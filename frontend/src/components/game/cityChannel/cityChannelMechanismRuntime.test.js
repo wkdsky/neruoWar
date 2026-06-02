@@ -1,5 +1,6 @@
 import {
   buildMechanicalAssemblies,
+  getGearAxisBindingStatus,
   getGearMountLocalPosition,
   getWorldTransmissionPorts
 } from './cityChannelMechanismRuntime';
@@ -16,6 +17,32 @@ describe('city channel mechanism runtime', () => {
   it('uses true board corners for gear mounts', () => {
     expect(getGearMountLocalPosition('corner_ne')).toEqual({ x: 0.5, y: -0.5, z: 0 });
     expect(getGearMountLocalPosition('corner_sw')).toEqual({ x: -0.5, y: 0.5, z: 0 });
+  });
+
+  it('rotates transmission ports by runtime surface rotation', () => {
+    const tile = {
+      ...createTile({
+        x: 2,
+        y: 3,
+        z: 0,
+        panelType: CITY_CHANNEL_TILE_TYPES.TRANSMISSION_STRAIGHT_PLATE,
+        rotation: 0,
+        transmissionRotation: 0
+      }),
+      isVertical: true,
+      runtimeSurfaceRotation: 90
+    };
+
+    const ports = getWorldTransmissionPorts(tile, createCellKey(2, 3, 0));
+
+    expect(ports.find((port) => port.id === 'north')).toMatchObject({
+      worldDirection: 'east',
+      worldLocalPosition: { x: 0.5, y: 0, z: 0 }
+    });
+    expect(ports.find((port) => port.id === 'south')).toMatchObject({
+      worldDirection: 'west',
+      worldLocalPosition: { x: -0.5, y: 0, z: 0 }
+    });
   });
 
   it('connects a wall transmission socket to a floor socket on the layer above', () => {
@@ -208,6 +235,143 @@ describe('city channel mechanism runtime', () => {
 
     expect(tile.gearMounts).toHaveLength(1);
     expect(tile.gearMounts[0].id).toBe('gear_test');
+  });
+
+  it('validates gear axis bindings against the bound board corner', () => {
+    const hostKey = createCellKey(0, 0, 0);
+    const boundKey = createCellKey(1, 1, 0);
+    const host = createTile({ x: 0, y: 0, z: 0 });
+    const bound = createTile({ x: 1, y: 1, z: 0 });
+    const mount = {
+      id: 'gear_bound',
+      componentType: 'gear',
+      position: 'corner_se',
+      surface: 'front',
+      axisBinding: {
+        componentKey: boundKey,
+        hostKind: 'tile',
+        socket: 'corner_nw',
+        surface: 'front'
+      }
+    };
+    const mapData = {
+      tiles: {
+        [hostKey]: host,
+        [boundKey]: bound
+      },
+      walls: {}
+    };
+
+    expect(getGearAxisBindingStatus({ mapData, placement: host, mount })).toMatchObject({
+      bound: true,
+      valid: true,
+      reason: 'ok'
+    });
+    expect(getGearAxisBindingStatus({
+      mapData: {
+        ...mapData,
+        tiles: {
+          [hostKey]: host,
+          [boundKey]: { ...bound, x: 2 }
+        }
+      },
+      placement: host,
+      mount
+    })).toMatchObject({
+      bound: true,
+      valid: false,
+      reason: 'detached_pivot'
+    });
+    expect(getGearAxisBindingStatus({
+      mapData: { tiles: { [hostKey]: host }, walls: {} },
+      placement: host,
+      mount
+    })).toMatchObject({
+      bound: true,
+      valid: false,
+      reason: 'missing_component'
+    });
+  });
+
+  it('validates gear axis bindings on vertical wall surfaces', () => {
+    const hostKey = createWallKey(0, 0, 0, 'east');
+    const boundKey = createWallKey(0, 0, 1, 'east');
+    const host = createWall({ x: 0, y: 0, z: 0, edge: 'east' });
+    const bound = createWall({ x: 0, y: 0, z: 1, edge: 'east' });
+    const mount = {
+      id: 'gear_wall_bound',
+      componentType: 'gear',
+      position: 'corner_ne',
+      surface: 'front',
+      axisBinding: {
+        componentKey: boundKey,
+        hostKind: 'wall',
+        socket: 'corner_se',
+        surface: 'front'
+      }
+    };
+    const mapData = {
+      tiles: {},
+      walls: {
+        [hostKey]: host,
+        [boundKey]: bound
+      }
+    };
+
+    expect(getGearAxisBindingStatus({ mapData, placement: host, mount })).toMatchObject({
+      bound: true,
+      valid: true,
+      reason: 'ok'
+    });
+    expect(getGearAxisBindingStatus({
+      mapData: {
+        tiles: {},
+        walls: {
+          [hostKey]: host,
+          [boundKey]: { ...bound, z: 2 }
+        }
+      },
+      placement: host,
+      mount
+    })).toMatchObject({
+      bound: true,
+      valid: false,
+      reason: 'detached_pivot'
+    });
+  });
+
+  it('does not use stale gear axis bindings as fixed axes', () => {
+    const hostKey = createCellKey(0, 0, 0);
+    const host = createTile({
+      x: 0,
+      y: 0,
+      z: 0,
+      panelType: CITY_CHANNEL_TILE_TYPES.TRANSMISSION_STRAIGHT_PLATE
+    });
+    host.gearMounts = [{
+      id: 'gear_stale',
+      componentType: 'gear',
+      position: 'corner_se',
+      surface: 'front',
+      axisBinding: {
+        componentKey: createCellKey(1, 1, 0),
+        hostKind: 'tile',
+        socket: 'corner_nw',
+        surface: 'front'
+      }
+    }];
+
+    const graph = buildMechanicalAssemblies({
+      tiles: { [hostKey]: host },
+      walls: {}
+    });
+
+    expect(graph.assemblies[0]?.fixedAxes).toHaveLength(0);
+    expect(graph.assemblies[0]?.gearMounts[0]).toMatchObject({
+      axisBinding: null,
+      axisBindingInvalid: true,
+      axisBindingInvalidReason: 'missing_component'
+    });
   });
 
   it('does not create a mechanical assembly from gears without transmission skeletons', () => {

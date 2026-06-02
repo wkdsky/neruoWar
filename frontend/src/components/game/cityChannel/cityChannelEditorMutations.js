@@ -16,6 +16,12 @@ import {
   normalizeWallEdge
 } from './cityChannelSchema';
 import { getCityChannelMaterial } from './cityChannelCatalog';
+import {
+  CITY_CHANNEL_GEAR_CORNER_SOCKETS,
+  getGearSocketWorldPosition,
+  isCornerGearSocket
+} from './cityChannelMechanismRuntime';
+import { hasDirectionalGearSurface, normalizeGearSurfaceForPanel } from './cityChannelGearPressurePlateRender';
 
 const sameCell = (point, target) => (
   point
@@ -107,6 +113,218 @@ const removeMechanicalLinksForComponents = (links = [], componentKeys = new Set(
   ))
 );
 
+const getGearSurfacesForPlacement = (placement = null) => (
+  hasDirectionalGearSurface(placement?.panelType) && (placement?.edge || placement?.isVertical)
+    ? ['front', 'back']
+    : ['front']
+);
+
+const sameGearWorldPoint = (a = null, b = null, epsilon = 0.008) => (
+  !!a && !!b
+  && Math.abs((Number(a.x) || 0) - (Number(b.x) || 0)) <= epsilon
+  && Math.abs((Number(a.y) || 0) - (Number(b.y) || 0)) <= epsilon
+  && Math.abs((Number(a.z) || 0) - (Number(b.z) || 0)) <= epsilon
+);
+
+const gearSocketOccupied = (placement = {}, socket = '', surface = 'front') => (
+  (placement.gearMounts || []).some((mount) => (
+    mount.position === socket
+    && normalizeGearSurfaceForPanel(placement.panelType, mount.surface || 'front') === normalizeGearSurfaceForPanel(placement.panelType, surface || 'front')
+  ))
+);
+
+const getAxisBindingToRemovedPlacement = ({ hostKind, componentKey, placement, mount }) => ({
+  componentKey,
+  hostKind,
+  socket: mount.position,
+  surface: normalizeGearSurfaceForPanel(placement?.panelType, mount.surface || 'front')
+});
+
+const GEAR_REPLACEMENT_SOCKET_EPSILON = 0.08;
+
+const getGearReplacementSockets = (mount = {}) => (
+  isCornerGearSocket(mount.position)
+    ? Array.from(CITY_CHANNEL_GEAR_CORNER_SOCKETS)
+    : [mount.position || 'center']
+);
+
+const getGearMountReplacementTarget = (fromPlacement = null, toPlacement = null, mount = {}) => {
+  if (!fromPlacement || !toPlacement || !mount?.position) return null;
+  const pivotWorld = getGearSocketWorldPosition(fromPlacement, mount.position, mount.surface || 'front');
+  if (!pivotWorld) return null;
+  for (const surface of getGearSurfacesForPlacement(toPlacement)) {
+    for (const socket of getGearReplacementSockets(mount)) {
+      const socketWorld = getGearSocketWorldPosition(toPlacement, socket, surface);
+      if (!sameGearWorldPoint(socketWorld, pivotWorld, GEAR_REPLACEMENT_SOCKET_EPSILON)) continue;
+      return {
+        socket,
+        socketKind: isCornerGearSocket(socket) ? 'corner' : 'center',
+        surface: normalizeGearSurfaceForPanel(toPlacement.panelType, surface || 'front')
+      };
+    }
+  }
+  return null;
+};
+
+export const preserveGearMountsForReplacementPlacement = ({
+  fromPlacement = null,
+  toPlacement = null,
+  gearMounts = null
+} = {}) => {
+  const sourceMounts = Array.isArray(gearMounts)
+    ? gearMounts
+    : (Array.isArray(fromPlacement?.gearMounts) ? fromPlacement.gearMounts : []);
+  return cloneGearMounts(sourceMounts).map((mount) => {
+    const replacementTarget = getGearMountReplacementTarget(fromPlacement, toPlacement, mount);
+    if (!replacementTarget) return mount;
+    return {
+      ...mount,
+      position: replacementTarget.socket,
+      socketKind: replacementTarget.socketKind,
+      surface: replacementTarget.surface
+    };
+  });
+};
+
+const getPreservedGearTargetCandidates = ({ nextTiles, nextWalls, pivotWorld }) => {
+  const candidates = [];
+  const appendPlacement = (hostKind, componentKey, placement) => {
+    if (!placement || !pivotWorld) return;
+    getGearSurfacesForPlacement(placement).forEach((surface) => {
+      Array.from(CITY_CHANNEL_GEAR_CORNER_SOCKETS).forEach((socket) => {
+        if (gearSocketOccupied(placement, socket, surface)) return;
+        const socketWorld = getGearSocketWorldPosition(placement, socket, surface);
+        if (!sameGearWorldPoint(socketWorld, pivotWorld)) return;
+        candidates.push({
+          hostKind,
+          componentKey,
+          placement,
+          socket,
+          surface
+        });
+      });
+    });
+  };
+  Object.entries(nextTiles || {}).forEach(([componentKey, tile]) => {
+    appendPlacement('tile', componentKey, tile);
+  });
+  Object.entries(nextWalls || {}).forEach(([componentKey, wall]) => {
+    appendPlacement('wall', componentKey, wall);
+  });
+  return candidates;
+};
+
+const pickPreservedGearTarget = (targets = [], preferredBinding = null) => {
+  if (!targets.length) return null;
+  if (preferredBinding?.componentKey) {
+    const preferred = targets.find((target) => (
+      target.componentKey === preferredBinding.componentKey
+      && target.socket === preferredBinding.socket
+      && normalizeGearSurfaceForPanel(target.placement?.panelType, target.surface || 'front')
+        === normalizeGearSurfaceForPanel(target.placement?.panelType, preferredBinding.surface || 'front')
+      && (target.hostKind || 'tile') === (preferredBinding.hostKind || 'tile')
+    ));
+    if (preferred) return preferred;
+  }
+  return targets[0];
+};
+
+const preserveCornerGearMountsFromRemovedPlacements = ({
+  nextTiles,
+  nextWalls,
+  removedPlacements = []
+}) => {
+  removedPlacements.forEach(({ hostKind, componentKey, placement }) => {
+    const mounts = Array.isArray(placement?.gearMounts) ? placement.gearMounts : [];
+    mounts.forEach((mount) => {
+      if (!mount?.id || !isCornerGearSocket(mount.position)) return;
+      const pivotWorld = getGearSocketWorldPosition(placement, mount.position, mount.surface || 'front');
+      const target = pickPreservedGearTarget(
+        getPreservedGearTargetCandidates({ nextTiles, nextWalls, pivotWorld }),
+        mount.axisBinding
+      );
+      if (!target) return;
+      const targetMap = target.hostKind === 'wall' ? nextWalls : nextTiles;
+      const currentTarget = targetMap[target.componentKey];
+      if (!currentTarget) return;
+      targetMap[target.componentKey] = {
+        ...currentTarget,
+        gearMounts: [
+          ...(currentTarget.gearMounts || []),
+          {
+            ...mount,
+            position: target.socket,
+            socketKind: 'corner',
+            surface: target.surface || 'front',
+            axisBinding: getAxisBindingToRemovedPlacement({ hostKind, componentKey, placement, mount }),
+            followMode: 'none',
+            followDelaySeconds: 0
+          }
+        ]
+      };
+    });
+  });
+};
+
+const getAxisBindingReplacementTarget = (replacement = null, binding = null) => {
+  if (!replacement?.from?.placement || !replacement?.to?.placement || !binding?.socket) return null;
+  const pivotWorld = getGearSocketWorldPosition(
+    replacement.from.placement,
+    binding.socket,
+    binding.surface || 'front'
+  );
+  if (!pivotWorld) return null;
+  for (const surface of getGearSurfacesForPlacement(replacement.to.placement)) {
+    for (const socket of Array.from(CITY_CHANNEL_GEAR_CORNER_SOCKETS)) {
+      const socketWorld = getGearSocketWorldPosition(replacement.to.placement, socket, surface);
+      if (!sameGearWorldPoint(socketWorld, pivotWorld, 0.08)) continue;
+      return {
+        componentKey: replacement.to.componentKey,
+        hostKind: replacement.to.hostKind,
+        socket,
+        surface: normalizeGearSurfaceForPanel(replacement.to.placement?.panelType, surface || 'front')
+      };
+    }
+  }
+  return null;
+};
+
+const rebindAxisBindingsForReplacementPlacements = ({
+  nextTiles,
+  nextWalls,
+  replacementPlacements = []
+}) => {
+  if (!replacementPlacements.length) return;
+  const replacementsByComponentKey = new Map(
+    replacementPlacements.map((replacement) => [replacement.from?.componentKey, replacement])
+  );
+  const visitPlacement = (targetMap, componentKey) => {
+    const placement = targetMap[componentKey];
+    if (!placement || !Array.isArray(placement.gearMounts) || placement.gearMounts.length <= 0) return;
+    let changed = false;
+    const gearMounts = placement.gearMounts.map((mount) => {
+      const binding = mount.axisBinding;
+      const replacement = replacementsByComponentKey.get(binding?.componentKey);
+      if (!replacement) return mount;
+      const replacementBinding = getAxisBindingReplacementTarget(replacement, binding);
+      if (!replacementBinding) return mount;
+      changed = true;
+      return {
+        ...mount,
+        axisBinding: replacementBinding
+      };
+    });
+    if (changed) {
+      targetMap[componentKey] = {
+        ...placement,
+        gearMounts
+      };
+    }
+  };
+  Object.keys(nextTiles || {}).forEach((componentKey) => visitPlacement(nextTiles, componentKey));
+  Object.keys(nextWalls || {}).forEach((componentKey) => visitPlacement(nextWalls, componentKey));
+};
+
 const moveMechanicalLinksForTiles = (links = [], tileMoves = []) => {
   if (!Array.isArray(links) || tileMoves.length <= 0) return links || [];
   const keyMap = new Map(tileMoves.map(({ from, to }) => [
@@ -148,6 +366,8 @@ export const applyPlacementOperationsToMap = (current, operations = []) => {
   let nextEntrances = current.entrances || [];
   let nextExits = current.exits || [];
   let nextMechanicalLinks = current.mechanicalLinks || [];
+  const removedPlacements = [];
+  const replacementPlacements = [];
 
   operations.forEach((operation) => {
     if (operation.kind === 'gearMount') {
@@ -164,12 +384,28 @@ export const applyPlacementOperationsToMap = (current, operations = []) => {
       }
       const duplicate = (existing.gearMounts || []).some((mount) => (
         mount.position === operation.mount.position
-        && (mount.surface || 'front') === (operation.mount.surface || 'front')
+        && normalizeGearSurfaceForPanel(existing.panelType, mount.surface || 'front')
+          === normalizeGearSurfaceForPanel(existing.panelType, operation.mount.surface || 'front')
       ));
       if (!duplicate) {
+        const bindingPlacement = operation.mount.axisBinding
+          ? (operation.mount.axisBinding.hostKind === 'wall'
+            ? nextWalls[operation.mount.axisBinding.componentKey]
+            : nextTiles[operation.mount.axisBinding.componentKey])
+          : null;
+        const normalizedMount = {
+          ...operation.mount,
+          surface: normalizeGearSurfaceForPanel(existing.panelType, operation.mount.surface || 'front'),
+          axisBinding: operation.mount.axisBinding
+            ? {
+              ...operation.mount.axisBinding,
+              surface: normalizeGearSurfaceForPanel(bindingPlacement?.panelType, operation.mount.axisBinding.surface || 'front')
+            }
+            : operation.mount.axisBinding
+        };
         targetMap[operation.hostKey] = {
           ...existing,
-          gearMounts: [...(existing.gearMounts || []), operation.mount]
+          gearMounts: [...(existing.gearMounts || []), normalizedMount]
         };
       }
       return;
@@ -210,10 +446,18 @@ export const applyPlacementOperationsToMap = (current, operations = []) => {
       const edge = normalizeWallEdge(operation.edge);
       const wallKey = createWallKey(cell.x, cell.y, cell.z, edge);
       if (operation.action === 'erase') {
+        if (nextWalls[wallKey]) {
+          removedPlacements.push({
+            hostKind: 'wall',
+            componentKey: wallKey,
+            placement: nextWalls[wallKey]
+          });
+        }
         delete nextWalls[wallKey];
         return;
       }
-      nextWalls[wallKey] = createWall({
+      const existingWall = nextWalls[wallKey] || null;
+      const wall = createWall({
         x: cell.x,
         y: cell.y,
         z: cell.z,
@@ -221,8 +465,52 @@ export const applyPlacementOperationsToMap = (current, operations = []) => {
         panelType: operation.panelType,
         transmissionRotation: operation.transmissionRotation
       });
+      if (Array.isArray(existingWall?.gearMounts) && existingWall.gearMounts.length > 0) {
+        wall.gearMounts = preserveGearMountsForReplacementPlacement({
+          fromPlacement: existingWall,
+          toPlacement: wall
+        });
+      }
+      if (existingWall) {
+        replacementPlacements.push({
+          from: {
+            hostKind: 'wall',
+            componentKey: wallKey,
+            placement: existingWall
+          },
+          to: {
+            hostKind: 'wall',
+            componentKey: wallKey,
+            placement: wall
+          }
+        });
+      }
+      nextWalls[wallKey] = wall;
       const tileKey = createCellKey(cell.x, cell.y, cell.z);
       if (nextTiles[tileKey]?.isVertical) {
+        const removedPlacement = nextTiles[tileKey];
+        if (
+          (!Array.isArray(existingWall?.gearMounts) || existingWall.gearMounts.length <= 0)
+          && Array.isArray(removedPlacement?.gearMounts)
+          && removedPlacement.gearMounts.length > 0
+        ) {
+          wall.gearMounts = preserveGearMountsForReplacementPlacement({
+            fromPlacement: removedPlacement,
+            toPlacement: wall
+          });
+        }
+        replacementPlacements.push({
+          from: {
+            hostKind: 'tile',
+            componentKey: tileKey,
+            placement: removedPlacement
+          },
+          to: {
+            hostKind: 'wall',
+            componentKey: wallKey,
+            placement: wall
+          }
+        });
         delete nextTiles[tileKey];
         nextMechanicalLinks = removeMechanicalLinksForComponents(nextMechanicalLinks, new Set([tileKey]));
         nextEntrances = removePointsAtCell(nextEntrances, cell);
@@ -233,6 +521,13 @@ export const applyPlacementOperationsToMap = (current, operations = []) => {
 
     const tileKey = createCellKey(cell.x, cell.y, cell.z);
     if (operation.action === 'erase') {
+      if (nextTiles[tileKey]) {
+        removedPlacements.push({
+          hostKind: 'tile',
+          componentKey: tileKey,
+          placement: nextTiles[tileKey]
+        });
+      }
       delete nextTiles[tileKey];
       nextMechanicalLinks = removeMechanicalLinksForComponents(nextMechanicalLinks, new Set([tileKey]));
       nextEntrances = removePointsAtCell(nextEntrances, cell);
@@ -261,15 +556,56 @@ export const applyPlacementOperationsToMap = (current, operations = []) => {
       return;
     }
 
+    const existingTile = nextTiles[tileKey] || null;
     const tempMap = { ...current, tiles: nextTiles };
+    const replacementTile = createTile({
+      x: cell.x,
+      y: cell.y,
+      z: cell.z,
+      panelType: operation.panelType,
+      rotation: operation.rotation,
+      transmissionRotation: operation.transmissionRotation
+    });
+    const preservedGearMounts = Array.isArray(existingTile?.gearMounts) && existingTile.gearMounts.length > 0
+      ? preserveGearMountsForReplacementPlacement({
+        fromPlacement: existingTile,
+        toPlacement: replacementTile
+      })
+      : undefined;
     nextTiles = upsertTile(tempMap, cell, {
       panelType: operation.panelType,
       rotation: operation.rotation,
       transmissionRotation: operation.transmissionRotation,
-      marker: existingMarker === 'safe' || existingMarker === 'highlight' ? existingMarker : null
+      marker: existingMarker === 'safe' || existingMarker === 'highlight' ? existingMarker : null,
+      ...(preservedGearMounts !== undefined ? { gearMounts: preservedGearMounts } : {})
     });
+    if (existingTile) {
+      replacementPlacements.push({
+        from: {
+          hostKind: 'tile',
+          componentKey: tileKey,
+          placement: existingTile
+        },
+        to: {
+          hostKind: 'tile',
+          componentKey: tileKey,
+          placement: nextTiles[tileKey]
+        }
+      });
+    }
     nextEntrances = removePointsAtCell(nextEntrances, cell);
     nextExits = removePointsAtCell(nextExits, cell);
+  });
+
+  preserveCornerGearMountsFromRemovedPlacements({
+    nextTiles,
+    nextWalls,
+    removedPlacements
+  });
+  rebindAxisBindingsForReplacementPlacements({
+    nextTiles,
+    nextWalls,
+    replacementPlacements
   });
 
   return {
@@ -287,19 +623,42 @@ export const deletePlacementsFromMap = (current, placements = []) => {
   const nextWalls = { ...(current.walls || {}) };
   let nextEntrances = current.entrances || [];
   let nextExits = current.exits || [];
-  const removedTileKeys = new Set();
+  const removedComponentKeys = new Set();
+  const removedPlacements = [];
 
   placements.forEach((placement) => {
     if (!placement) return;
     if (placement.edge) {
-      delete nextWalls[createWallKey(placement.x, placement.y, placement.z, placement.edge)];
+      const wallKey = createWallKey(placement.x, placement.y, placement.z, placement.edge);
+      if (nextWalls[wallKey]) {
+        removedPlacements.push({
+          hostKind: 'wall',
+          componentKey: wallKey,
+          placement: nextWalls[wallKey]
+        });
+      }
+      delete nextWalls[wallKey];
+      removedComponentKeys.add(wallKey);
       return;
     }
     const tileKey = createCellKey(placement.x, placement.y, placement.z);
+    if (nextTiles[tileKey]) {
+      removedPlacements.push({
+        hostKind: 'tile',
+        componentKey: tileKey,
+        placement: nextTiles[tileKey]
+      });
+    }
     delete nextTiles[tileKey];
-    removedTileKeys.add(tileKey);
+    removedComponentKeys.add(tileKey);
     nextEntrances = removePointsAtCell(nextEntrances, placement);
     nextExits = removePointsAtCell(nextExits, placement);
+  });
+
+  preserveCornerGearMountsFromRemovedPlacements({
+    nextTiles,
+    nextWalls,
+    removedPlacements
   });
 
   return {
@@ -308,7 +667,7 @@ export const deletePlacementsFromMap = (current, placements = []) => {
     walls: nextWalls,
     entrances: nextEntrances,
     exits: nextExits,
-    mechanicalLinks: removeMechanicalLinksForComponents(current.mechanicalLinks || [], removedTileKeys)
+    mechanicalLinks: removeMechanicalLinksForComponents(current.mechanicalLinks || [], removedComponentKeys)
   };
 };
 

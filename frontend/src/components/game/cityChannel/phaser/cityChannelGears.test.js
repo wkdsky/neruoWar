@@ -56,6 +56,12 @@ describe('cityChannelGears', () => {
     const visibleSurface = getVisibleGearSurfaceSide(wall, 0);
     expect(['front', 'back']).toContain(visibleSurface);
     expect(isGearOnCameraSide(wall, { surface: visibleSurface }, 0)).toBe(true);
+    expect(isGearOnCameraSide(wall, { surface: visibleSurface === 'front' ? 'back' : 'front' }, 0)).toBe(true);
+    expect(isGearOnCameraSide(
+      { ...wall, panelType: CITY_CHANNEL_TILE_TYPES.GEAR_PRESSURE_PLATE },
+      { surface: visibleSurface === 'front' ? 'back' : 'front' },
+      0
+    )).toBe(false);
     expect(getMountedGearLayerKey('tile', '0:1:2', 'near')).toBe('gear-near:tile:0:1:2');
   });
 
@@ -285,7 +291,11 @@ describe('cityChannelGears', () => {
 
   it('resolves contact graph and driven gear phase', () => {
     expect(getGearSurfaceKey({ x: 0, y: 0, z: 2 }, { surface: 'front' })).toBe('floor:2:front');
-    expect(getGearSurfaceKey({ x: 0, y: 0, z: 1, edge: 'east' }, { surface: 'back' })).toBe('edge:1:east:back');
+    expect(getGearSurfaceKey({ x: 0, y: 0, z: 1, edge: 'east' }, { surface: 'back' })).toBe('edge:1:east:front');
+    expect(getGearSurfaceKey(
+      { x: 0, y: 0, z: 1, edge: 'east', panelType: CITY_CHANNEL_TILE_TYPES.GEAR_PRESSURE_PLATE },
+      { surface: 'back' }
+    )).toBe('edge:1:east:back');
     expect(getGearSurfaceKey({ x: 0, y: 0, z: 3, isVertical: true, rotation: 90 }, {})).toBe('vertical:3:90:front');
 
     const nodes = [
@@ -323,6 +333,70 @@ describe('cityChannelGears', () => {
     expect(getGearPhase(driven[2], 45, 10)).toBe(55);
   });
 
+  it('does not pin two meshed gear roots to the same direction', () => {
+    const assembly = {
+      componentKeys: ['source', 'gear_a_host', 'gear_b_host'],
+      edges: [
+        { componentKey: 'source', key: 'gear_a_host' },
+        { componentKey: 'source', key: 'gear_b_host' }
+      ]
+    };
+    const allNodes = [
+      { id: 'gear_a', componentKey: 'gear_a_host', point: { x: 0, y: 0 }, surfaceKey: 'floor:0:front', pitchRadius: 18 },
+      { id: 'gear_b', componentKey: 'gear_b_host', point: { x: 35, y: 0 }, surfaceKey: 'floor:0:front', pitchRadius: 18 }
+    ];
+
+    const driven = resolveDrivenGearNodes({
+      assembly,
+      assemblyNodes: allNodes,
+      allNodes,
+      sourceComponentKey: 'source'
+    });
+
+    expect(driven.map((node) => node.id)).toEqual(['gear_a', 'gear_b']);
+    expect(driven.map((node) => node.direction)).toEqual([1, -1]);
+  });
+
+  it('does not direct-drive a corner gear bound to a board outside the pressure assembly', () => {
+    const assembly = {
+      componentKeys: ['pressure', 'corner_host'],
+      edges: [{ componentKey: 'pressure', key: 'corner_host' }]
+    };
+    const allNodes = [
+      {
+        id: 'pressure:gear_center',
+        componentKey: 'pressure',
+        point: { x: 0, y: 0 },
+        surfaceKey: 'floor:0:front',
+        pitchRadius: 18
+      },
+      {
+        id: 'corner_host:gear_corner',
+        componentKey: 'corner_host',
+        point: { x: 100, y: 0 },
+        surfaceKey: 'floor:0:front',
+        pitchRadius: 18,
+        mount: {
+          axisBinding: {
+            componentKey: 'bound_board',
+            hostKind: 'tile',
+            socket: 'corner_nw',
+            surface: 'front'
+          }
+        }
+      }
+    ];
+
+    const driven = resolveDrivenGearNodes({
+      assembly,
+      assemblyNodes: allNodes,
+      allNodes,
+      sourceComponentKey: 'pressure'
+    });
+
+    expect(driven.map((node) => node.id)).toEqual(['pressure:gear_center']);
+  });
+
   it('uses stable world positions and tooth counts for gear mesh ratios', () => {
     const nodes = [
       {
@@ -347,5 +421,77 @@ describe('cityChannelGears', () => {
 
     expect(graph.get('a')).toEqual([{ id: 'b', ratio: -0.5 }]);
     expect(graph.get('b')).toEqual([{ id: 'a', ratio: -2 }]);
+  });
+
+  it('uses physical mesh planes for adjacent gears on different render surfaces', () => {
+    const nodes = [
+      {
+        id: 'a',
+        surfaceKey: 'vertical:0:0:front',
+        point: { x: 100, y: 100 },
+        worldPoint: { x: 10, y: 10, z: 0 },
+        pitchRadius: 18,
+        pitchRadiusWorld: 0.2,
+        meshPlane: {
+          kind: 'vertical',
+          normal: { x: 0, y: 1, z: 0 },
+          planeOffset: 0,
+          u: 0,
+          v: 0
+        }
+      },
+      {
+        id: 'b',
+        surfaceKey: 'edge:0:east:front',
+        point: { x: 135, y: 100 },
+        worldPoint: { x: 20, y: 20, z: 0 },
+        pitchRadius: 18,
+        pitchRadiusWorld: 0.2,
+        meshPlane: {
+          kind: 'vertical',
+          normal: { x: 0, y: 1, z: 0 },
+          planeOffset: 0,
+          u: 0.4,
+          v: 0
+        }
+      },
+      {
+        id: 'c',
+        surfaceKey: 'vertical:0:0:back',
+        point: { x: 100, y: 100 },
+        worldPoint: { x: 10, y: 10, z: 0 },
+        pitchRadius: 1,
+        pitchRadiusWorld: 0.2,
+        meshPlane: {
+          kind: 'vertical',
+          normal: { x: 0, y: -1, z: 0 },
+          planeOffset: 0,
+          u: 0,
+          v: 0
+        }
+      },
+      {
+        id: 'd',
+        surfaceKey: 'vertical:0:0:front',
+        point: { x: 100, y: 100 },
+        worldPoint: { x: 10, y: 10, z: 0 },
+        pitchRadius: 1,
+        pitchRadiusWorld: 0.2,
+        meshPlane: {
+          kind: 'vertical',
+          normal: { x: 0, y: 1, z: 0 },
+          planeOffset: 0.3,
+          u: 0,
+          v: 0
+        }
+      }
+    ];
+
+    const graph = buildGearContactGraph(nodes);
+
+    expect(graph.get('a')).toEqual([{ id: 'b', ratio: -1 }]);
+    expect(graph.get('b')).toEqual([{ id: 'a', ratio: -1 }]);
+    expect(graph.get('c')).toEqual([]);
+    expect(graph.get('d')).toEqual([]);
   });
 });

@@ -13,6 +13,7 @@ import {
 import {
   buildMechanicalAssemblies,
   getAssemblyForCell,
+  getGearAxisBindingStatus,
   getMechanismParamKey,
   isCornerGearSocket,
   normalizeMechanismParams
@@ -171,9 +172,20 @@ const CityChannelPhaserEditor = ({
   ), [activePanelTile, selectedGearHost]);
   const activePanelPanelType = mechanismPanel?.panelType || activePanelTile?.panelType || '';
   const canRunActivePanel = activePanelPanelType === CITY_CHANNEL_TILE_TYPES.GEAR_PRESSURE_PLATE;
-  const gearMountsForPanel = selectedGearMount
-    ? [selectedGearMount]
-    : Array.isArray(activePanelTile?.gearMounts) ? activePanelTile.gearMounts : [];
+  const gearMountsForPanel = useMemo(() => (
+    selectedGearMount
+      ? [selectedGearMount]
+      : Array.isArray(activePanelTile?.gearMounts) ? activePanelTile.gearMounts : []
+  ), [activePanelTile?.gearMounts, selectedGearMount]);
+  const gearMountBindingStatusById = useMemo(() => {
+    const placement = selectedGearMount ? selectedGearHost : activePanelTile;
+    return (gearMountsForPanel || []).reduce((statuses, mount) => {
+      if (mount?.id) {
+        statuses[mount.id] = getGearAxisBindingStatus({ mapData, placement, mount });
+      }
+      return statuses;
+    }, {});
+  }, [activePanelTile, gearMountsForPanel, mapData, selectedGearHost, selectedGearMount]);
   const mechanismPanelParams = useMemo(() => (
     normalizeMechanismParams(mechanismParams[activePanelKey])
   ), [activePanelKey, mechanismParams]);
@@ -182,6 +194,18 @@ const CityChannelPhaserEditor = ({
     const id = Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
     setToasts((prev) => [...prev, { id, message, type, timestamp: Date.now() }]);
   }, []);
+
+  const resetMechanismPreview = useCallback(() => {
+    sceneRef.current?.cancelMechanismRuntimePreview?.();
+    setMechanismRuntimeSnapshot(null);
+    setMechanismPreviewState(null);
+  }, []);
+
+  const handleEditorPointerDownCapture = useCallback((event) => {
+    const target = event.target;
+    if (!target?.closest?.('button')) return;
+    resetMechanismPreview();
+  }, [resetMechanismPreview]);
 
   const clearSelection = useCallback(() => {
     setSelectedCells([]);
@@ -201,6 +225,7 @@ const CityChannelPhaserEditor = ({
   }, []);
 
   const handleMaterialSelect = useCallback((panelType) => {
+    resetMechanismPreview();
     if (activeTool !== CITY_CHANNEL_TOOLS.PLACE_TILE) {
       placeReturnToolRef.current = activeTool === CITY_CHANNEL_TOOLS.SELECT
         ? CITY_CHANNEL_TOOLS.SELECT
@@ -208,9 +233,10 @@ const CityChannelPhaserEditor = ({
     }
     clearSelection();
     selectMaterial(panelType);
-  }, [activeTool, clearSelection, selectMaterial]);
+  }, [activeTool, clearSelection, resetMechanismPreview, selectMaterial]);
 
   const handleComponentSelect = useCallback((componentType) => {
+    resetMechanismPreview();
     if (activeTool !== CITY_CHANNEL_TOOLS.PLACE_COMPONENT) {
       placeReturnToolRef.current = activeTool === CITY_CHANNEL_TOOLS.SELECT
         ? CITY_CHANNEL_TOOLS.SELECT
@@ -218,23 +244,25 @@ const CityChannelPhaserEditor = ({
     }
     clearSelection();
     selectComponent(componentType);
-  }, [activeTool, clearSelection, selectComponent]);
+  }, [activeTool, clearSelection, resetMechanismPreview, selectComponent]);
 
   const handleRequestTool = useCallback((tool) => {
+    resetMechanismPreview();
     if (tool === CITY_CHANNEL_TOOLS.BROWSE || tool === CITY_CHANNEL_TOOLS.SELECT) {
       placeReturnToolRef.current = tool;
     }
     selectOperationTool(tool);
-  }, [selectOperationTool]);
+  }, [resetMechanismPreview, selectOperationTool]);
 
   const handleExitPlaceMode = useCallback(() => {
+    resetMechanismPreview();
     const returnTool = placeReturnToolRef.current === CITY_CHANNEL_TOOLS.SELECT
       ? CITY_CHANNEL_TOOLS.SELECT
       : CITY_CHANNEL_TOOLS.BROWSE;
     clearSelection();
     selectOperationTool(returnTool);
     addToast('已退出放置模式。', 'info');
-  }, [addToast, clearSelection, selectOperationTool]);
+  }, [addToast, clearSelection, resetMechanismPreview, selectOperationTool]);
 
   const handleCommitOperations = useCallback((operations) => {
     applyPlacementOperations(operations);
@@ -370,6 +398,7 @@ const CityChannelPhaserEditor = ({
   }, []);
 
   const executeMechanismPanelAction = useCallback(() => {
+    resetMechanismPreview();
     if (!canRunActivePanel) {
       addToast('只有齿轮压力板可以运行预览。', 'error');
       return;
@@ -382,7 +411,7 @@ const CityChannelPhaserEditor = ({
       return;
     }
     addToast('运行预览已启动。', 'info');
-  }, [addToast, canRunActivePanel, mechanismPanel?.cell, mechanismPanelParams, selectedCells]);
+  }, [addToast, canRunActivePanel, mechanismPanel?.cell, mechanismPanelParams, resetMechanismPreview, selectedCells]);
 
   const handleMechanismPreviewProgress = useCallback((payload = null) => {
     setMechanismPreviewState(payload);
@@ -393,15 +422,17 @@ const CityChannelPhaserEditor = ({
   }, []);
 
   const handleInspectSelected = useCallback(() => {
+    resetMechanismPreview();
     if (inspectMode?.active) {
       sceneRef.current?.closeInspectMode?.();
       return;
     }
     const opened = sceneRef.current?.inspectSelectedTile?.();
     if (!opened) addToast('请选择一个可观察的地块。', 'error');
-  }, [addToast, inspectMode?.active]);
+  }, [addToast, inspectMode?.active, resetMechanismPreview]);
 
   const handleDeleteSelection = useCallback(() => {
+    resetMechanismPreview();
     if (selectionScope === 'component') {
       if (selectedGearItems.length <= 0) return;
       const groups = new Map();
@@ -437,9 +468,10 @@ const CityChannelPhaserEditor = ({
     });
     deletePlacements(selectedPlacements);
     clearSelection();
-  }, [clearSelection, deletePlacements, selectedCells, selectedGearItems, selectedPlacements, selectionScope, updatePlacement]);
+  }, [clearSelection, deletePlacements, resetMechanismPreview, selectedCells, selectedGearItems, selectedPlacements, selectionScope, updatePlacement]);
 
   const handleCopySelection = useCallback(() => {
+    resetMechanismPreview();
     if (selectionScope === 'component' || selectedPlacements.length <= 0) {
       addToast('请先选择一个或多个板材再复制。', 'error');
       return false;
@@ -450,9 +482,10 @@ const CityChannelPhaserEditor = ({
       return false;
     }
     return true;
-  }, [addToast, selectedPlacements.length, selectionScope]);
+  }, [addToast, resetMechanismPreview, selectedPlacements.length, selectionScope]);
 
   const handleRotateSelection = useCallback((direction = 'forward', meta = null) => {
+    resetMechanismPreview();
     const targetPlacements = selectedPlacements.length > 0 ? selectedPlacements : (meta?.placements || []);
     if (targetPlacements.length <= 0) return;
     if (!meta?.alreadyPreviewed) {
@@ -460,20 +493,22 @@ const CityChannelPhaserEditor = ({
     }
     if (direction === 'reverse') rotatePlacementsReverse(targetPlacements);
     else rotatePlacements(targetPlacements);
-  }, [rotatePlacements, rotatePlacementsReverse, selectedPlacements]);
+  }, [resetMechanismPreview, rotatePlacements, rotatePlacementsReverse, selectedPlacements]);
 
   const handleRotateActive = useCallback((delta = 90) => {
     setActiveRotation((current) => normalizeRotation(current + delta));
   }, [setActiveRotation]);
 
   const runValidation = useCallback(() => {
+    resetMechanismPreview();
     const result = validateSafeRoute();
     if (result.ok) addToast('验证通过：入口可到达出口', 'success');
     else addToast(`验证失败：${result.message}`, 'error');
     return result;
-  }, [addToast, validateSafeRoute]);
+  }, [addToast, resetMechanismPreview, validateSafeRoute]);
 
   const handleSave = useCallback(() => {
+    resetMechanismPreview();
     const result = validateSafeRoute();
     if (!result.ok) {
       addToast(`保存失败：${result.message}`, 'error');
@@ -501,12 +536,13 @@ const CityChannelPhaserEditor = ({
     } catch (error) {
       addToast(`保存失败：${error.message}`, 'error');
     }
-  }, [addToast, mapData, markSavedMap, mechanismParams, templateId, templateName, templateSource, validateSafeRoute]);
+  }, [addToast, mapData, markSavedMap, mechanismParams, resetMechanismPreview, templateId, templateName, templateSource, validateSafeRoute]);
 
   const handleExit = useCallback(() => {
+    resetMechanismPreview();
     if (isDirty && !window.confirm('当前模板有未保存修改，确定退出到城内工坊首页？')) return;
     onExit?.();
-  }, [isDirty, onExit]);
+  }, [isDirty, onExit, resetMechanismPreview]);
 
   const sceneConfig = useMemo(() => ({
     mapData,
@@ -697,6 +733,7 @@ const CityChannelPhaserEditor = ({
         wallViewMode === 'solid' ? 'is-wall-solid' : '',
         showHelperGrid ? 'is-helper-grid-visible' : ''
       ].filter(Boolean).join(' ')}
+      onPointerDownCapture={handleEditorPointerDownCapture}
     >
       <div className="city-channel-immersive__void" aria-hidden="true" />
 
@@ -807,6 +844,7 @@ const CityChannelPhaserEditor = ({
         activePanelPanelType={activePanelPanelType}
         canRunActivePanel={canRunActivePanel}
         gearMountsForPanel={gearMountsForPanel}
+        gearMountBindingStatusById={gearMountBindingStatusById}
         mechanismPanelParams={mechanismPanelParams}
         onCloseInspect={handleInspectSelected}
         onExecute={executeMechanismPanelAction}

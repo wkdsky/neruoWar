@@ -57,6 +57,25 @@ const createBox = ({ minX, maxX, minY, maxY, minZ, maxZ }) => ({
   maxZ
 });
 
+const createPrism = ({ points = [], minZ, maxZ }) => ({
+  ...getPointBounds(points),
+  points,
+  minZ,
+  maxZ
+});
+
+const getRectPoints = ({ minX, maxX, minY, maxY }) => [
+  { x: minX, y: minY },
+  { x: maxX, y: minY },
+  { x: maxX, y: maxY },
+  { x: minX, y: maxY }
+];
+
+const translatePoints = (points = [], placement = {}) => points.map((point) => ({
+  x: (Number(placement.x) || 0) + point.x,
+  y: (Number(placement.y) || 0) + point.y
+}));
+
 export const boxesIntersect = (a, b, epsilon = BOX_EPSILON) => !!a && !!b && !(
   a.maxX <= b.minX + epsilon
   || a.minX >= b.maxX - epsilon
@@ -70,15 +89,14 @@ export const boxSetsIntersect = (boxesA = [], boxesB = []) => (
   boxesA.some((boxA) => boxesB.some((boxB) => boxesIntersect(boxA, boxB)))
 );
 
-const getRotatedTileFootprint = (rotation = 0) => {
-  const corners = [
+const getRotatedTileFootprintPoints = (rotation = 0) => (
+  [
     { x: -0.5, y: -0.5 },
     { x: 0.5, y: -0.5 },
     { x: 0.5, y: 0.5 },
     { x: -0.5, y: 0.5 }
-  ].map((point) => rotatePoint(point, rotation));
-  return getPointBounds(corners);
-};
+  ].map((point) => rotatePoint(point, rotation))
+);
 
 const getCellVerticalFootprint = (rotation = 0) => {
   const normalizedRotation = normalizeRotation(rotation) % 180;
@@ -94,18 +112,14 @@ const getEdgeWallFootprint = (edge = 'north') => {
   return { minX: -0.5, maxX: 0.5, minY: -0.5, maxY: -0.5 + WALL_THICKNESS };
 };
 
-export const getCityChannelPlacementCollisionBoxes = (placement) => {
+export const getCityChannelPlacementCollisionPrisms = (placement) => {
   if (!placement) return [];
   const z = Number(placement.z) || 0;
-  const boxes = [];
+  const prisms = [];
 
-  if (!placement.edge) {
-    const floorFootprint = getRotatedTileFootprint(placement.rotation || 0);
-    boxes.push(createBox({
-      minX: placement.x + floorFootprint.minX,
-      maxX: placement.x + floorFootprint.maxX,
-      minY: placement.y + floorFootprint.minY,
-      maxY: placement.y + floorFootprint.maxY,
+  if (!placement.edge && !placement.isVertical) {
+    prisms.push(createPrism({
+      points: translatePoints(getRotatedTileFootprintPoints(placement.rotation || 0), placement),
       minZ: z,
       maxZ: z + PANEL_THICKNESS
     }));
@@ -115,18 +129,59 @@ export const getCityChannelPlacementCollisionBoxes = (placement) => {
     const wallFootprint = placement.edge
       ? getEdgeWallFootprint(placement.edge)
       : getCellVerticalFootprint(placement.rotation || 0);
-    boxes.push(createBox({
-      minX: placement.x + wallFootprint.minX,
-      maxX: placement.x + wallFootprint.maxX,
-      minY: placement.y + wallFootprint.minY,
-      maxY: placement.y + wallFootprint.maxY,
+    prisms.push(createPrism({
+      points: translatePoints(getRectPoints(wallFootprint), placement),
       minZ: z + PANEL_THICKNESS + BOX_EPSILON,
       maxZ: z + 1
     }));
   }
 
-  return boxes;
+  return prisms;
 };
+
+export const getCityChannelPlacementCollisionBoxes = (placement) => (
+  getCityChannelPlacementCollisionPrisms(placement).map((prism) => createBox(prism))
+);
+
+const getPolygonAxes = (points = []) => {
+  const axes = [];
+  for (let index = 0; index < points.length; index += 1) {
+    const from = points[index];
+    const to = points[(index + 1) % points.length];
+    const dx = (to.x || 0) - (from.x || 0);
+    const dy = (to.y || 0) - (from.y || 0);
+    const length = Math.hypot(dx, dy);
+    if (length <= BOX_EPSILON) continue;
+    axes.push({ x: -dy / length, y: dx / length });
+  }
+  return axes;
+};
+
+const projectPolygon = (points = [], axis = {}) => points.reduce((range, point) => {
+  const value = ((point.x || 0) * (axis.x || 0)) + ((point.y || 0) * (axis.y || 0));
+  return {
+    min: Math.min(range.min, value),
+    max: Math.max(range.max, value)
+  };
+}, { min: Infinity, max: -Infinity });
+
+const polygonsIntersect = (pointsA = [], pointsB = [], epsilon = BOX_EPSILON) => {
+  if (pointsA.length < 3 || pointsB.length < 3) return false;
+  const axes = [...getPolygonAxes(pointsA), ...getPolygonAxes(pointsB)];
+  return axes.every((axis) => {
+    const rangeA = projectPolygon(pointsA, axis);
+    const rangeB = projectPolygon(pointsB, axis);
+    return !(
+      rangeA.max <= rangeB.min + epsilon
+      || rangeB.max <= rangeA.min + epsilon
+    );
+  });
+};
+
+export const collisionPrismsIntersect = (a, b, epsilon = BOX_EPSILON) => (
+  boxesIntersect(a, b, epsilon)
+  && polygonsIntersect(a.points || [], b.points || [], epsilon)
+);
 
 export const getCityChannelPlacementCollisionBox = (placement) => {
   const boxes = getCityChannelPlacementCollisionBoxes(placement);

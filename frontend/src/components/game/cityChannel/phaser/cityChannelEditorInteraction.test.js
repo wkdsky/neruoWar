@@ -1,7 +1,12 @@
 import {
-  createCellKey
+  CITY_CHANNEL_TILE_TYPES,
+  createBaseCityChannelMap,
+  createCellKey,
+  createTile
 } from '../cityChannelSchema';
+import { getGearSocketWorldPosition } from '../cityChannelMechanismRuntime';
 import {
+  applyPaint,
   eraseHit,
   isSelectedHit,
   selectHit,
@@ -9,6 +14,12 @@ import {
 } from './cityChannelEditorInteraction';
 
 describe('cityChannelEditorInteraction', () => {
+  const expectSameGearPoint = (actual, expected) => {
+    expect(actual?.x).toBeCloseTo(expected?.x, 4);
+    expect(actual?.y).toBeCloseTo(expected?.y, 4);
+    expect(actual?.z).toBeCloseTo(expected?.z, 4);
+  };
+
   const createScene = () => ({
     config: {
       onCommitOperations: jest.fn(),
@@ -79,5 +90,91 @@ describe('cityChannelEditorInteraction', () => {
       cell: { x: 1, y: 2, z: 0 },
       edge: 'north'
     }], { label: '擦除' });
+  });
+
+  it('preserves gear mounts while previewing a same-cell tile replacement', () => {
+    const cell = { x: 4, y: 5, z: 0 };
+    const tileKey = createCellKey(cell.x, cell.y, cell.z);
+    const existing = createTile({
+      ...cell,
+      panelType: CITY_CHANNEL_TILE_TYPES.TRANSMISSION_L_PLATE,
+      rotation: 0
+    });
+    existing.gearMounts = [{
+      id: 'gear_corner',
+      componentType: 'gear',
+      position: 'corner_ne',
+      socketKind: 'corner',
+      surface: 'front',
+      axisBinding: {
+        componentKey: createCellKey(5, 4, 0),
+        hostKind: 'tile',
+        socket: 'corner_sw',
+        surface: 'front'
+      }
+    }];
+    const beforePoint = getGearSocketWorldPosition(existing, 'corner_ne', 'front');
+    const scene = {
+      ...createScene(),
+      activeRotation: 90,
+      activeTileType: CITY_CHANNEL_TILE_TYPES.TRANSMISSION_CROSS_PLATE,
+      drawGhostLayer: jest.fn(),
+      refreshAfterIncrementalEdit: jest.fn(),
+      renderTileObject: jest.fn(),
+      resolvePlacementEdgeSnap: jest.fn(() => null),
+      resolveDynamicPlacementTarget: jest.fn(() => ({
+        kind: 'floor',
+        cell,
+        valid: true,
+        replace: true
+      })),
+      mapData: {
+        ...createBaseCityChannelMap({ name: 'replace preview gear mounts' }),
+        tiles: {
+          [tileKey]: existing
+        },
+        walls: {}
+      },
+      paintStroke: {
+        intent: 'place',
+        isWall: false,
+        touched: new Set(),
+        operations: []
+      }
+    };
+
+    applyPaint(scene, null, {
+      cell,
+      hit: {
+        type: 'tile',
+        cell,
+        tile: existing
+      }
+    });
+
+    expect(scene.mapData.tiles[tileKey]).toMatchObject({
+      panelType: CITY_CHANNEL_TILE_TYPES.TRANSMISSION_CROSS_PLATE,
+      rotation: 90
+    });
+    expect(scene.mapData.tiles[tileKey].gearMounts).toEqual([
+      expect.objectContaining({
+        id: 'gear_corner',
+        position: 'corner_nw',
+        socketKind: 'corner',
+        axisBinding: expect.objectContaining({
+          componentKey: createCellKey(5, 4, 0)
+        })
+      })
+    ]);
+    const nextMount = scene.mapData.tiles[tileKey].gearMounts[0];
+    expectSameGearPoint(
+      getGearSocketWorldPosition(scene.mapData.tiles[tileKey], nextMount.position, nextMount.surface),
+      beforePoint
+    );
+    expect(scene.renderTileObject).toHaveBeenCalledWith(expect.objectContaining({
+      gearMounts: expect.arrayContaining([
+        expect.objectContaining({ id: 'gear_corner' })
+      ])
+    }));
   });
 });

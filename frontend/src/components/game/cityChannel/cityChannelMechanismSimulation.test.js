@@ -6,7 +6,9 @@ import {
   createWall,
   createWallKey
 } from './cityChannelSchema';
+import { buildMechanicalAssemblies } from './cityChannelMechanismRuntime';
 import {
+  createAxisBindingRuntimeEntryFromGearNode,
   createMechanismRuntimeSnapshot,
   findRotationObstruction,
   getAngleErrorDegrees,
@@ -170,6 +172,23 @@ describe('cityChannelMechanismSimulation', () => {
     expect(runtimeMountWorld.z).toBeCloseTo(pivotWorld.z, 4);
   });
 
+  it('treats front and back as the same mechanical surface for ordinary vertical boards', () => {
+    const tile = createTile({
+      x: 4,
+      y: 5,
+      z: 1,
+      rotation: 90,
+      isVertical: true,
+      panelType: CITY_CHANNEL_TILE_TYPES.TRANSMISSION_CROSS_PLATE
+    });
+    const front = getGearWorldPosition(tile, { id: 'front', position: 'corner_ne', surface: 'front' });
+    const back = getGearWorldPosition(tile, { id: 'back', position: 'corner_ne', surface: 'back' });
+
+    expect(back.x).toBeCloseTo(front.x, 5);
+    expect(back.y).toBeCloseTo(front.y, 5);
+    expect(back.z).toBeCloseTo(front.z, 5);
+  });
+
   it.each([
     ['corner_ne', 30],
     ['corner_nw', 90]
@@ -289,6 +308,200 @@ describe('cityChannelMechanismSimulation', () => {
     expect(runtimeMountWorld.z).toBeCloseTo(pivotWorld.z, 4);
   });
 
+  it('keeps vertical-plane assembly members connected during fixed-axis rotation', () => {
+    const upperKey = createCellKey(4, 5, 1);
+    const lowerKey = createCellKey(4, 5, 0);
+    const upper = {
+      ...createTile({
+        x: 4,
+        y: 5,
+        z: 1,
+        rotation: 0,
+        transmissionRotation: 0,
+        isVertical: true,
+        panelType: CITY_CHANNEL_TILE_TYPES.TRANSMISSION_STRAIGHT_PLATE
+      }),
+      isVertical: true
+    };
+    const lower = {
+      ...createTile({
+        x: 4,
+        y: 5,
+        z: 0,
+        rotation: 0,
+        transmissionRotation: 0,
+        isVertical: true,
+        panelType: CITY_CHANNEL_TILE_TYPES.TRANSMISSION_STRAIGHT_PLATE
+      }),
+      isVertical: true
+    };
+    const fixedMount = {
+      id: 'gear_fixed',
+      position: 'center',
+      surface: 'front',
+      axisType: 'fixedAxis',
+      componentKey: upperKey
+    };
+    upper.gearMounts = [fixedMount];
+    const mapData = {
+      ...createBaseCityChannelMap({ name: 'vertical plane compound runtime' }),
+      tiles: {
+        [upperKey]: upper,
+        [lowerKey]: lower
+      },
+      walls: {}
+    };
+    const pivotWorld = getGearWorldPosition(upper, fixedMount);
+
+    const snapshot = createMechanismRuntimeSnapshot({
+      mapData,
+      assemblyEntries: [{
+        assembly: {
+          id: 'assembly_vertical',
+          componentKeys: [upperKey, lowerKey]
+        },
+        fixedMount,
+        pivotWorld,
+        driveRatio: 1,
+        basePlacements: {
+          [upperKey]: upper,
+          [lowerKey]: lower
+        }
+      }],
+      sourceAngle: 90
+    });
+
+    expect(snapshot.placements[upperKey].runtimeSurfaceRotation).toBe(90);
+    expect(snapshot.placements[lowerKey]).toMatchObject({
+      x: 3,
+      y: 5,
+      z: 1,
+      runtimeSurfaceRotation: 90
+    });
+    const runtimeGraph = buildMechanicalAssemblies({
+      ...mapData,
+      tiles: {
+        [upperKey]: snapshot.placements[upperKey],
+        [lowerKey]: snapshot.placements[lowerKey]
+      },
+      walls: {}
+    });
+    expect(runtimeGraph.assemblyByComponentKey[upperKey]).toBe(runtimeGraph.assemblyByComponentKey[lowerKey]);
+  });
+
+  it('uses only the explicit axis-bound board as the driven runtime assembly', () => {
+    const sourceKey = createCellKey(1, 1, 0);
+    const boundKey = createCellKey(2, 1, 0);
+    const neighborKey = createCellKey(3, 1, 0);
+    const bound = createTile({
+      x: 2,
+      y: 1,
+      z: 0,
+      panelType: CITY_CHANNEL_TILE_TYPES.TRANSMISSION_L_PLATE
+    });
+    const neighbor = createTile({
+      x: 3,
+      y: 1,
+      z: 0,
+      panelType: CITY_CHANNEL_TILE_TYPES.TRANSMISSION_STRAIGHT_PLATE
+    });
+    const mapData = {
+      ...createBaseCityChannelMap({ name: 'single axis-bound board' }),
+      tiles: {
+        [boundKey]: bound,
+        [neighborKey]: neighbor
+      },
+      walls: {}
+    };
+    const entry = createAxisBindingRuntimeEntryFromGearNode({
+      mapData,
+      gearNode: {
+        id: `${sourceKey}:gear_driver`,
+        componentKey: sourceKey,
+        mountId: 'gear_driver',
+        mount: { id: 'gear_driver', position: 'corner_ne', surface: 'front' },
+        driveRatio: -1
+      },
+      axisBinding: {
+        componentKey: boundKey,
+        hostKind: 'tile',
+        socket: 'corner_nw',
+        surface: 'front'
+      },
+      pivotWorld: { x: 2, y: 0.5, z: 0 },
+      driveRatio: -1
+    });
+
+    expect(entry.assembly.componentKeys).toEqual([boundKey]);
+    expect(Object.keys(entry.basePlacements)).toEqual([boundKey]);
+    expect(entry.basePlacements[neighborKey]).toBeUndefined();
+  });
+
+  it('uses the bound board mechanical assembly when an assembly graph is available', () => {
+    const sourceKey = createCellKey(1, 1, 0);
+    const boundKey = createCellKey(2, 1, 0);
+    const neighborKey = createCellKey(3, 1, 0);
+    const bound = createTile({
+      x: 2,
+      y: 1,
+      z: 0,
+      panelType: CITY_CHANNEL_TILE_TYPES.TRANSMISSION_L_PLATE
+    });
+    const neighbor = createTile({
+      x: 3,
+      y: 1,
+      z: 0,
+      panelType: CITY_CHANNEL_TILE_TYPES.TRANSMISSION_STRAIGHT_PLATE
+    });
+    const mapData = {
+      ...createBaseCityChannelMap({ name: 'assembly axis-bound board' }),
+      tiles: {
+        [boundKey]: bound,
+        [neighborKey]: neighbor
+      },
+      walls: {}
+    };
+    const assembly = {
+      id: 'assembly_bound',
+      componentKeys: [boundKey, neighborKey],
+      edges: [{ componentKey: boundKey, key: neighborKey }],
+      gearMounts: [],
+      fixedAxes: []
+    };
+    const entry = createAxisBindingRuntimeEntryFromGearNode({
+      mapData,
+      assemblyGraph: {
+        assemblies: [assembly],
+        assemblyByComponentKey: {
+          [boundKey]: assembly.id,
+          [neighborKey]: assembly.id
+        }
+      },
+      gearNode: {
+        id: `${sourceKey}:gear_driver`,
+        componentKey: sourceKey,
+        mountId: 'gear_driver',
+        mount: { id: 'gear_driver', position: 'corner_ne', surface: 'front' },
+        driveRatio: -1
+      },
+      axisBinding: {
+        componentKey: boundKey,
+        hostKind: 'tile',
+        socket: 'corner_nw',
+        surface: 'front'
+      },
+      pivotWorld: { x: 2, y: 0.5, z: 0 },
+      driveRatio: -1
+    });
+
+    expect(entry.assembly).toBe(assembly);
+    expect(entry.assembly.componentKeys).toEqual([boundKey, neighborKey]);
+    expect(entry.basePlacements).toMatchObject({
+      [boundKey]: bound,
+      [neighborKey]: neighbor
+    });
+  });
+
   it('measures fixed axis one-to-one sync tolerance', () => {
     expect(getAngleErrorDegrees(359.8, 0.1)).toBeCloseTo(0.3, 5);
     expect(validateFixedAxisSync({ gearAngle: 90, assemblyAngle: 90.4 }).ok).toBe(true);
@@ -333,6 +546,111 @@ describe('cityChannelMechanismSimulation', () => {
       obstacleKey
     });
     expect(Math.abs(obstruction.angle)).toBeLessThanOrEqual(90);
+  });
+
+  it('ignores rotated AABB overlap when board footprints do not collide', () => {
+    const moverKey = createCellKey(0, 0, 0);
+    const obstacleKey = createCellKey(1.1, 1.1, 0);
+    const mover = createTile({
+      x: 0,
+      y: 0,
+      z: 0,
+      panelType: CITY_CHANNEL_TILE_TYPES.BASIC_PLATE
+    });
+    const obstacle = createTile({
+      x: 1.1,
+      y: 1.1,
+      z: 0,
+      panelType: CITY_CHANNEL_TILE_TYPES.BASIC_PLATE
+    });
+    const mapData = {
+      ...createBaseCityChannelMap({ name: 'runtime aabb-only overlap' }),
+      tiles: {
+        [moverKey]: mover,
+        [obstacleKey]: obstacle
+      },
+      walls: {}
+    };
+
+    expect(findRotationObstruction({
+      mapData,
+      assembly: { id: 'assembly_1', componentKeys: [moverKey] },
+      anchor: { x: 0, y: 0, z: 0 },
+      targetAngle: 45,
+      stepDegrees: 45
+    })).toBeNull();
+  });
+
+  it('does not use an invisible horizontal base for vertical board collision', () => {
+    const moverKey = createCellKey(0, 0, 0);
+    const verticalKey = createCellKey(1, 0, 0);
+    const mover = createTile({
+      x: 0,
+      y: 0,
+      z: 0,
+      panelType: CITY_CHANNEL_TILE_TYPES.TRANSMISSION_L_PLATE
+    });
+    const vertical = {
+      ...createTile({
+        x: 1,
+        y: 0,
+        z: 0,
+        rotation: 0,
+        panelType: CITY_CHANNEL_TILE_TYPES.TRANSMISSION_STRAIGHT_PLATE
+      }),
+      isVertical: true
+    };
+    const mapData = {
+      ...createBaseCityChannelMap({ name: 'vertical base collision' }),
+      tiles: {
+        [moverKey]: mover,
+        [verticalKey]: vertical
+      },
+      walls: {}
+    };
+
+    expect(findRotationObstruction({
+      mapData,
+      assembly: { id: 'assembly_1', componentKeys: [moverKey] },
+      anchor: { x: 0.5, y: -0.5, z: 0 },
+      targetAngle: 90,
+      stepDegrees: 90
+    })).toBeNull();
+  });
+
+  it('does not treat a wall support floor as a rotation obstruction', () => {
+    const supportKey = createCellKey(2, 2, 1);
+    const wallKey = createWallKey(2, 2, 1, 'north');
+    const support = createTile({
+      x: 2,
+      y: 2,
+      z: 1,
+      panelType: CITY_CHANNEL_TILE_TYPES.BASIC_PLATE
+    });
+    const wall = createWall({
+      x: 2,
+      y: 2,
+      z: 1,
+      edge: 'north',
+      panelType: CITY_CHANNEL_TILE_TYPES.TRANSMISSION_STRAIGHT_PLATE
+    });
+    const mapData = {
+      ...createBaseCityChannelMap({ name: 'support collision exemption' }),
+      tiles: {
+        [supportKey]: support
+      },
+      walls: {
+        [wallKey]: wall
+      },
+    };
+
+    expect(findRotationObstruction({
+      mapData,
+      assembly: { id: 'assembly_wall', componentKeys: [wallKey] },
+      anchor: { x: 2, y: 2, z: 1 },
+      targetAngle: 45,
+      stepDegrees: 5
+    })).toBeNull();
   });
 
   it('blocks tiny obstructed rotations before starting preview motion', () => {

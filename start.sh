@@ -559,7 +559,6 @@ else
     PORT="$FRONTEND_PORT" \
     HOST="$LOCAL_BIND_HOST" \
     BACKEND_PROXY_TARGET="$BACKEND_PUBLIC_ORIGIN" \
-    REACT_APP_BACKEND_ORIGIN="$BACKEND_PUBLIC_ORIGIN" \
     pm2 start npm --name neurowar-frontend -- start >/dev/null
 fi
 
@@ -569,7 +568,7 @@ echo "========================================="
 echo "Frontend actual origin: ${FRONTEND_LOCALHOST_ORIGIN}"
 echo "Frontend actual origin: ${FRONTEND_LOOPBACK_ORIGIN}"
 echo "Backend actual origin:  ${BACKEND_PUBLIC_ORIGIN}"
-echo "API_BASE:               ${BACKEND_PUBLIC_ORIGIN}/api"
+echo "Frontend API path:      /api -> ${BACKEND_PUBLIC_ORIGIN}/api"
 echo "WebSocket endpoint:     ${BACKEND_PUBLIC_ORIGIN}"
 echo "Access mode:            local-only (${LOCAL_BIND_HOST})"
 echo "MongoDB:   mongodb://localhost:${MONGO_PORT}/strategy-game"

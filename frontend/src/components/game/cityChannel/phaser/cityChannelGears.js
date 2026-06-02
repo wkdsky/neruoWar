@@ -9,6 +9,10 @@ import {
   isCornerGearSocket,
   normalizeGearMount
 } from '../cityChannelMechanismRuntime';
+import {
+  hasDirectionalGearSurface,
+  normalizeGearSurfaceForPanel
+} from '../cityChannelGearPressurePlateRender';
 import { getCellVerticalEndpoints, getPlacementDepth } from './renderer/CityChannelDepth';
 import { isPlacementVisible as isCityChannelPlacementVisible } from './cityChannelPhaserVisibility';
 import {
@@ -52,6 +56,7 @@ export const isGearSurfaceVisible = (placement, mount = {}) => {
 export const isGearOnCameraSide = (placement, mount = {}, cameraYaw = 0) => {
   if (!placement || !mount) return false;
   if (!placement.edge && !placement.isVertical) return (mount.surface || 'front') === 'front';
+  if (!hasDirectionalGearSurface(placement.panelType)) return true;
   return (mount.surface || 'front') === getVisibleGearSurfaceSide(placement, cameraYaw);
 };
 
@@ -275,7 +280,9 @@ export const isGearSocketBlockedBySurface = ({ mapData = {}, placement, socket }
 
 export const hasGearOnSocket = (placement, socket, surface = 'front') => (
   (placement?.gearMounts || []).some((mount) => (
-    mount.position === socket && (mount.surface || 'front') === surface
+    mount.position === socket
+    && normalizeGearSurfaceForPanel(placement?.panelType, mount.surface || 'front')
+      === normalizeGearSurfaceForPanel(placement?.panelType, surface)
   ))
 );
 
@@ -307,9 +314,10 @@ export const hasCornerGearConflict = ({
   const ignored = normalizeIgnoreGearKeys(ignoreGearKeys);
   return Object.entries(mapData.tiles || {}).some(([hostKey, tile]) => {
     if (!tile || tile.edge || tile.isVertical) return false;
+    const normalizedSurface = normalizeGearSurfaceForPanel(tile.panelType, surface);
     return (tile.gearMounts || []).some((mount) => {
       if (!isCornerGearSocket(mount.position)) return false;
-      if ((mount.surface || 'front') !== surface) return false;
+      if (normalizeGearSurfaceForPanel(tile.panelType, mount.surface || 'front') !== normalizedSurface) return false;
       if (ignored.has(getGearMountIdentity('tile', hostKey, mount.id))) return false;
       const mountPivot = getGearSocketWorldPosition(tile, mount.position);
       return isSameHorizontalCornerPivot(mountPivot, pivotWorld, epsilon);
@@ -331,9 +339,10 @@ export const validateGearPlacement = ({
   }
   const ignored = normalizeIgnoreGearKeys(ignoreGearKeys);
   const ownIdentity = getGearMountIdentity(target.hostKind, target.hostKey, target.mountId);
+  const targetSurface = normalizeGearSurfaceForPanel(target.placement.panelType, target.surface || 'front');
   const occupied = (target.placement.gearMounts || []).some((mount) => (
     mount.position === target.socket
-    && (mount.surface || 'front') === target.surface
+    && normalizeGearSurfaceForPanel(target.placement.panelType, mount.surface || 'front') === targetSurface
     && mount.id !== target.mountId
     && !ignored.has(getGearMountIdentity(target.hostKind, target.hostKey, mount.id))
     && !ignored.has(ownIdentity)
@@ -481,8 +490,9 @@ export const getGearInstallTarget = ({
   if (isPortalMaterial(hit.panelType)) return null;
   const placement = getGearHostPlacement({ mapData, hit });
   if (!placement) return null;
-  const surface = getGearSurfaceForHit(hit);
-  if (!surface) return null;
+  const hitSurface = getGearSurfaceForHit(hit);
+  if (!hitSurface) return null;
+  const surface = normalizeGearSurfaceForPanel(placement.panelType, hitSurface);
   const pointerLocal = getGearSurfaceLocalPointForHit({ mapData, hit, getGearSurfaceContext });
   const candidates = GEAR_SOCKET_POSITIONS.map((socket) => {
     const point = getGearBoardPointForHit({ mapData, hit, socket, mapGearLocalPointToSurface });
@@ -551,7 +561,7 @@ export const getGearInstallTargetForScene = (scene, hitInfo, options = {}) => ge
 });
 
 export const getGearSurfaceKey = (placement, mount = {}) => {
-  const surface = mount.surface || 'front';
+  const surface = normalizeGearSurfaceForPanel(placement?.panelType, mount.surface || 'front');
   if (!placement) return `unknown:${surface}`;
   if (placement.edge) return `edge:${placement.z || 0}:${placement.edge}:${surface}`;
   if (placement.isVertical) {
@@ -567,7 +577,36 @@ const getGearContactPoint = (node = {}) => node.worldPoint || node.point || { x:
 
 const getGearPitchRadius = (node = {}) => Number(node.pitchRadiusWorld ?? node.pitchRadius) || 1;
 
+const getGearScreenPitchRadius = (node = {}) => Number(node.pitchRadius) || Number(node.pitchRadiusWorld) || 1;
+
 const getGearRatioRadius = (node = {}) => Number(node.gearRatioRadius ?? node.pitchRadiusWorld ?? node.pitchRadius) || 1;
+
+const getGearMeshPlaneDistance = (a = {}, b = {}) => {
+  const aPlane = a.meshPlane;
+  const bPlane = b.meshPlane;
+  if (!aPlane || !bPlane) return null;
+  if (aPlane.kind !== bPlane.kind) return null;
+  const aNormal = aPlane.normal || {};
+  const bNormal = bPlane.normal || {};
+  const normalDot = ((Number(aNormal.x) || 0) * (Number(bNormal.x) || 0))
+    + ((Number(aNormal.y) || 0) * (Number(bNormal.y) || 0))
+    + ((Number(aNormal.z) || 0) * (Number(bNormal.z) || 0));
+  if (normalDot < 0.98) return null;
+  if (Math.abs((Number(aPlane.planeOffset) || 0) - (Number(bPlane.planeOffset) || 0)) > 0.08) return null;
+  return Math.hypot((Number(aPlane.u) || 0) - (Number(bPlane.u) || 0), (Number(aPlane.v) || 0) - (Number(bPlane.v) || 0));
+};
+
+const getSurfacePlaneWithoutSide = (surfaceKey = '') => {
+  if (!surfaceKey) return '';
+  const parts = String(surfaceKey).split(':');
+  if (parts.length <= 1) return surfaceKey;
+  return parts.slice(0, -1).join(':');
+};
+
+const areOppositeSidesOfSamePlane = (a = {}, b = {}) => (
+  a.surfaceKey !== b.surfaceKey
+  && getSurfacePlaneWithoutSide(a.surfaceKey) === getSurfacePlaneWithoutSide(b.surfaceKey)
+);
 
 export const buildGearContactGraph = (nodes = [], threshold = getGearContactThreshold()) => {
   const graph = new Map(nodes.map((node) => [node.id, []]));
@@ -575,15 +614,20 @@ export const buildGearContactGraph = (nodes = [], threshold = getGearContactThre
     for (let j = i + 1; j < nodes.length; j += 1) {
       const a = nodes[i];
       const b = nodes[j];
-      if (a.surfaceKey !== b.surfaceKey) continue;
-      const aPoint = getGearContactPoint(a);
-      const bPoint = getGearContactPoint(b);
-      if (Math.abs((Number(aPoint.z) || 0) - (Number(bPoint.z) || 0)) > 0.08) continue;
-      const distance = Math.hypot(aPoint.x - bPoint.x, aPoint.y - bPoint.y);
-      const aRadius = getGearPitchRadius(a);
-      const bRadius = getGearPitchRadius(b);
+      const sameSurface = a.surfaceKey === b.surfaceKey;
+      if (!sameSurface && areOppositeSidesOfSamePlane(a, b)) continue;
+      const meshPlaneDistance = getGearMeshPlaneDistance(a, b);
+      if ((a.meshPlane || b.meshPlane) && meshPlaneDistance === null) continue;
+      const aPoint = meshPlaneDistance !== null || sameSurface ? getGearContactPoint(a) : (a.point || getGearContactPoint(a));
+      const bPoint = meshPlaneDistance !== null || sameSurface ? getGearContactPoint(b) : (b.point || getGearContactPoint(b));
+      if (meshPlaneDistance === null && sameSurface && Math.abs((Number(aPoint.z) || 0) - (Number(bPoint.z) || 0)) > 0.08) continue;
+      const distance = meshPlaneDistance ?? Math.hypot(aPoint.x - bPoint.x, aPoint.y - bPoint.y);
+      const aRadius = meshPlaneDistance !== null || sameSurface ? getGearPitchRadius(a) : getGearScreenPitchRadius(a);
+      const bRadius = meshPlaneDistance !== null || sameSurface ? getGearPitchRadius(b) : getGearScreenPitchRadius(b);
       const pitchContact = aRadius + bRadius;
-      const contactDistance = Math.max(pitchContact * 1.22, Math.min(threshold, pitchContact * 1.22));
+      const contactDistance = meshPlaneDistance !== null || sameSurface
+        ? pitchContact * 1.22
+        : Math.max(pitchContact * 1.22, Math.min(threshold, pitchContact * 1.22));
       if (distance > contactDistance) continue;
       if (distance < Math.max(pitchContact * 0.28, 0.08)) continue;
       const aRatioRadius = getGearRatioRadius(a);
@@ -622,11 +666,17 @@ export const getAssemblyComponentDistances = (assembly, sourceComponentKey) => {
 
 export const getDrivenGearRoots = (assembly, nodes = [], sourceComponentKey = '') => {
   if (nodes.length <= 0) return [];
+  const assemblyComponentKeys = new Set(assembly?.componentKeys || []);
+  const directDriveNodes = nodes.filter((node) => {
+    const boundComponentKey = node?.mount?.axisBinding?.componentKey;
+    return !boundComponentKey || assemblyComponentKeys.has(boundComponentKey);
+  });
+  if (directDriveNodes.length <= 0) return [];
   const distances = getAssemblyComponentDistances(assembly, sourceComponentKey);
-  const reachable = nodes
+  const reachable = directDriveNodes
     .map((node) => ({ node, distance: distances.has(node.componentKey) ? distances.get(node.componentKey) : Infinity }))
     .filter((item) => Number.isFinite(item.distance));
-  if (reachable.length <= 0) return [nodes[0]];
+  if (reachable.length <= 0) return [directDriveNodes[0]];
   const minDistance = Math.min(...reachable.map((item) => item.distance));
   return reachable.filter((item) => item.distance === minDistance).map((item) => item.node);
 };
@@ -642,8 +692,8 @@ export const resolveDrivenGearNodes = ({
   const byId = new Map(allNodes.map((node) => [node.id, node]));
   const graph = contactGraph || buildGearContactGraph(allNodes);
   const roots = getDrivenGearRoots(assembly, assemblyNodes, sourceComponentKey);
+  if (roots.length <= 0) return [];
   const visited = new Set();
-  const queue = [];
   roots.forEach((root) => {
     if (!root?.id || visited.has(root.id)) return;
     const liveRoot = byId.get(root.id);
@@ -651,22 +701,22 @@ export const resolveDrivenGearNodes = ({
     liveRoot.driveRatio = 1;
     liveRoot.direction = 1;
     visited.add(root.id);
-    queue.push(root.id);
+    const queue = [root.id];
+    while (queue.length > 0) {
+      const currentId = queue.shift();
+      const current = byId.get(currentId);
+      (graph.get(currentId) || []).forEach((edge) => {
+        const nextId = edge.id;
+        if (visited.has(nextId)) return;
+        const next = byId.get(nextId);
+        if (!next || !current) return;
+        next.driveRatio = (current.driveRatio || 1) * (edge.ratio || -1);
+        next.direction = next.driveRatio >= 0 ? 1 : -1;
+        visited.add(nextId);
+        queue.push(nextId);
+      });
+    }
   });
-  while (queue.length > 0) {
-    const currentId = queue.shift();
-    const current = byId.get(currentId);
-    (graph.get(currentId) || []).forEach((edge) => {
-      const nextId = edge.id;
-      if (visited.has(nextId)) return;
-      const next = byId.get(nextId);
-      if (!next || !current) return;
-      next.driveRatio = (current.driveRatio || 1) * (edge.ratio || -1);
-      next.direction = next.driveRatio >= 0 ? 1 : -1;
-      visited.add(nextId);
-      queue.push(nextId);
-    });
-  }
   const driven = allNodes.filter((node) => visited.has(node.id));
   return driven.length > 0
     ? driven

@@ -6,16 +6,22 @@ import {
   wallEdgeToRotation
 } from './cityChannelSchema';
 import {
-  boxesIntersect,
-  getCityChannelPlacementCollisionBoxes
+  collisionPrismsIntersect,
+  getCityChannelPlacementCollisionBoxes,
+  getCityChannelPlacementCollisionPrisms,
+  isSupportCollisionExempt
 } from './cityChannelPlacementGeometry';
 import {
   createLegacyFixedAxisBinding,
-  getAssemblyForCell,
   getGearMountLocalPosition,
   getGearSocketKind,
   normalizeGearAxisBinding
 } from './cityChannelMechanismRuntime';
+import {
+  getGearSurfaceNormalSignForPanel,
+  getGearSurfaceOffsetSignForPanel,
+  normalizeGearSurfaceForPanel
+} from './cityChannelGearPressurePlateRender';
 
 export const FIXED_AXIS_SYNC_TOLERANCE_DEGREES = 0.5;
 export const ROTATION_COLLISION_STEP_DEGREES = 2;
@@ -48,7 +54,9 @@ const worldEdgeCenter = {
 const getVerticalAxis = (rotation = 0) => rotatePoint({ x: 1, y: 0 }, normalizeRotation(rotation || 0));
 const getVerticalNormal = (rotation = 0) => rotatePoint({ x: 0, y: 1 }, normalizeRotation(rotation || 0));
 
-const getSurfaceOffsetSign = (mount = {}) => ((mount.surface || 'front') === 'back' ? -1 : 1);
+const getSurfaceOffsetSign = (placement = {}, mount = {}) => (
+  getGearSurfaceOffsetSignForPanel(placement.panelType, mount.surface || 'front')
+);
 
 export const rotatePoint = (point = {}, degrees = 0) => {
   const radians = (degrees * Math.PI) / 180;
@@ -107,7 +115,7 @@ const getVerticalSurfaceFrame = (placement = {}, mount = {}) => {
     axis: edge ? (worldEdgeTangent[edge] || worldEdgeTangent.north) : getVerticalAxis(yaw),
     normal: edge ? (worldEdgeNormal[edge] || worldEdgeNormal.north) : getVerticalNormal(yaw),
     originOffset,
-    surfaceOffset: VERTICAL_PANEL_SURFACE_OFFSET_WORLD * getSurfaceOffsetSign(mount),
+    surfaceOffset: VERTICAL_PANEL_SURFACE_OFFSET_WORLD * getSurfaceOffsetSign(placement, mount),
     baseLift: edge ? 0 : VERTICAL_PANEL_BASE_LIFT_WORLD,
     yaw
   };
@@ -160,6 +168,56 @@ export const getGearWorldPosition = (placement = {}, mount = {}) => {
   };
 };
 
+export const getGearMeshPlane = (placement = {}, mount = {}, worldPoint = null) => {
+  if (!placement || !mount) return null;
+  const point = worldPoint || getGearWorldPosition(placement, mount);
+  if (!point) return null;
+  const sign = getGearSurfaceNormalSignForPanel(placement.panelType, mount.surface || 'front');
+
+  if (placement.edge) {
+    const tangent = worldEdgeTangent[placement.edge] || worldEdgeTangent.north;
+    const baseNormal = worldEdgeNormal[placement.edge] || worldEdgeNormal.north;
+    const normal = {
+      x: baseNormal.x * sign,
+      y: baseNormal.y * sign,
+      z: 0
+    };
+    return {
+      kind: 'vertical',
+      normal,
+      planeOffset: (point.x * normal.x) + (point.y * normal.y),
+      u: (point.x * tangent.x) + (point.y * tangent.y),
+      v: Number(point.z) || 0
+    };
+  }
+
+  if (placement.isVertical) {
+    const tangent = getVerticalAxis(placement.rotation || 0);
+    const baseNormal = getVerticalNormal(placement.rotation || 0);
+    const normal = {
+      x: baseNormal.x * sign,
+      y: baseNormal.y * sign,
+      z: 0
+    };
+    return {
+      kind: 'vertical',
+      normal,
+      planeOffset: (point.x * normal.x) + (point.y * normal.y),
+      u: (point.x * tangent.x) + (point.y * tangent.y),
+      v: Number(point.z) || 0
+    };
+  }
+
+  const normalZ = normalizeGearSurfaceForPanel(placement.panelType, mount.surface || 'front') === 'back' ? -1 : 1;
+  return {
+    kind: 'horizontal',
+    normal: { x: 0, y: 0, z: normalZ },
+    planeOffset: (Number(point.z) || 0) * normalZ,
+    u: Number(point.x) || 0,
+    v: Number(point.y) || 0
+  };
+};
+
 export const getFixedAxisWorldAnchor = (mapData = {}, fixedAxis = {}) => {
   const placement = getPlacementByComponentKey(mapData, fixedAxis.componentKey)
     || (fixedAxis.cell ? getPlacementByComponentKey(mapData, createCellKey(fixedAxis.cell.x, fixedAxis.cell.y, fixedAxis.cell.z)) : null);
@@ -207,6 +265,96 @@ export const getRuntimePlacementAtAngle = (placement = {}, anchor = {}, degrees 
     runtimeAxisAnchor: anchor,
     rotation: normalizeRotation(baseRotation + degrees)
   };
+};
+
+const getPlacementSurfaceCenterWorld = (placement = {}, mount = {}) => {
+  if (placement.edge || placement.isVertical) {
+    return getVerticalSurfaceWorldPosition(placement, {
+      ...mount,
+      position: 'center'
+    }, { x: 0, y: 0, z: 0 });
+  }
+  return {
+    x: Number(placement.x) || 0,
+    y: Number(placement.y) || 0,
+    z: Number(placement.z) || 0
+  };
+};
+
+const getVerticalPlaneCoordinates = (point = {}, anchor = {}, frame = {}) => {
+  const dx = (Number(point.x) || 0) - (Number(anchor.x) || 0);
+  const dy = (Number(point.y) || 0) - (Number(anchor.y) || 0);
+  return {
+    x: (dx * (frame.axis?.x || 0)) + (dy * (frame.axis?.y || 0)),
+    y: -((Number(point.z) || 0) - (Number(anchor.z) || 0)),
+    normal: (dx * (frame.normal?.x || 0)) + (dy * (frame.normal?.y || 0))
+  };
+};
+
+const getWorldPointFromVerticalPlaneCoordinates = (coords = {}, anchor = {}, frame = {}) => ({
+  x: (Number(anchor.x) || 0)
+    + ((frame.axis?.x || 0) * (Number(coords.x) || 0))
+    + ((frame.normal?.x || 0) * (Number(coords.normal) || 0)),
+  y: (Number(anchor.y) || 0)
+    + ((frame.axis?.y || 0) * (Number(coords.x) || 0))
+    + ((frame.normal?.y || 0) * (Number(coords.normal) || 0)),
+  z: (Number(anchor.z) || 0) - (Number(coords.y) || 0)
+});
+
+const getRuntimePlacementInFixedVerticalPlane = (
+  placement = {},
+  fixedPlacement = {},
+  fixedMount = {},
+  pivotWorld = null,
+  deltaDegrees = 0
+) => {
+  if (!placement || !pivotWorld) return getRuntimePlacementAtAngle(placement, pivotWorld || {}, deltaDegrees);
+  if (!placement.edge && !placement.isVertical) return getRuntimePlacementAtAngle(placement, pivotWorld, deltaDegrees);
+
+  const fixedFrame = getVerticalSurfaceFrame(fixedPlacement, fixedMount);
+  const centerWorld = getPlacementSurfaceCenterWorld(placement, fixedMount);
+  const centerPlane = getVerticalPlaneCoordinates(centerWorld, pivotWorld, fixedFrame);
+  const rotatedCenterPlane = {
+    ...rotatePoint(centerPlane, deltaDegrees),
+    normal: centerPlane.normal
+  };
+  const runtimeCenterWorld = getWorldPointFromVerticalPlaneCoordinates(rotatedCenterPlane, pivotWorld, fixedFrame);
+  const placementFrame = getVerticalSurfaceFrame(placement, fixedMount);
+  return {
+    ...placement,
+    x: Number(((Number(runtimeCenterWorld.x) || 0)
+      - (placementFrame.originOffset.x || 0)
+      - (placementFrame.normal.x * placementFrame.surfaceOffset)).toFixed(6)),
+    y: Number(((Number(runtimeCenterWorld.y) || 0)
+      - (placementFrame.originOffset.y || 0)
+      - (placementFrame.normal.y * placementFrame.surfaceOffset)).toFixed(6)),
+    z: Number(((Number(runtimeCenterWorld.z) || 0) - 0.5 - placementFrame.baseLift).toFixed(6)),
+    runtimeAngle: deltaDegrees,
+    runtimeAxisAnchor: pivotWorld,
+    runtimePivotWorld: pivotWorld,
+    runtimeFixedMountId: fixedMount.id,
+    runtimeAxisBindingMountId: fixedMount.id,
+    runtimeBaseRotation: placement.edge ? wallEdgeToRotation(placement.edge) : normalizeRotation(placement.rotation || 0),
+    runtimeSurfaceRotation: deltaDegrees,
+    runtimeBaseSurfaceRotation: getVerticalSurfaceBaseRotation(placement)
+  };
+};
+
+export const getRuntimePlacementForFixedAxisAssemblyMember = ({
+  placement = {},
+  componentKey = '',
+  fixedMount = {},
+  fixedPlacement = null,
+  pivotWorld = null,
+  degrees = 0
+} = {}) => {
+  if (componentKey === fixedMount?.componentKey) {
+    return getRuntimePlacementAroundFixedGear(placement, fixedMount, pivotWorld, degrees);
+  }
+  if (fixedPlacement?.edge || fixedPlacement?.isVertical) {
+    return getRuntimePlacementInFixedVerticalPlane(placement, fixedPlacement, fixedMount, pivotWorld, degrees);
+  }
+  return getRuntimePlacementAtAngle(placement, pivotWorld, degrees);
 };
 
 export const getRuntimePlacementAroundFixedGear = (
@@ -295,6 +443,26 @@ export const createSingleComponentAssembly = (componentKey = '') => ({
   warnings: []
 });
 
+const getAssemblyFromGraph = (assemblyGraph = null, componentKey = '') => {
+  if (!assemblyGraph || !componentKey) return null;
+  const assemblyId = assemblyGraph.assemblyByComponentKey?.[componentKey];
+  if (assemblyId) {
+    const assembly = (assemblyGraph.assemblies || []).find((item) => item.id === assemblyId);
+    if (assembly) return assembly;
+  }
+  return (assemblyGraph.assemblies || []).find((assembly) => (
+    (assembly?.componentKeys || []).includes(componentKey)
+  )) || null;
+};
+
+const getAssemblyBasePlacements = (mapData = {}, assembly = null) => (
+  (assembly?.componentKeys || []).reduce((placements, componentKey) => {
+    const placement = getPlacementByComponentKey(mapData, componentKey);
+    if (placement) placements[componentKey] = placement;
+    return placements;
+  }, {})
+);
+
 export const createAxisBindingRuntimeEntryFromGearNode = ({
   mapData = {},
   assemblyGraph = null,
@@ -307,7 +475,7 @@ export const createAxisBindingRuntimeEntryFromGearNode = ({
   if (!gearNode || !binding?.componentKey) return null;
   const boundPlacement = getPlacementByComponentKey(mapData, binding.componentKey);
   if (!boundPlacement) return null;
-  const boundAssembly = getAssemblyForCell(assemblyGraph, binding.componentKey)
+  const boundAssembly = getAssemblyFromGraph(assemblyGraph, binding.componentKey)
     || createSingleComponentAssembly(binding.componentKey);
   const boundMount = {
     ...gearNode.mount,
@@ -320,11 +488,8 @@ export const createAxisBindingRuntimeEntryFromGearNode = ({
       ? { x: boundPlacement.x, y: boundPlacement.y, z: boundPlacement.z }
       : null
   };
-  const basePlacements = (boundAssembly.componentKeys || []).reduce((placements, componentKey) => {
-    const placement = getPlacementByComponentKey(mapData, componentKey);
-    if (placement) placements[componentKey] = placement;
-    return placements;
-  }, {});
+  const basePlacements = getAssemblyBasePlacements(mapData, boundAssembly);
+  basePlacements[binding.componentKey] = boundPlacement;
   return {
     assembly: boundAssembly,
     componentKey: binding.componentKey,
@@ -350,21 +515,24 @@ export const buildStaticCollisionBoxes = (mapData = {}, excludedComponentKeys = 
     const componentKey = getPlacementKey(tile);
     if (excludedComponentKeys.has(componentKey)) return;
     const boxes = getCityChannelPlacementCollisionBoxes(tile);
-    if (boxes.length > 0) entries.push({ componentKey, placement: tile, boxes });
+    const prisms = getCityChannelPlacementCollisionPrisms(tile);
+    if (boxes.length > 0) entries.push({ componentKey, placement: tile, boxes, prisms });
   });
   Object.values(mapData.walls || {}).forEach((wall) => {
     const componentKey = getPlacementKey(wall);
     if (excludedComponentKeys.has(componentKey)) return;
     const boxes = getCityChannelPlacementCollisionBoxes(wall);
-    if (boxes.length > 0) entries.push({ componentKey, placement: wall, boxes });
+    const prisms = getCityChannelPlacementCollisionPrisms(wall);
+    if (boxes.length > 0) entries.push({ componentKey, placement: wall, boxes, prisms });
   });
   return entries;
 };
 
-const findBoxCollision = (movingBoxes = [], staticEntries = []) => {
-  for (const movingBox of movingBoxes) {
+const findBoxCollision = (movingPlacement = null, movingPrisms = [], staticEntries = []) => {
+  for (const movingPrism of movingPrisms) {
     for (const entry of staticEntries) {
-      if (entry.boxes.some((staticBox) => boxesIntersect(movingBox, staticBox, 0.015))) {
+      if (isSupportCollisionExempt(movingPlacement, entry.placement)) continue;
+      if ((entry.prisms || []).some((staticPrism) => collisionPrismsIntersect(movingPrism, staticPrism, 0.015))) {
         return entry;
       }
     }
@@ -376,6 +544,7 @@ export const findRotationObstruction = ({
   mapData = {},
   assembly,
   anchor,
+  fixedMount = null,
   targetAngle = 0,
   stepDegrees = ROTATION_COLLISION_STEP_DEGREES,
   excludedComponentKeys = new Set()
@@ -388,10 +557,13 @@ export const findRotationObstruction = ({
     ...movingKeys,
     ...(excludedComponentKeys instanceof Set ? excludedComponentKeys : Array.from(excludedComponentKeys || []))
   ]);
-  const movingPlacements = componentKeys
-    .map((componentKey) => getPlacementByComponentKey(mapData, componentKey))
-    .filter(Boolean);
-  if (movingPlacements.length <= 0) return null;
+  const movingEntries = componentKeys
+    .map((componentKey) => ({
+      componentKey,
+      placement: getPlacementByComponentKey(mapData, componentKey)
+    }))
+    .filter((entry) => !!entry.placement);
+  if (movingEntries.length <= 0) return null;
 
   const staticEntries = buildStaticCollisionBoxes(mapData, staticExcludedKeys);
   if (staticEntries.length <= 0) return null;
@@ -403,17 +575,28 @@ export const findRotationObstruction = ({
 
   for (let index = 1; index <= steps; index += 1) {
     const angle = direction * Math.min(maxAngle, index * step);
-    const movingBoxes = movingPlacements.flatMap((placement) => (
-      getRotatedPlacementCollisionBoxes(placement, anchor, angle)
-    ));
-    const obstacle = findBoxCollision(movingBoxes, staticEntries);
-    if (obstacle) {
-      return {
-        blocked: true,
-        angle,
-        obstacleKey: obstacle.componentKey,
-        obstacle: obstacle.placement
-      };
+    const fixedPlacement = fixedMount?.componentKey
+      ? getPlacementByComponentKey(mapData, fixedMount.componentKey)
+      : null;
+    for (const { componentKey, placement } of movingEntries) {
+      const runtimePlacement = getRuntimePlacementForFixedAxisAssemblyMember({
+        placement,
+        componentKey,
+        fixedMount,
+        fixedPlacement,
+        pivotWorld: anchor,
+        degrees: angle
+      });
+      const movingPrisms = getCityChannelPlacementCollisionPrisms(runtimePlacement);
+      const obstacle = findBoxCollision(runtimePlacement, movingPrisms, staticEntries);
+      if (obstacle) {
+        return {
+          blocked: true,
+          angle,
+          obstacleKey: obstacle.componentKey,
+          obstacle: obstacle.placement
+        };
+      }
     }
   }
 
@@ -478,12 +661,20 @@ export const createMechanismRuntimeSnapshot = ({
     const angle = (Number(entry.driveRatio) || 1) * sourceAngle;
     const fixedMount = entry.fixedMount || entry.fixedAxis;
     const anchor = entry.pivotWorld || entry.anchor || getFixedAxisWorldAnchor(mapData, fixedMount);
+    const fixedPlacement = fixedMount?.componentKey
+      ? (entry.basePlacements?.[fixedMount.componentKey] || getPlacementByComponentKey(mapData, fixedMount.componentKey))
+      : null;
     (entry.assembly?.componentKeys || []).forEach((componentKey) => {
       const placement = entry.basePlacements?.[componentKey] || getPlacementByComponentKey(mapData, componentKey);
       if (!placement) return;
-      placements[componentKey] = componentKey === fixedMount?.componentKey
-        ? getRuntimePlacementAroundFixedGear(placement, fixedMount, anchor, angle)
-        : getRuntimePlacementAtAngle(placement, anchor, angle);
+      placements[componentKey] = getRuntimePlacementForFixedAxisAssemblyMember({
+        placement,
+        componentKey,
+        fixedMount,
+        fixedPlacement,
+        pivotWorld: anchor,
+        degrees: angle
+      });
     });
     sync.push({
       assemblyId: entry.assembly?.id,

@@ -175,6 +175,7 @@ export const drawMechanicalLayers = (scene) => {
         mapData: scene.mapData,
         visibleLayerCutoff: scene.visibleLayerCutoff
       }))
+      .map(([componentKey, placement]) => [componentKey, scene.getRuntimePlacement?.(componentKey, placement) || placement])
   );
   const portsByComponentKey = new Map();
   Object.entries(components).forEach(([componentKey, tile]) => {
@@ -222,46 +223,45 @@ export const drawMechanicalLayers = (scene) => {
   });
 
   (scene.mapData.mechanicalLinks || []).forEach((link) => {
-    const fromTile = scene.mapData.tiles?.[link.from?.componentKey];
-    const toTile = scene.mapData.tiles?.[link.to?.componentKey];
+    const fromBaseTile = scene.mapData.tiles?.[link.from?.componentKey];
+    const toBaseTile = scene.mapData.tiles?.[link.to?.componentKey];
+    const fromTile = fromBaseTile ? (scene.getRuntimePlacement?.(link.from?.componentKey, fromBaseTile) || fromBaseTile) : null;
+    const toTile = toBaseTile ? (scene.getRuntimePlacement?.(link.to?.componentKey, toBaseTile) || toBaseTile) : null;
     if (
       !isCityChannelPlacementVisible(fromTile, { mapData: scene.mapData, visibleLayerCutoff: scene.visibleLayerCutoff })
       || !isCityChannelPlacementVisible(toTile, { mapData: scene.mapData, visibleLayerCutoff: scene.visibleLayerCutoff })
     ) return;
-    const from = getMechanicalEndpointPoint({
-      mapData: scene.mapData,
-      cameraYaw: scene.cameraState.yaw,
-      visibleLayerCutoff: scene.visibleLayerCutoff,
-      endpoint: link.from
-    });
-    const to = getMechanicalEndpointPoint({
-      mapData: scene.mapData,
-      cameraYaw: scene.cameraState.yaw,
-      visibleLayerCutoff: scene.visibleLayerCutoff,
-      endpoint: link.to
-    });
-    if (!from || !to) return;
+    const fromPort = (fromTile.mechanicalPorts || []).find((item) => item.id === link.from?.portId);
+    const toPort = (toTile.mechanicalPorts || []).find((item) => item.id === link.to?.portId);
+    const runtimeFrom = fromPort
+      ? getMechanicalPortPoint({ mapData: scene.mapData, cameraYaw: scene.cameraState.yaw, tile: fromTile, port: fromPort })
+      : null;
+    const runtimeTo = toPort
+      ? getMechanicalPortPoint({ mapData: scene.mapData, cameraYaw: scene.cameraState.yaw, tile: toTile, port: toPort })
+      : null;
+    if (!runtimeFrom || !runtimeTo) return;
     const color = mediumColor[link.medium] || 0xcbd5e1;
     scene.mechanicalLinkLayer.lineStyle(link.medium === 'rope' ? 2 : 4, color, link.medium === 'rope' ? 0.74 : 0.82);
     if (link.medium === 'rope') {
-      const sag = Math.min(26, Math.max(8, Math.hypot(to.x - from.x, to.y - from.y) * 0.08));
+      const sag = Math.min(26, Math.max(8, Math.hypot(runtimeTo.x - runtimeFrom.x, runtimeTo.y - runtimeFrom.y) * 0.08));
       scene.mechanicalLinkLayer.beginPath();
-      scene.mechanicalLinkLayer.moveTo(from.x, from.y);
-      scene.mechanicalLinkLayer.lineTo((from.x + to.x) / 2, ((from.y + to.y) / 2) + sag);
-      scene.mechanicalLinkLayer.lineTo(to.x, to.y);
+      scene.mechanicalLinkLayer.moveTo(runtimeFrom.x, runtimeFrom.y);
+      scene.mechanicalLinkLayer.lineTo((runtimeFrom.x + runtimeTo.x) / 2, ((runtimeFrom.y + runtimeTo.y) / 2) + sag);
+      scene.mechanicalLinkLayer.lineTo(runtimeTo.x, runtimeTo.y);
       scene.mechanicalLinkLayer.strokePath();
     } else {
-      scene.mechanicalLinkLayer.lineBetween(from.x, from.y, to.x, to.y);
+      scene.mechanicalLinkLayer.lineBetween(runtimeFrom.x, runtimeFrom.y, runtimeTo.x, runtimeTo.y);
     }
   });
 
   Object.entries(scene.mapData.tiles || {}).forEach(([componentKey, tile]) => {
-    if (!isCityChannelPlacementVisible(tile, { mapData: scene.mapData, visibleLayerCutoff: scene.visibleLayerCutoff })) return;
-    (tile.mechanicalPorts || []).forEach((port) => {
+    const runtimeTile = scene.getRuntimePlacement?.(componentKey, tile) || tile;
+    if (!isCityChannelPlacementVisible(runtimeTile, { mapData: scene.mapData, visibleLayerCutoff: scene.visibleLayerCutoff })) return;
+    (runtimeTile.mechanicalPorts || []).forEach((port) => {
       const point = getMechanicalPortPoint({
         mapData: scene.mapData,
         cameraYaw: scene.cameraState.yaw,
-        tile,
+        tile: runtimeTile,
         port
       });
       if (!point) return;

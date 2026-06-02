@@ -32,12 +32,12 @@ const THUMBNAIL_LAYER_COLORS = [
   { top: '#9ee37d', side: '#3f8f42', edge: '#eaffdc' }
 ];
 const THUMBNAIL_ASSEMBLY_COLORS = [
-  { top: '#7dd3fc', side: '#0369a1', edge: '#e0f2fe' },
-  { top: '#f9a8d4', side: '#be185d', edge: '#fce7f3' },
-  { top: '#a7f3d0', side: '#047857', edge: '#ecfdf5' },
-  { top: '#fde68a', side: '#b45309', edge: '#fffbeb' },
-  { top: '#c4b5fd', side: '#6d28d9', edge: '#f5f3ff' },
-  { top: '#fca5a5', side: '#b91c1c', edge: '#fff1f2' }
+  { top: '#22d3ee', side: '#155e75', edge: '#ecfeff' },
+  { top: '#f472b6', side: '#9d174d', edge: '#fdf2f8' },
+  { top: '#34d399', side: '#065f46', edge: '#ecfdf5' },
+  { top: '#fbbf24', side: '#92400e', edge: '#fffbeb' },
+  { top: '#8b5cf6', side: '#4c1d95', edge: '#f5f3ff' },
+  { top: '#ef4444', side: '#7f1d1d', edge: '#fff1f2' }
 ];
 const THUMBNAIL_NEIGHBOR_OFFSETS = {
   north: { x: 0, y: -1 },

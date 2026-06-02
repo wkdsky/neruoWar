@@ -344,6 +344,12 @@ body.city-channel-immersive-active .home-location-dock {
   filter: drop-shadow(0 12px 12px rgba(0, 0, 0, 0.28));
 }
 
+.city-channel-thumbnail-item.is-mechanical-assembly .city-channel-thumbnail-item__svg {
+  filter:
+    drop-shadow(0 0 5px color-mix(in srgb, var(--thumbnail-edge) 72%, transparent))
+    drop-shadow(0 12px 12px rgba(0, 0, 0, 0.34));
+}
+
 .city-channel-thumbnail-surface {
   vector-effect: non-scaling-stroke;
   stroke-width: 1.9;
@@ -365,6 +371,22 @@ body.city-channel-immersive-active .home-location-dock {
 .city-channel-thumbnail-surface.is-attachment {
   fill: color-mix(in srgb, var(--thumbnail-side) 74%, #020617);
   stroke: color-mix(in srgb, var(--thumbnail-edge) 74%, #67e8f9);
+}
+
+.city-channel-thumbnail-item.is-mechanical-assembly .city-channel-thumbnail-surface {
+  stroke-width: 3.2;
+}
+
+.city-channel-thumbnail-item.is-mechanical-assembly .city-channel-thumbnail-surface.is-top {
+  stroke: var(--thumbnail-edge);
+}
+
+.city-channel-thumbnail-item.is-mechanical-assembly .city-channel-thumbnail-surface.is-side,
+.city-channel-thumbnail-item.is-mechanical-assembly .city-channel-thumbnail-surface.is-wall,
+.city-channel-thumbnail-item.is-mechanical-assembly .city-channel-thumbnail-surface.is-wall-side,
+.city-channel-thumbnail-item.is-mechanical-assembly .city-channel-thumbnail-surface.is-wall-cap,
+.city-channel-thumbnail-item.is-mechanical-assembly .city-channel-thumbnail-surface.is-attachment {
+  stroke: color-mix(in srgb, var(--thumbnail-edge) 88%, #ffffff);
 }
 
 .city-channel-thumbnail-item.is-hovered-layer .city-channel-thumbnail-surface.is-top,

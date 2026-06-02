@@ -8,6 +8,7 @@ import {
   normalizeRotation,
   wallEdgeToRotation
 } from '../cityChannelSchema';
+import { preserveGearMountsForReplacementPlacement } from '../cityChannelEditorMutations';
 import {
   canSelectBoardPlacement,
   canSelectComponentPlacement
@@ -191,7 +192,6 @@ const applyWallPaint = (scene, cell, edge, placementTarget) => {
     const legacyVerticalKey = createCellKey(cell.x, cell.y, cell.z);
     const legacyVerticalTile = scene.mapData.tiles?.[legacyVerticalKey];
     if (legacyVerticalTile?.isVertical) {
-      scene.paintStroke.operations.push({ kind: 'tile', action: 'erase', cell });
       delete scene.mapData.tiles[legacyVerticalKey];
       scene.removeTileObject(cell);
     }
@@ -203,6 +203,20 @@ const applyWallPaint = (scene, cell, edge, placementTarget) => {
       panelType: scene.activeTileType,
       transmissionRotation: scene.activeRotation
     });
+    const preservedGearMounts = Array.isArray(existing?.gearMounts) && existing.gearMounts.length > 0
+      ? preserveGearMountsForReplacementPlacement({
+        fromPlacement: existing,
+        toPlacement: wall
+      })
+      : (Array.isArray(legacyVerticalTile?.gearMounts) && legacyVerticalTile.gearMounts.length > 0
+        ? preserveGearMountsForReplacementPlacement({
+          fromPlacement: legacyVerticalTile,
+          toPlacement: wall
+        })
+        : null);
+    if (Array.isArray(preservedGearMounts) && preservedGearMounts.length > 0) {
+      wall.gearMounts = preservedGearMounts;
+    }
     scene.paintStroke.operations.push({
       kind: 'wall',
       action: 'place',
@@ -279,6 +293,9 @@ const applyTilePaint = (scene, cell, key) => {
     delete scene.mapData.tiles[tileKey];
     scene.removeTileObject(cell);
   } else if (shouldReplaceTile) {
+    const existingGearMounts = Array.isArray(existing?.gearMounts) && existing.gearMounts.length > 0
+      ? existing.gearMounts
+      : null;
     const tile = createTile({
       x: cell.x,
       y: cell.y,
@@ -286,6 +303,13 @@ const applyTilePaint = (scene, cell, key) => {
       panelType: scene.activeTileType,
       rotation: scene.activeRotation
     });
+    if (existingGearMounts) {
+      tile.gearMounts = preserveGearMountsForReplacementPlacement({
+        fromPlacement: existing,
+        toPlacement: tile,
+        gearMounts: existingGearMounts
+      });
+    }
     scene.paintStroke.operations.push({
       kind: 'tile',
       action: 'place',
@@ -374,6 +398,7 @@ export const toggleGearAxisBinding = (scene, hit) => {
     }
   }], { label: nextBinding ? '绑定连轴板材' : '取消连轴板材' });
   mount.axisBinding = nextBinding;
+  scene.playGearBindingConfirmPulse?.(hit, nextBinding);
   scene.redrawMountedGearHostLayers(hit.hostKind, hit.hostKey, host);
   scene.drawGearBindingCandidates?.();
   scene.config.onToast?.(nextBinding ? '已绑定连轴板材。' : '已取消连轴板材。', 'success');

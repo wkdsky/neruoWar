@@ -7,6 +7,10 @@ import {
   parseCellKey,
   wallEdgeToRotation
 } from './cityChannelSchema';
+import {
+  getGearSurfaceOffsetSignForPanel,
+  normalizeGearSurfaceForPanel
+} from './cityChannelGearPressurePlateRender';
 
 export const CITY_CHANNEL_TRIGGER_MECHANISM_TYPES = new Set([
   CITY_CHANNEL_TILE_TYPES.GEAR_PRESSURE_PLATE
@@ -63,6 +67,9 @@ const edgeEndpointsByEdge = {
   west: [{ x: -0.5, y: -0.5 }, { x: -0.5, y: 0.5 }],
   east: [{ x: 0.5, y: -0.5 }, { x: 0.5, y: 0.5 }]
 };
+
+const VERTICAL_PANEL_BASE_LIFT_WORLD = 4 / 62;
+const VERTICAL_PANEL_SURFACE_OFFSET_WORLD = 0.06;
 
 const oppositeDirection = {
   north: 'south',
@@ -171,7 +178,10 @@ export const getWorldTransmissionPorts = (tile = {}, componentKey = '') => {
     ? catalogPorts
     : [];
   const baseRotation = tile.edge ? wallEdgeToRotation(tile.edge) : 0;
-  const localRotation = normalizeRotation(tile.transmissionRotation ?? tile.rotation ?? 0);
+  const localRotation = normalizeRotation(
+    (tile.transmissionRotation ?? tile.rotation ?? 0)
+    + (Number(tile.runtimeSurfaceRotation) || 0)
+  );
   const directionRotation = normalizeRotation(baseRotation + localRotation);
   return ports.map((port) => ({
     ...port,
@@ -203,6 +213,61 @@ export const getHorizontalGearSocketWorldPosition = (placement = {}, socket = 'c
   };
 };
 
+const getVerticalSurfaceFrame = (placement = {}, surface = 'front') => {
+  if (placement.edge) {
+    const endpoints = edgeEndpointsByEdge[placement.edge] || edgeEndpointsByEdge.north;
+    const tangent = {
+      x: (endpoints[1].x || 0) - (endpoints[0].x || 0),
+      y: (endpoints[1].y || 0) - (endpoints[0].y || 0)
+    };
+    const length = Math.max(0.001, Math.hypot(tangent.x, tangent.y));
+    const normal = directionVector[placement.edge] || directionVector.north;
+    const sign = getGearSurfaceOffsetSignForPanel(placement.panelType, surface);
+    return {
+      axis: { x: tangent.x / length, y: tangent.y / length },
+      normal: { x: normal.x || 0, y: normal.y || 0 },
+      originOffset: {
+        x: ((endpoints[0].x || 0) + (endpoints[1].x || 0)) * 0.5,
+        y: ((endpoints[0].y || 0) + (endpoints[1].y || 0)) * 0.5
+      },
+      surfaceOffset: VERTICAL_PANEL_SURFACE_OFFSET_WORLD * sign,
+      baseLift: 0
+    };
+  }
+  const rotation = normalizeRotation(placement.rotation || 0);
+  const axis = rotateGearLocalPosition({ x: 1, y: 0 }, rotation);
+  const normal = rotateGearLocalPosition({ x: 0, y: 1 }, rotation);
+  const sign = getGearSurfaceOffsetSignForPanel(placement.panelType, surface);
+  return {
+    axis,
+    normal,
+    originOffset: { x: 0, y: 0 },
+    surfaceOffset: VERTICAL_PANEL_SURFACE_OFFSET_WORLD * sign,
+    baseLift: VERTICAL_PANEL_BASE_LIFT_WORLD
+  };
+};
+
+export const getGearSocketWorldPosition = (placement = {}, socket = 'center', surface = 'front') => {
+  if (!placement) return null;
+  if (!placement.edge && !placement.isVertical) {
+    return getHorizontalGearSocketWorldPosition(placement, socket);
+  }
+  const localRotation = normalizeRotation(placement.transmissionRotation ?? 0);
+  const local = rotateGearLocalPosition(getGearMountLocalPosition(socket), localRotation);
+  const frame = getVerticalSurfaceFrame(placement, surface);
+  return {
+    x: (Number(placement.x) || 0)
+      + (frame.originOffset.x || 0)
+      + ((frame.axis.x || 0) * (Number(local.x) || 0))
+      + ((frame.normal.x || 0) * frame.surfaceOffset),
+    y: (Number(placement.y) || 0)
+      + (frame.originOffset.y || 0)
+      + ((frame.axis.y || 0) * (Number(local.x) || 0))
+      + ((frame.normal.y || 0) * frame.surfaceOffset),
+    z: (Number(placement.z) || 0) + 0.5 - (Number(local.y) || 0) + frame.baseLift
+  };
+};
+
 const sameCornerPivot = (a = {}, b = {}, epsilon = 0.001) => (
   Math.abs((Number(a.x) || 0) - (Number(b.x) || 0)) <= epsilon
   && Math.abs((Number(a.y) || 0) - (Number(b.y) || 0)) <= epsilon
@@ -227,6 +292,67 @@ export const normalizeGearMount = (mount = {}) => {
     ...mount,
     socketKind: mount.socketKind || getGearSocketKind(mount.position),
     axisBinding
+  };
+};
+
+export const getGearAxisBindingStatus = ({
+  mapData = {},
+  placement = null,
+  mount = {},
+  epsilon = 0.001
+} = {}) => {
+  const binding = normalizeGearAxisBinding(mount?.axisBinding);
+  if (!binding) {
+    return {
+      bound: false,
+      valid: true,
+      binding: null,
+      reason: 'unbound'
+    };
+  }
+  if (!placement || !isCornerGearSocket(mount.position)) {
+    return {
+      bound: true,
+      valid: false,
+      binding,
+      reason: 'invalid_host'
+    };
+  }
+  const boundPlacement = binding.hostKind === 'wall'
+    ? mapData.walls?.[binding.componentKey]
+    : mapData.tiles?.[binding.componentKey];
+  if (!boundPlacement) {
+    return {
+      bound: true,
+      valid: false,
+      binding,
+      reason: 'missing_component'
+    };
+  }
+  const hostPivot = getGearSocketWorldPosition(
+    placement,
+    mount.position,
+    normalizeGearSurfaceForPanel(placement.panelType, mount.surface || 'front')
+  );
+  const boundPivot = getGearSocketWorldPosition(
+    boundPlacement,
+    binding.socket,
+    normalizeGearSurfaceForPanel(boundPlacement.panelType, binding.surface || 'front')
+  );
+  if (!sameCornerPivot(hostPivot, boundPivot, epsilon)) {
+    return {
+      bound: true,
+      valid: false,
+      binding,
+      reason: 'detached_pivot'
+    };
+  }
+  return {
+    bound: true,
+    valid: true,
+    binding,
+    reason: 'ok',
+    component: boundPlacement
   };
 };
 
@@ -346,6 +472,29 @@ const hasGraphEdge = (graph, a, b) => (
 
 const pushUnique = (list, value) => {
   if (value && !list.includes(value)) list.push(value);
+};
+
+const normalizeAssemblyGearMount = ({ mapData = {}, placement = null, componentKey = '', mount = {} } = {}) => {
+  const normalizedMount = normalizeGearMount({
+    ...mount,
+    axisBinding: mount.axisBinding || createLegacyFixedAxisBinding({
+      mapData,
+      mount,
+      componentKey,
+      placement
+    })
+  });
+  const bindingStatus = getGearAxisBindingStatus({
+    mapData,
+    placement,
+    mount: normalizedMount
+  });
+  return {
+    ...normalizedMount,
+    axisBinding: bindingStatus.valid ? bindingStatus.binding : null,
+    axisBindingInvalid: bindingStatus.bound && !bindingStatus.valid,
+    axisBindingInvalidReason: bindingStatus.bound && !bindingStatus.valid ? bindingStatus.reason : null
+  };
 };
 
 const getWallAdjacentFloorKeys = (wall = {}) => {
@@ -471,15 +620,7 @@ export const buildMechanicalAssemblies = (mapData = {}) => {
     const gearMounts = componentKeys.flatMap((componentKey) => {
       const tile = components[componentKey];
       return (Array.isArray(tile.gearMounts) ? tile.gearMounts : []).map((mount) => ({
-        ...normalizeGearMount({
-          ...mount,
-          axisBinding: mount.axisBinding || createLegacyFixedAxisBinding({
-            mapData,
-            mount,
-            componentKey,
-            placement: tile
-          })
-        }),
+        ...normalizeAssemblyGearMount({ mapData, placement: tile, componentKey, mount }),
         componentKey,
         cell: parseCellKey(componentKey)
       }));

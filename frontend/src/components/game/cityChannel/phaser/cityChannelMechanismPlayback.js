@@ -31,6 +31,7 @@ import {
   getAllowedRotationAngle,
   getAxisBindingForMount,
   getFixedAxisWorldAnchor,
+  getGearMeshPlane,
   getGearTeeth,
   getGearWorldPosition
 } from '../cityChannelMechanismSimulation';
@@ -65,6 +66,7 @@ export const triggerMechanismAtCell = (scene, cell, paramsOverride = null) => {
   const tile = scene.mapData.tiles?.[key];
   if (!tile) return false;
   if (!isTriggerMechanismTile(tile.panelType)) return false;
+  scene.cancelMechanismRuntimePreview?.({ silent: true });
   const params = normalizeMechanismParams(paramsOverride || scene.mechanismParams?.[key]);
   let driveStarted = false;
   const startDrive = () => {
@@ -180,11 +182,13 @@ export const playAssemblyRotation = (scene, assembly, fixedAxis, params) => {
     mapData: scene.mapData,
     assembly,
     anchor: anchorWorld,
+    fixedMount: runtimeEntry?.fixedMount || fixedAxis,
     targetAngle
   });
   const allowedRotation = getAllowedRotationAngle({ targetAngle, obstruction });
   if (!allowedRotation.canRotate) {
     scene.clearMechanismRuntimeSnapshot?.();
+    scene.flashMechanismObstruction?.(obstruction);
     scene.config.onToast?.('旁边有遮挡物，当前结构没有足够转动空间。', 'error');
     return false;
   }
@@ -203,6 +207,7 @@ export const playAssemblyRotation = (scene, assembly, fixedAxis, params) => {
     scene.applyMechanismRuntimePlacementTransforms?.(assembly, runtimeEntry || fixedAxis, degrees);
   };
   const motion = { angle: 0 };
+  scene.registerMechanismPreviewTarget?.(motion);
   scene.tweens.killTweensOf(motion);
   scene.tweens.add({
     targets: motion,
@@ -227,7 +232,7 @@ export const playAssemblyRotation = (scene, assembly, fixedAxis, params) => {
         return;
       }
       if (!normalized.autoReturn) return;
-      scene.time.delayedCall(Math.round(normalized.autoReturnDelaySeconds * 1000), () => {
+      const returnTimer = scene.time.delayedCall(Math.round(normalized.autoReturnDelaySeconds * 1000), () => {
         scene.tweens.add({
           targets: motion,
           angle: 0,
@@ -241,6 +246,7 @@ export const playAssemblyRotation = (scene, assembly, fixedAxis, params) => {
           }
         });
       });
+      scene.registerMechanismPreviewTimer?.(returnTimer);
     }
   });
   scene.config.onToast?.(`${assembly.id} 运行预览：固定轴驱动 ${assembly.componentKeys.length} 块板材。`, 'success');
@@ -286,6 +292,7 @@ export const getGearNodesForMounts = (scene, mounts = []) => {
     const liveMount = (placement.gearMounts || []).find((item) => item.id === mount.id) || mount;
     const point = scene.getGearMountPoint(placement, liveMount);
     if (!point) return null;
+    const worldPoint = getGearWorldPosition(placement, liveMount);
     return {
       id: `${mount.componentKey}:${mount.id}`,
       componentKey: mount.componentKey,
@@ -302,7 +309,8 @@ export const getGearNodesForMounts = (scene, mounts = []) => {
         })
       },
       point,
-      worldPoint: getGearWorldPosition(placement, liveMount),
+      worldPoint,
+      meshPlane: getGearMeshPlane(placement, liveMount, worldPoint),
       pitchRadius: getGearPitchRadiusAtPoint(scene, placement, liveMount, point),
       pitchRadiusWorld: GEAR_PITCH_RADIUS_LOCAL,
       gearRatioRadius: getGearRatioRadiusForMount(liveMount),
@@ -405,6 +413,16 @@ export const setGearMountPhases = (scene, nodes = [], angle = 0, basePhases = ne
   scene.sortMapLayer();
 };
 
+export const getGearRotationTransmissionEventKeys = (assembly, assemblyEntries = []) => {
+  const eventKeys = new Set(assembly?.componentKeys || []);
+  assemblyEntries.forEach((entry) => {
+    (entry?.assembly?.componentKeys || []).forEach((componentKey) => {
+      eventKeys.add(componentKey);
+    });
+  });
+  return eventKeys;
+};
+
 export const playAssemblyGearRotation = (scene, assembly, sourceComponentKey, params) => {
   const nodes = resolveDrivenGearNodes(scene, assembly, sourceComponentKey);
   if (nodes.length <= 0) return false;
@@ -440,6 +458,7 @@ export const playAssemblyGearRotation = (scene, assembly, sourceComponentKey, pa
     const delay = Math.round(normalized.triggerDelaySeconds * 1000);
     const basePhases = new Map(nodes.map((node) => [node.id, Number(node.mount?.phase) || 0]));
     const motion = { angle: 0 };
+    scene.registerMechanismPreviewTarget?.(motion);
     scene.tweens.killTweensOf(motion);
     scene.tweens.add({
       targets: motion,
@@ -461,7 +480,7 @@ export const playAssemblyGearRotation = (scene, assembly, sourceComponentKey, pa
       onComplete: () => {
         setGearMountPhases(scene, nodes, targetAngle, basePhases);
         if (!normalized.autoReturn) return;
-        scene.time.delayedCall(Math.round(normalized.autoReturnDelaySeconds * 1000), () => {
+        const returnTimer = scene.time.delayedCall(Math.round(normalized.autoReturnDelaySeconds * 1000), () => {
           scene.tweens.add({
             targets: motion,
             angle: 0,
@@ -475,6 +494,7 @@ export const playAssemblyGearRotation = (scene, assembly, sourceComponentKey, pa
             }
           });
         });
+        scene.registerMechanismPreviewTimer?.(returnTimer);
       }
     });
     scene.config.onToast?.(`${assembly.id} 齿轮传动预览：${nodes.length} 个齿轮转动。`, 'success');
@@ -483,18 +503,16 @@ export const playAssemblyGearRotation = (scene, assembly, sourceComponentKey, pa
   const normalized = normalizeMechanismParams(params);
   const sign = normalized.rotationDirection === 'left' ? -1 : 1;
   const targetAngle = sign * normalized.rotationAngle;
-  const sourceExcludedKeys = new Set(assembly.componentKeys || []);
+  const transmissionEventKeys = getGearRotationTransmissionEventKeys(assembly, assemblyEntries);
   const obstructions = assemblyEntries.map((entry) => {
     const driveRatio = Number(entry.driveRatio) || 1;
-    const excludedComponentKeys = entry.assembly === assembly
-      ? new Set()
-      : sourceExcludedKeys;
     const obstruction = findRotationObstruction({
       mapData: scene.mapData,
       assembly: entry.assembly,
       anchor: entry.anchor,
+      fixedMount: entry.fixedMount,
       targetAngle: targetAngle * driveRatio,
-      excludedComponentKeys
+      excludedComponentKeys: transmissionEventKeys
     });
     if (!obstruction) return null;
     return {
@@ -513,8 +531,9 @@ export const playAssemblyGearRotation = (scene, assembly, sourceComponentKey, pa
     targetAngle,
     obstruction: limitingObstruction
   });
-  if (!allowedRotation.canRotate) {
+  if (limitingObstruction || !allowedRotation.canRotate) {
     scene.clearMechanismRuntimeSnapshot?.();
+    scene.flashMechanismObstruction?.(limitingObstruction);
     scene.config.onToast?.('旁边有遮挡物，当前齿轮组没有足够转动空间。', 'error');
     return false;
   }
@@ -543,6 +562,7 @@ export const playAssemblyGearRotation = (scene, assembly, sourceComponentKey, pa
     });
   };
   const motion = { angle: 0 };
+  scene.registerMechanismPreviewTarget?.(motion);
   scene.tweens.killTweensOf(motion);
   scene.tweens.add({
     targets: motion,
@@ -568,7 +588,7 @@ export const playAssemblyGearRotation = (scene, assembly, sourceComponentKey, pa
         return;
       }
       if (!normalized.autoReturn) return;
-      scene.time.delayedCall(Math.round(normalized.autoReturnDelaySeconds * 1000), () => {
+      const returnTimer = scene.time.delayedCall(Math.round(normalized.autoReturnDelaySeconds * 1000), () => {
         scene.tweens.add({
           targets: motion,
           angle: 0,
@@ -582,6 +602,7 @@ export const playAssemblyGearRotation = (scene, assembly, sourceComponentKey, pa
           }
         });
       });
+      scene.registerMechanismPreviewTimer?.(returnTimer);
     }
   });
   scene.config.onToast?.(`${assembly.id} 齿轮传动预览：${nodes.length} 个齿轮转动。`, 'success');
@@ -602,6 +623,13 @@ export const playMechanismAction = (scene, tile, key, params, options = {}) => {
     engaged = true;
     onEngage?.();
   };
+  scene.registerMechanismPreviewTarget?.(runtime.state);
+  scene.registerMechanismPreviewResetter?.(() => {
+    runtime.state.progress = 0;
+    runtime.state.running = false;
+    scene.drawMechanismState(tile, runtime, 0, params);
+    notifyMechanismPreviewProgress(scene, key, tile, 0, params);
+  });
   scene.tweens.killTweensOf(runtime.state);
   runtime.state.progress = 0;
   runtime.state.running = true;
@@ -636,6 +664,11 @@ export const playInspectMechanismAction = (scene, tile, key, params) => {
   const duration = Math.round(Math.max(0.5, params.durationSeconds || 1.5) * 1000);
   const travelDuration = Math.max(120, Math.round(duration / 2));
   scene.tweens.killTweensOf(state.runtime.state);
+  scene.registerMechanismPreviewTarget?.(state.runtime.state);
+  scene.registerMechanismPreviewResetter?.(() => {
+    state.runtime.state.progress = 0;
+    scene.drawMechanismState(tile, state.runtime, 0, params, state.yaw);
+  });
   state.runtime.state.progress = 0;
   scene.drawMechanismState(tile, state.runtime, 0, params, state.yaw);
   scene.tweens.add({

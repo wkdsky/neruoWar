@@ -8,11 +8,13 @@ import {
   createWallKey
 } from '../cityChannelSchema';
 import {
+  getGearRotationTransmissionEventKeys,
   getGearNodesForMounts,
   playAssemblyGearRotation,
   setGearMountPhases,
   triggerMechanismFromHit
 } from './cityChannelMechanismPlayback';
+import * as mechanismSimulation from '../cityChannelMechanismSimulation';
 import {
   getGearWorldPosition,
   getRuntimePlacementAroundFixedGear
@@ -253,7 +255,7 @@ describe('cityChannelMechanismPlayback', () => {
     expect(scene.config.onToast).toHaveBeenCalledWith('assembly_source 齿轮传动预览：2 个齿轮转动。', 'success');
   });
 
-  it('rotates only the board selected by an axis binding', () => {
+  it('rotates the full mechanical assembly selected by an axis binding', () => {
     const sourceKey = createCellKey(0, 0, 0);
     const fixedKey = createCellKey(1, 0, 0);
     const source = createTile({
@@ -342,7 +344,10 @@ describe('cityChannelMechanismPlayback', () => {
 
     expect(played).toBe(true);
     expect(scene.applyMechanismRuntimePlacementTransforms).toHaveBeenCalledWith(
-      assembly,
+      expect.objectContaining({
+        id: 'assembly_linked',
+        componentKeys: [sourceKey, fixedKey]
+      }),
       expect.objectContaining({
         componentKey: fixedKey,
         fixedMount: expect.objectContaining({
@@ -350,10 +355,409 @@ describe('cityChannelMechanismPlayback', () => {
           componentKey: fixedKey
         }),
         pivotWorld: getGearWorldPosition(fixed, { ...fixed.gearMounts[0], componentKey: fixedKey }),
-        basePlacement: fixed
+        basePlacement: fixed,
+        basePlacements: expect.objectContaining({
+          [sourceKey]: source,
+          [fixedKey]: fixed
+        })
       }),
       45
     );
+  });
+
+  it('drives an externally bound corner gear only through real mesh direction', () => {
+    const sourceKey = createCellKey(0, 0, 0);
+    const cornerHostKey = createCellKey(1, -1, 0);
+    const boundKey = createCellKey(1, 0, 0);
+    const source = createTile({
+      x: 0,
+      y: 0,
+      z: 0,
+      panelType: CITY_CHANNEL_TILE_TYPES.GEAR_PRESSURE_PLATE
+    });
+    const cornerHost = createTile({
+      x: 1,
+      y: -1,
+      z: 0,
+      panelType: CITY_CHANNEL_TILE_TYPES.TRANSMISSION_CROSS_PLATE
+    });
+    const bound = createTile({
+      x: 1,
+      y: 0,
+      z: 0,
+      rotation: 0,
+      panelType: CITY_CHANNEL_TILE_TYPES.TRANSMISSION_L_PLATE
+    });
+    source.gearMounts = [{ id: 'gear_center', position: 'center', surface: 'front', axisType: 'freeAxis' }];
+    cornerHost.gearMounts = [{
+      id: 'gear_corner',
+      position: 'corner_sw',
+      surface: 'front',
+      axisBinding: {
+        componentKey: boundKey,
+        hostKind: 'tile',
+        socket: 'corner_nw',
+        surface: 'front'
+      }
+    }];
+    const sourceAssembly = {
+      id: 'assembly_pressure',
+      componentKeys: [sourceKey, cornerHostKey],
+      edges: [{ componentKey: sourceKey, key: cornerHostKey }],
+      gearMounts: [
+        { ...source.gearMounts[0], componentKey: sourceKey },
+        { ...cornerHost.gearMounts[0], componentKey: cornerHostKey }
+      ],
+      fixedAxes: [{ ...cornerHost.gearMounts[0], componentKey: cornerHostKey }]
+    };
+    const scene = {
+      getGearMountPoint: jest.fn((placement) => (
+        placement === source ? { x: 100, y: 100 } : { x: 122, y: 100 }
+      )),
+      getMechanicalAssemblyGraph: jest.fn(() => ({
+        assemblies: [sourceAssembly],
+        assemblyByComponentKey: {
+          [sourceKey]: sourceAssembly.id,
+          [cornerHostKey]: sourceAssembly.id
+        }
+      })),
+      mapData: {
+        tiles: {
+          [sourceKey]: source,
+          [cornerHostKey]: cornerHost,
+          [boundKey]: bound
+        },
+        walls: {}
+      },
+      mapGearLocalPointToSurface: jest.fn((placement, localPosition) => ({
+        x: (placement === source ? 100 : 122) + ((localPosition.x || 0) * 100),
+        y: 100 + ((localPosition.y || 0) * 100)
+      })),
+      applyMechanismRuntimePlacementTransforms: jest.fn(),
+      mergeMechanismRuntimeGearStates: jest.fn(),
+      redrawMountedGearHostLayers: jest.fn(),
+      setMechanismRuntimeSnapshot: jest.fn(),
+      sortMapLayer: jest.fn(),
+      time: { delayedCall: jest.fn() },
+      tweens: {
+        killTweensOf: jest.fn(),
+        add: jest.fn((config) => {
+          config.onUpdate?.();
+          config.onComplete?.();
+        })
+      },
+      config: {
+        onMechanismPreviewProgress: jest.fn(),
+        onToast: jest.fn()
+      }
+    };
+
+    const played = playAssemblyGearRotation(scene, sourceAssembly, sourceKey, {
+      rotationAngle: 45,
+      rotationDirection: 'right',
+      rotationSpeedDegPerSec: 45,
+      triggerDelaySeconds: 0,
+      autoReturn: false
+    });
+
+    expect(played).toBe(true);
+    expect(scene.applyMechanismRuntimePlacementTransforms).toHaveBeenCalledWith(
+      expect.objectContaining({
+        id: `single_${boundKey}`,
+        componentKeys: [boundKey]
+      }),
+      expect.objectContaining({
+        componentKey: boundKey,
+        sourceGearComponentKey: cornerHostKey,
+        sourceGearMountId: 'gear_corner'
+      }),
+      -45
+    );
+  });
+
+  it('does not treat a source-side vertical panel base as a floor-plane obstruction', () => {
+    const sourceKey = createCellKey(0, 0, 0);
+    const cornerHostKey = createCellKey(0, -1, 0);
+    const blockerKey = createCellKey(1, -1, 0);
+    const boundKey = createCellKey(1, 0, 0);
+    const source = createTile({
+      x: 0,
+      y: 0,
+      z: 0,
+      panelType: CITY_CHANNEL_TILE_TYPES.GEAR_PRESSURE_PLATE
+    });
+    const cornerHost = createTile({
+      x: 0,
+      y: -1,
+      z: 0,
+      panelType: CITY_CHANNEL_TILE_TYPES.TRANSMISSION_CROSS_PLATE
+    });
+    const blocker = {
+      ...createTile({
+        x: 1,
+        y: -1,
+        z: 0,
+        panelType: CITY_CHANNEL_TILE_TYPES.TRANSMISSION_STRAIGHT_PLATE,
+        rotation: 0
+      }),
+      isVertical: true
+    };
+    const bound = createTile({
+      x: 1,
+      y: 0,
+      z: 0,
+      rotation: 0,
+      panelType: CITY_CHANNEL_TILE_TYPES.TRANSMISSION_L_PLATE
+    });
+    source.gearMounts = [{ id: 'gear_center', position: 'center', surface: 'front', axisType: 'freeAxis' }];
+    cornerHost.gearMounts = [{
+      id: 'gear_corner',
+      position: 'corner_se',
+      surface: 'front',
+      axisBinding: {
+        componentKey: boundKey,
+        hostKind: 'tile',
+        socket: 'corner_nw',
+        surface: 'front'
+      }
+    }];
+    const sourceAssembly = {
+      id: 'assembly_pressure',
+      componentKeys: [sourceKey, cornerHostKey, blockerKey],
+      edges: [
+        { componentKey: sourceKey, key: cornerHostKey },
+        { componentKey: cornerHostKey, key: blockerKey }
+      ],
+      gearMounts: [
+        { ...source.gearMounts[0], componentKey: sourceKey },
+        { ...cornerHost.gearMounts[0], componentKey: cornerHostKey }
+      ],
+      fixedAxes: [{ ...cornerHost.gearMounts[0], componentKey: cornerHostKey }]
+    };
+    const scene = {
+      getGearMountPoint: jest.fn((placement) => (
+        placement === source ? { x: 100, y: 100 } : { x: 122, y: 100 }
+      )),
+      getMechanicalAssemblyGraph: jest.fn(() => ({
+        assemblies: [sourceAssembly],
+        assemblyByComponentKey: {
+          [sourceKey]: sourceAssembly.id,
+          [cornerHostKey]: sourceAssembly.id,
+          [blockerKey]: sourceAssembly.id
+        }
+      })),
+      mapData: {
+        tiles: {
+          [sourceKey]: source,
+          [cornerHostKey]: cornerHost,
+          [blockerKey]: blocker,
+          [boundKey]: bound
+        },
+        walls: {}
+      },
+      mapGearLocalPointToSurface: jest.fn((placement, localPosition) => ({
+        x: (placement === source ? 100 : 122) + ((localPosition.x || 0) * 100),
+        y: 100 + ((localPosition.y || 0) * 100)
+      })),
+      applyMechanismRuntimePlacementTransforms: jest.fn(),
+      clearMechanismRuntimeSnapshot: jest.fn(),
+      flashMechanismObstruction: jest.fn(),
+      mergeMechanismRuntimeGearStates: jest.fn(),
+      redrawMountedGearHostLayers: jest.fn(),
+      setMechanismRuntimeSnapshot: jest.fn(),
+      sortMapLayer: jest.fn(),
+      time: { delayedCall: jest.fn() },
+      tweens: {
+        killTweensOf: jest.fn(),
+        add: jest.fn()
+      },
+      config: {
+        onMechanismPreviewProgress: jest.fn(),
+        onToast: jest.fn()
+      }
+    };
+
+    const played = playAssemblyGearRotation(scene, sourceAssembly, sourceKey, {
+      rotationAngle: 90,
+      rotationDirection: 'right',
+      rotationSpeedDegPerSec: 45,
+      triggerDelaySeconds: 0,
+      autoReturn: false
+    });
+
+    expect(played).toBe(true);
+    expect(scene.clearMechanismRuntimeSnapshot).not.toHaveBeenCalled();
+    expect(scene.flashMechanismObstruction).not.toHaveBeenCalled();
+    expect(scene.tweens.add).toHaveBeenCalled();
+  });
+
+  it('builds a collision filter from every assembly in one gear rotation event', () => {
+    const keys = getGearRotationTransmissionEventKeys(
+      {
+        id: 'assembly_source',
+        componentKeys: ['source_floor', 'source_wall', 'source_vertical']
+      },
+      [
+        { assembly: { id: 'assembly_bound_a', componentKeys: ['bound_a', 'bound_a_neighbor'] } },
+        { assembly: { id: 'assembly_bound_b', componentKeys: ['bound_b'] } }
+      ]
+    );
+
+    expect(Array.from(keys).sort()).toEqual([
+      'bound_a',
+      'bound_a_neighbor',
+      'bound_b',
+      'source_floor',
+      'source_vertical',
+      'source_wall'
+    ]);
+  });
+
+  it('does not let source-side transmission participants block an axis-bound driven assembly', () => {
+    const obstructionCalls = [];
+    const obstructionSpy = jest
+      .spyOn(mechanismSimulation, 'findRotationObstruction')
+      .mockImplementation(({ excludedComponentKeys }) => {
+        obstructionCalls.push(new Set(excludedComponentKeys));
+        return null;
+      });
+    const sourceKey = createCellKey(0, 0, 0);
+    const cornerHostKey = createCellKey(0, -1, 0);
+    const sourceSideBlockerKey = createWallKey(0, -1, 0, 'east');
+    const boundKey = createCellKey(1, 0, 0);
+    const boundNeighborKey = createCellKey(2, 0, 0);
+    const source = createTile({
+      x: 0,
+      y: 0,
+      z: 0,
+      panelType: CITY_CHANNEL_TILE_TYPES.GEAR_PRESSURE_PLATE
+    });
+    const cornerHost = createTile({
+      x: 0,
+      y: -1,
+      z: 0,
+      panelType: CITY_CHANNEL_TILE_TYPES.TRANSMISSION_CROSS_PLATE
+    });
+    const sourceSideBlocker = createWall({
+      x: 0,
+      y: -1,
+      z: 0,
+      edge: 'east',
+      panelType: CITY_CHANNEL_TILE_TYPES.TRANSMISSION_STRAIGHT_PLATE
+    });
+    const bound = createTile({
+      x: 1,
+      y: 0,
+      z: 0,
+      rotation: 0,
+      panelType: CITY_CHANNEL_TILE_TYPES.TRANSMISSION_L_PLATE
+    });
+    const boundNeighbor = createTile({
+      x: 2,
+      y: 0,
+      z: 0,
+      rotation: 0,
+      panelType: CITY_CHANNEL_TILE_TYPES.TRANSMISSION_STRAIGHT_PLATE
+    });
+    source.gearMounts = [{ id: 'gear_center', position: 'center', surface: 'front', axisType: 'freeAxis' }];
+    cornerHost.gearMounts = [{
+      id: 'gear_corner',
+      position: 'corner_se',
+      surface: 'front',
+      axisBinding: {
+        componentKey: boundKey,
+        hostKind: 'tile',
+        socket: 'corner_nw',
+        surface: 'front'
+      }
+    }];
+    const sourceAssembly = {
+      id: 'assembly_pressure',
+      componentKeys: [sourceKey, cornerHostKey, sourceSideBlockerKey],
+      edges: [
+        { componentKey: sourceKey, key: cornerHostKey },
+        { componentKey: cornerHostKey, key: sourceSideBlockerKey }
+      ],
+      gearMounts: [
+        { ...source.gearMounts[0], componentKey: sourceKey },
+        { ...cornerHost.gearMounts[0], componentKey: cornerHostKey }
+      ],
+      fixedAxes: [{ ...cornerHost.gearMounts[0], componentKey: cornerHostKey }]
+    };
+    const boundAssembly = {
+      id: 'assembly_bound',
+      componentKeys: [boundKey, boundNeighborKey],
+      edges: [{ componentKey: boundKey, key: boundNeighborKey }],
+      gearMounts: [],
+      fixedAxes: []
+    };
+    const scene = {
+      getGearMountPoint: jest.fn((placement) => (
+        placement === source ? { x: 100, y: 100 } : { x: 122, y: 100 }
+      )),
+      getMechanicalAssemblyGraph: jest.fn(() => ({
+        assemblies: [sourceAssembly, boundAssembly],
+        assemblyByComponentKey: {
+          [sourceKey]: sourceAssembly.id,
+          [cornerHostKey]: sourceAssembly.id,
+          [sourceSideBlockerKey]: sourceAssembly.id,
+          [boundKey]: boundAssembly.id,
+          [boundNeighborKey]: boundAssembly.id
+        }
+      })),
+      mapData: {
+        tiles: {
+          [sourceKey]: source,
+          [cornerHostKey]: cornerHost,
+          [boundKey]: bound,
+          [boundNeighborKey]: boundNeighbor
+        },
+        walls: {
+          [sourceSideBlockerKey]: sourceSideBlocker
+        }
+      },
+      mapGearLocalPointToSurface: jest.fn((placement, localPosition) => ({
+        x: (placement === source ? 100 : 122) + ((localPosition.x || 0) * 100),
+        y: 100 + ((localPosition.y || 0) * 100)
+      })),
+      applyMechanismRuntimePlacementTransforms: jest.fn(),
+      clearMechanismRuntimeSnapshot: jest.fn(),
+      flashMechanismObstruction: jest.fn(),
+      mergeMechanismRuntimeGearStates: jest.fn(),
+      redrawMountedGearHostLayers: jest.fn(),
+      setMechanismRuntimeSnapshot: jest.fn(),
+      sortMapLayer: jest.fn(),
+      time: { delayedCall: jest.fn() },
+      tweens: {
+        killTweensOf: jest.fn(),
+        add: jest.fn()
+      },
+      config: {
+        onMechanismPreviewProgress: jest.fn(),
+        onToast: jest.fn()
+      }
+    };
+
+    try {
+      const played = playAssemblyGearRotation(scene, sourceAssembly, sourceKey, {
+        rotationAngle: 90,
+        rotationDirection: 'right',
+        rotationSpeedDegPerSec: 45,
+        triggerDelaySeconds: 0,
+        autoReturn: false
+      });
+
+      expect(played).toBe(true);
+      expect(obstructionCalls).toHaveLength(1);
+      expect(obstructionCalls[0].has(sourceKey)).toBe(true);
+      expect(obstructionCalls[0].has(cornerHostKey)).toBe(true);
+      expect(obstructionCalls[0].has(sourceSideBlockerKey)).toBe(true);
+      expect(obstructionCalls[0].has(boundKey)).toBe(true);
+      expect(obstructionCalls[0].has(boundNeighborKey)).toBe(true);
+      expect(scene.flashMechanismObstruction).not.toHaveBeenCalled();
+    } finally {
+      obstructionSpy.mockRestore();
+    }
   });
 
   it('applies fixed-axis runtime placement in world space across camera yaw changes', () => {

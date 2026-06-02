@@ -130,6 +130,7 @@ const CityChannelMechanismPanel = ({
   activePanelPanelType,
   canRunActivePanel,
   gearMountsForPanel = [],
+  gearMountBindingStatusById = {},
   mechanismPanelParams,
   onCloseInspect,
   onExecute,
@@ -195,18 +196,22 @@ const CityChannelMechanismPanel = ({
       ) : null}
       {canConfigureGearMounts ? (
         <div className="city-channel-gear-config">
-          {gearMountsForPanel.map((mount, index) => (
-            <section key={mount.id || `gear-${index}`} className="city-channel-gear-config__item">
-              <header>
-                <strong>{GEAR_POSITION_LABELS[mount.position] || mount.position || `齿轮 ${index + 1}`}</strong>
-                <span>{mount.axisBinding ? '已绑定' : '未绑定'}</span>
-              </header>
-              <div className="city-channel-mechanism-summary is-detail">
-                <span>{`连轴板材：${mount.axisBinding?.componentKey || '未绑定'}`}</span>
-                <span>{isCornerGearSocket(mount.position) ? '点击虚线切换联动板材' : '中心齿轮不绑定板材'}</span>
-              </div>
-            </section>
-          ))}
+          {gearMountsForPanel.map((mount, index) => {
+            const status = gearMountBindingStatusById[mount.id] || null;
+            const invalid = status?.bound && !status.valid;
+            return (
+              <section key={mount.id || `gear-${index}`} className="city-channel-gear-config__item">
+                <header>
+                  <strong>{GEAR_POSITION_LABELS[mount.position] || mount.position || `齿轮 ${index + 1}`}</strong>
+                  <span>{invalid ? '联动失效' : mount.axisBinding ? '已绑定' : '未绑定'}</span>
+                </header>
+                <div className={`city-channel-mechanism-summary is-detail ${invalid ? 'is-warning' : ''}`}>
+                  <span>{`连轴板材：${mount.axisBinding?.componentKey || '未绑定'}`}</span>
+                  <span>{invalid ? '被绑定板材已移动或删除' : isCornerGearSocket(mount.position) ? '点击白色光带切换联动板材' : '中心齿轮不绑定板材'}</span>
+                </div>
+              </section>
+            );
+          })}
         </div>
       ) : null}
       {canRunActivePanel ? (
