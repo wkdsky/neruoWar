@@ -1,20 +1,20 @@
-.city-channel-phaser-editor .city-channel-phaser-viewport {
+.city-channel-orthographic-editor .city-channel-three-viewport {
   cursor: default;
 }
 
-.city-channel-phaser-stage {
+.city-channel-three-stage {
   position: absolute;
   inset: 0;
   overflow: hidden;
 }
 
-.city-channel-phaser-stage canvas {
+.city-channel-three-stage canvas {
   display: block;
   width: 100% !important;
   height: 100% !important;
 }
 
-.city-channel-phaser-loader {
+.city-channel-three-loader {
   position: absolute;
   left: 50%;
   top: 50%;
@@ -33,7 +33,7 @@
   backdrop-filter: blur(14px);
 }
 
-.city-channel-phaser-loader.is-error {
+.city-channel-three-loader.is-error {
   color: #fecaca;
   border-color: rgba(248, 113, 113, 0.32);
   background: rgba(69, 10, 10, 0.72);
@@ -73,11 +73,11 @@
   color: #fefce8;
 }
 
-.city-channel-phaser-editor .city-channel-immersive-status span:nth-child(7) {
+.city-channel-orthographic-editor .city-channel-immersive-status span:nth-child(7) {
   color: #cbd5e1;
 }
 
-.city-channel-phaser-editor .city-channel-immersive-status.is-ok span:nth-child(7) {
+.city-channel-orthographic-editor .city-channel-immersive-status.is-ok span:nth-child(7) {
   color: #a7f3d0;
   border-color: rgba(16, 185, 129, 0.24);
 }

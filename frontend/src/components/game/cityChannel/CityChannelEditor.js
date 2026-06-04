@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import React, { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   CITY_CHANNEL_TILE_TYPES,
   CITY_CHANNEL_LAYER_LABELS,
@@ -21,7 +21,6 @@ import {
 import useCityChannelEditorState from './useCityChannelEditorState';
 import CityChannelMaterialPalette from './CityChannelMaterialPalette';
 import CityChannelMechanismPanel, { CityChannelGearAxisPrompt } from './CityChannelMechanismPanel';
-import CityChannelPressurePlateInspect3D from './CityChannelPressurePlateInspect3D';
 import {
   CityChannelEditorTopbar,
   CityChannelHotbar,
@@ -36,14 +35,23 @@ import {
   getCityChannelMapPlaneLevels
 } from './CityChannelThumbnail';
 import CityChannelThumbnail from './CityChannelThumbnail';
+import CityChannelThreeRuntime from './three/CityChannelThreeRuntime';
+import {
+  expandVisibleLayerCutoffForTargetLayer,
+  getMaxTargetLayerFromMoves,
+  getMaxTargetLayerFromPlacementOperations,
+  getRuntimeVisibleLayerCutoff
+} from './cityChannelEditorVisibility';
 import './CityChannelImmersiveEditor.css';
-import './CityChannelPhaserEditor.css';
+import './CityChannelEditor.css';
+
+const CityChannelPressurePlateInspect3D = lazy(() => import('./CityChannelPressurePlateInspect3D'));
 
 const stopEditorPanelPointerEvent = (event) => {
   event.stopPropagation();
 };
 
-const CityChannelPhaserEditor = ({
+const CityChannelEditor = ({
   initialMapData,
   templateId = null,
   templateName,
@@ -81,10 +89,9 @@ const CityChannelPhaserEditor = ({
   } = editor;
 
   const containerRef = useRef(null);
-  const gameRef = useRef(null);
   const sceneRef = useRef(null);
   const placeReturnToolRef = useRef(CITY_CHANNEL_TOOLS.BROWSE);
-  const [phaserStatus, setPhaserStatus] = useState('loading');
+  const [rendererStatus, setRendererStatus] = useState('loading');
   const [wallViewMode, setWallViewMode] = useState('semi');
   const [panelPose, setPanelPose] = useState('floor');
   const [showHelperGrid, setShowHelperGrid] = useState(false);
@@ -213,7 +220,7 @@ const CityChannelPhaserEditor = ({
     setSelectedGears([]);
     setSelectionScope(null);
     setGearAxisPrompt(null);
-    sceneRef.current?.setSelection?.([], []);
+    sceneRef.current?.setSelection?.([], [], [], null);
   }, []);
 
   const handleSelectionChange = useCallback(({ cells = [], walls = [], gears = [], scope = null } = {}) => {
@@ -265,11 +272,19 @@ const CityChannelPhaserEditor = ({
   }, [addToast, clearSelection, resetMechanismPreview, selectOperationTool]);
 
   const handleCommitOperations = useCallback((operations) => {
+    const maxTargetLayer = getMaxTargetLayerFromPlacementOperations(operations);
+    if (maxTargetLayer !== null) {
+      setVisibleLayerCutoff((current) => expandVisibleLayerCutoffForTargetLayer(current, maxTargetLayer));
+    }
     applyPlacementOperations(operations);
   }, [applyPlacementOperations]);
 
   const handleMovePlacements = useCallback((moves) => {
     if (!Array.isArray(moves) || moves.length <= 0) return;
+    const maxTargetLayer = getMaxTargetLayerFromMoves(moves);
+    if (maxTargetLayer !== null) {
+      setVisibleLayerCutoff((current) => expandVisibleLayerCutoffForTargetLayer(current, maxTargetLayer));
+    }
     movePlacements(moves);
     setMechanismParams((current) => {
       const next = { ...current };
@@ -555,7 +570,11 @@ const CityChannelPhaserEditor = ({
     wallViewMode,
     showHelperGrid,
     showCoordinates,
-    visibleLayerCutoff,
+    visibleLayerCutoff: getRuntimeVisibleLayerCutoff({
+      visibleLayerCutoff,
+      activeTool,
+      carryActive
+    }),
     selection: {
       cells: selectedCells,
       walls: selectedWalls,
@@ -564,7 +583,7 @@ const CityChannelPhaserEditor = ({
     },
     onSceneReady: (scene) => {
       sceneRef.current = scene;
-      setPhaserStatus('ready');
+      setRendererStatus('ready');
     },
     onCommitOperations: handleCommitOperations,
     onSelectionChange: handleSelectionChange,
@@ -587,6 +606,7 @@ const CityChannelPhaserEditor = ({
     onMovePlacements: handleMovePlacements,
     onMechanismPanelRequest: handleMechanismPanelRequest,
     onGearAxisPrompt: setGearAxisPrompt,
+    onUpdateGearMountConfig: updateGearMountConfig,
     onInspectChange: handleInspectChange,
     onMechanismPreviewProgress: handleMechanismPreviewProgress,
     onMechanismRuntimeSnapshot: setMechanismRuntimeSnapshot,
@@ -601,6 +621,7 @@ const CityChannelPhaserEditor = ({
     activeComponentType,
     activeTool,
     addToast,
+    carryActive,
     handleCommitOperations,
     handleDeleteSelection,
     handleCopySelection,
@@ -613,6 +634,7 @@ const CityChannelPhaserEditor = ({
     setPanelPose,
     handleRotateSelection,
     handleSelectionChange,
+    updateGearMountConfig,
     mapData,
     mechanismParams,
     panelPose,
@@ -647,55 +669,23 @@ const CityChannelPhaserEditor = ({
   }, [toasts]);
 
   useEffect(() => {
-    let cancelled = false;
-    let game = null;
-
-    const bootPhaser = async () => {
-      try {
-        setPhaserStatus('loading');
-        const [phaserModule, sceneModule] = await Promise.all([
-          import('phaser'),
-          import('./phaser/CityChannelPhaserScene')
-        ]);
-        if (cancelled || !containerRef.current) return;
-        const Phaser = phaserModule.default || phaserModule;
-        const SceneClass = sceneModule.createCityChannelPhaserScene(Phaser, latestSceneConfigRef.current);
-        game = new Phaser.Game({
-          type: Phaser.AUTO,
-          parent: containerRef.current,
-          width: Math.max(1, containerRef.current.clientWidth || window.innerWidth),
-          height: Math.max(1, containerRef.current.clientHeight || window.innerHeight),
-          backgroundColor: '#020617',
-          render: {
-            antialias: true,
-            antialiasGL: true,
-            roundPixels: false,
-            powerPreference: 'high-performance'
-          },
-          scale: {
-            mode: Phaser.Scale.RESIZE,
-            autoCenter: Phaser.Scale.CENTER_BOTH
-          },
-          scene: SceneClass
-        });
-        gameRef.current = game;
-      } catch (error) {
-        setPhaserStatus('error');
-        addToast(`Phaser 编辑器加载失败：${error.message}`, 'error');
-      }
-    };
-
-    bootPhaser();
+    if (!containerRef.current) return undefined;
+    let runtime = null;
+    try {
+      setRendererStatus('loading');
+      runtime = new CityChannelThreeRuntime({
+        mount: containerRef.current,
+        ...latestSceneConfigRef.current,
+        onStatusChange: setHoverStatusLabel
+      });
+    } catch (error) {
+      setRendererStatus('error');
+      addToast(`正交 3D 编辑器加载失败：${error.message}`, 'error');
+    }
 
     return () => {
-      cancelled = true;
-      sceneRef.current = null;
-      if (gameRef.current) {
-        gameRef.current.destroy(true);
-        gameRef.current = null;
-      } else if (game) {
-        game.destroy(true);
-      }
+      if (sceneRef.current === runtime) sceneRef.current = null;
+      runtime?.dispose?.();
     };
   }, [addToast]);
 
@@ -727,7 +717,7 @@ const CityChannelPhaserEditor = ({
     <div
       className={[
         'city-channel-immersive',
-        'city-channel-phaser-editor',
+        'city-channel-orthographic-editor',
         'has-palette',
         wallViewMode === 'perspective' ? 'is-wall-transparent' : '',
         wallViewMode === 'solid' ? 'is-wall-solid' : '',
@@ -755,11 +745,11 @@ const CityChannelPhaserEditor = ({
         onRedo={redo}
       />
 
-      <div className="city-channel-viewport city-channel-phaser-viewport">
-        <div ref={containerRef} className="city-channel-phaser-stage" />
-        {phaserStatus !== 'ready' ? (
-          <div className={`city-channel-phaser-loader is-${phaserStatus}`}>
-            {phaserStatus === 'error' ? 'Phaser 编辑器加载失败' : '正在加载 Phaser 编辑器'}
+      <div className="city-channel-viewport city-channel-three-viewport">
+        <div ref={containerRef} className="city-channel-three-stage" />
+        {rendererStatus !== 'ready' ? (
+          <div className={`city-channel-three-loader is-${rendererStatus}`}>
+            {rendererStatus === 'error' ? '正交 3D 编辑器加载失败' : '正在加载正交 3D 编辑器'}
           </div>
         ) : null}
         <CityChannelGearAxisPrompt
@@ -801,11 +791,15 @@ const CityChannelPhaserEditor = ({
         onSetSelectedGearAxis={clearSelectedGearBindings}
       />
 
-      <CityChannelPressurePlateInspect3D
-        inspectMode={inspectMode}
-        mechanismParams={mechanismParams[inspectMode?.key]}
-        previewState={mechanismPreviewState}
-      />
+      {inspectMode?.active ? (
+        <Suspense fallback={null}>
+          <CityChannelPressurePlateInspect3D
+            inspectMode={inspectMode}
+            mechanismParams={mechanismParams[inspectMode?.key]}
+            previewState={mechanismPreviewState}
+          />
+        </Suspense>
+      ) : null}
 
       <CityChannelHotbar
         activeTool={activeTool}
@@ -866,4 +860,4 @@ const CityChannelPhaserEditor = ({
   );
 };
 
-export default CityChannelPhaserEditor;
+export default CityChannelEditor;

@@ -3,9 +3,6 @@
     "version": "0.1.0",
     "private": true,
     "dependencies": {
-        "@testing-library/jest-dom": "^5.16.5",
-        "@testing-library/react": "^13.4.0",
-        "@testing-library/user-event": "^13.5.0",
         "@tiptap/extension-bullet-list": "^3.20.1",
         "@tiptap/extension-color": "^3.20.1",
         "@tiptap/extension-highlight": "^3.20.1",
@@ -25,13 +22,11 @@
         "@tiptap/react": "^3.20.1",
         "@tiptap/starter-kit": "^3.20.1",
         "lucide-react": "^0.263.1",
-        "phaser": "^4.0.0",
         "react": "^18.2.0",
         "react-dom": "^18.2.0",
         "react-scripts": "5.0.1",
         "socket.io-client": "^4.5.4",
-        "three": "^0.165.0",
-        "web-vitals": "^2.1.4"
+        "three": "^0.165.0"
     },
     "scripts": {
         "start": "HOST=${HOST:-0.0.0.0} react-scripts start",
@@ -60,6 +55,9 @@
         ]
     },
     "devDependencies": {
+        "@testing-library/jest-dom": "^5.16.5",
+        "@testing-library/react": "^13.4.0",
+        "@testing-library/user-event": "^13.5.0",
         "baseline-browser-mapping": "^2.10.32",
         "browserslist": "^4.28.2",
         "caniuse-lite": "^1.0.30001793"

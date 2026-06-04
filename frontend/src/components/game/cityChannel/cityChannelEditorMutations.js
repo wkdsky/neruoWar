@@ -31,6 +31,17 @@ const sameCell = (point, target) => (
   && point.z === target.z
 );
 
+const getLayerCountForCell = (cell = null) => {
+  const z = Number.parseInt(cell?.z, 10);
+  return Number.isInteger(z) && z >= 0 ? z + 1 : 0;
+};
+
+const expandLayerCountForCells = (currentLayers, cells = []) => (
+  (Array.isArray(cells) ? cells : []).reduce((layerCount, cell) => (
+    Math.max(layerCount, getLayerCountForCell(cell))
+  ), Number.isInteger(currentLayers) && currentLayers > 0 ? currentLayers : 0)
+);
+
 const createPointId = (prefix, point) => (
   `${prefix}_${point.z}_${point.x}_${point.y}_${Date.now().toString(36)}`
 );
@@ -558,13 +569,15 @@ export const applyPlacementOperationsToMap = (current, operations = []) => {
 
     const existingTile = nextTiles[tileKey] || null;
     const tempMap = { ...current, tiles: nextTiles };
+    const isVerticalPlacement = operation.isVertical === true;
     const replacementTile = createTile({
       x: cell.x,
       y: cell.y,
       z: cell.z,
       panelType: operation.panelType,
       rotation: operation.rotation,
-      transmissionRotation: operation.transmissionRotation
+      transmissionRotation: operation.transmissionRotation,
+      isVertical: isVerticalPlacement
     });
     const preservedGearMounts = Array.isArray(existingTile?.gearMounts) && existingTile.gearMounts.length > 0
       ? preserveGearMountsForReplacementPlacement({
@@ -576,6 +589,7 @@ export const applyPlacementOperationsToMap = (current, operations = []) => {
       panelType: operation.panelType,
       rotation: operation.rotation,
       transmissionRotation: operation.transmissionRotation,
+      isVertical: isVerticalPlacement,
       marker: existingMarker === 'safe' || existingMarker === 'highlight' ? existingMarker : null,
       ...(preservedGearMounts !== undefined ? { gearMounts: preservedGearMounts } : {})
     });
@@ -610,6 +624,7 @@ export const applyPlacementOperationsToMap = (current, operations = []) => {
 
   return {
     ...current,
+    layers: expandLayerCountForCells(current.layers, operations.map((operation) => operation?.cell)),
     tiles: nextTiles,
     walls: nextWalls,
     entrances: nextEntrances,
@@ -798,6 +813,7 @@ export const movePlacementsInMap = (current, moves = []) => {
 
   return {
     ...current,
+    layers: expandLayerCountForCells(current.layers, moves.map((move) => move?.to)),
     tiles: nextTiles,
     walls: nextWalls,
     entrances: nextEntrances,

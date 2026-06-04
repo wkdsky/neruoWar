@@ -43,6 +43,94 @@ describe('cityChannelEditorMutations', () => {
     expect(next.walls).toEqual({});
   });
 
+  it('applies vertical tile placement intent instead of inheriting old pose', () => {
+    const tileKey = createCellKey(4, 5, 1);
+    const verticalMap = applyPlacementOperationsToMap(createBaseCityChannelMap({ name: 'vertical tile mutation' }), [{
+      kind: 'tile',
+      action: 'place',
+      cell: { x: 4, y: 5, z: 1 },
+      panelType: CITY_CHANNEL_TILE_TYPES.TRANSMISSION_STRAIGHT_PLATE,
+      rotation: 90,
+      transmissionRotation: 90,
+      isVertical: true
+    }]);
+
+    expect(verticalMap.tiles[tileKey]).toMatchObject({
+      x: 4,
+      y: 5,
+      z: 1,
+      panelType: CITY_CHANNEL_TILE_TYPES.TRANSMISSION_STRAIGHT_PLATE,
+      rotation: 90,
+      isVertical: true
+    });
+
+    const flattenedMap = applyPlacementOperationsToMap(verticalMap, [{
+      kind: 'tile',
+      action: 'place',
+      cell: { x: 4, y: 5, z: 1 },
+      panelType: CITY_CHANNEL_TILE_TYPES.BASIC_PLATE,
+      rotation: 0,
+      transmissionRotation: 0
+    }]);
+
+    expect(flattenedMap.tiles[tileKey]).toMatchObject({
+      panelType: CITY_CHANNEL_TILE_TYPES.BASIC_PLATE,
+      isVertical: false
+    });
+  });
+
+  it('expands map layers when placing above the current layer count', () => {
+    const mapData = createBaseCityChannelMap({
+      name: 'vertical layer expansion',
+      layers: 1
+    });
+    const next = applyPlacementOperationsToMap(mapData, [{
+      kind: 'wall',
+      action: 'place',
+      cell: { x: 4, y: 5, z: 1 },
+      edge: 'east',
+      panelType: CITY_CHANNEL_TILE_TYPES.TRANSMISSION_STRAIGHT_PLATE
+    }]);
+
+    expect(next.layers).toBe(2);
+    expect(next.walls[createWallKey(4, 5, 1, 'east')]).toMatchObject({
+      x: 4,
+      y: 5,
+      z: 1,
+      edge: 'east'
+    });
+  });
+
+  it('expands map layers when moving boards upward', () => {
+    const sourceKey = createCellKey(4, 5, 0);
+    const mapData = {
+      ...createBaseCityChannelMap({
+        name: 'move layer expansion',
+        layers: 1
+      }),
+      tiles: {
+        [sourceKey]: createTile({
+          x: 4,
+          y: 5,
+          z: 0,
+          panelType: CITY_CHANNEL_TILE_TYPES.BASIC_PLATE
+        })
+      }
+    };
+    const next = movePlacementsInMap(mapData, [{
+      from: { x: 4, y: 5, z: 0 },
+      to: { x: 4, y: 5, z: 1, isVertical: true }
+    }]);
+
+    expect(next.layers).toBe(2);
+    expect(next.tiles[createCellKey(4, 5, 1)]).toMatchObject({
+      x: 4,
+      y: 5,
+      z: 1,
+      isVertical: true
+    });
+  });
+
   it('moves tile placements and preserves attached gear mounts', () => {
     const sourceKey = createCellKey(2, 3, 0);
     const mapData = {
@@ -405,6 +493,41 @@ describe('cityChannelEditorMutations', () => {
       getGearSocketWorldPosition(next.walls[wallKey], next.walls[wallKey].gearMounts[0].position, next.walls[wallKey].gearMounts[0].surface),
       getGearSocketWorldPosition(wall, 'corner_ne', 'front')
     );
+  });
+
+  it('places an upper wall panel on the same edge above a lower wall', () => {
+    const lowerWall = createWall({
+      x: 3,
+      y: 4,
+      z: 0,
+      edge: 'east',
+      panelType: CITY_CHANNEL_TILE_TYPES.BASIC_PLATE
+    });
+    const mapData = {
+      ...createBaseCityChannelMap({ name: 'upper wall placement' }),
+      tiles: {},
+      walls: {
+        [createWallKey(3, 4, 0, 'east')]: lowerWall
+      }
+    };
+    const next = applyPlacementOperationsToMap(mapData, [{
+      kind: 'wall',
+      action: 'place',
+      cell: { x: 3, y: 4, z: 1 },
+      edge: 'east',
+      panelType: CITY_CHANNEL_TILE_TYPES.TRANSMISSION_STRAIGHT_PLATE,
+      transmissionRotation: 90
+    }]);
+
+    expect(next.walls[createWallKey(3, 4, 0, 'east')]).toBeDefined();
+    expect(next.walls[createWallKey(3, 4, 1, 'east')]).toMatchObject({
+      x: 3,
+      y: 4,
+      z: 1,
+      edge: 'east',
+      panelType: CITY_CHANNEL_TILE_TYPES.TRANSMISSION_STRAIGHT_PLATE,
+      transmissionRotation: 90
+    });
   });
 
   it('rotates wall transmission without changing wall identity', () => {

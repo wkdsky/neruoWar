@@ -1,8 +1,9 @@
-import React, { useState } from 'react';
+import React, { Suspense, lazy, useState } from 'react';
 import { Castle } from 'lucide-react';
-import CityChannelPhaserEditor from './cityChannel/CityChannelPhaserEditor';
 import CityChannelTemplateGallery from './cityChannel/CityChannelTemplateGallery';
 import './CityWorkshopPage.css';
+
+const CityChannelEditor = lazy(() => import('./cityChannel/CityChannelEditor'));
 
 const CityWorkshopPage = () => {
   const [editingTemplate, setEditingTemplate] = useState(null);
@@ -31,13 +32,15 @@ const CityWorkshopPage = () => {
       />
 
       {editingTemplate ? (
-        <CityChannelPhaserEditor
-          initialMapData={editingTemplate.mapData}
-          templateId={editingTemplate.id}
-          templateName={editingTemplate.name}
-          templateSource={editingTemplate.source}
-          onExit={handleExitEditor}
-        />
+        <Suspense fallback={<div className="city-workshop-editor-loading">正在加载编辑器...</div>}>
+          <CityChannelEditor
+            initialMapData={editingTemplate.mapData}
+            templateId={editingTemplate.id}
+            templateName={editingTemplate.name}
+            templateSource={editingTemplate.source}
+            onExit={handleExitEditor}
+          />
+        </Suspense>
       ) : null}
     </div>
   );

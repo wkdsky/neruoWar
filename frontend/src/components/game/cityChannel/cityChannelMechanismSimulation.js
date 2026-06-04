@@ -12,6 +12,7 @@ import {
   isSupportCollisionExempt
 } from './cityChannelPlacementGeometry';
 import {
+  buildMechanicalAssemblies,
   createLegacyFixedAxisBinding,
   getGearMountLocalPosition,
   getGearSocketKind,
@@ -27,6 +28,13 @@ export const FIXED_AXIS_SYNC_TOLERANCE_DEGREES = 0.5;
 export const ROTATION_COLLISION_STEP_DEGREES = 2;
 export const MIN_MEANINGFUL_ROTATION_DEGREES = 12;
 export const DEFAULT_GEAR_TEETH = 18;
+export const CITY_CHANNEL_GEAR_TOOTH_COUNT = DEFAULT_GEAR_TEETH;
+export const CITY_CHANNEL_GEAR_PITCH_RADIUS_WORLD = Math.SQRT2 / 4;
+export const CITY_CHANNEL_GEAR_ROOT_RADIUS_WORLD = CITY_CHANNEL_GEAR_PITCH_RADIUS_WORLD * 0.78;
+export const CITY_CHANNEL_GEAR_OUTER_RADIUS_WORLD = CITY_CHANNEL_GEAR_PITCH_RADIUS_WORLD * 1.08;
+export const CITY_CHANNEL_GEAR_HUB_RADIUS_WORLD = CITY_CHANNEL_GEAR_PITCH_RADIUS_WORLD * 0.32;
+export const CITY_CHANNEL_GEAR_AXLE_RADIUS_WORLD = CITY_CHANNEL_GEAR_PITCH_RADIUS_WORLD * 0.14;
+export const CITY_CHANNEL_GEAR_THICKNESS_WORLD = 0.09;
 const VERTICAL_PANEL_BASE_LIFT_WORLD = 4 / 62;
 const VERTICAL_PANEL_SURFACE_OFFSET_WORLD = 0.06;
 
@@ -106,6 +114,10 @@ export const getGearTorqueRatio = (driveRatio = 1) => {
   const ratio = Number(driveRatio) || 1;
   return ratio === 0 ? 0 : 1 / Math.abs(ratio);
 };
+
+export const getGearRatioRadiusForMount = (mount = {}) => (
+  Math.max(1, getGearTeeth(mount))
+);
 
 const getVerticalSurfaceFrame = (placement = {}, mount = {}) => {
   const edge = placement.edge || null;
@@ -218,6 +230,177 @@ export const getGearMeshPlane = (placement = {}, mount = {}, worldPoint = null) 
   };
 };
 
+export const getGearSurfaceKey = (placement, mount = {}) => {
+  const surface = normalizeGearSurfaceForPanel(placement?.panelType, mount.surface || 'front');
+  if (!placement) return `unknown:${surface}`;
+  if (placement.edge) return `edge:${placement.z || 0}:${placement.edge}:${surface}`;
+  if (placement.isVertical) {
+    const axis = normalizeRotation(placement.rotation || 0) % 180;
+    return `vertical:${placement.z || 0}:${axis}:${surface}`;
+  }
+  return `floor:${placement.z || 0}:${surface}`;
+};
+
+export const getGearContactThreshold = () => 56;
+
+const getGearContactPoint = (node = {}) => node.worldPoint || node.point || { x: 0, y: 0, z: 0 };
+
+const getGearPitchRadius = (node = {}) => Number(node.pitchRadiusWorld ?? node.pitchRadius) || 1;
+
+const getGearScreenPitchRadius = (node = {}) => Number(node.pitchRadius) || Number(node.pitchRadiusWorld) || 1;
+
+const getGearRatioRadius = (node = {}) => Number(node.gearRatioRadius ?? node.pitchRadiusWorld ?? node.pitchRadius) || 1;
+
+const getGearMeshPlaneDistance = (a = {}, b = {}) => {
+  const aPlane = a.meshPlane;
+  const bPlane = b.meshPlane;
+  if (!aPlane || !bPlane) return null;
+  if (aPlane.kind !== bPlane.kind) return null;
+  const aNormal = aPlane.normal || {};
+  const bNormal = bPlane.normal || {};
+  const normalDot = ((Number(aNormal.x) || 0) * (Number(bNormal.x) || 0))
+    + ((Number(aNormal.y) || 0) * (Number(bNormal.y) || 0))
+    + ((Number(aNormal.z) || 0) * (Number(bNormal.z) || 0));
+  if (normalDot < 0.98) return null;
+  if (Math.abs((Number(aPlane.planeOffset) || 0) - (Number(bPlane.planeOffset) || 0)) > 0.08) return null;
+  return Math.hypot((Number(aPlane.u) || 0) - (Number(bPlane.u) || 0), (Number(aPlane.v) || 0) - (Number(bPlane.v) || 0));
+};
+
+const getSurfacePlaneWithoutSide = (surfaceKey = '') => {
+  if (!surfaceKey) return '';
+  const parts = String(surfaceKey).split(':');
+  if (parts.length <= 1) return surfaceKey;
+  return parts.slice(0, -1).join(':');
+};
+
+const areOppositeSidesOfSamePlane = (a = {}, b = {}) => (
+  a.surfaceKey !== b.surfaceKey
+  && getSurfacePlaneWithoutSide(a.surfaceKey) === getSurfacePlaneWithoutSide(b.surfaceKey)
+);
+
+export const buildGearContactGraph = (nodes = [], threshold = getGearContactThreshold()) => {
+  const graph = new Map(nodes.map((node) => [node.id, []]));
+  for (let i = 0; i < nodes.length; i += 1) {
+    for (let j = i + 1; j < nodes.length; j += 1) {
+      const a = nodes[i];
+      const b = nodes[j];
+      const sameSurface = a.surfaceKey === b.surfaceKey;
+      if (!sameSurface && areOppositeSidesOfSamePlane(a, b)) continue;
+      const meshPlaneDistance = getGearMeshPlaneDistance(a, b);
+      if ((a.meshPlane || b.meshPlane) && meshPlaneDistance === null) continue;
+      const aPoint = meshPlaneDistance !== null || sameSurface ? getGearContactPoint(a) : (a.point || getGearContactPoint(a));
+      const bPoint = meshPlaneDistance !== null || sameSurface ? getGearContactPoint(b) : (b.point || getGearContactPoint(b));
+      if (meshPlaneDistance === null && sameSurface && Math.abs((Number(aPoint.z) || 0) - (Number(bPoint.z) || 0)) > 0.08) continue;
+      const distance = meshPlaneDistance ?? Math.hypot(aPoint.x - bPoint.x, aPoint.y - bPoint.y);
+      const aRadius = meshPlaneDistance !== null || sameSurface ? getGearPitchRadius(a) : getGearScreenPitchRadius(a);
+      const bRadius = meshPlaneDistance !== null || sameSurface ? getGearPitchRadius(b) : getGearScreenPitchRadius(b);
+      const pitchContact = aRadius + bRadius;
+      const contactDistance = meshPlaneDistance !== null || sameSurface
+        ? pitchContact * 1.22
+        : Math.max(pitchContact * 1.22, Math.min(threshold, pitchContact * 1.22));
+      if (distance > contactDistance) continue;
+      if (distance < Math.max(pitchContact * 0.28, 0.08)) continue;
+      const aRatioRadius = getGearRatioRadius(a);
+      const bRatioRadius = getGearRatioRadius(b);
+      graph.get(a.id)?.push({ id: b.id, ratio: -(aRatioRadius / bRatioRadius) });
+      graph.get(b.id)?.push({ id: a.id, ratio: -(bRatioRadius / aRatioRadius) });
+    }
+  }
+  return graph;
+};
+
+export const getAssemblyComponentDistances = (assembly, sourceComponentKey) => {
+  const distances = new Map();
+  if (!assembly || !sourceComponentKey) return distances;
+  const componentKeys = new Set(assembly.componentKeys || []);
+  if (!componentKeys.has(sourceComponentKey)) return distances;
+  const adjacency = new Map([...componentKeys].map((key) => [key, []]));
+  (assembly.edges || []).forEach((edge) => {
+    if (!edge?.componentKey || !edge?.key) return;
+    if (!componentKeys.has(edge.componentKey) || !componentKeys.has(edge.key)) return;
+    adjacency.get(edge.componentKey)?.push(edge.key);
+  });
+  const queue = [sourceComponentKey];
+  distances.set(sourceComponentKey, 0);
+  while (queue.length > 0) {
+    const current = queue.shift();
+    const nextDistance = (distances.get(current) || 0) + 1;
+    (adjacency.get(current) || []).forEach((nextKey) => {
+      if (distances.has(nextKey)) return;
+      distances.set(nextKey, nextDistance);
+      queue.push(nextKey);
+    });
+  }
+  return distances;
+};
+
+export const getDrivenGearRoots = (assembly, nodes = [], sourceComponentKey = '') => {
+  if (nodes.length <= 0) return [];
+  const assemblyComponentKeys = new Set(assembly?.componentKeys || []);
+  const directDriveNodes = nodes.filter((node) => {
+    const boundComponentKey = node?.mount?.axisBinding?.componentKey;
+    return !boundComponentKey || assemblyComponentKeys.has(boundComponentKey);
+  });
+  if (directDriveNodes.length <= 0) return [];
+  const distances = getAssemblyComponentDistances(assembly, sourceComponentKey);
+  const reachable = directDriveNodes
+    .map((node) => ({ node, distance: distances.has(node.componentKey) ? distances.get(node.componentKey) : Infinity }))
+    .filter((item) => Number.isFinite(item.distance));
+  if (reachable.length <= 0) return [directDriveNodes[0]];
+  const minDistance = Math.min(...reachable.map((item) => item.distance));
+  return reachable.filter((item) => item.distance === minDistance).map((item) => item.node);
+};
+
+export const resolveDrivenGearNodes = ({
+  assembly,
+  assemblyNodes = [],
+  allNodes = [],
+  contactGraph = null,
+  sourceComponentKey = ''
+} = {}) => {
+  if (assemblyNodes.length <= 0) return [];
+  const byId = new Map(allNodes.map((node) => [node.id, node]));
+  const graph = contactGraph || buildGearContactGraph(allNodes);
+  const roots = getDrivenGearRoots(assembly, assemblyNodes, sourceComponentKey);
+  if (roots.length <= 0) return [];
+  const visited = new Set();
+  roots.forEach((root) => {
+    if (!root?.id || visited.has(root.id)) return;
+    const liveRoot = byId.get(root.id);
+    if (!liveRoot) return;
+    liveRoot.driveRatio = 1;
+    liveRoot.direction = 1;
+    visited.add(root.id);
+    const queue = [root.id];
+    while (queue.length > 0) {
+      const currentId = queue.shift();
+      const current = byId.get(currentId);
+      (graph.get(currentId) || []).forEach((edge) => {
+        const nextId = edge.id;
+        if (visited.has(nextId)) return;
+        const next = byId.get(nextId);
+        if (!next || !current) return;
+        next.driveRatio = (current.driveRatio || 1) * (edge.ratio || -1);
+        next.direction = next.driveRatio >= 0 ? 1 : -1;
+        visited.add(nextId);
+        queue.push(nextId);
+      });
+    }
+  });
+  const driven = allNodes.filter((node) => visited.has(node.id));
+  return driven.length > 0
+    ? driven
+    : assemblyNodes.map((node, index) => ({
+      ...node,
+      driveRatio: index % 2 === 0 ? 1 : -1,
+      direction: index % 2 === 0 ? 1 : -1
+    }));
+};
+
+export const getGearPhase = (node, angle = 0, basePhase = 0) => normalizeRotation(
+  basePhase + ((node.driveRatio || node.direction || 1) * angle)
+);
+
 export const getFixedAxisWorldAnchor = (mapData = {}, fixedAxis = {}) => {
   const placement = getPlacementByComponentKey(mapData, fixedAxis.componentKey)
     || (fixedAxis.cell ? getPlacementByComponentKey(mapData, createCellKey(fixedAxis.cell.x, fixedAxis.cell.y, fixedAxis.cell.z)) : null);
@@ -256,6 +439,7 @@ export const getRotatedPlacementCollisionBoxes = (placement, anchor, degrees = 0
 export const getRuntimePlacementAtAngle = (placement = {}, anchor = {}, degrees = 0) => {
   const point = rotateWorldPointAround(placement, anchor, degrees);
   const baseRotation = placement.edge ? wallEdgeToRotation(placement.edge) : (placement.rotation || 0);
+  const baseSurfaceRotation = normalizeRotation(placement.transmissionRotation ?? baseRotation);
   return {
     ...placement,
     x: Number(point.x.toFixed(4)),
@@ -263,7 +447,9 @@ export const getRuntimePlacementAtAngle = (placement = {}, anchor = {}, degrees 
     z: placement.z,
     runtimeAngle: degrees,
     runtimeAxisAnchor: anchor,
-    rotation: normalizeRotation(baseRotation + degrees)
+    rotation: normalizeRotation(baseRotation + degrees),
+    runtimeSurfaceRotation: Number(degrees) || 0,
+    runtimeBaseSurfaceRotation: baseSurfaceRotation
   };
 };
 
@@ -354,7 +540,12 @@ export const getRuntimePlacementForFixedAxisAssemblyMember = ({
   if (fixedPlacement?.edge || fixedPlacement?.isVertical) {
     return getRuntimePlacementInFixedVerticalPlane(placement, fixedPlacement, fixedMount, pivotWorld, degrees);
   }
-  return getRuntimePlacementAtAngle(placement, pivotWorld, degrees);
+  return {
+    ...getRuntimePlacementAtAngle(placement, pivotWorld, degrees),
+    runtimePivotWorld: pivotWorld,
+    runtimeFixedMountId: fixedMount?.id,
+    runtimeAxisBindingMountId: fixedMount?.id
+  };
 };
 
 export const getRuntimePlacementAroundFixedGear = (
@@ -418,7 +609,9 @@ export const getRuntimePlacementAroundFixedGear = (
     runtimeFixedMountId: fixedMount.id,
     runtimeAxisBindingMountId: fixedMount.id,
     runtimeAnchorLocal: anchorLocal,
-    runtimeBaseRotation: baseRotation
+    runtimeBaseRotation: baseRotation,
+    runtimeSurfaceRotation: Number(deltaDegrees) || 0,
+    runtimeBaseSurfaceRotation: normalizeRotation(basePlacement.transmissionRotation ?? baseRotation)
   };
 };
 
@@ -455,6 +648,10 @@ const getAssemblyFromGraph = (assemblyGraph = null, componentKey = '') => {
   )) || null;
 };
 
+const resolveAssemblyGraph = (mapData = {}, assemblyGraph = null) => (
+  assemblyGraph?.assemblies ? assemblyGraph : buildMechanicalAssemblies(mapData)
+);
+
 const getAssemblyBasePlacements = (mapData = {}, assembly = null) => (
   (assembly?.componentKeys || []).reduce((placements, componentKey) => {
     const placement = getPlacementByComponentKey(mapData, componentKey);
@@ -475,7 +672,8 @@ export const createAxisBindingRuntimeEntryFromGearNode = ({
   if (!gearNode || !binding?.componentKey) return null;
   const boundPlacement = getPlacementByComponentKey(mapData, binding.componentKey);
   if (!boundPlacement) return null;
-  const boundAssembly = getAssemblyFromGraph(assemblyGraph, binding.componentKey)
+  const resolvedAssemblyGraph = resolveAssemblyGraph(mapData, assemblyGraph);
+  const boundAssembly = getAssemblyFromGraph(resolvedAssemblyGraph, binding.componentKey)
     || createSingleComponentAssembly(binding.componentKey);
   const boundMount = {
     ...gearNode.mount,

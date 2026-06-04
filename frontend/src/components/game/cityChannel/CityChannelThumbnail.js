@@ -58,6 +58,10 @@ const isFlatPlaneTile = (tile) => !!tile && !tile.isVertical;
 
 export const getCityChannelLayerLabel = (z) => CITY_CHANNEL_LAYER_LABELS[z] || `${z + 1}层`;
 
+export const getThumbnailYawForThreeCamera = (cameraYaw = 0) => (
+  ((Number(cameraYaw) || 0) - 45 + 360) % 360
+);
+
 const getThumbnailLayerColor = (z = 0) => (
   THUMBNAIL_LAYER_COLORS[Math.abs(Number(z) || 0) % THUMBNAIL_LAYER_COLORS.length]
 );
@@ -84,7 +88,10 @@ const getThumbnailAdjacentComponentKeys = (item) => {
 export const getCityChannelMapPlaneLevels = (mapData = {}) => {
   const levels = new Set([0]);
   Object.values(mapData.tiles || {}).forEach((tile) => {
-    if (isFlatPlaneTile(tile)) levels.add(Number(tile.z) || 0);
+    levels.add(Number(tile.z) || 0);
+  });
+  Object.values(mapData.walls || {}).forEach((wall) => {
+    levels.add(Number(wall.z) || 0);
   });
   return Array.from(levels).sort((a, b) => a - b);
 };
@@ -186,7 +193,7 @@ const CityChannelThumbnail = ({
   const [hoverLayer, setHoverLayer] = useState(null);
   const [isNearCursor, setIsNearCursor] = useState(false);
   const thumbnailRef = useRef(null);
-  const thumbnailYaw = Number(cameraYaw) || 0;
+  const thumbnailYaw = getThumbnailYawForThreeCamera(cameraYaw);
   const isInteractionLocked = useMemo(() => (
     isCityChannelThumbnailInteractionLocked({
       activeTool,

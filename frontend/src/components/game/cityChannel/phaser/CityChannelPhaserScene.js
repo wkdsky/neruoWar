@@ -1,9 +1,7 @@
 import {
-  CITY_CHANNEL_TILE_TYPES,
   CITY_CHANNEL_TOOLS,
   createCellKey,
   createTile,
-  createWall,
   createWallKey,
   isValidCell,
   normalizeCityChannelMap,
@@ -69,8 +67,7 @@ import {
   getGearAxisBindingStatus,
   getGearMountLocalPosition,
   isCornerGearSocket,
-  isTriggerMechanismTile,
-  normalizeMechanismParams
+  isTriggerMechanismTile
 } from '../cityChannelMechanismRuntime';
 import {
   getFixedAxisWorldAnchor,
@@ -122,17 +119,14 @@ import {
   getAbsoluteWallEdgeEndpoints,
   getAxisOptionIndex,
   getAxisOptionIndexInAllOptions,
-  getAxisOptionKey,
   getAxisPlacementOptions as getAxisPlacementOptionsForMap,
   getAxisPlacementTarget as getAxisPlacementTargetFromOptions,
-  getSnapAxisEdge,
   getSnapAxisKey,
   getSupportAxisSegment,
   getSupportAxisVertex,
   getSupportPrimaryEdge,
   getVerticalSupportConnectionCandidates,
   getVerticalTopSnapSpec as getVerticalTopSnapSpecForSupport,
-  getWallPhysicalKey,
   hasTileSupport as hasTileSupportForMap,
   isWallPhysicalPlaneOccupied,
   resolveBestVerticalSnapConnection as resolveBestVerticalSnapConnectionForSupport,
@@ -167,7 +161,6 @@ import {
   createWallSelectionKey,
   distancePointToSegmentSquared,
   drawGearShape,
-  drawLocalPolygon,
   drawPolygonShape,
   expandRect,
   getDirectionFromEndpoint,
@@ -178,7 +171,6 @@ import {
   isBoardMaterial,
   normalizeAngleDelta,
   normalizeCameraYaw,
-  normalizeVector,
   rectContainsPoint,
   resolveMaterialName,
   rotateLocalPoint,

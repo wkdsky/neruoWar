@@ -8,14 +8,19 @@ import {
 } from './cityChannelSchema';
 import { buildMechanicalAssemblies } from './cityChannelMechanismRuntime';
 import {
+  buildGearContactGraph,
+  CITY_CHANNEL_GEAR_PITCH_RADIUS_WORLD,
   createAxisBindingRuntimeEntryFromGearNode,
   createMechanismRuntimeSnapshot,
   findRotationObstruction,
   getAngleErrorDegrees,
   getAllowedRotationAngle,
   getFixedAxisWorldAnchor,
+  getGearPhase,
+  getGearSurfaceKey,
   getGearWorldPosition,
   getGearTorqueRatio,
+  resolveDrivenGearNodes,
   getRuntimePlacementAroundFixedGear,
   rotatePoint,
   validateFixedAxisSync
@@ -72,6 +77,77 @@ describe('cityChannelMechanismSimulation', () => {
       teeth: 24
     });
     expect(snapshot.sync[0]).toMatchObject({ ok: true, error: 0 });
+  });
+
+  it('meshes center and corner gears at board-scale pitch radius', () => {
+    const nodes = [
+      {
+        id: 'center',
+        componentKey: 'source',
+        surfaceKey: 'floor:0:front',
+        worldPoint: { x: 0, y: 0, z: 0 },
+        pitchRadiusWorld: CITY_CHANNEL_GEAR_PITCH_RADIUS_WORLD,
+        gearRatioRadius: 18
+      },
+      {
+        id: 'corner',
+        componentKey: 'driven',
+        surfaceKey: 'floor:0:front',
+        worldPoint: { x: 0.5, y: 0.5, z: 0 },
+        pitchRadiusWorld: CITY_CHANNEL_GEAR_PITCH_RADIUS_WORLD,
+        gearRatioRadius: 18
+      },
+      {
+        id: 'far',
+        componentKey: 'far',
+        surfaceKey: 'floor:0:front',
+        worldPoint: { x: 1.4, y: 0, z: 0 },
+        pitchRadiusWorld: CITY_CHANNEL_GEAR_PITCH_RADIUS_WORLD,
+        gearRatioRadius: 18
+      }
+    ];
+
+    const graph = buildGearContactGraph(nodes);
+
+    expect(graph.get('center')).toEqual([{ id: 'corner', ratio: -1 }]);
+    expect(graph.get('corner')).toEqual([{ id: 'center', ratio: -1 }]);
+    expect(graph.get('far')).toEqual([]);
+  });
+
+  it('propagates driven gear direction and phase through the shared contact graph', () => {
+    expect(getGearSurfaceKey({ x: 0, y: 0, z: 0 }, { surface: 'front' })).toBe('floor:0:front');
+    const assembly = {
+      componentKeys: ['source', 'driven'],
+      edges: [{ componentKey: 'source', key: 'driven' }]
+    };
+    const allNodes = [
+      {
+        id: 'source:gear_center',
+        componentKey: 'source',
+        surfaceKey: 'floor:0:front',
+        worldPoint: { x: 0, y: 0, z: 0 },
+        pitchRadiusWorld: CITY_CHANNEL_GEAR_PITCH_RADIUS_WORLD,
+        gearRatioRadius: 18
+      },
+      {
+        id: 'driven:gear_corner',
+        componentKey: 'driven',
+        surfaceKey: 'floor:0:front',
+        worldPoint: { x: 0.5, y: 0.5, z: 0 },
+        pitchRadiusWorld: CITY_CHANNEL_GEAR_PITCH_RADIUS_WORLD,
+        gearRatioRadius: 18
+      }
+    ];
+    const driven = resolveDrivenGearNodes({
+      assembly,
+      assemblyNodes: allNodes,
+      allNodes,
+      sourceComponentKey: 'source'
+    });
+
+    expect(driven.map((node) => node.id)).toEqual(['source:gear_center', 'driven:gear_corner']);
+    expect(driven.map((node) => node.driveRatio)).toEqual([1, -1]);
+    expect(getGearPhase(driven[1], 90, 15)).toBe(285);
   });
 
   it('keeps fixed-axis gear mount anchored while its board rotates', () => {
@@ -137,6 +213,7 @@ describe('cityChannelMechanismSimulation', () => {
     const rotatedAnchor = rotatePoint(runtimePlacement.runtimeAnchorLocal, boardAngle);
 
     expect(runtimePlacement.rotation).toBe(boardAngle);
+    expect(runtimePlacement.runtimeSurfaceRotation).toBe(delta);
     expect(runtimePlacement.x).toBeCloseTo(pivotWorld.x - rotatedAnchor.x, 4);
     expect(runtimePlacement.y).toBeCloseTo(pivotWorld.y - rotatedAnchor.y, 4);
     expect(runtimeMountWorld.x).toBeCloseTo(pivotWorld.x, 4);
@@ -496,6 +573,57 @@ describe('cityChannelMechanismSimulation', () => {
 
     expect(entry.assembly).toBe(assembly);
     expect(entry.assembly.componentKeys).toEqual([boundKey, neighborKey]);
+    expect(entry.basePlacements).toMatchObject({
+      [boundKey]: bound,
+      [neighborKey]: neighbor
+    });
+  });
+
+  it('resolves the bound board mechanical assembly from map data when no assembly graph is supplied', () => {
+    const sourceKey = createCellKey(1, 1, 0);
+    const boundKey = createCellKey(2, 1, 0);
+    const neighborKey = createCellKey(3, 1, 0);
+    const bound = createTile({
+      x: 2,
+      y: 1,
+      z: 0,
+      panelType: CITY_CHANNEL_TILE_TYPES.TRANSMISSION_L_PLATE
+    });
+    const neighbor = createTile({
+      x: 3,
+      y: 1,
+      z: 0,
+      panelType: CITY_CHANNEL_TILE_TYPES.TRANSMISSION_STRAIGHT_PLATE,
+      transmissionRotation: 90
+    });
+    const mapData = {
+      ...createBaseCityChannelMap({ name: 'fallback assembly axis-bound board' }),
+      tiles: {
+        [boundKey]: bound,
+        [neighborKey]: neighbor
+      },
+      walls: {}
+    };
+    const entry = createAxisBindingRuntimeEntryFromGearNode({
+      mapData,
+      gearNode: {
+        id: `${sourceKey}:gear_driver`,
+        componentKey: sourceKey,
+        mountId: 'gear_driver',
+        mount: { id: 'gear_driver', position: 'corner_ne', surface: 'front' },
+        driveRatio: -1
+      },
+      axisBinding: {
+        componentKey: boundKey,
+        hostKind: 'tile',
+        socket: 'corner_nw',
+        surface: 'front'
+      },
+      pivotWorld: { x: 2, y: 0.5, z: 0 },
+      driveRatio: -1
+    });
+
+    expect(entry.assembly.componentKeys).toEqual(expect.arrayContaining([boundKey, neighborKey]));
     expect(entry.basePlacements).toMatchObject({
       [boundKey]: bound,
       [neighborKey]: neighbor

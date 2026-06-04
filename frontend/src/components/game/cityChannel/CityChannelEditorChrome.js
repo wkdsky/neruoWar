@@ -282,6 +282,11 @@ export const CityChannelInteractionHints = ({
         <span>左键安装，右键或 Esc 取消</span>
         <span>齿轮会吸附到板材中心或四角</span>
       </>
+    ) : activeTool === CITY_CHANNEL_TOOLS.SELECT ? (
+      <>
+        <span>拖拽框选，Shift 点击或框选可追加选择</span>
+        <span>滚轮缩放；Shift+滚轮 / R 旋转传动骨骼，M 移动，Del 删除</span>
+      </>
     ) : (
       <>
         <span>拖拽平移，双击后拖拽或 Q/E 旋转视角</span>

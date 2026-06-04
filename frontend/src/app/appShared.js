@@ -95,7 +95,8 @@ export const KNOWN_PERSISTED_VIEWS = new Set([
     'profile',
     'army',
     'equipment',
-    'trainingGround'
+    'trainingGround',
+    'cityWorkshop'
 ]);
 
 export const clearStoredAuthState = () => {

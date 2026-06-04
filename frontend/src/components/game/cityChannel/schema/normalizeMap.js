@@ -21,8 +21,7 @@ import {
 } from './keys';
 import {
   createBaseCityChannelMap,
-  createTile,
-  createWall
+  createTile
 } from './entities';
 import {
   cloneConnectors,
@@ -55,6 +54,41 @@ const normalizePoint = (point = {}, fallbackIdPrefix = 'point', index = 0, bound
     y,
     z
   };
+};
+
+const getSafeLayerIndex = (value) => {
+  const parsed = Number.parseInt(value, 10);
+  return Number.isInteger(parsed) && parsed >= 0 ? parsed : null;
+};
+
+const getSourcePlacementLayer = (keyLayer, placement = {}) => {
+  const valueLayer = getSafeLayerIndex(placement?.z);
+  if (valueLayer !== null) return valueLayer;
+  return getSafeLayerIndex(keyLayer);
+};
+
+const getRequiredLayerCount = (input = {}) => {
+  let maxLayer = -1;
+  const visitLayer = (layer) => {
+    const safeLayer = getSafeLayerIndex(layer);
+    if (safeLayer !== null) maxLayer = Math.max(maxLayer, safeLayer);
+  };
+
+  Object.entries(input?.tiles && typeof input.tiles === 'object' ? input.tiles : {}).forEach(([key, value]) => {
+    const fallback = parseCellKey(key);
+    visitLayer(getSourcePlacementLayer(fallback.z, value));
+  });
+
+  Object.entries(input?.walls && typeof input.walls === 'object' ? input.walls : {}).forEach(([key, value]) => {
+    const [z] = String(key || '').split(':');
+    visitLayer(getSourcePlacementLayer(z, value));
+  });
+
+  (Array.isArray(input?.entrances) ? input.entrances : []).forEach((point) => visitLayer(point?.z));
+  (Array.isArray(input?.exits) ? input.exits : []).forEach((point) => visitLayer(point?.z));
+  (Array.isArray(input?.safeRoute) ? input.safeRoute : []).forEach((point) => visitLayer(point?.z));
+
+  return maxLayer + 1;
 };
 
 export const normalizeTile = (tile = {}, bounds = null) => {
@@ -180,10 +214,14 @@ export const normalizeCityChannelMap = (input = {}) => {
   const width = Number.parseInt(input?.width, 10);
   const height = Number.parseInt(input?.height, 10);
   const layers = Number.parseInt(input?.layers, 10);
+  const requiredLayers = getRequiredLayerCount(input);
   const base = createBaseCityChannelMap({
     width: Number.isInteger(width) && width > 0 ? width : CITY_CHANNEL_WIDTH,
     height: Number.isInteger(height) && height > 0 ? height : CITY_CHANNEL_HEIGHT,
-    layers: Number.isInteger(layers) && layers > 0 ? layers : CITY_CHANNEL_LAYERS,
+    layers: Math.max(
+      Number.isInteger(layers) && layers > 0 ? layers : CITY_CHANNEL_LAYERS,
+      requiredLayers
+    ),
     name: typeof input?.name === 'string' && input.name.trim() ? input.name.trim() : '未命名通道'
   });
   const bounds = {
