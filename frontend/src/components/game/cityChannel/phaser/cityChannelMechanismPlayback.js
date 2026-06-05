@@ -33,7 +33,8 @@ import {
   getFixedAxisWorldAnchor,
   getGearMeshPlane,
   getGearTeeth,
-  getGearWorldPosition
+  getGearWorldPosition,
+  isDrivenGearAxisBindingActive
 } from '../cityChannelMechanismSimulation';
 
 export const triggerMechanismFromHit = (scene, hit) => {
@@ -377,12 +378,13 @@ export const setGearMountPhases = (scene, nodes = [], angle = 0, basePhases = ne
     const mount = placement.gearMounts.find((item) => item.id === node.mountId);
     if (!mount) return;
     const base = basePhases.get(node.id) || 0;
-    const axisBinding = getAxisBindingForMount({
+    const resolvedAxisBinding = getAxisBindingForMount({
       mapData: scene.mapData,
       mount,
       componentKey: node.componentKey,
       placement
     });
+    const axisBinding = node.axisBindingSuppressed ? null : resolvedAxisBinding;
     runtimeGearStates[node.id] = {
       componentKey: node.componentKey,
       mountId: node.mountId,
@@ -428,7 +430,7 @@ export const playAssemblyGearRotation = (scene, assembly, sourceComponentKey, pa
   if (nodes.length <= 0) return false;
   const graph = scene.getMechanicalAssemblyGraph?.();
   const seenAxisBindings = new Set();
-  const fixedNodes = nodes.filter((node) => !!node.mount?.axisBinding);
+  const fixedNodes = nodes.filter((node) => isDrivenGearAxisBindingActive(node, assembly));
   const assemblyEntries = fixedNodes.map((node) => {
     const axisBinding = getAxisBindingForMount({
       mapData: scene.mapData,
@@ -503,7 +505,6 @@ export const playAssemblyGearRotation = (scene, assembly, sourceComponentKey, pa
   const normalized = normalizeMechanismParams(params);
   const sign = normalized.rotationDirection === 'left' ? -1 : 1;
   const targetAngle = sign * normalized.rotationAngle;
-  const transmissionEventKeys = getGearRotationTransmissionEventKeys(assembly, assemblyEntries);
   const obstructions = assemblyEntries.map((entry) => {
     const driveRatio = Number(entry.driveRatio) || 1;
     const obstruction = findRotationObstruction({
@@ -511,8 +512,7 @@ export const playAssemblyGearRotation = (scene, assembly, sourceComponentKey, pa
       assembly: entry.assembly,
       anchor: entry.anchor,
       fixedMount: entry.fixedMount,
-      targetAngle: targetAngle * driveRatio,
-      excludedComponentKeys: transmissionEventKeys
+      targetAngle: targetAngle * driveRatio
     });
     if (!obstruction) return null;
     return {

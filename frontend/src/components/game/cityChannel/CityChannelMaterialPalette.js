@@ -4,6 +4,8 @@ import {
   ChevronRight,
   Gauge,
   Cog,
+  LogIn,
+  LogOut,
   Square,
   Workflow
 } from 'lucide-react';
@@ -23,6 +25,8 @@ const iconByPanelType = {
   transmission_l_plate: Workflow,
   transmission_endpoint_plate: Workflow,
   gear_pressure_plate: Gauge,
+  entrance: LogIn,
+  exit: LogOut,
 };
 
 export const CITY_CHANNEL_COMPONENT_CATALOG = [

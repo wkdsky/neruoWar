@@ -35,8 +35,8 @@ const colorByPanelType = {
   actuator_opposite_corner_gear_plate: { top: 0xb8b1a4, side: 0x756f64, edge: 0xd8d2c4 },
   actuator_triangle_gear_plate: { top: 0xb8b1a4, side: 0x756f64, edge: 0xd8d2c4 },
   actuator_four_corner_gear_plate: { top: 0xb8b1a4, side: 0x756f64, edge: 0xd8d2c4 },
-  entrance: { top: 0x0e7490, side: 0x08304a, edge: 0x67e8f9 },
-  exit: { top: 0xa16207, side: 0x451a03, edge: 0xfacc15 }
+  entrance: { top: 0xb8b1a4, side: 0x756f64, edge: 0xd8d2c4 },
+  exit: { top: 0xb8b1a4, side: 0x756f64, edge: 0xd8d2c4 }
 };
 
 const drawPolygonPath = (graphics, points = []) => {
@@ -425,53 +425,27 @@ export class CityChannelTextureCache {
   drawPortalGlyph(graphics, panelType) {
     const color = panelType === CITY_CHANNEL_TILE_TYPES.ENTRANCE ? 0x67e8f9 : 0xfacc15;
     graphics.lineStyle(3, color, 0.85);
-    graphics.strokeRoundedRect(58, 42, 44, 64, 12);
+    graphics.strokeRoundedRect(54, 70, 52, 28, 6);
     graphics.fillStyle(color, 0.22);
-    graphics.fillEllipse(80, 78, 28, 42);
+    graphics.fillRoundedRect(61, 76, 38, 16, 4);
   }
 
   drawPortalModel(graphics, panelType, rotation, cameraYaw) {
     const isEntrance = panelType === CITY_CHANNEL_TILE_TYPES.ENTRANCE;
     const accent = isEntrance ? 0x22d3ee : 0xfacc15;
-    const glow = isEntrance ? 0x06b6d4 : 0xeab308;
-    const colors = isEntrance
-      ? { stone: 0x5b6474, light: 0x7a8594, dark: 0x3b4454, edge: 0xcbd5e1, alpha: 0.96 }
-      : { stone: 0x6b5a3a, light: 0x8a7a5a, dark: 0x3d3018, edge: 0xfde68a, alpha: 0.96 };
+    const frameColors = { stone: 0x64748b, light: 0x94a3b8, dark: 0x334155, edge: 0xe2e8f0, alpha: 0.96 };
+    const deckColors = { stone: 0x111827, light: 0x1f2937, dark: 0x020617, edge: 0x475569, alpha: 0.98 };
+    const hoodColors = { stone: 0x273449, light: 0x475569, dark: 0x0f172a, edge: 0x94a3b8, alpha: 0.98 };
     const portal = createPortalGeometry(cameraYaw, rotation);
 
-    drawBoxPart(graphics, portal.threshold, {
-      ...colors,
-      stone: colors.light,
-      light: isEntrance ? 0x83a7b6 : 0xa08b5a,
-      alpha: 0.92
-    });
-    drawBoxPart(graphics, portal.leftPillar, colors);
-    drawBoxPart(graphics, portal.rightPillar, colors);
-    drawBoxPart(graphics, portal.lintel, colors);
-    drawBoxPart(graphics, portal.arch, {
-      ...colors,
-      stone: isEntrance ? 0x287486 : 0x8d6c25,
-      light: isEntrance ? 0x38a0b5 : 0xb58b2c
-    });
+    drawBoxPart(graphics, portal.threshold, deckColors);
+    drawBoxPart(graphics, portal.leftPillar, frameColors);
+    drawBoxPart(graphics, portal.rightPillar, frameColors);
+    drawBoxPart(graphics, portal.arch, frameColors);
+    drawBoxPart(graphics, portal.lintel, hoodColors);
 
-    graphics.fillStyle(glow, 0.22);
-    graphics.fillEllipse(portal.coreCenter.x, portal.coreCenter.y, portal.coreRx + 7, portal.coreRy + 8);
-    graphics.lineStyle(2, accent, 0.82);
-    graphics.fillStyle(isEntrance ? 0x083344 : 0x451a03, 0.62);
-    graphics.fillEllipse(portal.coreCenter.x, portal.coreCenter.y, portal.coreRx + 4, portal.coreRy + 4);
-    graphics.lineStyle(1, 0xffffff, 0.52);
-    graphics.fillStyle(accent, 0.36);
-    graphics.fillEllipse(portal.coreCenter.x, portal.coreCenter.y, portal.coreRx, portal.coreRy);
-
-    graphics.fillStyle(accent, 0.82);
-    portal.runePositions.forEach((rune, index) => {
-      const width = index % 2 === 0 ? 4 : 3;
-      graphics.fillRoundedRect(rune.x - (width / 2), rune.y - 3, width, 7, 1);
-    });
-    graphics.fillStyle(accent, 0.58);
-    portal.particles.forEach((particle) => {
-      graphics.fillCircle(particle.x, particle.y, particle.radius);
-    });
+    const arrow = isEntrance ? portal.arrow : portal.reverseArrow;
+    drawPolygon(graphics, arrow, accent, 0.76, 0xffffff, 0.42);
   }
 
   drawMechanismGlyph(graphics, panelType) {

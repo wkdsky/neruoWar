@@ -521,6 +521,133 @@ describe('cityChannelSceneInteraction', () => {
     expect(scene.selectedCells).toEqual([{ x: 16, y: 16, z: 0 }]);
   });
 
+  it('requires every board polygon point to be inside the box selection range', () => {
+    const SceneClass = createCityChannelPhaserScene(PhaserStub, {
+      mapData: createBaseCityChannelMap({ name: 'box selection containment' }),
+      activeTool: CITY_CHANNEL_TOOLS.SELECT
+    });
+    const scene = new SceneClass();
+    const polygon = [
+      { x: 10, y: 10 },
+      { x: 50, y: 10 },
+      { x: 50, y: 50 },
+      { x: 10, y: 50 }
+    ];
+
+    expect(scene.isPolygonFullyInsideRect(polygon, {
+      left: 0,
+      top: 0,
+      right: 60,
+      bottom: 60
+    })).toBe(true);
+    expect(scene.isPolygonFullyInsideRect(polygon, {
+      left: 20,
+      top: 0,
+      right: 60,
+      bottom: 60
+    })).toBe(false);
+  });
+
+  it('keeps a partially visible board selectable and rejects a fully occluded board', () => {
+    const tile = createTile({
+      x: 1,
+      y: 1,
+      z: 0,
+      panelType: CITY_CHANNEL_TILE_TYPES.BASIC_PLATE
+    });
+    const blocker = createTile({
+      x: 2,
+      y: 2,
+      z: 1,
+      panelType: CITY_CHANNEL_TILE_TYPES.BASIC_PLATE
+    });
+    const SceneClass = createCityChannelPhaserScene(PhaserStub, {
+      mapData: createBaseCityChannelMap({ name: 'box selection visibility' }),
+      activeTool: CITY_CHANNEL_TOOLS.SELECT
+    });
+    const scene = new SceneClass();
+    scene.worldLayer = { x: 0, y: 0 };
+    scene.cameraState = { yaw: 0, zoom: 1, offsetX: 0, offsetY: 0 };
+    const points = [
+      { x: 10, y: 10 },
+      { x: 50, y: 10 },
+      { x: 50, y: 50 },
+      { x: 10, y: 50 }
+    ];
+    scene.hitTest = jest.fn()
+      .mockReturnValueOnce({
+        hit: { type: 'tile', cell: { x: blocker.x, y: blocker.y, z: blocker.z }, tile: blocker }
+      })
+      .mockReturnValueOnce({
+        hit: { type: 'tile', cell: { x: tile.x, y: tile.y, z: tile.z }, tile }
+      });
+
+    expect(scene.isSelectionPolygonVisible(points, tile)).toBe(true);
+
+    scene.hitTest.mockReset();
+    scene.hitTest.mockReturnValue({
+      hit: { type: 'tile', cell: { x: blocker.x, y: blocker.y, z: blocker.z }, tile: blocker }
+    });
+    expect(scene.isSelectionPolygonVisible(points, tile)).toBe(false);
+  });
+
+  it('does not commit a fully occluded board even when it is fully inside the selection range', () => {
+    const key = createCellKey(16, 16, 0);
+    const tile = createTile({
+      x: 16,
+      y: 16,
+      z: 0,
+      panelType: CITY_CHANNEL_TILE_TYPES.BASIC_PLATE
+    });
+    const blocker = createTile({
+      x: 16,
+      y: 16,
+      z: 1,
+      panelType: CITY_CHANNEL_TILE_TYPES.BASIC_PLATE
+    });
+    const mapData = {
+      ...createBaseCityChannelMap({ name: 'occluded box select' }),
+      tiles: { [key]: tile },
+      walls: {}
+    };
+    const SceneClass = createCityChannelPhaserScene(PhaserStub, {
+      mapData,
+      activeTool: CITY_CHANNEL_TOOLS.SELECT
+    });
+    const scene = new SceneClass();
+    scene.worldLayer = { x: 0, y: 0 };
+    scene.cameraState = { yaw: 0, zoom: 1, offsetX: 0, offsetY: 0 };
+    scene.mapData = mapData;
+    scene.selectedCells = [];
+    scene.selectedWalls = [];
+    scene.selectedGears = [];
+    scene.selectionScope = null;
+    scene.selectionLayer = { clear: jest.fn() };
+    scene.config = { onSelectionChange: jest.fn() };
+    scene.renderObjects = new Map();
+    scene.applySelectionScopeVisualState = jest.fn();
+    scene.drawSelectionLayer = jest.fn();
+    scene.drawGearBindingCandidates = jest.fn();
+    scene.refreshMechanismVisuals = jest.fn();
+    scene.redrawAllMountedGearLayers = jest.fn();
+    scene.sortMapLayer = jest.fn();
+    scene.hitTest = jest.fn(() => ({
+      hit: {
+        type: 'tile',
+        cell: { x: blocker.x, y: blocker.y, z: blocker.z },
+        tile: blocker,
+        panelType: blocker.panelType
+      }
+    }));
+
+    scene.commitBoxSelect(
+      { x: 9999, y: 9999 },
+      { startX: -9999, startY: -9999, shiftKey: false }
+    );
+
+    expect(scene.selectedCells).toEqual([]);
+  });
+
   it('selects newly painted corner gears so binding candidates can render', () => {
     const key = createCellKey(16, 16, 0);
     const tile = createTile({

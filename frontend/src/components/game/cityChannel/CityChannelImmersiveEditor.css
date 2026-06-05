@@ -389,6 +389,17 @@ body.city-channel-immersive-active .home-location-dock {
   stroke: color-mix(in srgb, var(--thumbnail-edge) 88%, #ffffff);
 }
 
+.city-channel-thumbnail-surface.is-portal-accent {
+  fill: #22d3ee;
+  stroke: rgba(207, 250, 254, 0.94);
+  stroke-width: 1.6;
+}
+
+.city-channel-thumbnail-item.is-portal-outline.is-exit .city-channel-thumbnail-surface.is-portal-accent {
+  fill: #f59e0b;
+  stroke: rgba(254, 243, 199, 0.96);
+}
+
 .city-channel-thumbnail-item.is-hovered-layer .city-channel-thumbnail-surface.is-top,
 .city-channel-thumbnail-item.is-hovered-layer .city-channel-thumbnail-surface.is-side {
   fill: color-mix(in srgb, var(--thumbnail-top) 72%, #22d3ee);

@@ -348,7 +348,35 @@ export const getDrivenGearRoots = (assembly, nodes = [], sourceComponentKey = ''
     .filter((item) => Number.isFinite(item.distance));
   if (reachable.length <= 0) return [directDriveNodes[0]];
   const minDistance = Math.min(...reachable.map((item) => item.distance));
-  return reachable.filter((item) => item.distance === minDistance).map((item) => item.node);
+  return reachable
+    .filter((item) => item.distance === minDistance)
+    .sort((a, b) => {
+      const aCenter = getGearSocketKind(a.node?.mount?.position ?? a.node?.position) === 'center';
+      const bCenter = getGearSocketKind(b.node?.mount?.position ?? b.node?.position) === 'center';
+      if (aCenter === bCenter) return 0;
+      return aCenter ? -1 : 1;
+    })
+    .map((item) => item.node);
+};
+
+export const isDrivenGearAxisBindingActive = (node = null, assembly = null) => {
+  const binding = normalizeGearAxisBinding(node?.mount?.axisBinding);
+  if (!binding?.componentKey) return false;
+  return !node?.axisBindingSuppressed;
+};
+
+const shouldSuppressDrivenAxisBinding = (node = null, nodeById = new Map(), sourceAssembly = null) => {
+  const binding = normalizeGearAxisBinding(node?.mount?.axisBinding);
+  if (!binding?.componentKey || node?.isDriveRoot !== false) return false;
+  const driver = node?.drivenByGearId ? nodeById.get(node.drivenByGearId) : null;
+  const isDrivenCorner = getGearSocketKind(node?.mount?.position ?? node?.position) === 'corner';
+  const isDrivenByCenter = getGearSocketKind(driver?.mount?.position ?? driver?.position) === 'center';
+  const sourceAssemblyKeys = new Set(sourceAssembly?.componentKeys || []);
+  const bindsIntoSourceAssembly = sourceAssemblyKeys.has(binding.componentKey);
+  return isDrivenCorner && isDrivenByCenter && (
+    binding.componentKey === driver?.componentKey
+    || bindsIntoSourceAssembly
+  );
 };
 
 export const resolveDrivenGearNodes = ({
@@ -370,6 +398,10 @@ export const resolveDrivenGearNodes = ({
     if (!liveRoot) return;
     liveRoot.driveRatio = 1;
     liveRoot.direction = 1;
+    liveRoot.isDriveRoot = true;
+    liveRoot.drivenByGearId = null;
+    liveRoot.drivenByComponentKey = null;
+    liveRoot.drivenByMountId = null;
     visited.add(root.id);
     const queue = [root.id];
     while (queue.length > 0) {
@@ -382,19 +414,33 @@ export const resolveDrivenGearNodes = ({
         if (!next || !current) return;
         next.driveRatio = (current.driveRatio || 1) * (edge.ratio || -1);
         next.direction = next.driveRatio >= 0 ? 1 : -1;
+        next.isDriveRoot = false;
+        next.drivenByGearId = current.id;
+        next.drivenByComponentKey = current.componentKey;
+        next.drivenByMountId = current.mountId;
         visited.add(nextId);
         queue.push(nextId);
       });
     }
   });
   const driven = allNodes.filter((node) => visited.has(node.id));
+  driven.forEach((node) => {
+    node.axisBindingSuppressed = shouldSuppressDrivenAxisBinding(node, byId, assembly);
+  });
   return driven.length > 0
     ? driven
-    : assemblyNodes.map((node, index) => ({
-      ...node,
-      driveRatio: index % 2 === 0 ? 1 : -1,
-      direction: index % 2 === 0 ? 1 : -1
-    }));
+    : assemblyNodes.map((node, index) => {
+      const next = {
+        ...node,
+        driveRatio: index % 2 === 0 ? 1 : -1,
+        direction: index % 2 === 0 ? 1 : -1,
+        isDriveRoot: index === 0
+      };
+      return {
+        ...next,
+        axisBindingSuppressed: shouldSuppressDrivenAxisBinding(next, byId, assembly)
+      };
+    });
 };
 
 export const getGearPhase = (node, angle = 0, basePhase = 0) => normalizeRotation(
@@ -518,8 +564,11 @@ const getRuntimePlacementInFixedVerticalPlane = (
     runtimeAngle: deltaDegrees,
     runtimeAxisAnchor: pivotWorld,
     runtimePivotWorld: pivotWorld,
+    runtimeFixedComponentKey: fixedMount.componentKey,
     runtimeFixedMountId: fixedMount.id,
     runtimeAxisBindingMountId: fixedMount.id,
+    runtimeAxisSocket: fixedMount.position || fixedMount.axisBinding?.socket,
+    runtimeAxisSurface: fixedMount.surface || fixedMount.axisBinding?.surface || 'front',
     runtimeBaseRotation: placement.edge ? wallEdgeToRotation(placement.edge) : normalizeRotation(placement.rotation || 0),
     runtimeSurfaceRotation: deltaDegrees,
     runtimeBaseSurfaceRotation: getVerticalSurfaceBaseRotation(placement)
@@ -543,8 +592,11 @@ export const getRuntimePlacementForFixedAxisAssemblyMember = ({
   return {
     ...getRuntimePlacementAtAngle(placement, pivotWorld, degrees),
     runtimePivotWorld: pivotWorld,
+    runtimeFixedComponentKey: fixedMount?.componentKey,
     runtimeFixedMountId: fixedMount?.id,
-    runtimeAxisBindingMountId: fixedMount?.id
+    runtimeAxisBindingMountId: fixedMount?.id,
+    runtimeAxisSocket: fixedMount?.position || fixedMount?.axisBinding?.socket,
+    runtimeAxisSurface: fixedMount?.surface || fixedMount?.axisBinding?.surface || 'front'
   };
 };
 
@@ -585,9 +637,12 @@ export const getRuntimePlacementAroundFixedGear = (
       runtimeAngle: deltaDegrees,
       runtimeAxisAnchor: resolvedPivot,
       runtimePivotWorld: resolvedPivot,
+      runtimeFixedComponentKey: fixedMount.componentKey,
       runtimeFixedMountId: fixedMount.id,
       runtimeAxisBindingMountId: fixedMount.id,
       runtimeAnchorLocal: anchorLocal,
+      runtimeAxisSocket: anchorSocket,
+      runtimeAxisSurface: fixedMount.surface || fixedMount.axisBinding?.surface || 'front',
       runtimeBaseRotation: baseRotation,
       runtimeSurfaceRotation: surfaceRotation,
       runtimeBaseSurfaceRotation: baseSurfaceRotation
@@ -606,9 +661,12 @@ export const getRuntimePlacementAroundFixedGear = (
     runtimeAngle: deltaDegrees,
     runtimeAxisAnchor: resolvedPivot,
     runtimePivotWorld: resolvedPivot,
+    runtimeFixedComponentKey: fixedMount.componentKey,
     runtimeFixedMountId: fixedMount.id,
     runtimeAxisBindingMountId: fixedMount.id,
     runtimeAnchorLocal: anchorLocal,
+    runtimeAxisSocket: anchorSocket,
+    runtimeAxisSurface: fixedMount.surface || fixedMount.axisBinding?.surface || 'front',
     runtimeBaseRotation: baseRotation,
     runtimeSurfaceRotation: Number(deltaDegrees) || 0,
     runtimeBaseSurfaceRotation: normalizeRotation(basePlacement.transmissionRotation ?? baseRotation)
@@ -889,12 +947,15 @@ export const createMechanismRuntimeSnapshot = ({
   gearNodes.forEach((node) => {
     const basePhase = basePhases.get(node.id) || 0;
     const phase = normalizeRotation(basePhase + ((Number(node.driveRatio) || 1) * sourceAngle));
+    const axisBinding = node.axisBindingSuppressed
+      ? null
+      : normalizeGearAxisBinding(node.mount?.axisBinding);
     gears[node.id] = {
       componentKey: node.componentKey,
       mountId: node.mountId,
-      axisType: node.mount?.axisBinding ? 'bound' : (node.mount?.axisType || node.axisType || 'freeAxis'),
+      axisType: axisBinding ? 'bound' : (node.mount?.axisType || node.axisType || 'freeAxis'),
       socketKind: getGearSocketKind(node.mount?.position),
-      axisBinding: normalizeGearAxisBinding(node.mount?.axisBinding),
+      axisBinding,
       phase,
       speedRatio: Number(node.driveRatio) || 1,
       torqueRatio: getGearTorqueRatio(node.driveRatio),

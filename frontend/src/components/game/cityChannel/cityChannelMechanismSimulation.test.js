@@ -20,6 +20,7 @@ import {
   getGearSurfaceKey,
   getGearWorldPosition,
   getGearTorqueRatio,
+  isDrivenGearAxisBindingActive,
   resolveDrivenGearNodes,
   getRuntimePlacementAroundFixedGear,
   rotatePoint,
@@ -148,6 +149,195 @@ describe('cityChannelMechanismSimulation', () => {
     expect(driven.map((node) => node.id)).toEqual(['source:gear_center', 'driven:gear_corner']);
     expect(driven.map((node) => node.driveRatio)).toEqual([1, -1]);
     expect(getGearPhase(driven[1], 90, 15)).toBe(285);
+  });
+
+  it('degrades a meshed corner gear bound to the active center gear board', () => {
+    const assembly = {
+      componentKeys: ['pressure', 'corner_host'],
+      edges: [{ componentKey: 'pressure', key: 'corner_host' }]
+    };
+    const allNodes = [
+      {
+        id: 'pressure:gear_center',
+        componentKey: 'pressure',
+        surfaceKey: 'floor:0:front',
+        worldPoint: { x: 0, y: 0, z: 0 },
+        pitchRadiusWorld: CITY_CHANNEL_GEAR_PITCH_RADIUS_WORLD,
+        gearRatioRadius: 18
+      },
+      {
+        id: 'corner_host:gear_corner',
+        componentKey: 'corner_host',
+        surfaceKey: 'floor:0:front',
+        worldPoint: { x: 0.5, y: 0.5, z: 0 },
+        pitchRadiusWorld: CITY_CHANNEL_GEAR_PITCH_RADIUS_WORLD,
+        gearRatioRadius: 18,
+        mount: {
+          id: 'gear_corner',
+          position: 'corner_nw',
+          axisBinding: {
+            componentKey: 'pressure',
+            hostKind: 'tile',
+            socket: 'corner_se',
+            surface: 'front'
+          }
+        }
+      }
+    ];
+
+    const driven = resolveDrivenGearNodes({
+      assembly,
+      assemblyNodes: allNodes,
+      allNodes,
+      sourceComponentKey: 'pressure'
+    });
+    const corner = driven.find((node) => node.id === 'corner_host:gear_corner');
+    const snapshot = createMechanismRuntimeSnapshot({
+      gearNodes: driven,
+      sourceAngle: 90,
+      basePhases: new Map()
+    });
+
+    expect(driven.map((node) => node.id)).toEqual(['pressure:gear_center', 'corner_host:gear_corner']);
+    expect(corner).toMatchObject({
+      driveRatio: -1,
+      isDriveRoot: false,
+      drivenByGearId: 'pressure:gear_center',
+      axisBindingSuppressed: true
+    });
+    expect(isDrivenGearAxisBindingActive(corner, assembly)).toBe(false);
+    expect(snapshot.placements).toEqual({});
+    expect(snapshot.gears['corner_host:gear_corner']).toMatchObject({
+      axisType: 'freeAxis',
+      axisBinding: null,
+      phase: 270,
+      speedRatio: -1
+    });
+  });
+
+  it('degrades a meshed corner gear bound to any board in the active source assembly', () => {
+    const assembly = {
+      componentKeys: ['pressure', 'vertical_link'],
+      edges: [{ componentKey: 'pressure', key: 'vertical_link' }]
+    };
+    const sourceNode = {
+      id: 'pressure:gear_center',
+      componentKey: 'pressure',
+      surfaceKey: 'floor:0:front',
+      worldPoint: { x: 0, y: 0, z: 0 },
+      pitchRadiusWorld: CITY_CHANNEL_GEAR_PITCH_RADIUS_WORLD,
+      gearRatioRadius: 18,
+      mount: {
+        id: 'gear_center',
+        position: 'center'
+      }
+    };
+    const passiveNode = {
+      id: 'corner_host:gear_corner',
+      componentKey: 'corner_host',
+      surfaceKey: 'floor:0:front',
+      worldPoint: { x: 0.5, y: 0.5, z: 0 },
+      pitchRadiusWorld: CITY_CHANNEL_GEAR_PITCH_RADIUS_WORLD,
+      gearRatioRadius: 18,
+      mount: {
+        id: 'gear_corner',
+        position: 'corner_nw',
+        axisBinding: {
+          componentKey: 'vertical_link',
+          hostKind: 'tile',
+          socket: 'corner_se',
+          surface: 'front'
+        }
+      }
+    };
+    const allNodes = [sourceNode, passiveNode];
+
+    const driven = resolveDrivenGearNodes({
+      assembly,
+      assemblyNodes: [sourceNode],
+      allNodes,
+      sourceComponentKey: 'pressure'
+    });
+    const corner = driven.find((node) => node.id === 'corner_host:gear_corner');
+    const snapshot = createMechanismRuntimeSnapshot({
+      gearNodes: driven,
+      sourceAngle: 90,
+      basePhases: new Map()
+    });
+
+    expect(corner).toMatchObject({
+      driveRatio: -1,
+      isDriveRoot: false,
+      drivenByGearId: 'pressure:gear_center',
+      axisBindingSuppressed: true
+    });
+    expect(isDrivenGearAxisBindingActive(corner, assembly)).toBe(false);
+    expect(snapshot.placements).toEqual({});
+    expect(snapshot.gears['corner_host:gear_corner']).toMatchObject({
+      axisType: 'freeAxis',
+      axisBinding: null,
+      phase: 270,
+      speedRatio: -1
+    });
+  });
+
+  it('keeps a same-board bound corner gear passive when the center gear is the active root', () => {
+    const assembly = {
+      componentKeys: ['pressure', 'driver'],
+      edges: [{ componentKey: 'pressure', key: 'driver' }]
+    };
+    const allNodes = [
+      {
+        id: 'driver:gear_corner',
+        componentKey: 'driver',
+        surfaceKey: 'floor:0:front',
+        worldPoint: { x: 0.5, y: 0.5, z: 0 },
+        pitchRadiusWorld: CITY_CHANNEL_GEAR_PITCH_RADIUS_WORLD,
+        gearRatioRadius: 18,
+        mount: {
+          id: 'gear_corner',
+          position: 'corner_se',
+          axisBinding: {
+            componentKey: 'driver',
+            hostKind: 'tile',
+            socket: 'corner_se',
+            surface: 'front'
+          }
+        }
+      },
+      {
+        id: 'driver:gear_center',
+        componentKey: 'driver',
+        surfaceKey: 'floor:0:front',
+        worldPoint: { x: 0, y: 0, z: 0 },
+        pitchRadiusWorld: CITY_CHANNEL_GEAR_PITCH_RADIUS_WORLD,
+        gearRatioRadius: 18,
+        mount: {
+          id: 'gear_center',
+          position: 'center'
+        }
+      }
+    ];
+
+    const driven = resolveDrivenGearNodes({
+      assembly,
+      assemblyNodes: allNodes,
+      allNodes,
+      sourceComponentKey: 'pressure'
+    });
+    const center = driven.find((node) => node.id === 'driver:gear_center');
+    const corner = driven.find((node) => node.id === 'driver:gear_corner');
+
+    expect(center).toMatchObject({
+      driveRatio: 1,
+      isDriveRoot: true
+    });
+    expect(corner).toMatchObject({
+      driveRatio: -1,
+      isDriveRoot: false,
+      drivenByGearId: 'driver:gear_center',
+      axisBindingSuppressed: true
+    });
   });
 
   it('keeps fixed-axis gear mount anchored while its board rotates', () => {
@@ -628,6 +818,69 @@ describe('cityChannelMechanismSimulation', () => {
       [boundKey]: bound,
       [neighborKey]: neighbor
     });
+  });
+
+  it('keeps an axis-bound horizontal transmission assembly rigid after runtime rotation', () => {
+    const sourceKey = createCellKey(1, 1, 0);
+    const boundKey = createCellKey(2, 1, 0);
+    const neighborKey = createCellKey(3, 1, 0);
+    const bound = createTile({
+      x: 2,
+      y: 1,
+      z: 0,
+      panelType: CITY_CHANNEL_TILE_TYPES.TRANSMISSION_L_PLATE
+    });
+    const neighbor = createTile({
+      x: 3,
+      y: 1,
+      z: 0,
+      panelType: CITY_CHANNEL_TILE_TYPES.TRANSMISSION_STRAIGHT_PLATE,
+      transmissionRotation: 90
+    });
+    const mapData = {
+      ...createBaseCityChannelMap({ name: 'axis-bound rigid horizontal assembly' }),
+      tiles: {
+        [boundKey]: bound,
+        [neighborKey]: neighbor
+      },
+      walls: {}
+    };
+    const entry = createAxisBindingRuntimeEntryFromGearNode({
+      mapData,
+      gearNode: {
+        id: `${sourceKey}:gear_driver`,
+        componentKey: sourceKey,
+        mountId: 'gear_driver',
+        mount: { id: 'gear_driver', position: 'corner_ne', surface: 'front' },
+        driveRatio: 1
+      },
+      axisBinding: {
+        componentKey: boundKey,
+        hostKind: 'tile',
+        socket: 'corner_nw',
+        surface: 'front'
+      },
+      pivotWorld: getGearWorldPosition(bound, { position: 'corner_nw', surface: 'front' }),
+      driveRatio: 1
+    });
+
+    const snapshot = createMechanismRuntimeSnapshot({
+      mapData,
+      assemblyEntries: [entry],
+      sourceAngle: 90
+    });
+    const runtimeGraph = buildMechanicalAssemblies({
+      ...mapData,
+      tiles: {
+        [boundKey]: snapshot.placements[boundKey],
+        [neighborKey]: snapshot.placements[neighborKey]
+      },
+      walls: {}
+    });
+
+    expect(snapshot.placements[neighborKey].x - snapshot.placements[boundKey].x).toBeCloseTo(0, 5);
+    expect(snapshot.placements[neighborKey].y - snapshot.placements[boundKey].y).toBeCloseTo(1, 5);
+    expect(runtimeGraph.assemblyByComponentKey[boundKey]).toBe(runtimeGraph.assemblyByComponentKey[neighborKey]);
   });
 
   it('measures fixed axis one-to-one sync tolerance', () => {

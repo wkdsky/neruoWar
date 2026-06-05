@@ -287,13 +287,25 @@ const CityChannelThumbnail = ({
 
     if (item.kind === 'tile' && (item.tile?.panelType === CITY_CHANNEL_TILE_TYPES.ENTRANCE || item.tile?.panelType === CITY_CHANNEL_TILE_TYPES.EXIT)) {
       const portal = createPortalGeometry(thumbnailYaw, item.tile.rotation || 0);
+      const geometry = createTileGeometry(thumbnailYaw, item.tile.rotation || 0);
+      const isEntrance = item.tile.panelType === CITY_CHANNEL_TILE_TYPES.ENTRANCE;
       return (
-        <div key={`thumb:${item.id}`} className={`${commonClass} is-portal-outline`} style={commonStyle} aria-hidden="true">
+        <div
+          key={`thumb:${item.id}`}
+          className={`${commonClass} is-portal-outline ${isEntrance ? 'is-entrance' : 'is-exit'}`}
+          style={commonStyle}
+          aria-hidden="true"
+        >
           <svg className="city-channel-thumbnail-item__svg" viewBox={`0 0 ${TILE_RENDER_WIDTH} ${TILE_RENDER_HEIGHT}`}>
+            {geometry.sides.map((points, index) => (
+              <polygon key={`side-${index}`} className="city-channel-thumbnail-surface is-side" points={polygonPoints(points)} />
+            ))}
+            <polygon className="city-channel-thumbnail-surface is-top" points={polygonPoints(geometry.top)} />
             <polygon className="city-channel-thumbnail-surface is-attachment" points={polygonPoints(portal.threshold.top)} />
-            <polygon className="city-channel-thumbnail-surface is-attachment" points={polygonPoints(portal.leftPillar.front)} />
-            <polygon className="city-channel-thumbnail-surface is-attachment" points={polygonPoints(portal.rightPillar.front)} />
-            <polygon className="city-channel-thumbnail-surface is-attachment" points={polygonPoints(portal.lintel.front)} />
+            <polygon className="city-channel-thumbnail-surface is-attachment" points={polygonPoints(portal.leftPillar.top)} />
+            <polygon className="city-channel-thumbnail-surface is-attachment" points={polygonPoints(portal.rightPillar.top)} />
+            <polygon className="city-channel-thumbnail-surface is-attachment" points={polygonPoints(portal.lintel.top)} />
+            <polygon className="city-channel-thumbnail-surface is-portal-accent" points={polygonPoints(isEntrance ? portal.arrow : portal.reverseArrow)} />
           </svg>
         </div>
       );

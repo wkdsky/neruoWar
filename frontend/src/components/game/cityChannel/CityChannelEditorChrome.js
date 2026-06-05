@@ -128,9 +128,10 @@ export const CityChannelSelectionActions = ({
                 <span>表面朝向</span>
                 <em className="city-channel-shortcut-hint">R</em>
               </button>
-              <button type="button" className="city-channel-selection-action" onClick={onCycleCarrySnapAxisRotation} title="吸附时沿当前轴切换到其他空位">
+              <button type="button" className="city-channel-selection-action" onClick={onCycleCarrySnapAxisRotation} title="移动预览姿态翻转 (Space)">
                 <PanelTop size={14} />
-                <span>沿轴切换</span>
+                <span>翻转姿态</span>
+                <em className="city-channel-shortcut-hint">Space</em>
               </button>
             </>
           )}
@@ -180,6 +181,7 @@ export const CityChannelSelectionActions = ({
 export const CityChannelHotbar = ({
   activeTool,
   panelPose,
+  fixedHorizontal = false,
   wallViewMode,
   openPanel,
   onClearSelection,
@@ -212,15 +214,20 @@ export const CityChannelHotbar = ({
       <span className="city-channel-hotbar__divider" aria-hidden="true" />
       <button
         type="button"
-        className={`city-channel-hotbar__item ${panelPose === 'wall' ? 'is-active' : ''}`}
+        className={`city-channel-hotbar__item ${!fixedHorizontal && panelPose === 'wall' ? 'is-active' : ''}`}
         onClick={() => {
+          if (fixedHorizontal) {
+            onSetPanelPose?.('floor');
+            onToast?.('入口/出口仅支持平放', 'info');
+            return;
+          }
           onSetPanelPose?.((current) => (current === 'wall' ? 'floor' : 'wall'));
           onToast?.(panelPose === 'wall' ? '板材平放：作为地板放置' : '板材竖放：作为墙板放置', 'info');
         }}
-        title={panelPose === 'wall' ? '当前：竖放为墙板' : '当前：平放为地板'}
+        title={fixedHorizontal ? '入口/出口仅支持平放' : (panelPose === 'wall' ? '当前：竖放为墙板' : '当前：平放为地板')}
       >
         <PanelTop size={18} />
-        <span>{panelPose === 'wall' ? '竖放' : '平放'}</span>
+        <span>{fixedHorizontal ? '平放' : (panelPose === 'wall' ? '竖放' : '平放')}</span>
       </button>
       <button
         type="button"
@@ -290,7 +297,7 @@ export const CityChannelInteractionHints = ({
     ) : (
       <>
         <span>拖拽平移，双击后拖拽或 Q/E 旋转视角</span>
-        <span>滚轮缩放；M 移动，移动预览中 R / Shift+滚轮 转表面、Del 删除</span>
+        <span>滚轮缩放；M 移动，移动预览中 R 转表面、Space 翻转、Del 删除</span>
       </>
     )}
     {selectedCount > 0 ? <em>{selectedCount} 个选中</em> : null}

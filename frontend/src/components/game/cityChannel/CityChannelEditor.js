@@ -42,6 +42,7 @@ import {
   getMaxTargetLayerFromPlacementOperations,
   getRuntimeVisibleLayerCutoff
 } from './cityChannelEditorVisibility';
+import { isPortalMaterial } from './cityChannelPlacementGeometry';
 import './CityChannelImmersiveEditor.css';
 import './CityChannelEditor.css';
 
@@ -239,6 +240,7 @@ const CityChannelEditor = ({
         : CITY_CHANNEL_TOOLS.BROWSE;
     }
     clearSelection();
+    if (isPortalMaterial(panelType)) setPanelPose('floor');
     selectMaterial(panelType);
   }, [activeTool, clearSelection, resetMechanismPreview, selectMaterial]);
 
@@ -594,9 +596,18 @@ const CityChannelEditor = ({
     onRotateSelection: handleRotateSelection,
     onRotateActive: handleRotateActive,
     onTogglePanelPose: () => {
+      if (isPortalMaterial(activeTileType)) {
+        setPanelPose('floor');
+        addToast('入口/出口仅支持平放', 'info');
+        return;
+      }
       setPanelPose((current) => (current === 'wall' ? 'floor' : 'wall'));
     },
     onSetPanelPose: (pose) => {
+      if (isPortalMaterial(activeTileType)) {
+        setPanelPose('floor');
+        return;
+      }
       setPanelPose(pose === 'wall' ? 'wall' : 'floor');
     },
     onUndo: undo,
@@ -804,6 +815,7 @@ const CityChannelEditor = ({
       <CityChannelHotbar
         activeTool={activeTool}
         panelPose={panelPose}
+        fixedHorizontal={isPortalMaterial(activeTileType)}
         wallViewMode={wallViewMode}
         openPanel={openPanel}
         onClearSelection={clearSelection}

@@ -275,6 +275,8 @@ export const getPortalPolygons = (cameraYaw = 0, rotation = 0) => {
     portal.lintel.side,
     portal.lintel.top,
     portal.arch.front,
-    portal.arch.top
+    portal.arch.top,
+    portal.arrow,
+    portal.reverseArrow
   ].filter((polygon) => Array.isArray(polygon) && polygon.length >= 3);
 };

@@ -452,6 +452,115 @@ describe('cityChannelMechanismPlayback', () => {
       }
     };
 
+    const obstructionSpy = jest
+      .spyOn(mechanismSimulation, 'findRotationObstruction')
+      .mockReturnValue(null);
+
+    try {
+      const played = playAssemblyGearRotation(scene, sourceAssembly, sourceKey, {
+        rotationAngle: 45,
+        rotationDirection: 'right',
+        rotationSpeedDegPerSec: 45,
+        triggerDelaySeconds: 0,
+        autoReturn: false
+      });
+
+      expect(played).toBe(true);
+      expect(scene.applyMechanismRuntimePlacementTransforms).toHaveBeenCalledWith(
+        expect.objectContaining({
+          id: `single_${boundKey}`,
+          componentKeys: [boundKey]
+        }),
+        expect.objectContaining({
+          componentKey: boundKey,
+          sourceGearComponentKey: cornerHostKey,
+          sourceGearMountId: 'gear_corner'
+        }),
+        -45
+      );
+    } finally {
+      obstructionSpy.mockRestore();
+    }
+  });
+
+  it('degrades a meshed bound corner gear into an unbound passive gear', () => {
+    const sourceKey = createCellKey(0, 0, 0);
+    const cornerHostKey = createCellKey(1, -1, 0);
+    const source = createTile({
+      x: 0,
+      y: 0,
+      z: 0,
+      panelType: CITY_CHANNEL_TILE_TYPES.GEAR_PRESSURE_PLATE
+    });
+    const cornerHost = createTile({
+      x: 1,
+      y: -1,
+      z: 0,
+      panelType: CITY_CHANNEL_TILE_TYPES.TRANSMISSION_CROSS_PLATE
+    });
+    source.gearMounts = [{ id: 'gear_center', position: 'center', surface: 'front', axisType: 'freeAxis' }];
+    cornerHost.gearMounts = [{
+      id: 'gear_corner',
+      position: 'corner_sw',
+      surface: 'front',
+      axisBinding: {
+        componentKey: sourceKey,
+        hostKind: 'tile',
+        socket: 'corner_ne',
+        surface: 'front'
+      }
+    }];
+    const sourceAssembly = {
+      id: 'assembly_pressure',
+      componentKeys: [sourceKey, cornerHostKey],
+      edges: [{ componentKey: sourceKey, key: cornerHostKey }],
+      gearMounts: [
+        { ...source.gearMounts[0], componentKey: sourceKey },
+        { ...cornerHost.gearMounts[0], componentKey: cornerHostKey }
+      ],
+      fixedAxes: [{ ...cornerHost.gearMounts[0], componentKey: cornerHostKey }]
+    };
+    const scene = {
+      getGearMountPoint: jest.fn((placement) => (
+        placement === source ? { x: 100, y: 100 } : { x: 122, y: 100 }
+      )),
+      getMechanicalAssemblyGraph: jest.fn(() => ({
+        assemblies: [sourceAssembly],
+        assemblyByComponentKey: {
+          [sourceKey]: sourceAssembly.id,
+          [cornerHostKey]: sourceAssembly.id
+        }
+      })),
+      mapData: {
+        tiles: {
+          [sourceKey]: source,
+          [cornerHostKey]: cornerHost
+        },
+        walls: {}
+      },
+      mapGearLocalPointToSurface: jest.fn((placement, localPosition) => ({
+        x: (placement === source ? 100 : 122) + ((localPosition.x || 0) * 100),
+        y: 100 + ((localPosition.y || 0) * 100)
+      })),
+      applyMechanismRuntimePlacementTransforms: jest.fn(),
+      mergeMechanismRuntimeGearStates: jest.fn(),
+      redrawMountedGearHostLayers: jest.fn(),
+      setMechanismRuntimeSnapshot: jest.fn(),
+      sortMapLayer: jest.fn(),
+      time: { delayedCall: jest.fn() },
+      tweens: {
+        killTweensOf: jest.fn(),
+        add: jest.fn((config) => {
+          config.onUpdate?.();
+          config.onComplete?.();
+        })
+      },
+      config: {
+        onMechanismPreviewProgress: jest.fn(),
+        onToast: jest.fn()
+      }
+    };
+
     const played = playAssemblyGearRotation(scene, sourceAssembly, sourceKey, {
       rotationAngle: 45,
       rotationDirection: 'right',
@@ -459,20 +568,17 @@ describe('cityChannelMechanismPlayback', () => {
       triggerDelaySeconds: 0,
       autoReturn: false
     });
+    const snapshotCalls = scene.setMechanismRuntimeSnapshot.mock.calls;
+    const snapshot = snapshotCalls[snapshotCalls.length - 1]?.[0];
 
     expect(played).toBe(true);
-    expect(scene.applyMechanismRuntimePlacementTransforms).toHaveBeenCalledWith(
-      expect.objectContaining({
-        id: `single_${boundKey}`,
-        componentKeys: [boundKey]
-      }),
-      expect.objectContaining({
-        componentKey: boundKey,
-        sourceGearComponentKey: cornerHostKey,
-        sourceGearMountId: 'gear_corner'
-      }),
-      -45
-    );
+    expect(scene.applyMechanismRuntimePlacementTransforms).not.toHaveBeenCalled();
+    expect(snapshot.gears[`${cornerHostKey}:gear_corner`]).toMatchObject({
+      axisType: 'freeAxis',
+      axisBinding: null,
+      phase: 315,
+      speedRatio: -1
+    });
   });
 
   it('does not treat a source-side vertical panel base as a floor-plane obstruction', () => {
@@ -613,13 +719,18 @@ describe('cityChannelMechanismPlayback', () => {
     ]);
   });
 
-  it('does not let source-side transmission participants block an axis-bound driven assembly', () => {
+  it('keeps source-side transmission participants blocking an axis-bound driven assembly', () => {
     const obstructionCalls = [];
     const obstructionSpy = jest
       .spyOn(mechanismSimulation, 'findRotationObstruction')
       .mockImplementation(({ excludedComponentKeys }) => {
-        obstructionCalls.push(new Set(excludedComponentKeys));
-        return null;
+        obstructionCalls.push(new Set(excludedComponentKeys || []));
+        return {
+          blocked: true,
+          angle: 30,
+          componentKey: sourceSideBlockerKey,
+          obstacleComponentKey: sourceKey
+        };
       });
     const sourceKey = createCellKey(0, 0, 0);
     const cornerHostKey = createCellKey(0, -1, 0);
@@ -747,14 +858,15 @@ describe('cityChannelMechanismPlayback', () => {
         autoReturn: false
       });
 
-      expect(played).toBe(true);
+      expect(played).toBe(false);
       expect(obstructionCalls).toHaveLength(1);
-      expect(obstructionCalls[0].has(sourceKey)).toBe(true);
-      expect(obstructionCalls[0].has(cornerHostKey)).toBe(true);
-      expect(obstructionCalls[0].has(sourceSideBlockerKey)).toBe(true);
-      expect(obstructionCalls[0].has(boundKey)).toBe(true);
-      expect(obstructionCalls[0].has(boundNeighborKey)).toBe(true);
-      expect(scene.flashMechanismObstruction).not.toHaveBeenCalled();
+      expect(obstructionCalls[0].has(sourceKey)).toBe(false);
+      expect(obstructionCalls[0].has(cornerHostKey)).toBe(false);
+      expect(obstructionCalls[0].has(sourceSideBlockerKey)).toBe(false);
+      expect(obstructionCalls[0].has(boundKey)).toBe(false);
+      expect(obstructionCalls[0].has(boundNeighborKey)).toBe(false);
+      expect(scene.flashMechanismObstruction).toHaveBeenCalledTimes(1);
+      expect(scene.config.onToast).toHaveBeenLastCalledWith('旁边有遮挡物，当前齿轮组没有足够转动空间。', 'error');
     } finally {
       obstructionSpy.mockRestore();
     }

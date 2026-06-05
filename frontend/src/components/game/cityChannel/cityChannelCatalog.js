@@ -88,6 +88,11 @@ export const CITY_CHANNEL_MATERIAL_GROUPS = [
     id: 'power_board',
     label: '力源板材',
     categories: ['power_board']
+  },
+  {
+    id: 'portal_board',
+    label: '出入口板材',
+    categories: ['portal_board']
   }
 ];
 
@@ -285,33 +290,31 @@ export const CITY_CHANNEL_MATERIAL_CATALOG = [
   },
   {
     id: 'entrance',
-    name: '入口门框',
+    name: '入口板材',
     shortName: '入口',
-    category: 'portal',
+    category: 'portal_board',
     boardRole: 'portal',
     walkable: true,
     solid: false,
-    placeable: false,
+    placeable: true,
     rotatable: true,
     markerType: 'entrance',
-    isVertical: true,
-    hiddenFromPalette: true,
-    description: '挑战者进入通道的起点。'
+    isVertical: false,
+    description: '普通水平板材与低矮入口通道口组成；仅支持平放。'
   },
   {
     id: 'exit',
-    name: '出口门框',
+    name: '出口板材',
     shortName: '出口',
-    category: 'portal',
+    category: 'portal_board',
     boardRole: 'portal',
     walkable: true,
     solid: false,
-    placeable: false,
+    placeable: true,
     rotatable: true,
     markerType: 'exit',
-    isVertical: true,
-    hiddenFromPalette: true,
-    description: '挑战者抵达通道的终点。'
+    isVertical: false,
+    description: '普通水平板材与低矮出口通道口组成；仅支持平放。'
   }
 ];
 

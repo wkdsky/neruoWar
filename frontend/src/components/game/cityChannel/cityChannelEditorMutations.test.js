@@ -160,6 +160,44 @@ describe('cityChannelEditorMutations', () => {
     expect(next.tiles[createCellKey(6, 7, 1)]?.gearMounts).toHaveLength(1);
   });
 
+  it('updates a tile when a move lands back on the same cell with a new surface rotation', () => {
+    const sourceKey = createCellKey(2, 3, 0);
+    const mapData = {
+      ...createBaseCityChannelMap({ name: 'same cell move update' }),
+      tiles: {
+        [sourceKey]: createTile({
+          x: 2,
+          y: 3,
+          z: 0,
+          panelType: CITY_CHANNEL_TILE_TYPES.BASIC_PLATE,
+          rotation: 0,
+          transmissionRotation: 0
+        })
+      }
+    };
+
+    const next = movePlacementsInMap(mapData, [{
+      from: { x: 2, y: 3, z: 0 },
+      to: {
+        x: 2,
+        y: 3,
+        z: 0,
+        rotation: 90,
+        transmissionRotation: 90,
+        layFlat: true
+      }
+    }]);
+
+    expect(next.tiles[sourceKey]).toMatchObject({
+      x: 2,
+      y: 3,
+      z: 0,
+      rotation: 90,
+      transmissionRotation: 90,
+      isVertical: false
+    });
+  });
+
   it('deletes tiles and related mechanical links', () => {
     const sourceKey = createCellKey(1, 1, 0);
     const targetKey = createCellKey(1, 2, 0);

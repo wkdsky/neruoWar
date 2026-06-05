@@ -214,7 +214,7 @@ export const hasThreeWallSupport = ({
   };
   const hasSupportingFloor = (candidate) => {
     const tile = mapData.tiles?.[createCellKey(candidate.x, candidate.y, candidate.z)];
-    return !!tile && !tile.isVertical && !isPortalMaterial(tile.panelType);
+    return !!tile && !tile.isVertical;
   };
   if (hasSupportingFloor(cell) || hasSupportingFloor(neighbor)) return true;
   if (cell.z > 0) {
@@ -316,7 +316,7 @@ export const isThreeVerticalSupportPlacement = (placement = null) => (
 const hasHorizontalTile = (mapData = {}, cell = null) => {
   if (!cell) return false;
   const tile = mapData.tiles?.[createCellKey(cell.x, cell.y, cell.z)];
-  return !!tile && !tile.isVertical && !isPortalMaterial(tile.panelType);
+  return !!tile && !tile.isVertical;
 };
 
 const getThreePlacementVisibilityKey = (placement = null) => {
@@ -365,7 +365,7 @@ const hasVisibleVerticalTileBaseSupport = (placement = {}, mapData = {}, cutoff 
   const lowerTile = z > 0
     ? mapData.tiles?.[createCellKey(placement.x, placement.y, z - 1)]
     : null;
-  return !!lowerTile && !lowerTile.isVertical && !isPortalMaterial(lowerTile.panelType) && (Number(lowerTile.z) || 0) <= cutoff;
+  return !!lowerTile && !lowerTile.isVertical && (Number(lowerTile.z) || 0) <= cutoff;
 };
 
 const isVerticalAttachmentConnectedToVisibleLayer = (placement = {}, mapData = {}, cutoff = 0) => {

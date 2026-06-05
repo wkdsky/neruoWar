@@ -5,7 +5,8 @@ import {
   CITY_CHANNEL_TOOLS,
   createCellKey,
   createWallKey,
-  normalizeRotation
+  normalizeRotation,
+  wallEdgeToRotation
 } from '../cityChannelSchema';
 import { computeCityChannelMovePreviewModel } from '../cityChannelMovePreview';
 import {
@@ -19,7 +20,8 @@ import {
   normalizeGearMount,
   normalizeMechanismParams
 } from '../cityChannelMechanismRuntime';
-import { normalizeGearSurfaceForPanel } from '../cityChannelGearPressurePlateRender';
+import { hasDirectionalGearSurface, normalizeGearSurfaceForPanel } from '../cityChannelGearPressurePlateRender';
+import { isPortalMaterial } from '../cityChannelPlacementGeometry';
 import {
   buildGearContactGraph as buildGearContactGraphModel,
   CITY_CHANNEL_GEAR_AXLE_RADIUS_WORLD,
@@ -39,6 +41,7 @@ import {
   getGearRatioRadiusForMount,
   getGearSurfaceKey,
   getGearWorldPosition,
+  isDrivenGearAxisBindingActive,
   resolveDrivenGearNodes as resolveDrivenGearNodesModel
 } from '../cityChannelMechanismSimulation';
 import {
@@ -73,6 +76,7 @@ const KEYBOARD_ROTATION_SPEED = 96;
 const SELECTED_MOVE_HOLD_DELAY = 260;
 const SELECTED_MOVE_CANCEL_DRAG_DISTANCE = 3;
 const WALL_EDGE_SNAP_WORLD_RADIUS = 0.18;
+const PRECISE_WALL_EDGE_SNAP_WORLD_RADIUS = 0.055;
 const CENTER_REPLACEMENT_RADIUS = 0.31;
 const VERTICAL_CENTER_REPLACEMENT_RADIUS = 0.22;
 const GEAR_SOCKET_HOVER_RADIUS = CITY_CHANNEL_GEAR_OUTER_RADIUS_WORLD;
@@ -175,6 +179,51 @@ const createGearTorusGeometry = (radius, tubeRadius, segments = 56) => {
   return geometry;
 };
 
+const createPortalHoodGeometry = () => {
+  const halfWidth = 0.28;
+  const halfDepth = 0.12;
+  const frontHeight = 0.065;
+  const rearHeight = 0.16;
+  const positions = [
+    -halfWidth, 0, -halfDepth,
+    halfWidth, 0, -halfDepth,
+    halfWidth, 0, halfDepth,
+    -halfWidth, 0, halfDepth,
+    -halfWidth, rearHeight, -halfDepth,
+    halfWidth, rearHeight, -halfDepth,
+    halfWidth, frontHeight, halfDepth,
+    -halfWidth, frontHeight, halfDepth
+  ];
+  const indices = [
+    0, 2, 1, 0, 3, 2,
+    4, 5, 6, 4, 6, 7,
+    0, 1, 5, 0, 5, 4,
+    1, 2, 6, 1, 6, 5,
+    2, 3, 7, 2, 7, 6,
+    3, 0, 4, 3, 4, 7
+  ];
+  const geometry = new THREE.BufferGeometry();
+  geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+  geometry.setIndex(indices);
+  geometry.computeVertexNormals();
+  return geometry;
+};
+
+const createPortalArrowGeometry = () => {
+  const shape = new THREE.Shape();
+  shape.moveTo(-0.075, -0.28);
+  shape.lineTo(0.075, -0.28);
+  shape.lineTo(0.075, 0.04);
+  shape.lineTo(0.2, 0.04);
+  shape.lineTo(0, 0.29);
+  shape.lineTo(-0.2, 0.04);
+  shape.lineTo(-0.075, 0.04);
+  shape.closePath();
+  const geometry = new THREE.ShapeGeometry(shape);
+  geometry.rotateX(-Math.PI / 2);
+  return geometry;
+};
+
 const disposeNode = (node) => {
   if (node.geometry && !node.userData?.sharedGeometry) node.geometry.dispose();
   if (node.material && !node.userData?.sharedMaterial) {
@@ -272,6 +321,8 @@ export default class CityChannelThreeRuntime {
     this.pointerState = null;
     this.longPressTimer = null;
     this.carryState = null;
+    this.placementGroups = new Map();
+    this.gearMeshes = new Map();
     this.mechanismPreviewTimer = null;
     this.mechanismPreviewFrame = null;
     this.mechanismRuntimeSnapshot = null;
@@ -351,35 +402,35 @@ export default class CityChannelThreeRuntime {
       depthWrite: false
     });
     this.gearMaterial = new THREE.MeshStandardMaterial({
-      color: 0xd99b2b,
-      roughness: 0.36,
-      metalness: 0.58,
-      emissive: 0x3b2505,
-      emissiveIntensity: 0.24,
+      color: 0x111111,
+      roughness: 0.52,
+      metalness: 0.42,
+      emissive: 0x000000,
+      emissiveIntensity: 0.04,
       transparent: true,
-      opacity: 0.97,
+      opacity: 0.98,
       depthTest: false,
       depthWrite: false,
       side: THREE.DoubleSide
     });
     this.gearSpokeMaterial = new THREE.MeshStandardMaterial({
-      color: 0x7c4a12,
-      roughness: 0.42,
-      metalness: 0.5,
-      emissive: 0x1f1304,
-      emissiveIntensity: 0.2,
+      color: 0x9a4a12,
+      roughness: 0.58,
+      metalness: 0.36,
+      emissive: 0x2b1204,
+      emissiveIntensity: 0.08,
       transparent: true,
-      opacity: 0.96,
+      opacity: 0.9,
       depthTest: false,
       depthWrite: false,
       side: THREE.DoubleSide
     });
     this.gearHubMaterial = new THREE.MeshStandardMaterial({
-      color: 0xf2c66a,
-      roughness: 0.32,
-      metalness: 0.64,
-      emissive: 0x4c2d06,
-      emissiveIntensity: 0.18,
+      color: 0xf08a24,
+      roughness: 0.42,
+      metalness: 0.5,
+      emissive: 0x4a1903,
+      emissiveIntensity: 0.12,
       transparent: true,
       opacity: 0.98,
       depthTest: false,
@@ -387,11 +438,11 @@ export default class CityChannelThreeRuntime {
       side: THREE.DoubleSide
     });
     this.gearAxleMaterial = new THREE.MeshStandardMaterial({
-      color: 0x94a3b8,
-      roughness: 0.28,
-      metalness: 0.72,
-      emissive: 0x0f172a,
-      emissiveIntensity: 0.2,
+      color: 0xc45a12,
+      roughness: 0.36,
+      metalness: 0.62,
+      emissive: 0x2b1204,
+      emissiveIntensity: 0.1,
       transparent: true,
       opacity: 0.98,
       depthTest: false,
@@ -399,32 +450,32 @@ export default class CityChannelThreeRuntime {
       side: THREE.DoubleSide
     });
     this.gearEdgeMaterial = new THREE.LineBasicMaterial({
-      color: 0xfef3c7,
+      color: 0x020617,
       transparent: true,
-      opacity: 0.78,
+      opacity: 0.38,
       depthTest: false,
       depthWrite: false
     });
     this.gearReliefMaterial = new THREE.MeshBasicMaterial({
-      color: 0xfff0b8,
+      color: 0xb45309,
       transparent: true,
-      opacity: 0.44,
+      opacity: 0.18,
       depthTest: false,
       depthWrite: false,
       side: THREE.DoubleSide
     });
     this.gearHaloMaterial = new THREE.MeshBasicMaterial({
-      color: 0xfbbf24,
+      color: 0x000000,
       transparent: true,
-      opacity: 0.2,
+      opacity: 0.08,
       depthTest: false,
       depthWrite: false,
       side: THREE.DoubleSide
     });
     this.gearTimingMarkerMaterial = new THREE.MeshBasicMaterial({
-      color: 0x67e8f9,
+      color: 0xf59e0b,
       transparent: true,
-      opacity: 0.94,
+      opacity: 0.34,
       depthTest: false,
       depthWrite: false
     });
@@ -442,19 +493,57 @@ export default class CityChannelThreeRuntime {
       depthTest: false,
       depthWrite: false
     });
+    this.portalDeckMaterial = new THREE.MeshStandardMaterial({
+      color: 0x111827,
+      roughness: 0.48,
+      metalness: 0.52
+    });
+    this.portalFrameMaterial = new THREE.MeshStandardMaterial({
+      color: 0x64748b,
+      roughness: 0.34,
+      metalness: 0.68
+    });
+    this.portalHoodMaterial = new THREE.MeshStandardMaterial({
+      color: 0x273449,
+      roughness: 0.42,
+      metalness: 0.58
+    });
+    this.portalAttachmentEdgeMaterial = new THREE.LineBasicMaterial({
+      color: 0xe2e8f0,
+      transparent: true,
+      opacity: 0.46,
+      depthTest: false,
+      depthWrite: false
+    });
     this.entranceMarkerMaterial = new THREE.MeshStandardMaterial({
       color: 0x38bdf8,
-      roughness: 0.45,
-      metalness: 0.08,
+      roughness: 0.32,
+      metalness: 0.22,
       emissive: 0x075985,
-      emissiveIntensity: 0.38
+      emissiveIntensity: 0.72
     });
     this.exitMarkerMaterial = new THREE.MeshStandardMaterial({
       color: 0xf59e0b,
-      roughness: 0.45,
-      metalness: 0.08,
+      roughness: 0.32,
+      metalness: 0.22,
       emissive: 0x92400e,
-      emissiveIntensity: 0.36
+      emissiveIntensity: 0.68
+    });
+    this.entranceMarkerGlowMaterial = new THREE.MeshBasicMaterial({
+      color: 0x67e8f9,
+      transparent: true,
+      opacity: 0.42,
+      depthTest: false,
+      depthWrite: false,
+      side: THREE.DoubleSide
+    });
+    this.exitMarkerGlowMaterial = new THREE.MeshBasicMaterial({
+      color: 0xfcd34d,
+      transparent: true,
+      opacity: 0.42,
+      depthTest: false,
+      depthWrite: false,
+      side: THREE.DoubleSide
     });
     this.hoverMaterial = new THREE.MeshBasicMaterial({
       color: 0x67e8f9,
@@ -702,7 +791,14 @@ export default class CityChannelThreeRuntime {
       8
     );
     this.gearContactMarkerGeometry = new THREE.SphereGeometry(0.05, 14, 8);
-    this.markerGeometry = new THREE.CylinderGeometry(0.12, 0.12, 0.28, 18);
+    this.portalDeckGeometry = new THREE.BoxGeometry(0.58, 0.028, 0.72);
+    this.portalRailGeometry = new THREE.BoxGeometry(0.075, 0.055, 0.78);
+    this.portalLipGeometry = new THREE.BoxGeometry(0.58, 0.055, 0.075);
+    this.portalLaneGeometry = new THREE.BoxGeometry(0.18, 0.014, 0.52);
+    this.portalBeaconGeometry = new THREE.CylinderGeometry(0.034, 0.034, 0.052, 16);
+    this.portalHoodGeometry = createPortalHoodGeometry();
+    this.portalHoodEdgeGeometry = new THREE.EdgesGeometry(this.portalHoodGeometry, 12);
+    this.portalArrowGeometry = createPortalArrowGeometry();
     this.ghostGeometry = new THREE.BoxGeometry(1, 1, 1);
     this.gearBindingMarkerGeometry = new THREE.SphereGeometry(0.055, 12, 8);
     this.gearSocketMarkerGeometry = new THREE.SphereGeometry(0.035, 12, 8);
@@ -722,6 +818,7 @@ export default class CityChannelThreeRuntime {
     this.scene.add(fillLight);
 
     this.raycaster = new THREE.Raycaster();
+    this.selectionRaycaster = new THREE.Raycaster();
     this.pointerNdc = new THREE.Vector2();
     this.hasPointerRay = false;
     this.groundPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
@@ -778,7 +875,8 @@ export default class CityChannelThreeRuntime {
       key: transform.key,
       kind: transform.kind,
       edge: transform.edge,
-      placement
+      placement,
+      visibilityPlacement: transform.placement
     };
   }
 
@@ -789,11 +887,67 @@ export default class CityChannelThreeRuntime {
     ].map((transform) => this.getRuntimeTransform(transform));
   }
 
+  getRuntimePlacementMatrix(transform = null, runtimePlacement = null) {
+    if (!transform?.placement || !runtimePlacement) return null;
+    const angle = Number(runtimePlacement.runtimeAngle);
+    if (!Number.isFinite(angle) || Math.abs(angle) <= 0.000001) return new THREE.Matrix4();
+    const fixedTransform = runtimePlacement.runtimeFixedComponentKey
+      ? (this.getBasePlacementTransform?.(runtimePlacement.runtimeFixedComponentKey) || transform)
+      : transform;
+    const mountId = runtimePlacement.runtimeFixedMountId || runtimePlacement.runtimeAxisBindingMountId;
+    const surface = runtimePlacement.runtimeAxisSurface || 'front';
+    const mount = (fixedTransform.placement?.gearMounts || []).find((item) => item.id === mountId)
+      || (runtimePlacement.runtimeAxisSocket ? {
+        position: runtimePlacement.runtimeAxisSocket,
+        surface
+      } : null);
+    const pivot = mount
+      ? getThreeGearSurfacePoint(fixedTransform, mount)
+      : (runtimePlacement.runtimeAnchorLocal ? getThreeSurfacePoint(fixedTransform, runtimePlacement.runtimeAnchorLocal, {
+        lift: (CITY_CHANNEL_GEAR_THICKNESS_WORLD * 0.5) + 0.012,
+        rotate: fixedTransform.kind === 'tile',
+        surface
+      }) : null);
+    const normal = getThreeSurfaceNormal(fixedTransform, mount?.surface || surface);
+    if (!pivot || !normal) return null;
+    const axis = new THREE.Vector3(normal.x || 0, normal.y || 0, normal.z || 0);
+    if (axis.lengthSq() <= 0.000001) return null;
+    axis.normalize();
+    const pivotMatrix = new THREE.Matrix4().makeTranslation(pivot.x || 0, pivot.y || 0, pivot.z || 0);
+    const rotationMatrix = new THREE.Matrix4().makeRotationAxis(axis, -(angle * Math.PI / 180));
+    const unpivotMatrix = new THREE.Matrix4().makeTranslation(-(pivot.x || 0), -(pivot.y || 0), -(pivot.z || 0));
+    return pivotMatrix.multiply(rotationMatrix).multiply(unpivotMatrix);
+  }
+
+  applyPlacementGroupMatrix(group = null, matrix = null) {
+    if (!group) return;
+    group.matrixAutoUpdate = false;
+    group.matrix.copy(matrix || new THREE.Matrix4());
+    group.matrixWorldNeedsUpdate = true;
+    group.updateMatrixWorld(true);
+  }
+
+  syncMechanismRuntimeTransforms() {
+    const snapshot = this.mechanismRuntimeSnapshot || null;
+    const placements = snapshot?.placements || {};
+    (this.placementGroups || new Map()).forEach((group, key) => {
+      const baseTransform = group.userData?.cityChannelPlacement?.baseTransform || null;
+      const matrix = this.getRuntimePlacementMatrix(baseTransform, placements[key]);
+      this.applyPlacementGroupMatrix(group, matrix);
+    });
+    (this.gearMeshes || new Map()).forEach((gear, gearKey) => {
+      this.syncGearMeshRuntimeTransform(gear, gearKey, placements, snapshot);
+    });
+    this.syncSelectionFromConfig?.();
+    this.requestRender?.();
+    this.emitStatus?.();
+  }
+
   setMechanismRuntimeSnapshot(snapshot = null) {
     const hadSnapshot = !!this.mechanismRuntimeSnapshot;
     this.mechanismRuntimeSnapshot = snapshot || null;
     this.config.onMechanismRuntimeSnapshot?.(this.mechanismRuntimeSnapshot);
-    if (hadSnapshot || snapshot) this.rebuildMap();
+    if (hadSnapshot || snapshot) this.syncMechanismRuntimeTransforms();
   }
 
   hasMechanismRuntimePreview() {
@@ -843,7 +997,7 @@ export default class CityChannelThreeRuntime {
       ...this.config,
       ...next
     };
-    this.updatePlacementGhost();
+    this.updateActiveGhost();
     this.syncSelectionFromConfig();
     this.emitStatus();
     this.emitCamera();
@@ -865,6 +1019,8 @@ export default class CityChannelThreeRuntime {
   rebuildMap() {
     clearGroup(this.worldGroup);
     this.pickables = [];
+    this.placementGroups = new Map();
+    this.gearMeshes = new Map();
     this.hoverMesh = null;
     this.hoverHit = null;
     this.hoverOverlayGroup = null;
@@ -879,35 +1035,52 @@ export default class CityChannelThreeRuntime {
     const visibleLayerCutoff = Number.isFinite(Number(this.config.visibleLayerCutoff))
       ? Number(this.config.visibleLayerCutoff)
       : null;
-    const transforms = this.getRuntimeRenderTransforms().filter((transform) => isThreePlacementVisible(transform.placement, {
+    const transforms = [
+      ...(this.renderModel?.tiles || []),
+      ...(this.renderModel?.walls || [])
+    ].filter((transform) => isThreePlacementVisible(transform.placement, {
       mapData: this.renderModel?.mapData || {},
       visibleLayerCutoff
     }));
     const visibleComponentKeys = new Set(transforms.map((transform) => transform.key));
 
     transforms.forEach((transform) => {
-      const mesh = this.createPlacementMesh(transform);
-      this.worldGroup.add(mesh);
-      this.pickables.push(mesh);
-      const edge = new THREE.LineSegments(
-        new THREE.EdgesGeometry(mesh.geometry),
-        this.edgeMaterial
-      );
-      edge.userData.sharedMaterial = true;
-      edge.position.copy(mesh.position);
-      edge.rotation.copy(mesh.rotation);
-      edge.scale.copy(mesh.scale);
-      edge.renderOrder = this.getPlacementRenderOrder(transform, 1);
-      this.worldGroup.add(edge);
-      this.addPlacementDetails(transform, this.getPlacementRenderOrder(transform, PLACEMENT_DETAIL_RENDER_ORDER_OFFSET));
+      const group = this.createPlacementRenderGroup(transform);
+      this.worldGroup.add(group);
+      this.placementGroups.set(transform.key, group);
     });
 
     this.addGearContactVisuals(visibleComponentKeys);
     this.addGroundGrid();
     this.addCoordinateLabels();
+    this.syncMechanismRuntimeTransforms();
     this.syncSelectionFromConfig();
     this.requestRender();
     this.emitStatus();
+  }
+
+  createPlacementRenderGroup(transform = null) {
+    const group = new THREE.Group();
+    group.matrixAutoUpdate = false;
+    group.userData.cityChannelPlacement = {
+      key: transform?.key || '',
+      baseTransform: transform
+    };
+    const mesh = this.createPlacementMesh(transform);
+    group.add(mesh);
+    this.pickables.push(mesh);
+    const edge = new THREE.LineSegments(
+      new THREE.EdgesGeometry(mesh.geometry),
+      this.edgeMaterial
+    );
+    edge.userData.sharedMaterial = true;
+    edge.position.copy(mesh.position);
+    edge.rotation.copy(mesh.rotation);
+    edge.scale.copy(mesh.scale);
+    edge.renderOrder = this.getPlacementRenderOrder(transform, 1);
+    group.add(edge);
+    this.addPlacementDetails(transform, this.getPlacementRenderOrder(transform, PLACEMENT_DETAIL_RENDER_ORDER_OFFSET), group);
+    return group;
   }
 
   createPlacementMesh(transform) {
@@ -1106,10 +1279,16 @@ export default class CityChannelThreeRuntime {
       (Number.isFinite(mesh.renderOrder) ? mesh.renderOrder : 0) + 12
     );
 
+    mesh.updateWorldMatrix(true, false);
+    const worldPosition = new THREE.Vector3();
+    const worldQuaternion = new THREE.Quaternion();
+    const worldScale = new THREE.Vector3();
+    mesh.matrixWorld.decompose(worldPosition, worldQuaternion, worldScale);
+
     const syncObject = (object, scaleFactor, orderOffset) => {
-      object.position.copy(mesh.position);
-      object.quaternion.copy(mesh.quaternion);
-      object.scale.copy(mesh.scale).multiplyScalar(scaleFactor);
+      object.position.copy(worldPosition);
+      object.quaternion.copy(worldQuaternion);
+      object.scale.copy(worldScale).multiplyScalar(scaleFactor);
       object.renderOrder = baseRenderOrder + orderOffset;
       object.visible = true;
     };
@@ -1121,13 +1300,13 @@ export default class CityChannelThreeRuntime {
     group.visible = true;
   }
 
-  addPlacementDetails(transform, renderOrder = 0) {
-    this.addTransmissionLines(transform, renderOrder);
-    this.addGearMounts(transform, renderOrder);
-    this.addMarker(transform, renderOrder);
+  addPlacementDetails(transform, renderOrder = 0, targetGroup = this.worldGroup) {
+    this.addTransmissionLines(transform, renderOrder, targetGroup);
+    this.addGearMounts(transform, renderOrder, targetGroup);
+    this.addPortalAttachment(transform, renderOrder, targetGroup);
   }
 
-  addTransmissionLines(transform, renderOrder = 0) {
+  addTransmissionLines(transform, renderOrder = 0, targetGroup = this.worldGroup) {
     const segments = getThreeTransmissionLineSegments(transform);
     if (segments.length <= 0) return;
     const points = [];
@@ -1142,13 +1321,13 @@ export default class CityChannelThreeRuntime {
       node.scale.setScalar(scale);
       node.position.set(point.x, point.y, point.z);
       node.renderOrder = renderOrder + 2;
-      this.worldGroup.add(node);
+      targetGroup.add(node);
     };
     segments.forEach(({ start, end }) => {
       points.push(new THREE.Vector3(start.x, start.y, start.z));
       points.push(new THREE.Vector3(end.x, end.y, end.z));
-      this.addTransmissionTube(start, end, 0.052, this.transmissionGlowMaterial, renderOrder);
-      this.addTransmissionTube(start, end, 0.018, this.transmissionCoreMaterial, renderOrder + 1);
+      this.addTransmissionTube(start, end, 0.052, this.transmissionGlowMaterial, renderOrder, targetGroup);
+      this.addTransmissionTube(start, end, 0.018, this.transmissionCoreMaterial, renderOrder + 1, targetGroup);
       appendNode(start, 1.18);
       appendNode(end, 0.92);
     });
@@ -1158,10 +1337,10 @@ export default class CityChannelThreeRuntime {
     );
     lines.userData.sharedMaterial = true;
     lines.renderOrder = renderOrder + 1;
-    this.worldGroup.add(lines);
+    targetGroup.add(lines);
   }
 
-  addTransmissionTube(start = null, end = null, radius = 0.02, material = this.transmissionCoreMaterial, renderOrder = 0) {
+  addTransmissionTube(start = null, end = null, radius = 0.02, material = this.transmissionCoreMaterial, renderOrder = 0, targetGroup = this.worldGroup) {
     if (!start || !end) return;
     const from = new THREE.Vector3(start.x, start.y, start.z);
     const to = new THREE.Vector3(end.x, end.y, end.z);
@@ -1174,7 +1353,7 @@ export default class CityChannelThreeRuntime {
     mesh.position.copy(from.add(to).multiplyScalar(0.5));
     mesh.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), direction.normalize());
     mesh.renderOrder = renderOrder;
-    this.worldGroup.add(mesh);
+    targetGroup.add(mesh);
   }
 
   createTransmissionTubeMesh(start = null, end = null, radius = 0.02, material = this.transmissionCoreMaterial) {
@@ -1310,6 +1489,7 @@ export default class CityChannelThreeRuntime {
       group.add(gear);
     }
 
+    this.addPortalAttachment(detailTransform, renderOrder + 1, group);
     return group;
   }
 
@@ -1333,6 +1513,14 @@ export default class CityChannelThreeRuntime {
     this.replaceGhostGroup('carryGhostGroup', null);
   }
 
+  updateActiveGhost() {
+    if (this.carryState) {
+      this.clearPlacementGhost();
+      return this.updateCarryGhost();
+    }
+    return this.updatePlacementGhost();
+  }
+
   getGearSurfaceQuaternion(transform = {}, surface = 'front') {
     const normal = getThreeSurfaceNormal(transform, surface);
     const quaternion = new THREE.Quaternion();
@@ -1343,6 +1531,14 @@ export default class CityChannelThreeRuntime {
     return quaternion;
   }
 
+  getGearSurfaceRotationDegrees(transform = {}) {
+    const placement = transform?.placement || {};
+    return normalizeRotation(
+      (placement.transmissionRotation ?? placement.rotation ?? 0)
+      + (Number(placement.runtimeSurfaceRotation) || 0)
+    );
+  }
+
   getRuntimeGearState(componentKey = '', mountId = '') {
     if (!componentKey || !mountId) return null;
     return this.mechanismRuntimeSnapshot?.gears?.[`${componentKey}:${mountId}`] || null;
@@ -1350,11 +1546,128 @@ export default class CityChannelThreeRuntime {
 
   getGearQuaternion(transform = {}, mount = {}, phase = 0) {
     const surfaceQuaternion = this.getGearSurfaceQuaternion(transform, mount.surface || 'front');
+    const surfaceSpinQuaternion = new THREE.Quaternion().setFromAxisAngle(
+      new THREE.Vector3(0, 1, 0),
+      -((this.getGearSurfaceRotationDegrees(transform) * Math.PI) / 180)
+    );
     const spinQuaternion = new THREE.Quaternion().setFromAxisAngle(
       new THREE.Vector3(0, 1, 0),
-      (Number(phase) || 0) * Math.PI / 180
+      -((Number(phase) || 0) * Math.PI / 180)
     );
-    return surfaceQuaternion.multiply(spinQuaternion);
+    return surfaceQuaternion.multiply(surfaceSpinQuaternion).multiply(spinQuaternion);
+  }
+
+  hasRuntimePlacementGroupMatrix(runtimePlacement = null) {
+    const angle = Number(runtimePlacement?.runtimeAngle);
+    return Number.isFinite(angle) && Math.abs(angle) > 0.000001;
+  }
+
+  getGearAttachmentContext(transform = null, mount = null, bindingStatus = null, {
+    suppressAxisBinding = false
+  } = {}) {
+    const hostKind = transform?.kind === 'wall' ? 'wall' : 'tile';
+    const fallback = {
+      componentKey: transform?.key || '',
+      hostKind,
+      placement: transform?.placement || null,
+      transform,
+      mount,
+      binding: null,
+      followsAxisBinding: false
+    };
+    if (!transform || !mount) return fallback;
+    if (suppressAxisBinding) return fallback;
+    const status = bindingStatus || this.getGearBindingStatusForMount(transform, mount);
+    const binding = status?.valid ? status.binding : null;
+    if (!binding?.componentKey) return fallback;
+    const mapData = this.renderModel?.mapData || {};
+    const placement = binding.hostKind === 'wall'
+      ? mapData.walls?.[binding.componentKey]
+      : mapData.tiles?.[binding.componentKey];
+    const attachmentTransform = this.getBasePlacementTransform(binding.componentKey);
+    if (!placement || !attachmentTransform) return fallback;
+    return {
+      componentKey: binding.componentKey,
+      hostKind: binding.hostKind === 'wall' ? 'wall' : 'tile',
+      placement,
+      transform: attachmentTransform,
+      mount: {
+        ...mount,
+        position: binding.socket,
+        surface: normalizeGearSurfaceForPanel(placement.panelType, binding.surface || 'front')
+      },
+      binding,
+      followsAxisBinding: true
+    };
+  }
+
+  getGearAttachmentWorldPoint(attachment = null, placements = {}) {
+    if (!attachment?.transform || !attachment.mount) return null;
+    return this.getRuntimeGearSurfacePointForPlacement(
+      attachment.componentKey,
+      attachment.transform,
+      attachment.mount
+    );
+  }
+
+  getGearAttachmentWorldQuaternion(attachment = null, phase = 0, placements = {}) {
+    if (!attachment?.transform || !attachment.mount) return new THREE.Quaternion();
+    const runtimePlacement = placements?.[attachment.componentKey] || null;
+    const localTransform = this.hasRuntimePlacementGroupMatrix(runtimePlacement)
+      ? attachment.transform
+      : (runtimePlacement ? this.getRuntimeTransform(attachment.transform) : attachment.transform);
+    const localQuaternion = this.getGearQuaternion(localTransform, attachment.mount, phase);
+    if (!this.hasRuntimePlacementGroupMatrix(runtimePlacement)) return localQuaternion;
+    const group = this.placementGroups?.get(attachment.componentKey);
+    if (!group) return localQuaternion;
+    group.updateWorldMatrix(true, false);
+    const groupQuaternion = group.getWorldQuaternion(new THREE.Quaternion());
+    return groupQuaternion.multiply(localQuaternion);
+  }
+
+  syncGearMeshRuntimeTransform(gear = null, gearKey = '', placements = {}, snapshot = this.mechanismRuntimeSnapshot || null) {
+    const data = gear?.userData?.cityChannel || null;
+    if (!gear || !data?.transform || !data?.mount) return;
+    const runtimeGear = snapshot?.gears?.[gearKey || `${data.hostKey || data.transform.key}:${data.mount.id}`] || null;
+    const suppressAxisBinding = !!(
+      runtimeGear
+      && runtimeGear.axisType === 'freeAxis'
+      && !runtimeGear.axisBinding
+    );
+    const attachment = this.getGearAttachmentContext(data.transform, data.mount, data.axisBindingStatus, {
+      suppressAxisBinding
+    });
+    const attachmentHasRuntimePlacement = !!placements?.[attachment.componentKey];
+    const phase = runtimeGear && suppressAxisBinding
+      ? (runtimeGear.phase ?? data.mount.phase ?? 0)
+      : attachmentHasRuntimePlacement
+      ? (Number(data.mount.phase) || 0)
+      : (runtimeGear?.phase ?? data.mount.phase ?? 0);
+    const worldPoint = this.getGearAttachmentWorldPoint(attachment, placements);
+    if (worldPoint) {
+      const position = new THREE.Vector3(worldPoint.x || 0, worldPoint.y || 0, worldPoint.z || 0);
+      const parent = gear.parent || null;
+      if (parent) {
+        parent.updateWorldMatrix(true, false);
+        parent.worldToLocal(position);
+      }
+      gear.position.copy(position);
+    }
+    const worldQuaternion = this.getGearAttachmentWorldQuaternion(attachment, phase, placements);
+    const parent = gear.parent || null;
+    if (parent) {
+      parent.updateWorldMatrix(true, false);
+      const parentQuaternion = parent.getWorldQuaternion(new THREE.Quaternion()).invert();
+      gear.quaternion.copy(parentQuaternion.multiply(worldQuaternion));
+    } else {
+      gear.quaternion.copy(worldQuaternion);
+    }
+    data.attachmentComponentKey = attachment.componentKey;
+    data.attachmentHostKind = attachment.hostKind;
+    data.attachmentMount = attachment.mount;
+    data.followsAxisBinding = attachment.followsAxisBinding;
+    data.axisBindingSuppressed = suppressAxisBinding;
+    gear.updateMatrixWorld(true);
   }
 
   getGearRenderOrder(renderOrder = 0, offset = 0) {
@@ -1514,7 +1827,7 @@ export default class CityChannelThreeRuntime {
     gear.add(edges);
   }
 
-  addGearMounts(transform, renderOrder = 0) {
+  addGearMounts(transform, renderOrder = 0, targetGroup = this.worldGroup) {
     const mounts = transform.placement?.gearMounts || [];
     if (!Array.isArray(mounts) || mounts.length <= 0) return;
     mounts.forEach((mount) => {
@@ -1560,15 +1873,25 @@ export default class CityChannelThreeRuntime {
         axisBindingInvalidReason: axisBindingInvalid ? bindingStatus.reason : null,
         axisBindingWarning: this.getGearBindingWarningMessage(bindingStatus)
       };
-      this.worldGroup.add(gear);
+      targetGroup.add(gear);
       this.pickables.push(gear);
+      this.gearMeshes?.set(`${transform.key}:${mount.id}`, gear);
     });
   }
 
   getRuntimeGearSurfacePointForNode(node = null) {
     if (!node?.transform || !node?.mount) return null;
-    const transform = this.getRuntimeTransform(node.transform);
-    return getThreeGearSurfacePoint(transform, node.mount);
+    const attachment = node.attachmentTransform
+      ? {
+        componentKey: node.attachmentComponentKey || node.componentKey,
+        hostKind: node.attachmentHostKind || node.hostKind,
+        placement: node.attachmentPlacement || node.placement,
+        transform: node.attachmentTransform,
+        mount: node.attachmentMount || node.mount
+      }
+      : this.getGearAttachmentContext(node.transform, node.mount);
+    const transform = this.getRuntimeTransform(attachment.transform);
+    return getThreeGearSurfacePoint(transform, attachment.mount);
   }
 
   addGearContactVisuals(visibleComponentKeys = null) {
@@ -1647,22 +1970,71 @@ export default class CityChannelThreeRuntime {
     });
   }
 
-  addMarker(transform, renderOrder = 0) {
+  addPortalAttachment(transform, renderOrder = 0, targetGroup = this.worldGroup) {
     const panelType = transform.placement?.panelType;
     if (panelType !== CITY_CHANNEL_TILE_TYPES.ENTRANCE && panelType !== CITY_CHANNEL_TILE_TYPES.EXIT) return;
+    if (transform.kind !== 'tile') return;
+    const isEntrance = panelType === CITY_CHANNEL_TILE_TYPES.ENTRANCE;
+    const accentMaterial = isEntrance ? this.entranceMarkerMaterial : this.exitMarkerMaterial;
+    const glowMaterial = isEntrance ? this.entranceMarkerGlowMaterial : this.exitMarkerGlowMaterial;
     const point = getThreeSurfacePoint(transform, { x: 0, y: 0 }, {
-      lift: 0.17,
+      lift: 0.006,
       rotate: false
     });
-    const marker = new THREE.Mesh(
-      this.markerGeometry,
-      panelType === CITY_CHANNEL_TILE_TYPES.ENTRANCE ? this.entranceMarkerMaterial : this.exitMarkerMaterial
-    );
-    marker.userData.sharedGeometry = true;
-    marker.userData.sharedMaterial = true;
-    marker.position.set(point.x, point.y, point.z);
-    marker.renderOrder = renderOrder + 3;
-    this.worldGroup.add(marker);
+    const group = new THREE.Group();
+    group.position.set(point.x, point.y, point.z);
+    group.rotation.y = transform.rotationY || 0;
+    group.renderOrder = renderOrder + 3;
+
+    const addMesh = (geometry, material, {
+      x = 0,
+      y = 0,
+      z = 0,
+      rotationY = 0,
+      orderOffset = 0
+    } = {}) => {
+      const mesh = new THREE.Mesh(geometry, material);
+      mesh.userData.sharedGeometry = true;
+      mesh.userData.sharedMaterial = true;
+      mesh.position.set(x, y, z);
+      mesh.rotation.y = rotationY;
+      mesh.renderOrder = renderOrder + 3 + orderOffset;
+      group.add(mesh);
+      return mesh;
+    };
+
+    addMesh(this.portalDeckGeometry, this.portalDeckMaterial, { y: 0.014 });
+    addMesh(this.portalRailGeometry, this.portalFrameMaterial, { x: -0.34, y: 0.0275 });
+    addMesh(this.portalRailGeometry, this.portalFrameMaterial, { x: 0.34, y: 0.0275 });
+    addMesh(this.portalLipGeometry, this.portalFrameMaterial, { y: 0.0275, z: 0.35 });
+    addMesh(this.portalHoodGeometry, this.portalHoodMaterial, { z: -0.24, orderOffset: 1 });
+    addMesh(this.portalLaneGeometry, glowMaterial, { y: 0.043, z: 0.07, orderOffset: 2 });
+
+    const arrow = addMesh(this.portalArrowGeometry, accentMaterial, {
+      y: 0.056,
+      z: 0.08,
+      rotationY: isEntrance ? 0 : Math.PI,
+      orderOffset: 3
+    });
+    arrow.scale.set(0.82, 0.82, 0.82);
+
+    [-0.23, 0.23].forEach((x) => {
+      addMesh(this.portalBeaconGeometry, accentMaterial, {
+        x,
+        y: 0.026,
+        z: -0.31,
+        orderOffset: 3
+      });
+    });
+
+    const hoodEdge = new THREE.LineSegments(this.portalHoodEdgeGeometry, this.portalAttachmentEdgeMaterial);
+    hoodEdge.userData.sharedGeometry = true;
+    hoodEdge.userData.sharedMaterial = true;
+    hoodEdge.position.z = -0.24;
+    hoodEdge.renderOrder = renderOrder + 7;
+    group.add(hoodEdge);
+
+    targetGroup.add(group);
   }
 
   addGroundGrid() {
@@ -1745,7 +2117,7 @@ export default class CityChannelThreeRuntime {
     ) ? this.placementTarget : null;
     if (!lockedPlacementTarget) {
       this.updateHover(event);
-      this.updatePlacementGhost();
+      this.updateActiveGhost();
     }
     const now = Date.now();
     const isBrowseTool = this.config.activeTool === CITY_CHANNEL_TOOLS.BROWSE;
@@ -1824,14 +2196,14 @@ export default class CityChannelThreeRuntime {
         return;
       }
       if (this.pointerState.mode === 'rotateCamera') {
-        this.rotateCameraYaw(dx * 0.34);
+        this.rotateCameraYaw(-dx * 0.34);
         return;
       }
       this.panCamera(dx, dy);
       return;
     }
     this.updateHover(event);
-    this.updatePlacementGhost();
+    this.updateActiveGhost();
   }
 
   handlePointerUp(event) {
@@ -1842,6 +2214,7 @@ export default class CityChannelThreeRuntime {
       this.hideSelectionBox();
       return;
     }
+    const pointerState = this.pointerState;
     const wasDrag = !!this.pointerState?.moved;
     const pointerMode = this.pointerState?.mode || 'pan';
     const boxShiftKey = !!this.pointerState?.shiftKey || !!event.shiftKey;
@@ -1851,7 +2224,7 @@ export default class CityChannelThreeRuntime {
     this.pointerState = null;
     if (pointerMode === 'box') {
       if (wasDrag) {
-        this.commitBoxSelection(event, boxShiftKey);
+        this.commitBoxSelection(event, boxShiftKey, pointerState);
         this.hideSelectionBox();
         return;
       }
@@ -1913,12 +2286,17 @@ export default class CityChannelThreeRuntime {
     return false;
   }
 
-  getSelectionBoxRect(event) {
+  getSelectionBoxRect(event, pointerState = this.pointerState) {
     const mountRect = this.mount.getBoundingClientRect();
-    const startX = Math.max(0, Math.min(this.pointerState?.startX - mountRect.left, mountRect.width));
-    const startY = Math.max(0, Math.min(this.pointerState?.startY - mountRect.top, mountRect.height));
-    const endX = Math.max(0, Math.min(event.clientX - mountRect.left, mountRect.width));
-    const endY = Math.max(0, Math.min(event.clientY - mountRect.top, mountRect.height));
+    const startClientX = Number(pointerState?.startX);
+    const startClientY = Number(pointerState?.startY);
+    const endClientX = Number(event?.clientX);
+    const endClientY = Number(event?.clientY);
+    if (![startClientX, startClientY, endClientX, endClientY].every(Number.isFinite)) return null;
+    const startX = Math.max(0, Math.min(startClientX - mountRect.left, mountRect.width));
+    const startY = Math.max(0, Math.min(startClientY - mountRect.top, mountRect.height));
+    const endX = Math.max(0, Math.min(endClientX - mountRect.left, mountRect.width));
+    const endY = Math.max(0, Math.min(endClientY - mountRect.top, mountRect.height));
     return {
       left: Math.min(startX, endX),
       top: Math.min(startY, endY),
@@ -1931,7 +2309,7 @@ export default class CityChannelThreeRuntime {
 
   updateSelectionBox(event) {
     const rect = this.getSelectionBoxRect(event);
-    if (rect.width < 3 && rect.height < 3) {
+    if (!rect || (rect.width < 3 && rect.height < 3)) {
       this.hideSelectionBox();
       return;
     }
@@ -2026,24 +2404,96 @@ export default class CityChannelThreeRuntime {
     });
   }
 
-  doScreenRectsIntersect(leftRect = null, rightRect = null) {
-    if (!leftRect || !rightRect) return false;
-    return !(
-      rightRect.left > leftRect.right
-      || rightRect.right < leftRect.left
-      || rightRect.top > leftRect.bottom
-      || rightRect.bottom < leftRect.top
+  doesScreenRectContain(containerRect = null, contentRect = null) {
+    if (!containerRect || !contentRect) return false;
+    const values = [
+      containerRect.left,
+      containerRect.top,
+      containerRect.right,
+      containerRect.bottom,
+      contentRect.left,
+      contentRect.top,
+      contentRect.right,
+      contentRect.bottom
+    ];
+    if (!values.every(Number.isFinite)) return false;
+    return (
+      contentRect.left >= containerRect.left
+      && contentRect.top >= containerRect.top
+      && contentRect.right <= containerRect.right
+      && contentRect.bottom <= containerRect.bottom
     );
   }
 
   isMeshInsideSelectionRect(mesh, rect) {
     if (!mesh.geometry?.boundingBox) mesh.geometry?.computeBoundingBox?.();
-    return this.doScreenRectsIntersect(rect, this.getMeshScreenBounds(mesh));
+    return this.doesScreenRectContain(rect, this.getMeshScreenBounds(mesh));
   }
 
-  commitBoxSelection(event, additive = false) {
-    const rect = this.getSelectionBoxRect(event);
-    if (rect.width < 4 && rect.height < 4) return false;
+  getMeshSelectionVisibilitySamplePoints(mesh = null) {
+    if (!mesh?.geometry) return [];
+    if (!mesh.geometry.boundingBox) mesh.geometry.computeBoundingBox?.();
+    const box = mesh.geometry.boundingBox;
+    if (!box) return [];
+    mesh.updateMatrixWorld(true);
+    const values = [0.01, 0.25, 0.5, 0.75, 0.99];
+    const lerp = (min, max, ratio) => min + ((max - min) * ratio);
+    const points = [mesh.getWorldPosition(new THREE.Vector3())];
+    const keys = new Set();
+    // Cover every box face so a board with only an exposed edge remains selectable.
+    const appendLocalPoint = (x, y, z) => {
+      const key = `${x.toFixed(5)}:${y.toFixed(5)}:${z.toFixed(5)}`;
+      if (keys.has(key)) return;
+      keys.add(key);
+      points.push(new THREE.Vector3(x, y, z).applyMatrix4(mesh.matrixWorld));
+    };
+    values.forEach((u) => {
+      values.forEach((v) => {
+        const x = lerp(box.min.x, box.max.x, u);
+        const y = lerp(box.min.y, box.max.y, u);
+        const z = lerp(box.min.z, box.max.z, v);
+        const crossY = lerp(box.min.y, box.max.y, v);
+        appendLocalPoint(box.min.x, y, z);
+        appendLocalPoint(box.max.x, y, z);
+        appendLocalPoint(x, box.min.y, z);
+        appendLocalPoint(x, box.max.y, z);
+        appendLocalPoint(x, crossY, box.min.z);
+        appendLocalPoint(x, crossY, box.max.z);
+      });
+    });
+    return points;
+  }
+
+  isMeshVisibleForSelection(mesh = null) {
+    if (!mesh || !this.camera || !this.selectionRaycaster) return false;
+    const selectionKey = this.getMeshSelectionKey(mesh);
+    if (!selectionKey) return false;
+    const pointer = new THREE.Vector2();
+    return this.getMeshSelectionVisibilitySamplePoints(mesh).some((point) => {
+      const projected = point.clone().project(this.camera);
+      if (
+        !Number.isFinite(projected.x)
+        || !Number.isFinite(projected.y)
+        || !Number.isFinite(projected.z)
+        || projected.x < -1
+        || projected.x > 1
+        || projected.y < -1
+        || projected.y > 1
+        || projected.z < -1
+        || projected.z > 1
+      ) {
+        return false;
+      }
+      pointer.set(projected.x, projected.y);
+      this.selectionRaycaster.setFromCamera(pointer, this.camera);
+      const hit = this.selectionRaycaster.intersectObjects(this.pickables, false)[0] || null;
+      return this.getMeshSelectionKey(hit?.object) === selectionKey;
+    });
+  }
+
+  commitBoxSelection(event, additive = false, pointerState = this.pointerState) {
+    const rect = this.getSelectionBoxRect(event, pointerState);
+    if (!rect || (rect.width < 4 && rect.height < 4)) return false;
     const next = additive
       ? {
         cells: [...(this.config.selection?.cells || [])],
@@ -2057,6 +2507,7 @@ export default class CityChannelThreeRuntime {
     const gearKeys = new Set(next.gears.map((gear) => `${gear.hostKind || 'tile'}:${gear.hostKey}:${gear.mountId}`));
     this.pickables.forEach((mesh) => {
       if (!this.isMeshInsideSelectionRect(mesh, rect)) return;
+      if (!this.isMeshVisibleForSelection(mesh)) return;
       const selection = this.getPlacementSelectionFromData(mesh.userData?.cityChannel || null);
       (selection?.cells || []).forEach((cell) => {
         const key = createCellKey(cell.x, cell.y, cell.z);
@@ -2219,6 +2670,11 @@ export default class CityChannelThreeRuntime {
   handleSpaceSurfaceToggle() {
     if (this.carryState) return this.cycleCarrySnapAxisRotation();
     if (!(this.config.activeTool === CITY_CHANNEL_TOOLS.PLACE_TILE && this.config.activeTileType)) return false;
+    if (isPortalMaterial(this.config.activeTileType)) {
+      this.config.onSetPanelPose?.('floor');
+      this.notifyStatus('入口/出口仅支持平放');
+      return true;
+    }
     this.config.onTogglePanelPose?.();
     if (!this.config.onTogglePanelPose) {
       this.config.onSetPanelPose?.(this.config.panelPose === 'wall' ? 'floor' : 'wall');
@@ -2284,7 +2740,7 @@ export default class CityChannelThreeRuntime {
     this.refreshPointerRayFromCamera();
     this.requestRender();
     this.emitCamera();
-    this.updatePlacementGhost();
+    this.updateActiveGhost();
   }
 
   rotateCameraYaw(delta) {
@@ -2301,7 +2757,7 @@ export default class CityChannelThreeRuntime {
     this.refreshPointerRayFromCamera();
     this.requestRender();
     this.emitCamera();
-    this.updatePlacementGhost();
+    this.updateActiveGhost();
   }
 
   panCamera(dx, dy) {
@@ -2372,6 +2828,115 @@ export default class CityChannelThreeRuntime {
     ];
   }
 
+  getCarryPrimaryPlacement() {
+    const origin = this.carryState?.origins?.[0] || null;
+    if (!origin) return null;
+    const mapData = this.renderModel?.mapData || {};
+    return origin.edge
+      ? mapData.walls?.[createWallKey(origin.x, origin.y, origin.z, origin.edge)] || null
+      : mapData.tiles?.[createCellKey(origin.x, origin.y, origin.z)] || null;
+  }
+
+  getCarryDefaultPose(placement = this.getCarryPrimaryPlacement()) {
+    if (this.carryState?.defaultPose) return this.carryState.defaultPose;
+    return placement?.edge || placement?.isVertical ? 'wall' : 'floor';
+  }
+
+  getPlacementDefaultPose(placement = null) {
+    return placement?.edge || placement?.isVertical ? 'wall' : 'floor';
+  }
+
+  getCarrySurfaceRotation(placement = this.getCarryPrimaryPlacement()) {
+    return normalizeRotation(
+      this.carryState?.surfaceRotation
+        ?? placement?.transmissionRotation
+        ?? placement?.rotation
+        ?? (placement?.edge ? wallEdgeToRotation(placement.edge) : 0)
+    );
+  }
+
+  hasSingleCarryPoseChange() {
+    const origins = this.carryState?.origins || [];
+    if (origins.length !== 1) return false;
+    const placement = this.getCarryPrimaryPlacement();
+    if (!placement) return false;
+    const sourceSurfaceRotation = normalizeRotation(
+      placement.transmissionRotation
+        ?? placement.rotation
+        ?? (placement.edge ? wallEdgeToRotation(placement.edge) : 0)
+    );
+    return (
+      this.getCarryDefaultPose(placement) !== this.getPlacementDefaultPose(placement)
+      || this.getCarrySurfaceRotation(placement) !== sourceSurfaceRotation
+    );
+  }
+
+  getCarryOriginTargetCell() {
+    const origin = this.carryState?.origins?.[0] || null;
+    if (!origin) return null;
+    const placement = this.getCarryPrimaryPlacement();
+    const target = {
+      x: origin.x,
+      y: origin.y,
+      z: origin.z
+    };
+    if (origin.edge || placement?.edge) return { ...target, edge: origin.edge || placement.edge };
+    if (placement?.isVertical) return { ...target, isVertical: true };
+    return { ...target, layFlat: true };
+  }
+
+  isCarrySourceHoverData(data = null) {
+    const origin = this.carryState?.origins?.[0] || null;
+    if (!origin || !data?.placement) return false;
+    const sourceKey = origin.edge
+      ? createWallKey(origin.x, origin.y, origin.z, origin.edge)
+      : createCellKey(origin.x, origin.y, origin.z);
+    return data.key === sourceKey;
+  }
+
+  applyCarryGhostPoseToTarget(targetCell = null) {
+    if (!this.carryState || !targetCell) return targetCell;
+    const origins = this.carryState.origins || [];
+    if (origins.length !== 1) return { ...targetCell };
+    const placement = this.getCarryPrimaryPlacement();
+    const surfaceRotation = this.getCarrySurfaceRotation(placement);
+    if (isPortalMaterial(placement?.panelType)) {
+      return {
+        ...targetCell,
+        edge: undefined,
+        isVertical: false,
+        layFlat: true,
+        rotation: surfaceRotation
+      };
+    }
+    if (targetCell.isVertical) {
+      return {
+        ...targetCell,
+        edge: undefined,
+        isVertical: true,
+        layFlat: false,
+        rotation: surfaceRotation
+      };
+    }
+    const targetPose = targetCell.edge ? 'wall' : (targetCell.layFlat ? 'floor' : this.getCarryDefaultPose(placement));
+    if (targetPose === 'wall') {
+      return {
+        ...targetCell,
+        edge: targetCell.edge || placement?.edge || 'north',
+        isVertical: false,
+        layFlat: false,
+        rotation: surfaceRotation
+      };
+    }
+    return {
+      ...targetCell,
+      edge: undefined,
+      isVertical: false,
+      layFlat: true,
+      rotation: surfaceRotation
+    };
+  }
+
   startCarry() {
     const origins = this.getCarryOrigins();
     if (origins.length <= 0) return false;
@@ -2379,9 +2944,23 @@ export default class CityChannelThreeRuntime {
       this.config.onToast?.('Three 编辑器暂不支持拖拽移动齿轮，请先删除后重新安装。', 'error');
       return false;
     }
+    const primaryOrigin = origins[0];
+    const primaryPlacement = primaryOrigin?.edge
+      ? this.renderModel?.mapData?.walls?.[createWallKey(primaryOrigin.x, primaryOrigin.y, primaryOrigin.z, primaryOrigin.edge)]
+      : this.renderModel?.mapData?.tiles?.[createCellKey(primaryOrigin.x, primaryOrigin.y, primaryOrigin.z)];
     this.carryState = {
       mode: 'move',
       origins,
+      defaultPose: origins.length === 1 && primaryPlacement
+        ? (primaryPlacement.edge || primaryPlacement.isVertical ? 'wall' : 'floor')
+        : null,
+      surfaceRotation: origins.length === 1 && primaryPlacement
+        ? normalizeRotation(
+          primaryPlacement.transmissionRotation
+            ?? primaryPlacement.rotation
+            ?? (primaryPlacement.edge ? wallEdgeToRotation(primaryPlacement.edge) : 0)
+        )
+        : null,
       groupRotationSteps: 0,
       groupPoseSteps: 0
     };
@@ -2411,8 +2990,15 @@ export default class CityChannelThreeRuntime {
   rotateCarryPlacementSurface(direction = 'forward') {
     if (!this.carryState) return false;
     const delta = direction === 'reverse' ? -1 : 1;
-    this.carryState.groupPoseSteps = ((this.carryState.groupPoseSteps || 0) + delta + 4) % 4;
-    this.notifyStatus('移动预览：已切换表面朝向');
+    const origins = this.carryState.origins || [];
+    if (origins.length === 1) {
+      const placement = this.getCarryPrimaryPlacement();
+      this.carryState.surfaceRotation = normalizeRotation(this.getCarrySurfaceRotation(placement) + (delta * 90));
+      this.notifyStatus('移动预览：表面朝向已旋转');
+    } else {
+      this.carryState.groupRotationSteps = ((this.carryState.groupRotationSteps || 0) + delta + 4) % 4;
+      this.notifyStatus('多选移动预览：整体朝向已旋转 90°');
+    }
     this.updateCarryGhost();
     this.requestRender();
     return true;
@@ -2420,8 +3006,15 @@ export default class CityChannelThreeRuntime {
 
   cycleCarrySnapAxisRotation() {
     if (!this.carryState) return false;
-    this.carryState.groupRotationSteps = ((this.carryState.groupRotationSteps || 0) + 1) % 4;
-    this.notifyStatus('移动预览：已沿轴旋转目标');
+    const origins = this.carryState.origins || [];
+    if (origins.length === 1) {
+      const placement = this.getCarryPrimaryPlacement();
+      this.carryState.defaultPose = this.getCarryDefaultPose(placement) === 'wall' ? 'floor' : 'wall';
+      this.notifyStatus(this.carryState.defaultPose === 'wall' ? '移动预览：默认竖直吸附' : '移动预览：默认水平摆放');
+    } else {
+      this.carryState.groupPoseSteps = ((this.carryState.groupPoseSteps || 0) + 1) % 4;
+      this.notifyStatus('多选移动预览：整体向前翻滚 90°');
+    }
     this.updateCarryGhost();
     this.requestRender();
     return true;
@@ -2434,25 +3027,34 @@ export default class CityChannelThreeRuntime {
     const sourcePlacement = anchor.edge
       ? this.renderModel?.mapData?.walls?.[createWallKey(anchor.x, anchor.y, anchor.z, anchor.edge)]
       : this.renderModel?.mapData?.tiles?.[createCellKey(anchor.x, anchor.y, anchor.z)];
+    const defaultPose = origins.length === 1 ? this.getCarryDefaultPose(sourcePlacement) : null;
+    const preferWallPose = origins.length === 1
+      ? defaultPose === 'wall'
+      : !!(sourcePlacement?.isVertical || anchor.edge);
     const placementTarget = this.getPlacementTargetFromHoverBoard({
       sourcePlacement,
-      preferWallPose: !!(sourcePlacement?.isVertical || anchor.edge),
+      preferWallPose,
       allowReplacement: false
     });
     if (placementTarget?.cell) {
       if (placementTarget.edge) return { ...placementTarget.cell, edge: placementTarget.edge };
       const targetCell = { ...placementTarget.cell };
       if (placementTarget.kind === 'verticalTile') targetCell.isVertical = true;
-      if (placementTarget.kind === 'tile' && (sourcePlacement?.isVertical || anchor.edge)) targetCell.layFlat = true;
+      if (placementTarget.kind === 'tile' && defaultPose === 'floor') targetCell.layFlat = true;
       return targetCell;
     }
-    if (this.getHoverPlacementData()?.placement) return null;
+    const hoverPlacementData = this.getHoverPlacementData();
+    if (hoverPlacementData?.placement) {
+      return this.isCarrySourceHoverData(hoverPlacementData) && this.hasSingleCarryPoseChange()
+        ? this.getCarryOriginTargetCell()
+        : null;
+    }
     const layer = Number.isInteger(this.config.activeLayer)
       ? this.config.activeLayer
       : origins[0].z || 0;
     const cell = this.getPointerLayerCell(layer);
     if (!cell) return null;
-    if (anchor.edge || sourcePlacement?.isVertical) {
+    if (anchor.edge || sourcePlacement?.isVertical || defaultPose === 'wall') {
       const edgeTarget = getThreeNearestCellEdge(this.groundHitPoint, this.renderModel?.mapData || {}, cell);
       if (edgeTarget?.edge && edgeTarget.distance <= WALL_EDGE_SNAP_WORLD_RADIUS) return { ...cell, edge: edgeTarget.edge };
     }
@@ -2464,7 +3066,7 @@ export default class CityChannelThreeRuntime {
       this.clearCarryGhost();
       return null;
     }
-    const targetCell = this.getCarryTargetFromPointerRay();
+    const targetCell = this.applyCarryGhostPoseToTarget(this.getCarryTargetFromPointerRay());
     if (!targetCell) {
       this.clearCarryGhost();
       this.requestRender();
@@ -2535,7 +3137,7 @@ export default class CityChannelThreeRuntime {
 
   commitCarryTarget() {
     if (!this.carryState) return false;
-    const targetCell = this.getCarryTargetFromPointerRay();
+    const targetCell = this.applyCarryGhostPoseToTarget(this.getCarryTargetFromPointerRay());
     if (!targetCell) return false;
     const preview = computeCityChannelMovePreviewModel({
       mapData: this.renderModel?.mapData || {},
@@ -2697,9 +3299,72 @@ export default class CityChannelThreeRuntime {
       });
   }
 
+  getRuntimeWorldPointForPlacement(componentKey = '', point = null) {
+    if (!point || !componentKey) return point;
+    const group = this.placementGroups?.get(componentKey);
+    if (!group) return point;
+    group.updateMatrixWorld(true);
+    const vector = new THREE.Vector3(point.x || 0, point.y || 0, point.z || 0).applyMatrix4(group.matrixWorld);
+    return { x: vector.x, y: vector.y, z: vector.z };
+  }
+
+  getRuntimeSurfacePointForPlacement(componentKey = '', transform = null, localPoint = null, options = {}) {
+    if (!transform || !localPoint) return null;
+    const runtimePlacement = this.mechanismRuntimeSnapshot?.placements?.[componentKey] || null;
+    if (this.hasRuntimePlacementGroupMatrix(runtimePlacement)) {
+      return this.getRuntimeWorldPointForPlacement(
+        componentKey,
+        getThreeSurfacePoint(transform, localPoint, options)
+      );
+    }
+    const runtimeTransform = runtimePlacement ? this.getRuntimeTransform(transform) : transform;
+    return this.getRuntimeWorldPointForPlacement(
+      componentKey,
+      getThreeSurfacePoint(runtimeTransform, localPoint, options)
+    );
+  }
+
+  getRuntimeGearSurfacePointForPlacement(componentKey = '', transform = null, mount = {}) {
+    if (!transform || !mount) return null;
+    const runtimePlacement = this.mechanismRuntimeSnapshot?.placements?.[componentKey] || null;
+    if (this.hasRuntimePlacementGroupMatrix(runtimePlacement)) {
+      return this.getRuntimeWorldPointForPlacement(
+        componentKey,
+        getThreeGearSurfacePoint(transform, mount)
+      );
+    }
+    const runtimeTransform = runtimePlacement ? this.getRuntimeTransform(transform) : transform;
+    return this.getRuntimeWorldPointForPlacement(
+      componentKey,
+      getThreeGearSurfacePoint(runtimeTransform, mount)
+    );
+  }
+
+  getPlacementMeshForComponent(componentKey = '', hostKind = 'tile') {
+    if (!componentKey) return null;
+    const isRenderableMesh = (mesh = null) => !!mesh?.geometry && typeof mesh.updateWorldMatrix === 'function';
+    const expectedKind = hostKind === 'wall' ? 'wall' : 'tile';
+    const group = this.placementGroups?.get(componentKey);
+    const fromGroup = (group?.children || []).find((child) => {
+      if (!isRenderableMesh(child)) return false;
+      const data = child.userData?.cityChannel;
+      if (!data?.placement || data.kind === 'gear') return false;
+      if (data.key !== componentKey) return false;
+      return expectedKind === 'wall' ? data.kind === 'wall' : data.kind !== 'wall';
+    });
+    if (fromGroup) return fromGroup;
+    return (this.pickables || []).find((mesh) => {
+      if (!isRenderableMesh(mesh)) return false;
+      const data = mesh.userData?.cityChannel;
+      if (!data?.placement || data.kind === 'gear') return false;
+      if (data.key !== componentKey) return false;
+      return expectedKind === 'wall' ? data.kind === 'wall' : data.kind !== 'wall';
+    }) || null;
+  }
+
   getGearBindingSurfacesForPlacement(placement = null) {
     if (!placement) return [];
-    if (placement.edge || placement.isVertical) return ['front', 'back'];
+    if (hasDirectionalGearSurface(placement.panelType) && (placement.edge || placement.isVertical)) return ['front', 'back'];
     return ['front'];
   }
 
@@ -2734,7 +3399,7 @@ export default class CityChannelThreeRuntime {
     const boundData = map.get(`${boundKind}:${binding.componentKey}`);
     if (!boundData) return null;
     const surface = normalizeGearSurfaceForPanel(boundData.placement?.panelType, binding.surface || 'front');
-    const point = getThreeGearSurfacePoint(boundData.transform, {
+    const point = this.getRuntimeGearSurfacePointForPlacement(binding.componentKey, boundData.transform, {
       position: binding.socket,
       surface
     });
@@ -2764,7 +3429,9 @@ export default class CityChannelThreeRuntime {
     const host = hostData?.placement || null;
     const mount = host?.gearMounts?.find((item) => item.id === selectedGear.mountId);
     if (!hostData || !host || !mount || !isCornerGearSocket(mount.position)) return null;
-    const pivotWorld = getThreeGearSurfacePoint(hostData.transform, mount);
+    const bindingStatus = this.getGearBindingStatusForMount(hostData.transform, mount);
+    const attachment = this.getGearAttachmentContext(hostData.transform, mount, bindingStatus);
+    const pivotWorld = this.getGearAttachmentWorldPoint(attachment);
     if (!pivotWorld) return null;
     const candidates = this.getGearBindingCandidatesForPivot({
       pivotWorld,
@@ -2775,7 +3442,6 @@ export default class CityChannelThreeRuntime {
         surface: normalizeGearSurfaceForPanel(host.panelType, mount.surface || 'front')
       }
     });
-    const bindingStatus = this.getGearBindingStatusForMount(hostData.transform, mount);
     if (candidates.length <= 0 && !bindingStatus.bound) return null;
     return {
       hostKind: selectedGear.hostKind || 'tile',
@@ -2784,6 +3450,10 @@ export default class CityChannelThreeRuntime {
       host,
       hostTransform: hostData.transform,
       mount,
+      attachment,
+      attachmentTransform: attachment.transform,
+      attachmentMount: attachment.mount,
+      attachmentComponentKey: attachment.componentKey,
       pivotWorld,
       candidates,
       bindingStatus,
@@ -2794,7 +3464,7 @@ export default class CityChannelThreeRuntime {
     };
   }
 
-  getGearBindingCandidatesForPivot({ pivotWorld = null, source = null } = {}) {
+  getGearBindingCandidatesForPivot({ pivotWorld = null } = {}) {
     if (!pivotWorld) return [];
     const candidates = [];
     this.getVisiblePlacementTransforms().forEach((data) => {
@@ -2803,16 +3473,10 @@ export default class CityChannelThreeRuntime {
       this.getGearBindingSurfacesForPlacement(placement).forEach((surface) => {
         GEAR_SOCKET_POSITIONS.filter(isCornerGearSocket).forEach((socket) => {
           const normalizedSurface = normalizeGearSurfaceForPanel(placement.panelType, surface || 'front');
-          if (
-            source
-            && source.hostKind === hostKind
-            && source.hostKey === data.key
-            && source.socket === socket
-            && source.surface === normalizedSurface
-          ) {
-            return;
-          }
-          const point = getThreeGearSurfacePoint(data.transform, { position: socket, surface: normalizedSurface });
+          const point = this.getRuntimeGearSurfacePointForPlacement(data.key, data.transform, {
+            position: socket,
+            surface: normalizedSurface
+          });
           if (!this.isSameThreePoint(point, pivotWorld)) return;
           candidates.push({
             componentKey: data.key,
@@ -2878,7 +3542,7 @@ export default class CityChannelThreeRuntime {
 
   getGearBindingBoardFocusPoint(candidate = null) {
     if (!candidate?.transform) return null;
-    return getThreeSurfacePoint(candidate.transform, { x: 0, y: 0 }, {
+    return this.getRuntimeSurfacePointForPlacement(candidate.componentKey, candidate.transform, { x: 0, y: 0 }, {
       lift: 0.18,
       rotate: false,
       surface: candidate.surface || 'front'
@@ -2904,16 +3568,20 @@ export default class CityChannelThreeRuntime {
   getGearBindingCandidateVisual(context = null, candidate = null) {
     if (!context?.pivotWorld || !candidate?.transform) return null;
     const boardFocusPoint = this.getGearBindingBoardFocusPoint(candidate);
-    const boardAnchor = candidate.point || getThreeGearSurfacePoint(candidate.transform, {
-      position: candidate.socket,
-      surface: candidate.surface || 'front'
-    });
+    const boardAnchor = candidate.point || this.getRuntimeGearSurfacePointForPlacement(
+      candidate.componentKey,
+      candidate.transform,
+      {
+        position: candidate.socket,
+        surface: candidate.surface || 'front'
+      }
+    );
     if (!boardFocusPoint || !boardAnchor) return null;
     const control = this.getGearBindingCurveControl(
       context.pivotWorld,
       boardFocusPoint,
-      context.hostTransform,
-      context.mount
+      context.attachmentTransform || context.hostTransform,
+      context.attachmentMount || context.mount
     );
     if (!control) return null;
     return {
@@ -2975,6 +3643,7 @@ export default class CityChannelThreeRuntime {
   }
 
   addGearBindingBoardOverlay(transform = null, {
+    candidate = null,
     active = false,
     invalid = false,
     renderOrder = GEAR_BINDING_AMBIENT_RENDER_ORDER
@@ -2986,6 +3655,24 @@ export default class CityChannelThreeRuntime {
     const outlineMaterial = invalid
       ? this.gearBindingInvalidOutlineMaterial
       : (active ? this.gearBindingActiveOutlineMaterial : this.gearBindingAmbientOutlineMaterial);
+    const mesh = this.getPlacementMeshForComponent(candidate?.componentKey, candidate?.hostKind);
+    if (mesh) {
+      const overlay = this.createBoardOverlayGroup({
+        fillMaterial,
+        outlineMaterial,
+        glowMaterial: outlineMaterial,
+        renderOrder
+      });
+      overlay.userData.cityChannelGearRole = invalid ? 'binding_board_invalid' : (active ? 'binding_board_active' : 'binding_board_ambient');
+      this.syncBoardOverlayGroup(overlay, mesh, {
+        fillScale: invalid ? 1.05 : (active ? 1.045 : 1.026),
+        outlineScale: invalid ? 1.071 : (active ? 1.062 : 1.036),
+        glowScale: invalid ? 1.085 : (active ? 1.078 : 1.047),
+        renderOrder
+      });
+      this.overlayGroup.add(overlay);
+      return;
+    }
     const geometry = new THREE.BoxGeometry(transform.size.x, transform.size.y, transform.size.z);
     const fill = new THREE.Mesh(geometry, fillMaterial);
     fill.userData.sharedMaterial = true;
@@ -3064,7 +3751,18 @@ export default class CityChannelThreeRuntime {
     ring.userData.sharedMaterial = true;
     ring.userData.cityChannelGearRole = invalid ? 'binding_source_invalid' : (active ? 'binding_source_active' : 'binding_source_ambient');
     ring.position.set(context.pivotWorld.x, context.pivotWorld.y, context.pivotWorld.z);
-    const quaternion = this.getGearSurfaceQuaternion(context.hostTransform, context.mount?.surface || 'front');
+    const attachment = context.attachment || {
+      componentKey: context.attachmentComponentKey || context.hostKey,
+      hostKind: context.attachmentHostKind || context.hostKind,
+      placement: context.attachmentPlacement || context.host,
+      transform: context.attachmentTransform || context.hostTransform,
+      mount: context.attachmentMount || context.mount
+    };
+    const quaternion = this.getGearAttachmentWorldQuaternion(
+      attachment,
+      Number(context.mount?.phase) || 0,
+      this.mechanismRuntimeSnapshot?.placements || {}
+    );
     ring.quaternion.copy(quaternion);
     ring.scale.setScalar(invalid ? 1.5 : (active ? 1.42 : 1.18));
     ring.renderOrder = renderOrder + 2;
@@ -3091,6 +3789,7 @@ export default class CityChannelThreeRuntime {
     if (!visual) return;
     if (active || ambient || invalid) {
       this.addGearBindingBoardOverlay(candidate.transform, {
+        candidate,
         active,
         invalid,
         renderOrder
@@ -3163,6 +3862,7 @@ export default class CityChannelThreeRuntime {
           epsilon: GEAR_BINDING_EPSILON
         });
         if (!status.bound || !status.binding) return;
+        const attachment = this.getGearAttachmentContext(data.transform, mount, status);
         const context = {
           hostKind,
           hostKey: data.key,
@@ -3170,7 +3870,11 @@ export default class CityChannelThreeRuntime {
           host: data.placement,
           hostTransform: data.transform,
           mount,
-          pivotWorld: getThreeGearSurfacePoint(data.transform, mount),
+          attachment,
+          attachmentTransform: attachment.transform,
+          attachmentMount: attachment.mount,
+          attachmentComponentKey: attachment.componentKey,
+          pivotWorld: this.getGearAttachmentWorldPoint(attachment),
           candidates: [],
           bindingStatus: status,
           axisBindingWarning: this.getGearBindingWarningMessage(status)
@@ -3506,8 +4210,10 @@ export default class CityChannelThreeRuntime {
           placement
         })
       };
-      const point = getThreeGearSurfacePoint(transform, nodeMount);
-      const worldPoint = getGearWorldPosition(placement, nodeMount);
+      const bindingStatus = this.getGearBindingStatusForMount(transform, nodeMount);
+      const attachment = this.getGearAttachmentContext(transform, nodeMount, bindingStatus);
+      const point = getThreeGearSurfacePoint(attachment.transform, attachment.mount);
+      const worldPoint = getGearWorldPosition(attachment.placement, attachment.mount);
       if (!point || !worldPoint) return null;
       return {
         id: `${mount.componentKey}:${liveMount.id}`,
@@ -3515,15 +4221,21 @@ export default class CityChannelThreeRuntime {
         hostKind,
         placement,
         transform,
+        attachmentComponentKey: attachment.componentKey,
+        attachmentHostKind: attachment.hostKind,
+        attachmentPlacement: attachment.placement,
+        attachmentTransform: attachment.transform,
+        attachmentMount: attachment.mount,
+        followsAxisBinding: attachment.followsAxisBinding,
         mountId: liveMount.id,
         mount: nodeMount,
         point,
         worldPoint,
-        meshPlane: getGearMeshPlane(placement, nodeMount, worldPoint),
+        meshPlane: getGearMeshPlane(attachment.placement, attachment.mount, worldPoint),
         pitchRadius: CITY_CHANNEL_GEAR_PITCH_RADIUS_WORLD,
         pitchRadiusWorld: CITY_CHANNEL_GEAR_PITCH_RADIUS_WORLD,
         gearRatioRadius: getGearRatioRadiusForMount(nodeMount),
-        surfaceKey: getGearSurfaceKey(placement, nodeMount),
+        surfaceKey: getGearSurfaceKey(attachment.placement, attachment.mount),
         driveRatio: 0,
         direction: 0
       };
@@ -3570,16 +4282,16 @@ export default class CityChannelThreeRuntime {
     return eventKeys;
   }
 
-  createAxisBindingRuntimeEntries(nodes = [], assemblyGraph = null) {
+  createAxisBindingRuntimeEntries(nodes = [], assemblyGraph = null, sourceAssembly = null) {
     const mapData = this.renderModel?.mapData || {};
     const seenAxisBindings = new Set();
-    return nodes.filter((node) => !!node.mount?.axisBinding).map((node) => {
+    return nodes.filter((node) => isDrivenGearAxisBindingActive(node, sourceAssembly)).map((node) => {
       const axisBinding = getAxisBindingForMount({
         mapData,
         mount: node.mount,
         componentKey: node.componentKey,
         placement: node.placement,
-        pivotWorld: getGearWorldPosition(node.placement, node.mount)
+        pivotWorld: node.worldPoint || getGearWorldPosition(node.placement, node.mount)
       });
       if (!axisBinding) return null;
       const entryKey = `${axisBinding.componentKey}:${axisBinding.socket}:${node.componentKey}:${node.mountId}`;
@@ -3590,7 +4302,7 @@ export default class CityChannelThreeRuntime {
         assemblyGraph,
         gearNode: node,
         axisBinding,
-        pivotWorld: getGearWorldPosition(node.placement, node.mount),
+        pivotWorld: node.worldPoint || getGearWorldPosition(node.placement, node.mount),
         driveRatio: node.driveRatio || 1
       });
     }).filter(Boolean);
@@ -3715,7 +4427,7 @@ export default class CityChannelThreeRuntime {
     const gearNodes = sourceAssembly?.gearMounts?.length > 0
       ? this.resolveDrivenGearNodes(sourceAssembly, key)
       : [];
-    let assemblyEntries = this.createAxisBindingRuntimeEntries(gearNodes, assemblyGraph);
+    let assemblyEntries = this.createAxisBindingRuntimeEntries(gearNodes, assemblyGraph, sourceAssembly);
     let driveFailure = null;
 
     if (gearNodes.length <= 0 && assemblyEntries.length <= 0) {
@@ -3732,7 +4444,6 @@ export default class CityChannelThreeRuntime {
       return false;
     }
 
-    const transmissionEventKeys = this.getGearRotationTransmissionEventKeys(sourceAssembly, assemblyEntries);
     const obstructions = assemblyEntries.map((entry) => {
       const driveRatio = Number(entry.driveRatio) || 1;
       const obstruction = findRotationObstruction({
@@ -3740,8 +4451,7 @@ export default class CityChannelThreeRuntime {
         assembly: entry.assembly,
         anchor: entry.anchor,
         fixedMount: entry.fixedMount,
-        targetAngle: targetAngle * driveRatio,
-        excludedComponentKeys: transmissionEventKeys
+        targetAngle: targetAngle * driveRatio
       });
       if (!obstruction) return null;
       return {
@@ -4167,7 +4877,11 @@ export default class CityChannelThreeRuntime {
 
     if (transform.kind === 'tile') {
       if (intent.zone === 'edge') {
-        if (wantsWallPose) {
+        const wantsPreciseWallEdge = (
+          intent.edgeDistance <= PRECISE_WALL_EDGE_SNAP_WORLD_RADIUS
+          && !isPortalMaterial(this.config.activeTileType)
+        );
+        if (wantsWallPose || wantsPreciseWallEdge) {
           candidates.push(this.createSnapCandidate(
             this.createWallTarget(
               { x: placement.x, y: placement.y, z: placement.z },
@@ -4303,21 +5017,24 @@ export default class CityChannelThreeRuntime {
           gears: [...(current.gears || [])],
           scope: selection.scope || current.scope || null
         };
+        const toggleByKey = (items, target, getKey) => {
+          const targetKey = getKey(target);
+          const index = items.findIndex((item) => getKey(item) === targetKey);
+          if (index < 0) return [...items, target];
+          return items.filter((_, itemIndex) => itemIndex !== index);
+        };
         (selection.cells || []).forEach((cell) => {
-          if (!next.cells.some((item) => createCellKey(item.x, item.y, item.z) === createCellKey(cell.x, cell.y, cell.z))) {
-            next.cells.push(cell);
-          }
+          next.cells = toggleByKey(next.cells, cell, (item) => createCellKey(item.x, item.y, item.z));
         });
         (selection.walls || []).forEach((wall) => {
-          if (!next.walls.some((item) => createWallKey(item.x, item.y, item.z, item.edge) === createWallKey(wall.x, wall.y, wall.z, wall.edge))) {
-            next.walls.push(wall);
-          }
+          next.walls = toggleByKey(next.walls, wall, (item) => createWallKey(item.x, item.y, item.z, item.edge));
         });
         (selection.gears || []).forEach((gear) => {
-          if (!next.gears.some((item) => `${item.hostKind}:${item.hostKey}:${item.mountId}` === `${gear.hostKind}:${gear.hostKey}:${gear.mountId}`)) {
-            next.gears.push(gear);
-          }
+          next.gears = toggleByKey(next.gears, gear, (item) => `${item.hostKind || 'tile'}:${item.hostKey}:${item.mountId}`);
         });
+        if (next.cells.length + next.walls.length + next.gears.length <= 0) next.scope = null;
+        else if (next.cells.length + next.walls.length > 0) next.scope = 'board';
+        else if (next.gears.length > 0) next.scope = 'component';
         this.emitSelection(next);
       }
       if (this.config.activeTool === CITY_CHANNEL_TOOLS.BROWSE) this.config.onRequestTool?.(CITY_CHANNEL_TOOLS.SELECT);
@@ -4537,8 +5254,14 @@ export default class CityChannelThreeRuntime {
     this.gearTimingMarkerMaterial.dispose();
     this.gearContactMaterial.dispose();
     this.gearContactActiveMaterial.dispose();
+    this.portalDeckMaterial.dispose();
+    this.portalFrameMaterial.dispose();
+    this.portalHoodMaterial.dispose();
+    this.portalAttachmentEdgeMaterial.dispose();
     this.entranceMarkerMaterial.dispose();
     this.exitMarkerMaterial.dispose();
+    this.entranceMarkerGlowMaterial.dispose();
+    this.exitMarkerGlowMaterial.dispose();
     this.hoverMaterial.dispose();
     this.hoverOutlineMaterial.dispose();
     this.hoverGlowMaterial.dispose();
@@ -4578,7 +5301,14 @@ export default class CityChannelThreeRuntime {
     this.gearHaloGeometry.dispose();
     this.gearTimingMarkerGeometry.dispose();
     this.gearContactMarkerGeometry.dispose();
-    this.markerGeometry.dispose();
+    this.portalDeckGeometry.dispose();
+    this.portalRailGeometry.dispose();
+    this.portalLipGeometry.dispose();
+    this.portalLaneGeometry.dispose();
+    this.portalBeaconGeometry.dispose();
+    this.portalHoodGeometry.dispose();
+    this.portalHoodEdgeGeometry.dispose();
+    this.portalArrowGeometry.dispose();
     this.ghostGeometry.dispose();
     this.gearBindingMarkerGeometry.dispose();
     this.gearSocketMarkerGeometry.dispose();

@@ -170,11 +170,19 @@
 }
 
 .city-channel-material-item__preview.is-entrance {
-  background: #0e7490;
+  color: #cffafe;
+  border-color: rgba(34, 211, 238, 0.58);
+  background:
+    linear-gradient(90deg, transparent 42%, rgba(34, 211, 238, 0.9) 42% 58%, transparent 58%),
+    linear-gradient(135deg, #d8d2c4 0%, #b8b1a4 52%, #756f64 100%);
 }
 
 .city-channel-material-item__preview.is-exit {
-  background: #a16207;
+  color: #fef3c7;
+  border-color: rgba(245, 158, 11, 0.62);
+  background:
+    linear-gradient(90deg, transparent 42%, rgba(245, 158, 11, 0.92) 42% 58%, transparent 58%),
+    linear-gradient(135deg, #d8d2c4 0%, #b8b1a4 52%, #756f64 100%);
 }
 
 .city-channel-material-item.is-mechanical .city-channel-material-item__preview {

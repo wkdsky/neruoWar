@@ -759,8 +759,8 @@ export const createCityChannelPhaserScene = (Phaser, initialConfig = {}) => {
       const isPortal = !isWallSurface && isPortalMaterial(placement.panelType);
       return getPlacementDepth({
         cell: { x: placement.x, y: placement.y, z: placement.z },
-        partType: isPortal ? 'portal_body' : isWallSurface ? 'wall_plane' : 'floor_base',
-        physicalLayer: isPortal ? 'portal_body' : isWallSurface ? 'wall_plane' : 'floor_base',
+        partType: isPortal ? 'floor_attachment' : isWallSurface ? 'wall_plane' : 'floor_base',
+        physicalLayer: isPortal ? 'floor_attachment' : isWallSurface ? 'wall_plane' : 'floor_base',
         edge: placement.edge,
         rotation: placement.edge ? getWallSurfaceRotation(placement) : placement.rotation || 0,
         cameraYaw: this.cameraState.yaw,
@@ -990,8 +990,8 @@ export const createCityChannelPhaserScene = (Phaser, initialConfig = {}) => {
       const isPortal = isPortalMaterial(tile.panelType);
       const depth = getPlacementDepth({
         cell,
-        partType: isPortal ? 'portal_body' : tile.isVertical ? 'wall_plane' : 'floor_base',
-        physicalLayer: isPortal ? 'portal_body' : tile.isVertical ? 'wall_plane' : 'floor_base',
+        partType: isPortal ? 'floor_attachment' : tile.isVertical ? 'wall_plane' : 'floor_base',
+        physicalLayer: isPortal ? 'floor_attachment' : tile.isVertical ? 'wall_plane' : 'floor_base',
         rotation: runtimeTile.rotation || 0,
         cameraYaw: this.cameraState.yaw,
         mapData: this.mapData
@@ -1313,8 +1313,8 @@ export const createCityChannelPhaserScene = (Phaser, initialConfig = {}) => {
         const isPortal = isPortalMaterial(tile.panelType);
         const depth = getPlacementDepth({
           cell,
-          partType: isPortal ? 'portal_body' : tile.isVertical ? 'wall_plane' : 'floor_base',
-          physicalLayer: isPortal ? 'portal_body' : tile.isVertical ? 'wall_plane' : 'floor_base',
+          partType: isPortal ? 'floor_attachment' : tile.isVertical ? 'wall_plane' : 'floor_base',
+          physicalLayer: isPortal ? 'floor_attachment' : tile.isVertical ? 'wall_plane' : 'floor_base',
           rotation: runtimeTile.rotation || 0,
           cameraYaw: this.cameraState.yaw,
           mapData: this.mapData
@@ -2904,8 +2904,8 @@ export const createCityChannelPhaserScene = (Phaser, initialConfig = {}) => {
           snapDistanceSquared: verticalSnapEdge?.distanceSquared ?? Infinity,
           depth: getPlacementDepth({
             cell: candidate.cell,
-            partType: isPortal ? 'portal_body' : candidate.tile.isVertical ? 'wall_plane' : 'floor_base',
-            physicalLayer: isPortal ? 'portal_body' : candidate.tile.isVertical ? 'wall_plane' : 'floor_base',
+            partType: isPortal ? 'floor_attachment' : candidate.tile.isVertical ? 'wall_plane' : 'floor_base',
+            physicalLayer: isPortal ? 'floor_attachment' : candidate.tile.isVertical ? 'wall_plane' : 'floor_base',
             rotation: candidate.tile.rotation || 0,
             cameraYaw: this.cameraState.yaw,
             mapData: this.mapData
@@ -6109,11 +6109,42 @@ export const createCityChannelPhaserScene = (Phaser, initialConfig = {}) => {
       centroid.x /= points.length;
       centroid.y /= points.length;
       const zoom = this.cameraState.zoom || 1;
-      const hitInfo = this.hitTest({
-        x: this.worldLayer.x + (centroid.x * zoom),
-        y: this.worldLayer.y + (centroid.y * zoom)
-      }, { allowOutline: false });
-      return this.matchesSelectionPlacementHit(normalizeInspectableHit(hitInfo.hit), ref);
+      const boundarySamples = [];
+      // Sample inward from the boundary so a partially exposed strip is not treated as fully occluded.
+      points.forEach((point, index) => {
+        const next = points[(index + 1) % points.length];
+        boundarySamples.push(
+          point,
+          {
+            x: point.x + ((next.x - point.x) * 0.25),
+            y: point.y + ((next.y - point.y) * 0.25)
+          },
+          {
+            x: point.x + ((next.x - point.x) * 0.5),
+            y: point.y + ((next.y - point.y) * 0.5)
+          },
+          {
+            x: point.x + ((next.x - point.x) * 0.75),
+            y: point.y + ((next.y - point.y) * 0.75)
+          }
+        );
+      });
+      const samples = [centroid];
+      boundarySamples.forEach((point) => {
+        [0.02, 0.25, 0.5, 0.75].forEach((inset) => {
+          samples.push({
+            x: point.x + ((centroid.x - point.x) * inset),
+            y: point.y + ((centroid.y - point.y) * inset)
+          });
+        });
+      });
+      return samples.some((sample) => {
+        const hitInfo = this.hitTest({
+          x: this.worldLayer.x + (sample.x * zoom),
+          y: this.worldLayer.y + (sample.y * zoom)
+        }, { allowOutline: false });
+        return this.matchesSelectionPlacementHit(normalizeInspectableHit(hitInfo.hit), ref);
+      });
     }
 
     isPolygonFullyInsideRect(points = [], rect) {
@@ -6128,7 +6159,8 @@ export const createCityChannelPhaserScene = (Phaser, initialConfig = {}) => {
         ? this.getWallLocalPolygons(placement)
         : this.getTileLocalPolygons(placement);
       if (polygons.length <= 0) return false;
-      return polygons.every((points) => this.isPolygonFullyInsideRect(points, rect));
+      return polygons.every((points) => this.isPolygonFullyInsideRect(points, rect))
+        && polygons.some((points) => this.isSelectionPolygonVisible(points, placement));
     }
 
     commitBoxSelect(pointer, dragState) {

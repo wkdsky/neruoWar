@@ -23,7 +23,6 @@ export const isFloorSupportPlacement = (placement) => (
   !!placement
   && !placement.edge
   && !placement.isVertical
-  && !isPortalMaterial(placement.panelType)
 );
 
 export const sameCell = (a, b) => !!a && !!b && a.x === b.x && a.y === b.y && a.z === b.z;

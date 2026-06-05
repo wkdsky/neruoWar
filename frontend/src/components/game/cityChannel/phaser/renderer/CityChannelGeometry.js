@@ -278,89 +278,75 @@ export const createVerticalTileWallGeometry = (cameraYaw = 0, tileRotation = 0, 
 };
 
 export const createPortalGeometry = (cameraYaw = 0, tileRotation = 0) => {
-  const pillarWidth = 0.12;
-  const pillarDepth = 0.1;
-  const pillarHeight = 48;
-  const pillarBottom = 4;
-  const spacing = 0.32;
+  const railWidth = 0.075;
+  const railLift = 8;
+  const railX = 0.34;
 
   const leftPillar = createRaisedBoxGeometry(
     cameraYaw,
-    -spacing - pillarWidth,
-    -pillarDepth / 2,
-    -spacing + pillarWidth,
-    pillarDepth / 2,
-    pillarBottom,
-    pillarBottom + pillarHeight,
+    -railX - (railWidth / 2),
+    -0.39,
+    -railX + (railWidth / 2),
+    0.39,
+    2,
+    railLift,
     tileRotation
   );
   const rightPillar = createRaisedBoxGeometry(
     cameraYaw,
-    spacing - pillarWidth,
-    -pillarDepth / 2,
-    spacing + pillarWidth,
-    pillarDepth / 2,
-    pillarBottom,
-    pillarBottom + pillarHeight,
+    railX - (railWidth / 2),
+    -0.39,
+    railX + (railWidth / 2),
+    0.39,
+    2,
+    railLift,
     tileRotation
   );
 
-  const lintelBottom = pillarBottom + pillarHeight - 4;
   const lintel = createRaisedBoxGeometry(
     cameraYaw,
-    -spacing - pillarWidth,
-    -pillarDepth / 2,
-    spacing + pillarWidth,
-    pillarDepth / 2,
-    lintelBottom,
-    lintelBottom + 10,
+    -0.28,
+    -0.36,
+    0.28,
+    -0.12,
+    3,
+    16,
     tileRotation
   );
   const threshold = createRaisedBoxGeometry(
     cameraYaw,
-    -spacing - pillarWidth,
-    (-pillarDepth / 2) - 0.04,
-    spacing + pillarWidth,
-    (pillarDepth / 2) + 0.04,
-    0,
-    5,
+    -0.29,
+    -0.36,
+    0.29,
+    0.36,
+    1,
+    4,
     tileRotation
   );
   const arch = createRaisedBoxGeometry(
     cameraYaw,
-    -spacing + pillarWidth,
-    (-pillarDepth / 2) + 0.02,
-    spacing - pillarWidth,
-    (pillarDepth / 2) - 0.02,
-    lintelBottom - 6,
-    lintelBottom,
+    -0.29,
+    0.31,
+    0.29,
+    0.39,
+    2,
+    railLift,
     tileRotation
   );
 
-  const coreWidth = 0.16;
-  const coreHeight = 32;
-  const coreBottom = 7;
-  const coreMid = rotateWorldPoint({ x: 0, y: 0 }, tileRotation);
-  const coreProjection = projectLocalPoint(coreMid.x, coreMid.y, cameraYaw);
-  const coreBottomY = coreProjection.y - coreBottom;
-  const coreTopY = coreBottomY - coreHeight;
-
-  const runePositions = [
-    { x: -spacing + 0.02, y: 0, lift: pillarBottom + 12 },
-    { x: spacing - 0.02, y: 0, lift: pillarBottom + 12 },
-    { x: -spacing + 0.02, y: 0, lift: pillarBottom + 28 },
-    { x: spacing - 0.02, y: 0, lift: pillarBottom + 28 }
-  ].map((rune) => {
-    const rotated = rotateWorldPoint({ x: rune.x, y: rune.y }, tileRotation);
-    const point = projectLocalPoint(rotated.x, rotated.y, cameraYaw);
-    return { x: point.x, y: point.y - rune.lift };
-  });
-
-  const particles = Array.from({ length: 5 }, (_, index) => {
-    const t = (index / 4) * 2 - 1;
-    const rotated = rotateWorldPoint({ x: t * coreWidth, y: 0 }, tileRotation);
-    const point = projectLocalPoint(rotated.x, rotated.y, cameraYaw);
-    return { x: point.x, y: coreBottomY - 8 - (index * 6), radius: 1.4 + (index % 2) * 0.5 };
+  const arrowPoints = [
+    { x: -0.075, y: 0.28 },
+    { x: 0.075, y: 0.28 },
+    { x: 0.075, y: -0.04 },
+    { x: 0.2, y: -0.04 },
+    { x: 0, y: -0.29 },
+    { x: -0.2, y: -0.04 },
+    { x: -0.075, y: -0.04 }
+  ];
+  const projectArrow = (rotation) => arrowPoints.map((point) => {
+    const rotated = rotateWorldPoint(point, rotation);
+    const projected = projectLocalPoint(rotated.x, rotated.y, cameraYaw);
+    return { x: projected.x, y: projected.y - 10 };
   });
 
   return {
@@ -369,11 +355,8 @@ export const createPortalGeometry = (cameraYaw = 0, tileRotation = 0) => {
     rightPillar,
     lintel,
     arch,
-    coreCenter: { x: coreProjection.x, y: (coreTopY + coreBottomY) / 2 },
-    coreRx: 8,
-    coreRy: coreHeight / 2,
-    runePositions,
-    particles
+    arrow: projectArrow(tileRotation),
+    reverseArrow: projectArrow(tileRotation + 180)
   };
 };
 

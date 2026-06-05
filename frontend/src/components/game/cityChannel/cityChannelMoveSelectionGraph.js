@@ -4,7 +4,6 @@ import {
 } from './cityChannelSchema';
 import {
   EDGE_NEIGHBOR_OFFSETS,
-  isPortalMaterial,
   sameCell
 } from './cityChannelPlacementGeometry';
 
@@ -14,7 +13,7 @@ export const collectSupportedFloorKeys = ({
   isSameLevelConnected = () => false
 } = {}) => {
   const floorTiles = Array.from(previewTiles.entries()).filter(([, tile]) => (
-    tile && !tile.isVertical && !isPortalMaterial(tile.panelType)
+    tile && !tile.isVertical
   ));
   const floorTileKeys = new Set(floorTiles.map(([key]) => key));
   const floorGraph = new Map(floorTiles.map(([key]) => [key, new Set()]));
@@ -29,7 +28,7 @@ export const collectSupportedFloorKeys = ({
       const neighborKey = createCellKey(tile.x + offset.x, tile.y + offset.y, tile.z);
       if (!floorTileKeys.has(neighborKey)) return;
       const neighbor = previewTiles.get(neighborKey);
-      if (!neighbor || neighbor.isVertical || isPortalMaterial(neighbor.panelType)) return;
+      if (!neighbor || neighbor.isVertical) return;
       if (!isSameLevelConnected(tile, key, neighbor, neighborKey)) return;
       floorGraph.get(key)?.add(neighborKey);
       floorGraph.get(neighborKey)?.add(key);
@@ -100,10 +99,6 @@ const areSelectionPlacementsConnected = (a, b) => {
   if (bWall && !aWall) return areWallAndFloorConnected(b, a) || (bVertical && sameCell(a, b));
 
   if (aVertical || bVertical) {
-    return sameCell(a, b);
-  }
-
-  if (isPortalMaterial(a.panelType) || isPortalMaterial(b.panelType)) {
     return sameCell(a, b);
   }
 

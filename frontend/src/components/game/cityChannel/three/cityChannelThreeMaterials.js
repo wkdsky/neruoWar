@@ -9,8 +9,8 @@ const materialPalette = Object.freeze({
   [CITY_CHANNEL_TILE_TYPES.TRANSMISSION_L_PLATE]: { top: 0xcbb987, side: 0x746438, emissive: 0x2d2400 },
   [CITY_CHANNEL_TILE_TYPES.TRANSMISSION_ENDPOINT_PLATE]: { top: 0xd9c991, side: 0x806f3d, emissive: 0x332600 },
   [CITY_CHANNEL_TILE_TYPES.GEAR_PRESSURE_PLATE]: { top: 0x95b9b7, side: 0x476264, emissive: 0x072f35 },
-  [CITY_CHANNEL_TILE_TYPES.ENTRANCE]: { top: 0x89d7ff, side: 0x1d5f83, emissive: 0x05344f },
-  [CITY_CHANNEL_TILE_TYPES.EXIT]: { top: 0xf9bf72, side: 0x8b4f18, emissive: 0x4b2500 }
+  [CITY_CHANNEL_TILE_TYPES.ENTRANCE]: { top: 0xb8b2a4, side: 0x6f6a60 },
+  [CITY_CHANNEL_TILE_TYPES.EXIT]: { top: 0xb8b2a4, side: 0x6f6a60 }
 });
 
 export const createCityChannelThreeMaterials = () => {

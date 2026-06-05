@@ -94,6 +94,19 @@ describe('cityChannelThreeGeometry', () => {
       rotation: 0
     }, mapData);
     expect(eastWestVerticalTransform.size).toEqual({ x: 1, y: 1, z: 0.08 });
+
+    const portalTransform = getTileThreeTransform(createTile({
+      x: 1,
+      y: 1,
+      z: 0,
+      panelType: CITY_CHANNEL_TILE_TYPES.ENTRANCE,
+      isVertical: true
+    }), mapData);
+    expect(portalTransform).toMatchObject({
+      kind: 'tile',
+      panelType: CITY_CHANNEL_TILE_TYPES.ENTRANCE,
+      size: { x: 1, y: 0.08, z: 1 }
+    });
   });
 
   it('places edge walls on their real cell edge', () => {
@@ -543,6 +556,20 @@ describe('cityChannelThreeGeometry', () => {
       activeTool: CITY_CHANNEL_TOOLS.PLACE_TILE,
       activeTileType: CITY_CHANNEL_TILE_TYPES.BASIC_PLATE
     })).toBe('unsupported');
+
+    const portalFloor = createTile({
+      x: 1,
+      y: 1,
+      z: 0,
+      panelType: CITY_CHANNEL_TILE_TYPES.EXIT
+    });
+    const portalMap = {
+      ...unsupportedMap,
+      tiles: {
+        [createCellKey(1, 1, 0)]: portalFloor
+      }
+    };
+    expect(hasThreeWallSupport({ mapData: portalMap, cell: { x: 1, y: 1, z: 0 }, edge: 'east' })).toBe(true);
   });
 
   it('allows same-layer side-connected walls to support continued wall placement', () => {

@@ -99,6 +99,8 @@ export const normalizeTile = (tile = {}, bounds = null) => {
   const panelType = normalizeCityChannelPanelType(tile.panelType);
   const definition = getTileDefinition(panelType);
   const catalogItem = getCityChannelMaterial(panelType);
+  const isPortal = panelType === CITY_CHANNEL_TILE_TYPES.ENTRANCE
+    || panelType === CITY_CHANNEL_TILE_TYPES.EXIT;
   return {
     x,
     y,
@@ -111,7 +113,7 @@ export const normalizeTile = (tile = {}, bounds = null) => {
     walkable: !!definition.walkable,
     solid: !!definition.solid,
     transparent: !!definition.transparent,
-    isVertical: !!definition.isVertical || !!tile.isVertical,
+    isVertical: isPortal ? false : (!!definition.isVertical || !!tile.isVertical),
     marker: ['safe', 'highlight', 'entrance', 'exit'].includes(tile.marker)
       ? tile.marker
       : (catalogItem.markerType || null),
@@ -155,7 +157,13 @@ export const normalizeWall = (wall = {}, bounds = null) => {
   if (!isValidCell(x, y, z, bounds)) return null;
   const edge = normalizeWallEdge(wall.edge || rotationToWallEdge(wall.rotation));
   const edgeRotation = wallEdgeToRotation(edge);
-  const panelType = normalizeCityChannelPanelType(wall.panelType);
+  const normalizedPanelType = normalizeCityChannelPanelType(wall.panelType);
+  const panelType = (
+    normalizedPanelType === CITY_CHANNEL_TILE_TYPES.ENTRANCE
+    || normalizedPanelType === CITY_CHANNEL_TILE_TYPES.EXIT
+  )
+    ? CITY_CHANNEL_TILE_TYPES.BASIC_PLATE
+    : normalizedPanelType;
   const definition = getTileDefinition(panelType);
   const catalogItem = getCityChannelMaterial(panelType);
   return {

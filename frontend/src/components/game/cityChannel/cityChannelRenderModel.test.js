@@ -117,7 +117,7 @@ describe('cityChannelRenderModel', () => {
     expect(attachment.physicalLayer).toBe(CITY_CHANNEL_PHYSICAL_LAYERS.WALL_ATTACHMENT);
   });
 
-  it('assigns portal bodies to the portal physical layer after the floor base', () => {
+  it('assigns portal ground attachments after their ordinary floor base', () => {
     const cellKey = createCellKey(16, 16, 0);
     const mapData = createMapWithTiles({
       [cellKey]: createTile({ x: 16, y: 16, z: 0, panelType: CITY_CHANNEL_TILE_TYPES.ENTRANCE, rotation: 90 })
@@ -125,13 +125,13 @@ describe('cityChannelRenderModel', () => {
     const items = createCityChannelRenderItems({ mapData, cameraYaw: 0, includeHints: false });
 
     const floor = getPart(items, { x: 16, y: 16, partType: 'floor_base' });
-    const portal = getPart(items, { x: 16, y: 16, partType: 'portal_body' });
+    const portal = getPart(items, { x: 16, y: 16, partType: 'floor_attachment' });
 
     expect(floor.renderOrder).toBeLessThan(portal.renderOrder);
-    expect(portal.physicalLayer).toBe(CITY_CHANNEL_PHYSICAL_LAYERS.PORTAL_BODY);
+    expect(portal.physicalLayer).toBe(CITY_CHANNEL_PHYSICAL_LAYERS.FLOOR_ATTACHMENT);
   });
 
-  it('allows a foreground floor to occlude a background portal body by projected depth', () => {
+  it('allows a foreground floor to occlude a background portal attachment by projected depth', () => {
     const portalKey = createCellKey(16, 16, 0);
     const foregroundFloorKey = createCellKey(16, 17, 0);
     const mapData = createMapWithTiles({
@@ -140,7 +140,7 @@ describe('cityChannelRenderModel', () => {
     });
     const items = createCityChannelRenderItems({ mapData, cameraYaw: 0, includeHints: false });
 
-    const portal = getPart(items, { x: 16, y: 16, partType: 'portal_body' });
+    const portal = getPart(items, { x: 16, y: 16, partType: 'floor_attachment' });
     const foregroundFloor = getPart(items, { x: 16, y: 17, partType: 'floor_base' });
 
     expect(portal).toBeTruthy();
@@ -220,7 +220,7 @@ describe('cityChannelRenderModel', () => {
     expect(getPart(items, { x: 15, y: 16, source: 'wall', edge: 'north', partType: 'wall_plane' })).toBeTruthy();
     expect(getPart(items, { x: 16, y: 16, source: 'wall', edge: 'south', partType: 'wall_plane' })).toBeTruthy();
     expect(getPart(items, { x: 17, y: 16, partType: 'floor_attachment' })).toBeTruthy();
-    expect(getPart(items, { x: 15, y: 15, partType: 'portal_body' })).toBeTruthy();
-    expect(getPart(items, { x: 18, y: 17, partType: 'portal_body' })).toBeTruthy();
+    expect(getPart(items, { x: 15, y: 15, partType: 'floor_attachment' })).toBeTruthy();
+    expect(getPart(items, { x: 18, y: 17, partType: 'floor_attachment' })).toBeTruthy();
   });
 });

@@ -42,10 +42,14 @@ describe('cityChannelDomainModel', () => {
     expect(model.stats.edgeWalls).toBe(1);
     expect(model.conflicts).toEqual([]);
     expect(getCityChannelPlacementAtCell(model, { x: 11, y: 10, z: 0 })[0].kind).toBe(CITY_CHANNEL_PLACEMENT_KINDS.GROUND_ATTACHMENT);
+    const portalPlacement = getCityChannelPlacementAtCell(model, { x: 12, y: 10, z: 0 })[0];
+    expect(portalPlacement.kind).toBe(CITY_CHANNEL_PLACEMENT_KINDS.PORTAL);
+    expect(portalPlacement.anchor.surface).toBe('ground');
+    expect(portalPlacement.renderParts.map((part) => part.partType)).toEqual(['floor_base', 'floor_attachment']);
     expect(getCityChannelPlacementAtEdge(model, { x: 10, y: 10, z: 0, edge: 'east' })[0].kind).toBe(CITY_CHANNEL_PLACEMENT_KINDS.EDGE_WALL);
     expect(model.renderParts.some((part) => part.physicalLayer === CITY_CHANNEL_PHYSICAL_LAYERS.FLOOR_ATTACHMENT)).toBe(true);
     expect(model.renderParts.some((part) => part.physicalLayer === CITY_CHANNEL_PHYSICAL_LAYERS.WALL_PLANE)).toBe(true);
-    expect(model.renderParts.some((part) => part.physicalLayer === CITY_CHANNEL_PHYSICAL_LAYERS.PORTAL_BODY)).toBe(true);
+    expect(model.renderParts.some((part) => part.physicalLayer === CITY_CHANNEL_PHYSICAL_LAYERS.PORTAL_BODY)).toBe(false);
   });
 
   it('reports unsupported edge walls without mutating the map shape', () => {

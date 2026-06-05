@@ -45,6 +45,8 @@ export const createTile = ({
   const definition = getTileDefinition(normalizedPanelType);
   const catalogItem = getCityChannelMaterial(normalizedPanelType);
   const markerType = catalogItem.markerType || null;
+  const isPortal = normalizedPanelType === CITY_CHANNEL_TILE_TYPES.ENTRANCE
+    || normalizedPanelType === CITY_CHANNEL_TILE_TYPES.EXIT;
   return {
     x,
     y,
@@ -57,7 +59,7 @@ export const createTile = ({
     walkable: !!definition.walkable,
     solid: !!definition.solid,
     transparent: !!definition.transparent,
-    isVertical: !!definition.isVertical || !!isVertical,
+    isVertical: isPortal ? false : (!!definition.isVertical || !!isVertical),
     marker: marker || markerType,
     flipped: false,
     hiddenModule: cloneHiddenModule(catalogItem.hiddenModule),
@@ -84,7 +86,13 @@ export const createWall = ({
   flipped = false
 } = {}) => {
   const normalizedEdge = normalizeWallEdge(edge);
-  const safePanelType = normalizeCityChannelPanelType(panelType);
+  const normalizedPanelType = normalizeCityChannelPanelType(panelType);
+  const safePanelType = (
+    normalizedPanelType === CITY_CHANNEL_TILE_TYPES.ENTRANCE
+    || normalizedPanelType === CITY_CHANNEL_TILE_TYPES.EXIT
+  )
+    ? CITY_CHANNEL_TILE_TYPES.BASIC_PLATE
+    : normalizedPanelType;
   const definition = getTileDefinition(safePanelType);
   const catalogItem = getCityChannelMaterial(safePanelType);
   return {

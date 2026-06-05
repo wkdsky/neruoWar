@@ -107,12 +107,12 @@ const classifyTilePlacement = (tile) => {
   if (isPortalTile(tile)) {
     return {
       kind: CITY_CHANNEL_PLACEMENT_KINDS.PORTAL,
-      anchorSurface: CITY_CHANNEL_ANCHOR_SURFACES.PORTAL,
+      anchorSurface: CITY_CHANNEL_ANCHOR_SURFACES.GROUND,
       hasFloorBase: true,
-      hasFloorAttachment: false,
+      hasFloorAttachment: true,
       hasWallPlane: false,
       hasWallAttachment: false,
-      hasPortalBody: true,
+      hasPortalBody: false,
       mechanical,
       passAxis: getPortalPassAxis(tile.rotation)
     };

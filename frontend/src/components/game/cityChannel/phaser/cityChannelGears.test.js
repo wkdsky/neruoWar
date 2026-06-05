@@ -505,6 +505,160 @@ describe('cityChannelGears', () => {
     expect(driven.map((node) => node.id)).toEqual(['pressure:gear_center']);
   });
 
+  it('keeps a meshed corner gear bound to the active center gear board spinning as passive', () => {
+    const assembly = {
+      componentKeys: ['pressure', 'corner_host'],
+      edges: [{ componentKey: 'pressure', key: 'corner_host' }]
+    };
+    const allNodes = [
+      {
+        id: 'pressure:gear_center',
+        componentKey: 'pressure',
+        point: { x: 0, y: 0 },
+        surfaceKey: 'floor:0:front',
+        pitchRadius: 18
+      },
+      {
+        id: 'corner_host:gear_corner',
+        componentKey: 'corner_host',
+        point: { x: 36, y: 0 },
+        surfaceKey: 'floor:0:front',
+        pitchRadius: 18,
+        mount: {
+          position: 'corner_nw',
+          axisBinding: {
+            componentKey: 'pressure',
+            hostKind: 'tile',
+            socket: 'corner_nw',
+            surface: 'front'
+          }
+        }
+      }
+    ];
+
+    const driven = resolveDrivenGearNodes({
+      assembly,
+      assemblyNodes: allNodes,
+      allNodes,
+      sourceComponentKey: 'pressure'
+    });
+
+    expect(driven.map((node) => node.id)).toEqual(['pressure:gear_center', 'corner_host:gear_corner']);
+    expect(driven[1]).toMatchObject({
+      direction: -1,
+      isDriveRoot: false,
+      drivenByGearId: 'pressure:gear_center',
+      axisBindingSuppressed: true
+    });
+  });
+
+  it('keeps a meshed corner gear bound to another source-assembly board spinning as passive', () => {
+    const assembly = {
+      componentKeys: ['pressure', 'vertical_link'],
+      edges: [{ componentKey: 'pressure', key: 'vertical_link' }]
+    };
+    const sourceNode = {
+      id: 'pressure:gear_center',
+      componentKey: 'pressure',
+      point: { x: 0, y: 0 },
+      surfaceKey: 'floor:0:front',
+      pitchRadius: 18,
+      mount: {
+        id: 'gear_center',
+        position: 'center'
+      }
+    };
+    const cornerNode = {
+      id: 'corner_host:gear_corner',
+      componentKey: 'corner_host',
+      point: { x: 36, y: 0 },
+      surfaceKey: 'floor:0:front',
+      pitchRadius: 18,
+      mount: {
+        id: 'gear_corner',
+        position: 'corner_nw',
+        axisBinding: {
+          componentKey: 'vertical_link',
+          hostKind: 'tile',
+          socket: 'corner_se',
+          surface: 'front'
+        }
+      }
+    };
+
+    const driven = resolveDrivenGearNodes({
+      assembly,
+      assemblyNodes: [sourceNode],
+      allNodes: [sourceNode, cornerNode],
+      sourceComponentKey: 'pressure'
+    });
+    const corner = driven.find((node) => node.id === 'corner_host:gear_corner');
+
+    expect(corner).toMatchObject({
+      direction: -1,
+      isDriveRoot: false,
+      drivenByGearId: 'pressure:gear_center',
+      axisBindingSuppressed: true
+    });
+  });
+
+  it('does not let a same-board bound corner gear become a root before its center gear', () => {
+    const assembly = {
+      componentKeys: ['pressure', 'driver'],
+      edges: [{ componentKey: 'pressure', key: 'driver' }]
+    };
+    const allNodes = [
+      {
+        id: 'driver:gear_corner',
+        componentKey: 'driver',
+        point: { x: 35, y: 0 },
+        surfaceKey: 'floor:0:front',
+        pitchRadius: 18,
+        mount: {
+          id: 'gear_corner',
+          position: 'corner_se',
+          axisBinding: {
+            componentKey: 'driver',
+            hostKind: 'tile',
+            socket: 'corner_se',
+            surface: 'front'
+          }
+        }
+      },
+      {
+        id: 'driver:gear_center',
+        componentKey: 'driver',
+        point: { x: 0, y: 0 },
+        surfaceKey: 'floor:0:front',
+        pitchRadius: 18,
+        mount: {
+          id: 'gear_center',
+          position: 'center'
+        }
+      }
+    ];
+
+    const driven = resolveDrivenGearNodes({
+      assembly,
+      assemblyNodes: allNodes,
+      allNodes,
+      sourceComponentKey: 'pressure'
+    });
+    const center = driven.find((node) => node.id === 'driver:gear_center');
+    const corner = driven.find((node) => node.id === 'driver:gear_corner');
+
+    expect(center).toMatchObject({
+      direction: 1,
+      isDriveRoot: true
+    });
+    expect(corner).toMatchObject({
+      direction: -1,
+      isDriveRoot: false,
+      drivenByGearId: 'driver:gear_center',
+      axisBindingSuppressed: true
+    });
+  });
+
   it('uses stable world positions and tooth counts for gear mesh ratios', () => {
     const nodes = [
       {
