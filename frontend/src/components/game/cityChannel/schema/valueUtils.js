@@ -14,8 +14,9 @@ export const cloneGearMounts = (gearMounts = []) => (
       mount && typeof mount === 'object'
         ? {
           ...mount,
+          surface: 'front',
           ...(mount.axisBinding && typeof mount.axisBinding === 'object'
-            ? { axisBinding: { ...mount.axisBinding } }
+            ? { axisBinding: { ...mount.axisBinding, surface: 'front' } }
             : {})
         }
         : mount

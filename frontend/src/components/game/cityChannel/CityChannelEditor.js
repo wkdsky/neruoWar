@@ -12,12 +12,15 @@ import {
 } from './cityChannelSchema';
 import {
   buildMechanicalAssemblies,
+  DEFAULT_CITY_CHANNEL_GEAR_ROTATION_DIRECTION,
   getAssemblyForCell,
   getGearAxisBindingStatus,
   getMechanismParamKey,
   isCornerGearSocket,
+  normalizeGearRotationDirection,
   normalizeMechanismParams
 } from './cityChannelMechanismRuntime';
+import { canConfigureGearRotationDirection } from './cityChannelGearRotationConfig';
 import useCityChannelEditorState from './useCityChannelEditorState';
 import CityChannelMaterialPalette from './CityChannelMaterialPalette';
 import CityChannelMechanismPanel, { CityChannelGearAxisPrompt } from './CityChannelMechanismPanel';
@@ -100,6 +103,7 @@ const CityChannelEditor = ({
   const [selectedCells, setSelectedCells] = useState([]);
   const [selectedWalls, setSelectedWalls] = useState([]);
   const [selectedGears, setSelectedGears] = useState([]);
+  const [selectedRacks, setSelectedRacks] = useState([]);
   const [selectionScope, setSelectionScope] = useState(null);
   const [gearAxisPrompt, setGearAxisPrompt] = useState(null);
   const [openPanel, setOpenPanel] = useState(null);
@@ -113,6 +117,7 @@ const CityChannelEditor = ({
   const [mechanismRuntimeSnapshot, setMechanismRuntimeSnapshot] = useState(null);
   const [carryActive, setCarryActive] = useState(false);
   const [visibleLayerCutoff, setVisibleLayerCutoff] = useState(null);
+  const [lastGearRotationDirection, setLastGearRotationDirection] = useState(DEFAULT_CITY_CHANNEL_GEAR_ROTATION_DIRECTION);
 
   const planeLevels = useMemo(() => getCityChannelMapPlaneLevels(mapData), [mapData]);
   const highestPlaneLevel = planeLevels[planeLevels.length - 1] ?? 0;
@@ -125,7 +130,7 @@ const CityChannelEditor = ({
   const selectedPlacements = useMemo(() => (
     [...selectedCells, ...selectedWalls]
   ), [selectedCells, selectedWalls]);
-  const selectedCount = selectedPlacements.length + selectedGears.length;
+  const selectedCount = selectedPlacements.length + selectedGears.length + selectedRacks.length;
   const selectedTileKey = selectedCells.length === 1 && selectedWalls.length === 0
     ? createCellKey(selectedCells[0].x, selectedCells[0].y, selectedCells[0].z)
     : '';
@@ -143,8 +148,9 @@ const CityChannelEditor = ({
   ), [assemblyGraph, selectedTileKey, selectedWallKey]);
   const objectCounts = useMemo(() => ({
     tiles: Object.keys(mapData.tiles || {}).length,
-    walls: Object.keys(mapData.walls || {}).length
-  }), [mapData.tiles, mapData.walls]);
+    walls: Object.keys(mapData.walls || {}).length,
+    racks: Object.keys(mapData.racks || {}).length
+  }), [mapData.racks, mapData.tiles, mapData.walls]);
   const activePanelKey = mechanismPanel?.key || selectedTileKey || selectedWallKey;
   const activePanelTile = mechanismPanel?.key
     ? (mapData.tiles?.[mechanismPanel.key] || mapData.walls?.[mechanismPanel.key])
@@ -154,6 +160,17 @@ const CityChannelEditor = ({
     ? (selectedGear.hostKind === 'wall' ? mapData.walls?.[selectedGear.hostKey] : mapData.tiles?.[selectedGear.hostKey])
     : null;
   const selectedGearMount = selectedGearHost?.gearMounts?.find((mount) => mount.id === selectedGear?.mountId) || null;
+  const selectedGearCanConfigureRotation = !!(
+    selectedGear
+    && selectedGearMount
+    && canConfigureGearRotationDirection({
+      mapData,
+      assemblyGraph,
+      componentKey: selectedGear.hostKey,
+      placement: selectedGearHost,
+      mount: selectedGearMount
+    })
+  );
   const selectedGearItems = useMemo(() => (
     selectedGears.map((gear) => {
       const host = gear.hostKind === 'wall' ? mapData.walls?.[gear.hostKey] : mapData.tiles?.[gear.hostKey];
@@ -219,15 +236,17 @@ const CityChannelEditor = ({
     setSelectedCells([]);
     setSelectedWalls([]);
     setSelectedGears([]);
+    setSelectedRacks([]);
     setSelectionScope(null);
     setGearAxisPrompt(null);
-    sceneRef.current?.setSelection?.([], [], [], null);
+    sceneRef.current?.setSelection?.([], [], [], [], null);
   }, []);
 
-  const handleSelectionChange = useCallback(({ cells = [], walls = [], gears = [], scope = null } = {}) => {
+  const handleSelectionChange = useCallback(({ cells = [], walls = [], gears = [], racks = [], scope = null } = {}) => {
     setSelectedCells(cells);
     setSelectedWalls(walls);
     setSelectedGears(gears);
+    setSelectedRacks(racks);
     setSelectionScope(scope);
     setGearAxisPrompt(null);
   }, []);
@@ -372,6 +391,12 @@ const CityChannelEditor = ({
     }, '齿轮承动配置已更新。');
   }, [activePanelPlacement, updatePlacement]);
 
+  const updateGearMountRotationDirection = useCallback((mountId, direction) => {
+    const rotationDirection = normalizeGearRotationDirection(direction);
+    setLastGearRotationDirection(rotationDirection);
+    updateGearMountConfig(mountId, { rotationDirection });
+  }, [updateGearMountConfig]);
+
   const clearSelectedGearBindings = useCallback(() => {
     if (selectedGearItems.length <= 0) return;
     const groups = new Map();
@@ -451,7 +476,7 @@ const CityChannelEditor = ({
   const handleDeleteSelection = useCallback(() => {
     resetMechanismPreview();
     if (selectionScope === 'component') {
-      if (selectedGearItems.length <= 0) return;
+      if (selectedGearItems.length <= 0 && selectedRacks.length <= 0) return;
       const groups = new Map();
       selectedGearItems.forEach(({ gear, host }) => {
         if (!groups.has(gear.hostKey)) {
@@ -472,6 +497,17 @@ const CityChannelEditor = ({
           gearMounts: (currentPlacement.gearMounts || []).filter((mount) => !mountIds.has(mount.id))
         }), '已删除选中齿轮。');
       });
+      const rackOperations = selectedRacks.map((rack) => {
+        const existing = mapData.racks?.[rack.id];
+        return existing ? {
+          kind: 'rack',
+          action: 'erase',
+          rack: existing
+        } : null;
+      }).filter(Boolean);
+      if (rackOperations.length > 0) {
+        handleCommitOperations(rackOperations);
+      }
       clearSelection();
       return;
     }
@@ -485,7 +521,7 @@ const CityChannelEditor = ({
     });
     deletePlacements(selectedPlacements);
     clearSelection();
-  }, [clearSelection, deletePlacements, resetMechanismPreview, selectedCells, selectedGearItems, selectedPlacements, selectionScope, updatePlacement]);
+  }, [clearSelection, deletePlacements, handleCommitOperations, mapData.racks, resetMechanismPreview, selectedCells, selectedGearItems, selectedPlacements, selectedRacks, selectionScope, updatePlacement]);
 
   const handleCopySelection = useCallback(() => {
     resetMechanismPreview();
@@ -581,6 +617,7 @@ const CityChannelEditor = ({
       cells: selectedCells,
       walls: selectedWalls,
       gears: selectedGears,
+      racks: selectedRacks,
       scope: selectionScope
     },
     onSceneReady: (scene) => {
@@ -623,6 +660,7 @@ const CityChannelEditor = ({
     onMechanismRuntimeSnapshot: setMechanismRuntimeSnapshot,
     externalInspectOverlay: true,
     mechanismParams,
+    defaultGearRotationDirection: lastGearRotationDirection,
     onToast: addToast,
     onCarryStateChange: setCarryActive
   }), [
@@ -652,8 +690,10 @@ const CityChannelEditor = ({
     redo,
     handleExitPlaceMode,
     handleRequestTool,
+    lastGearRotationDirection,
     selectedCells,
     selectedGears,
+    selectedRacks,
     selectedWalls,
     selectionScope,
     showCoordinates,
@@ -845,6 +885,7 @@ const CityChannelEditor = ({
         inspectActive={!!inspectMode?.active}
         selectedGear={selectedGear}
         selectedGearMount={selectedGearMount}
+        selectedGearCanConfigureRotation={selectedGearCanConfigureRotation}
         selectedAssembly={selectedAssembly}
         activePanelTile={activePanelTile}
         activePanelPanelType={activePanelPanelType}
@@ -855,6 +896,7 @@ const CityChannelEditor = ({
         onCloseInspect={handleInspectSelected}
         onExecute={executeMechanismPanelAction}
         onUpdateGearMountConfig={updateGearMountConfig}
+        onUpdateGearRotationDirection={updateGearMountRotationDirection}
         onUpdateMechanismParam={updateMechanismParam}
       />
 
@@ -864,7 +906,7 @@ const CityChannelEditor = ({
         statusMessage={statusMessage}
         hoverStatusLabel={hoverStatusLabel}
         cameraSummary={cameraSummary}
-        objectCount={objectCounts.tiles + objectCounts.walls}
+        objectCount={objectCounts.tiles + objectCounts.walls + objectCounts.racks}
         validationOk={validationResult.ok}
       />
 

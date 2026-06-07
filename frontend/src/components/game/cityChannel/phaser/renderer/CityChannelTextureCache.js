@@ -11,7 +11,7 @@ import {
   getVerticalMiterTextureKey,
   getTransmissionMidPlane
 } from './CityChannelGeometry';
-import { hasDirectionalGearSurface, isGearPressurePlatePanel } from '../../cityChannelGearPressurePlateRender';
+import { isGearPressurePlatePanel } from '../../cityChannelGearPressurePlateRender';
 
 export const TILE_TEXTURE_SUPERSAMPLE = 2;
 const TEXTURE_YAW_STEP = 2;
@@ -299,9 +299,7 @@ export class CityChannelTextureCache {
     } else {
       if (options?.isVertical) {
         const transmissionPlane = getTransmissionMidPlane(geometry, 'wall');
-        const gearMountPlane = hasDirectionalGearSurface(panelType)
-          ? (geometry.wallFront || geometry.wall)
-          : transmissionPlane;
+        const gearMountPlane = transmissionPlane;
         this.drawWallTransmissionSkeleton(graphics, material, transmissionPlane, 0);
         this.drawWallGearMounts(graphics, material, gearMountPlane, 0);
       } else {
@@ -348,9 +346,7 @@ export class CityChannelTextureCache {
     this.drawStoneSurface(graphics, geometry.wallFront || geometry.wall, material.id);
     const runtimeGeometry = createEdgeWallGeometry(cameraYaw, edge, miter, transmissionRotation);
     const transmissionPlane = getTransmissionMidPlane(runtimeGeometry, 'wall');
-    const gearMountPlane = hasDirectionalGearSurface(panelType)
-      ? (runtimeGeometry.wallFront || runtimeGeometry.wall)
-      : transmissionPlane;
+    const gearMountPlane = transmissionPlane;
     this.drawWallTransmissionSkeleton(graphics, material, transmissionPlane, 0);
     this.drawWallGearMounts(graphics, material, gearMountPlane, 0);
     if (material.gearIcon) {

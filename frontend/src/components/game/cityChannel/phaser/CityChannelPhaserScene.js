@@ -72,7 +72,9 @@ import {
 import {
   getFixedAxisWorldAnchor,
   getGearWorldPosition,
-  getRuntimePlacementForFixedAxisAssemblyMember
+  getRuntimePlacementForFixedAxisAssemblyMember,
+  getRuntimePlacementForRackTranslationAssemblyMember,
+  isRackTranslationRuntimeEntry
 } from '../cityChannelMechanismSimulation';
 import {
   computeCityChannelMovePreviewModel,
@@ -80,7 +82,6 @@ import {
   isPortalMaterial
 } from '../cityChannelMovePreview';
 import {
-  hasDirectionalGearSurface,
   isGearPressurePlatePanel,
   normalizeGearSurfaceForPanel
 } from '../cityChannelGearPressurePlateRender';
@@ -816,9 +817,12 @@ export const createCityChannelPhaserScene = (Phaser, initialConfig = {}) => {
 
     applyMechanismRuntimePlacementTransforms(assembly, fixedAxisEntry, angle = 0) {
       if (!assembly || !fixedAxisEntry) return;
+      const rackTranslation = isRackTranslationRuntimeEntry(fixedAxisEntry);
       const fixedMount = fixedAxisEntry.fixedMount || fixedAxisEntry.fixedAxis || fixedAxisEntry;
-      const anchorWorld = fixedAxisEntry.pivotWorld || fixedAxisEntry.anchor || getFixedAxisWorldAnchor(this.mapData, fixedMount);
-      const fixedPlacement = fixedMount?.componentKey
+      const anchorWorld = rackTranslation
+        ? null
+        : fixedAxisEntry.pivotWorld || fixedAxisEntry.anchor || getFixedAxisWorldAnchor(this.mapData, fixedMount);
+      const fixedPlacement = !rackTranslation && fixedMount?.componentKey
         ? (fixedAxisEntry.basePlacements?.[fixedMount.componentKey]
           || this.mapData.tiles?.[fixedMount.componentKey]
           || this.mapData.walls?.[fixedMount.componentKey])
@@ -828,14 +832,24 @@ export const createCityChannelPhaserScene = (Phaser, initialConfig = {}) => {
           || this.mapData.tiles?.[componentKey]
           || this.mapData.walls?.[componentKey];
         if (!placement) return;
-        const runtimePlacement = getRuntimePlacementForFixedAxisAssemblyMember({
-          placement,
-          componentKey,
-          fixedMount,
-          fixedPlacement,
-          pivotWorld: anchorWorld,
-          degrees: angle
-        });
+        const runtimePlacement = rackTranslation
+          ? (
+            this.mechanismRuntimeSnapshot?.placements?.[componentKey]
+            || getRuntimePlacementForRackTranslationAssemblyMember({
+              placement,
+              componentKey,
+              entry: fixedAxisEntry,
+              sourceAngle: angle
+            })
+          )
+          : getRuntimePlacementForFixedAxisAssemblyMember({
+            placement,
+            componentKey,
+            fixedMount,
+            fixedPlacement,
+            pivotWorld: anchorWorld,
+            degrees: angle
+          });
         this.setRuntimeSnapshotPlacement(componentKey, runtimePlacement);
         const runtimeProjection = this.getRuntimePlacementScreenPoint(runtimePlacement);
         if (placement.edge) {
@@ -3231,11 +3245,6 @@ export const createCityChannelPhaserScene = (Phaser, initialConfig = {}) => {
         drawMechanicalLayers(this);
         return;
       }
-      if (this.selectedCells.length || this.selectedWalls.length || this.selectedGears.length) {
-        this.setSelection([], [], [], null);
-        return;
-      }
-      if (this.activeTool === CITY_CHANNEL_TOOLS.BROWSE) return;
       if (this.activeTool === CITY_CHANNEL_TOOLS.PLACE_TILE && this.activeTileType) {
         this.config.onExitPlaceMode?.();
         return;
@@ -3244,6 +3253,11 @@ export const createCityChannelPhaserScene = (Phaser, initialConfig = {}) => {
         this.config.onExitPlaceMode?.();
         return;
       }
+      if (this.selectedCells.length || this.selectedWalls.length || this.selectedGears.length) {
+        this.setSelection([], [], [], null);
+        return;
+      }
+      if (this.activeTool === CITY_CHANNEL_TOOLS.BROWSE) return;
       this.eraseHit(hit);
     }
 
@@ -4454,9 +4468,7 @@ export const createCityChannelPhaserScene = (Phaser, initialConfig = {}) => {
 
     getGearBindingSurfacesForPlacement(placement = null) {
       if (!placement) return [];
-      return hasDirectionalGearSurface(placement.panelType) && (placement.edge || placement.isVertical)
-        ? ['front', 'back']
-        : ['front'];
+      return ['front'];
     }
 
     isSameGearWorldPoint(a = null, b = null, epsilon = 0.008) {
@@ -5778,12 +5790,9 @@ export const createCityChannelPhaserScene = (Phaser, initialConfig = {}) => {
           this.getWallMiterProfile(placement),
           getTransmissionSurfaceRotation(placement)
         );
-        const directionalSurface = hasDirectionalGearSurface(placement.panelType);
-        const wall = directionalSurface
-          ? (surfaceSide === 'back' ? (geometry.wallBack || geometry.wall) : (geometry.wallFront || geometry.wall))
-          : getTransmissionMidPlane(geometry, 'wall');
+        const wall = getTransmissionMidPlane(geometry, 'wall');
         const normal = getGearSurfaceNormal(placement, surfaceSide);
-        const normalOffset = directionalSurface ? 0.14 : 0;
+        const normalOffset = 0;
         const projectedNormal = projectWorldOffset(normal.x * normalOffset, normal.y * normalOffset, this.cameraState.yaw);
         return {
           polygon: wall,
@@ -5801,12 +5810,9 @@ export const createCityChannelPhaserScene = (Phaser, initialConfig = {}) => {
         ? createVerticalTileWallGeometry(this.cameraState.yaw, placement.rotation || 0, getTransmissionSurfaceRotation(placement))
         : createTileGeometry(this.cameraState.yaw, placement.rotation || 0);
       const verticalNormal = getGearSurfaceNormal(placement, surfaceSide);
-      const directionalSurface = hasDirectionalGearSurface(placement.panelType);
-      const verticalNormalOffset = directionalSurface ? 0.14 : 0;
+      const verticalNormalOffset = 0;
       const verticalExtrusion = projectWorldOffset(verticalNormal.x * verticalNormalOffset, verticalNormal.y * verticalNormalOffset, this.cameraState.yaw);
-      const wallSurface = directionalSurface
-        ? (surfaceSide === 'back' ? (geometry.wallBack || geometry.wall) : (geometry.wallFront || geometry.wall))
-        : getTransmissionMidPlane(geometry, 'wall');
+      const wallSurface = getTransmissionMidPlane(geometry, 'wall');
       return {
         polygon: placement.isVertical ? wallSurface : geometry.top,
         rotation: 0,
@@ -6668,6 +6674,7 @@ export const createCityChannelPhaserScene = (Phaser, initialConfig = {}) => {
       const placement = options.placement || null;
       const axisBindingInvalid = !!options.axisBindingInvalid;
       const attachStyle = GEAR_ATTACH_HIGHLIGHT_STYLE;
+      const highlightEmbedded = options.highlightEmbedded ?? this.getEffectiveWallViewMode() === 'solid';
       const color = valid ? (selected ? attachStyle.SOURCE_RING_COLOR : 0x111827) : 0xef4444;
       const hubColor = axisBindingInvalid
         ? 0xef4444
@@ -6680,59 +6687,95 @@ export const createCityChannelPhaserScene = (Phaser, initialConfig = {}) => {
       if (placement && mount.position) {
         const centerLocal = getGearMountLocalPosition(mount.position);
         const gearAngle = options.angle || 0;
-        const surface = mount.surface || 'front';
+        const surface = 'front';
         const context = this.getGearSurfaceContext(placement, surface);
-        const extrusion = context?.extrusion || { x: 0, y: -8 };
-        const shadow = this.getProjectedSurfaceCircle(placement, centerLocal, GEAR_OUTER_RADIUS_LOCAL * 1.04, 48, gearAngle, surface);
-        this.drawProjectedSurfacePolygon(graphics, shadow, 0x020617, options.ghost ? 0.18 : 0.22);
+        const extrusion = context?.extrusion || { x: 0, y: 0 };
         const baseOutline = this.getProjectedSurfaceGearOutline(placement, centerLocal, GEAR_TOOTH_COUNT, gearAngle, surface);
         const outline = this.offsetProjectedPoints(baseOutline, extrusion);
-        this.drawProjectedExtrusionSides(graphics, baseOutline, outline, valid ? 0x111827 : 0x4c1111, options.ghost ? 0.62 : 0.9);
+        if (!highlightEmbedded) {
+          const shadow = this.getProjectedSurfaceCircle(placement, centerLocal, GEAR_OUTER_RADIUS_LOCAL * 1.04, 48, gearAngle, surface);
+          this.drawProjectedSurfacePolygon(graphics, shadow, 0x020617, options.ghost ? 0.18 : 0.22);
+          this.drawProjectedExtrusionSides(graphics, baseOutline, outline, valid ? 0x111827 : 0x4c1111, options.ghost ? 0.62 : 0.9);
+          this.drawProjectedSurfacePolygon(
+            graphics,
+            outline,
+            valid ? 0x111827 : 0x3f1111,
+            alpha,
+            options.ghost || selected ? color : 0x020617,
+            options.ghost || selected ? 0.9 : 0.58,
+            options.ghost || selected ? 2 : 1
+          );
+          const root = this.offsetProjectedPoints(
+            this.getProjectedSurfaceCircle(placement, centerLocal, GEAR_ROOT_RADIUS_LOCAL * 0.88, 48, gearAngle, surface),
+            extrusion
+          );
+          this.drawProjectedSurfacePolygon(graphics, root, valid ? 0x1f2937 : 0x7f1d1d, 0.94, 0x020617, 0.42, 1);
+          const hubBase = this.getProjectedSurfaceCircle(placement, centerLocal, GEAR_HUB_RADIUS_LOCAL, 32, gearAngle, surface);
+          const hub = this.offsetProjectedPoints(hubBase, extrusion);
+          this.drawProjectedExtrusionSides(
+            graphics,
+            hubBase,
+            hub,
+            mount.axisBinding ? attachStyle.GEAR_BOUND_SIDE_COLOR : 0x854d0e,
+            options.ghost ? 0.54 : 0.8
+          );
+          this.drawProjectedSurfacePolygon(graphics, hub, hubColor, 0.96, 0x020617, 0.74, 1);
+          this.drawProjectedGearPhaseMarker(graphics, placement, centerLocal, gearAngle, surface, extrusion, {
+            alpha: options.ghost ? 0.62 : 0.9,
+            color: selected ? attachStyle.SOURCE_RING_COLOR : 0xfacc15
+          });
+          const axle = this.offsetProjectedPoints(
+            this.getProjectedSurfaceCircle(placement, centerLocal, GEAR_AXLE_RADIUS_LOCAL, 24, gearAngle, surface),
+            extrusion
+          );
+          this.drawProjectedSurfacePolygon(graphics, axle, 0x020617, 0.82);
+          if (selected) {
+            const ring = this.offsetProjectedPoints(
+              this.getProjectedSurfaceCircle(placement, centerLocal, GEAR_OUTER_RADIUS_LOCAL * 1.18, 56, gearAngle, surface),
+              extrusion
+            );
+            this.drawProjectedSurfacePolygon(graphics, ring, attachStyle.SOURCE_GLOW_COLOR, 0.05, attachStyle.SOURCE_RING_COLOR, 0.88, 1.6);
+          }
+          if (axisBindingInvalid) this.drawGearBindingInvalidBadge(graphics, point, { alpha });
+          return;
+        }
+        const outlineColor = valid
+          ? (selected ? attachStyle.SOURCE_RING_COLOR : 0xa5f3fc)
+          : 0xef4444;
+        const glow = this.offsetProjectedPoints(
+          this.getProjectedSurfaceCircle(placement, centerLocal, GEAR_OUTER_RADIUS_LOCAL * 1.18, 56, gearAngle, surface),
+          extrusion
+        );
+        this.drawProjectedSurfacePolygon(graphics, glow, outlineColor, options.ghost ? 0.1 : 0.055);
         this.drawProjectedSurfacePolygon(
           graphics,
           outline,
-          valid ? 0x111827 : 0x3f1111,
-          alpha,
-          options.ghost || selected ? color : 0x020617,
-          options.ghost || selected ? 0.9 : 0.58,
-          options.ghost || selected ? 2 : 1
+          valid ? 0x0f172a : 0x3f1111,
+          options.ghost ? alpha * 0.18 : 0.035,
+          outlineColor,
+          options.ghost || selected ? 0.92 : 0.72,
+          options.ghost || selected ? 2.2 : 1.4
         );
         const root = this.offsetProjectedPoints(
           this.getProjectedSurfaceCircle(placement, centerLocal, GEAR_ROOT_RADIUS_LOCAL * 0.88, 48, gearAngle, surface),
           extrusion
         );
-        this.drawProjectedSurfacePolygon(graphics, root, valid ? 0x1f2937 : 0x7f1d1d, 0.94, 0x020617, 0.42, 1);
-        const hubBase = this.getProjectedSurfaceCircle(placement, centerLocal, GEAR_HUB_RADIUS_LOCAL, 32, gearAngle, surface);
-        const hub = this.offsetProjectedPoints(hubBase, {
-          x: extrusion.x * 1.22,
-          y: extrusion.y * 1.22
-        });
-        this.drawProjectedExtrusionSides(
-          graphics,
-          hubBase,
-          hub,
-          mount.axisBinding ? attachStyle.GEAR_BOUND_SIDE_COLOR : 0x854d0e,
-          options.ghost ? 0.54 : 0.8
+        this.drawProjectedSurfacePolygon(graphics, root, valid ? 0x0f172a : 0x7f1d1d, options.ghost ? 0.16 : 0.035, outlineColor, 0.5, 1);
+        const hub = this.offsetProjectedPoints(
+          this.getProjectedSurfaceCircle(placement, centerLocal, GEAR_HUB_RADIUS_LOCAL, 32, gearAngle, surface),
+          extrusion
         );
-        this.drawProjectedSurfacePolygon(graphics, hub, hubColor, 0.96, 0x020617, 0.74, 1);
+        this.drawProjectedSurfacePolygon(graphics, hub, hubColor, options.ghost ? 0.24 : 0.055, outlineColor, 0.66, 1);
         this.drawProjectedGearPhaseMarker(graphics, placement, centerLocal, gearAngle, surface, extrusion, {
-          alpha: options.ghost ? 0.62 : 0.9,
-          color: selected ? attachStyle.SOURCE_RING_COLOR : 0xfacc15
+          alpha: options.ghost ? 0.62 : 0.68,
+          color: selected ? attachStyle.SOURCE_RING_COLOR : 0xe0f2fe
         });
-        const axle = this.offsetProjectedPoints(
-          this.getProjectedSurfaceCircle(placement, centerLocal, GEAR_AXLE_RADIUS_LOCAL, 24, gearAngle, surface),
-          {
-            x: extrusion.x * 1.38,
-            y: extrusion.y * 1.38
-          }
-        );
-        this.drawProjectedSurfacePolygon(graphics, axle, 0x020617, 0.82);
         if (selected) {
           const ring = this.offsetProjectedPoints(
             this.getProjectedSurfaceCircle(placement, centerLocal, GEAR_OUTER_RADIUS_LOCAL * 1.18, 56, gearAngle, surface),
             extrusion
           );
-          this.drawProjectedSurfacePolygon(graphics, ring, attachStyle.SOURCE_GLOW_COLOR, 0.05, attachStyle.SOURCE_RING_COLOR, 0.88, 1.6);
+          this.drawProjectedSurfacePolygon(graphics, ring, attachStyle.SOURCE_GLOW_COLOR, 0.075, attachStyle.SOURCE_RING_COLOR, 0.9, 1.8);
         }
         if (axisBindingInvalid) this.drawGearBindingInvalidBadge(graphics, point, { alpha });
         return;

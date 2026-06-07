@@ -356,7 +356,7 @@ describe('cityChannelThreeGeometry', () => {
     expect(northSegment.end.z).toBeCloseTo(-0.5);
   });
 
-  it('projects gear mounts onto floor and wall surfaces', () => {
+  it('projects gear mounts into floor and wall midplanes', () => {
     const mapData = createBaseCityChannelMap({ width: 4, height: 4 });
     const gearTile = createTile({
       x: 1,
@@ -370,7 +370,7 @@ describe('cityChannelThreeGeometry', () => {
       x: -0.5,
       z: -0.5
     });
-    expect(floorGearPoint.y).toBeCloseTo(0.08 + (CITY_CHANNEL_GEAR_THICKNESS_WORLD * 0.5) + 0.012);
+    expect(floorGearPoint.y).toBeCloseTo(0.04);
 
     const wall = createWall({
       x: 1,
@@ -388,7 +388,7 @@ describe('cityChannelThreeGeometry', () => {
     expect(getThreeSurfaceNormal(wallTransform)).toEqual({ x: 0, y: 0, z: 1 });
   });
 
-  it('keeps opposite wall storage keys on the same canonical 3D surface', () => {
+  it('keeps opposite wall storage keys on the same embedded 3D surface', () => {
     const mapData = createBaseCityChannelMap({ width: 4, height: 4 });
     const eastWall = createWall({
       x: 1,
@@ -414,8 +414,9 @@ describe('cityChannelThreeGeometry', () => {
     expect(westFront.z).toBeCloseTo(eastFront.z);
     expect(getThreeSurfaceNormal(eastTransform, 'front')).toEqual({ x: 1, y: 0, z: 0 });
     expect(getThreeSurfaceNormal(westTransform, 'front')).toEqual({ x: 1, y: 0, z: 0 });
-    expect(getThreeSurfaceNormal(eastTransform, 'back')).toEqual({ x: -1, y: 0, z: 0 });
-    expect(eastBack.x).toBeLessThan(eastFront.x);
+    expect(getThreeSurfaceNormal(eastTransform, 'back')).toEqual({ x: 1, y: 0, z: 0 });
+    expect(eastBack.x).toBeCloseTo(eastFront.x);
+    expect(eastBack.z).toBeCloseTo(eastFront.z);
   });
 
   it('classifies hover zones without changing the hovered board orientation', () => {

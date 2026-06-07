@@ -4,17 +4,10 @@ export const isGearPressurePlatePanel = (panelType) => (
   panelType === CITY_CHANNEL_TILE_TYPES.GEAR_PRESSURE_PLATE
 );
 
-export const hasDirectionalGearSurface = (panelType) => isGearPressurePlatePanel(panelType);
+export const hasDirectionalGearSurface = () => false;
 
-export const normalizeGearSurfaceForPanel = (panelType, surface = 'front') => (
-  hasDirectionalGearSurface(panelType) && surface === 'back' ? 'back' : 'front'
-);
+export const normalizeGearSurfaceForPanel = () => 'front';
 
-export const getGearSurfaceOffsetSignForPanel = (panelType, surface = 'front') => {
-  if (!hasDirectionalGearSurface(panelType)) return 0;
-  return surface === 'back' ? -1 : 1;
-};
+export const getGearSurfaceOffsetSignForPanel = () => 0;
 
-export const getGearSurfaceNormalSignForPanel = (panelType, surface = 'front') => (
-  normalizeGearSurfaceForPanel(panelType, surface) === 'back' ? -1 : 1
-);
+export const getGearSurfaceNormalSignForPanel = () => 1;

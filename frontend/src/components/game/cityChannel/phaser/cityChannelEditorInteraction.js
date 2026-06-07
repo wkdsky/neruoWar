@@ -20,6 +20,10 @@ import {
 import { getGearInstallTargetForScene } from './cityChannelGears';
 import { getSnapAxisKey } from './cityChannelVerticalSnap';
 import {
+  DEFAULT_CITY_CHANNEL_GEAR_ROTATION_DIRECTION,
+  normalizeGearRotationDirection
+} from '../cityChannelMechanismRuntime';
+import {
   GEAR_COMPONENT_TYPE,
   createWallSelectionKey,
   sameCell
@@ -95,6 +99,9 @@ export const applyPaint = (scene, pointer, suppliedHitInfo = null) => {
       axisBinding: null,
       followMode: 'none',
       followDelaySeconds: 0,
+      rotationDirection: normalizeGearRotationDirection(
+        scene.config?.defaultGearRotationDirection || DEFAULT_CITY_CHANNEL_GEAR_ROTATION_DIRECTION
+      ),
       radius: 1,
       teeth: 12,
       phase: 0

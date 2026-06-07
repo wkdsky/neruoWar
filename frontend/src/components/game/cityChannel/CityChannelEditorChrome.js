@@ -162,11 +162,6 @@ export const CityChannelSelectionActions = ({
           >
             <span>取消连轴</span>
           </button>
-          <button type="button" className="city-channel-selection-action" onClick={onStartCarry} title="移动 (M)">
-            <Move size={14} />
-            <span>移动</span>
-            <em className="city-channel-shortcut-hint">M</em>
-          </button>
           <button type="button" className="city-channel-selection-action is-danger" onClick={onDeleteSelection} title="删除 (Del)">
             <Trash2 size={14} />
             <span>删除</span>
@@ -282,7 +277,7 @@ export const CityChannelInteractionHints = ({
       <>
         <span>左键放置，右键或 Esc 取消</span>
         <span>滚轮缩放；Shift+滚轮 / R 旋转预览</span>
-        <span>Space 吸附时切换安装位或安装面</span>
+        <span>Space 吸附时切换安装位</span>
       </>
     ) : activeTool === CITY_CHANNEL_TOOLS.PLACE_COMPONENT ? (
       <>

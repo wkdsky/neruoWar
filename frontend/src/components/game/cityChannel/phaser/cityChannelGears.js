@@ -1,18 +1,19 @@
 import { createCellKey, createWallKey, normalizeRotation } from '../cityChannelSchema';
-import { projectWorldOffset } from '../cityChannelGeometryUtils';
 import { isPortalMaterial } from '../cityChannelMovePreview';
 import {
   getCornerGearBindingCandidates,
+  getGearRotationDirectionSign,
   getGearMountLocalPosition,
   getGearSocketKind,
   getHorizontalGearSocketWorldPosition,
   isCornerGearSocket,
+  isPassiveGearRotationDirection,
   normalizeGearMount
 } from '../cityChannelMechanismRuntime';
+import { normalizeGearSurfaceForPanel } from '../cityChannelGearPressurePlateRender';
 import {
-  hasDirectionalGearSurface,
-  normalizeGearSurfaceForPanel
-} from '../cityChannelGearPressurePlateRender';
+  getRackGearContacts
+} from '../cityChannelRackModel';
 import { getCellVerticalEndpoints, getPlacementDepth } from './renderer/CityChannelDepth';
 import { isPlacementVisible as isCityChannelPlacementVisible } from './cityChannelPhaserVisibility';
 import {
@@ -35,29 +36,19 @@ export const getGearSurfaceNormal = (placement, surfaceSide = 'front') => {
     const normalizedRotation = ((Number.parseInt(placement.rotation, 10) || 0) % 180 + 180) % 180;
     normal = normalizedRotation === 90 ? { x: 1, y: 0 } : { x: 0, y: 1 };
   }
-  return surfaceSide === 'back'
-    ? { x: -normal.x, y: -normal.y }
-    : normal;
+  return normal;
 };
 
-export const getVisibleGearSurfaceSide = (placement, cameraYaw = 0) => {
-  if (!placement?.edge && !placement?.isVertical) return 'front';
-  const normal = getGearSurfaceNormal(placement, 'front');
-  const projected = projectWorldOffset(normal.x, normal.y, cameraYaw);
-  return projected.y >= 0 ? 'front' : 'back';
-};
+export const getVisibleGearSurfaceSide = () => 'front';
 
 export const isGearSurfaceVisible = (placement, mount = {}) => {
   if (!placement || !mount) return false;
-  if (!placement.edge && !placement.isVertical) return (mount.surface || 'front') === 'front';
   return true;
 };
 
 export const isGearOnCameraSide = (placement, mount = {}, cameraYaw = 0) => {
   if (!placement || !mount) return false;
-  if (!placement.edge && !placement.isVertical) return (mount.surface || 'front') === 'front';
-  if (!hasDirectionalGearSurface(placement.panelType)) return true;
-  return (mount.surface || 'front') === getVisibleGearSurfaceSide(placement, cameraYaw);
+  return true;
 };
 
 export const getMountedGearLayerKey = (hostKind, hostKey, side) => `gear-${side}:${hostKind}:${hostKey}`;
@@ -175,7 +166,7 @@ export const createGearHostKey = (placement = {}) => (
     : createCellKey(placement.x, placement.y, placement.z)
 );
 
-export const getGearSurfaceForHit = (hit) => (hit?.gearSurfacePlane ? (hit.surfaceSide || 'front') : null);
+export const getGearSurfaceForHit = (hit) => (hit?.gearSurfacePlane ? 'front' : null);
 
 export const getGearHostKey = (hit) => {
   if (!hit?.cell) return '';
@@ -598,7 +589,25 @@ const areOppositeSidesOfSamePlane = (a = {}, b = {}) => (
   && getSurfacePlaneWithoutSide(a.surfaceKey) === getSurfacePlaneWithoutSide(b.surfaceKey)
 );
 
-export const buildGearContactGraph = (nodes = [], threshold = getGearContactThreshold()) => {
+const addRackContactEdges = (graph = new Map(), nodes = [], racks = []) => {
+  (Array.isArray(racks) ? racks : []).forEach((rack) => {
+    const contacts = getRackGearContacts(rack, nodes);
+    for (let i = 0; i < contacts.length; i += 1) {
+      for (let j = i + 1; j < contacts.length; j += 1) {
+        const a = contacts[i];
+        const b = contacts[j];
+        if (!a?.node?.id || !b?.node?.id || a.node.id === b.node.id) continue;
+        const sideRatio = a.sideSign === b.sideSign ? 1 : -1;
+        const aRatioRadius = getGearRatioRadius(a.node);
+        const bRatioRadius = getGearRatioRadius(b.node);
+        graph.get(a.node.id)?.push({ id: b.node.id, ratio: sideRatio * (aRatioRadius / bRatioRadius), viaRackId: rack.id });
+        graph.get(b.node.id)?.push({ id: a.node.id, ratio: sideRatio * (bRatioRadius / aRatioRadius), viaRackId: rack.id });
+      }
+    }
+  });
+};
+
+export const buildGearContactGraph = (nodes = [], threshold = getGearContactThreshold(), racks = []) => {
   const graph = new Map(nodes.map((node) => [node.id, []]));
   for (let i = 0; i < nodes.length; i += 1) {
     for (let j = i + 1; j < nodes.length; j += 1) {
@@ -626,6 +635,7 @@ export const buildGearContactGraph = (nodes = [], threshold = getGearContactThre
       graph.get(b.id)?.push({ id: a.id, ratio: -(bRatioRadius / aRatioRadius) });
     }
   }
+  addRackContactEdges(graph, nodes, racks);
   return graph;
 };
 
@@ -658,25 +668,29 @@ export const getDrivenGearRoots = (assembly, nodes = [], sourceComponentKey = ''
   if (nodes.length <= 0) return [];
   const assemblyComponentKeys = new Set(assembly?.componentKeys || []);
   const directDriveNodes = nodes.filter((node) => {
+    if (isPassiveGearRotationDirection(node?.mount?.rotationDirection)) return false;
     const boundComponentKey = node?.mount?.axisBinding?.componentKey;
     return !boundComponentKey || assemblyComponentKeys.has(boundComponentKey);
   });
   if (directDriveNodes.length <= 0) return [];
+  const sortRootEntries = (left, right) => {
+    if (left.distance !== right.distance) return left.distance - right.distance;
+    const leftCenter = getGearSocketKind(left.node?.mount?.position ?? left.node?.position) === 'center';
+    const rightCenter = getGearSocketKind(right.node?.mount?.position ?? right.node?.position) === 'center';
+    if (leftCenter === rightCenter) return 0;
+    return leftCenter ? -1 : 1;
+  };
   const distances = getAssemblyComponentDistances(assembly, sourceComponentKey);
   const reachable = directDriveNodes
     .map((node) => ({ node, distance: distances.has(node.componentKey) ? distances.get(node.componentKey) : Infinity }))
     .filter((item) => Number.isFinite(item.distance));
-  if (reachable.length <= 0) return [directDriveNodes[0]];
-  const minDistance = Math.min(...reachable.map((item) => item.distance));
-  return reachable
-    .filter((item) => item.distance === minDistance)
-    .sort((a, b) => {
-      const aCenter = getGearSocketKind(a.node?.mount?.position ?? a.node?.position) === 'center';
-      const bCenter = getGearSocketKind(b.node?.mount?.position ?? b.node?.position) === 'center';
-      if (aCenter === bCenter) return 0;
-      return aCenter ? -1 : 1;
-    })
-    .map((item) => item.node);
+  if (reachable.length <= 0) {
+    return directDriveNodes
+      .map((node) => ({ node, distance: Infinity }))
+      .sort(sortRootEntries)
+      .map((item) => item.node);
+  }
+  return reachable.sort(sortRootEntries).map((item) => item.node);
 };
 
 const shouldSuppressDrivenAxisBinding = (node = null, nodeById = new Map(), sourceAssembly = null) => {
@@ -710,8 +724,9 @@ export const resolveDrivenGearNodes = ({
     if (!root?.id || visited.has(root.id)) return;
     const liveRoot = byId.get(root.id);
     if (!liveRoot) return;
-    liveRoot.driveRatio = 1;
-    liveRoot.direction = 1;
+    const rootDirection = getGearRotationDirectionSign(liveRoot.mount?.rotationDirection) || 1;
+    liveRoot.driveRatio = rootDirection;
+    liveRoot.direction = rootDirection;
     liveRoot.isDriveRoot = true;
     liveRoot.drivenByGearId = null;
     liveRoot.drivenByComponentKey = null;

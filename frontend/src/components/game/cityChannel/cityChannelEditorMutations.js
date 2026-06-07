@@ -17,11 +17,15 @@ import {
 } from './cityChannelSchema';
 import { getCityChannelMaterial } from './cityChannelCatalog';
 import {
+  createRackKey,
+  normalizeRack
+} from './cityChannelRackModel';
+import {
   CITY_CHANNEL_GEAR_CORNER_SOCKETS,
   getGearSocketWorldPosition,
   isCornerGearSocket
 } from './cityChannelMechanismRuntime';
-import { hasDirectionalGearSurface, normalizeGearSurfaceForPanel } from './cityChannelGearPressurePlateRender';
+import { normalizeGearSurfaceForPanel } from './cityChannelGearPressurePlateRender';
 
 const sameCell = (point, target) => (
   point
@@ -125,9 +129,7 @@ const removeMechanicalLinksForComponents = (links = [], componentKeys = new Set(
 );
 
 const getGearSurfacesForPlacement = (placement = null) => (
-  hasDirectionalGearSurface(placement?.panelType) && (placement?.edge || placement?.isVertical)
-    ? ['front', 'back']
-    : ['front']
+  placement ? ['front'] : []
 );
 
 const sameGearWorldPoint = (a = null, b = null, epsilon = 0.008) => (
@@ -374,6 +376,7 @@ const resetPortalTiles = (tiles = {}, marker) => (
 export const applyPlacementOperationsToMap = (current, operations = []) => {
   let nextTiles = { ...(current.tiles || {}) };
   const nextWalls = { ...(current.walls || {}) };
+  const nextRacks = { ...(current.racks || {}) };
   let nextEntrances = current.entrances || [];
   let nextExits = current.exits || [];
   let nextMechanicalLinks = current.mechanicalLinks || [];
@@ -381,6 +384,17 @@ export const applyPlacementOperationsToMap = (current, operations = []) => {
   const replacementPlacements = [];
 
   operations.forEach((operation) => {
+    if (operation.kind === 'rack') {
+      const rack = normalizeRack(operation.rack || operation, current);
+      if (!rack) return;
+      const key = createRackKey(rack);
+      if (operation.action === 'erase') {
+        delete nextRacks[key];
+        return;
+      }
+      nextRacks[key] = rack;
+      return;
+    }
     if (operation.kind === 'gearMount') {
       if (!operation.hostKey || !operation.mount) return;
       const targetMap = operation.hostKind === 'wall' ? nextWalls : nextTiles;
@@ -624,9 +638,14 @@ export const applyPlacementOperationsToMap = (current, operations = []) => {
 
   return {
     ...current,
-    layers: expandLayerCountForCells(current.layers, operations.map((operation) => operation?.cell)),
+    layers: expandLayerCountForCells(current.layers, operations.map((operation) => (
+      operation?.kind === 'rack'
+        ? { z: operation.rack?.z ?? operation.z }
+        : operation?.cell
+    ))),
     tiles: nextTiles,
     walls: nextWalls,
+    racks: nextRacks,
     entrances: nextEntrances,
     exits: nextExits,
     mechanicalLinks: nextMechanicalLinks

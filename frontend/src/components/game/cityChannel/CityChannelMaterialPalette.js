@@ -15,6 +15,9 @@ import {
   getPaletteCityChannelMaterials,
   isMechanicalMaterial
 } from './cityChannelCatalog';
+import {
+  DOUBLE_SIDED_RACK_COMPONENT_TYPE
+} from './cityChannelRackModel';
 import './CityChannelMaterialPalette.css';
 
 const iconByPanelType = {
@@ -33,7 +36,12 @@ export const CITY_CHANNEL_COMPONENT_CATALOG = [
   {
     id: 'gear',
     name: '齿轮',
-    description: '安装到板材正面或背面的五个轴点上。'
+    description: '内嵌到板材中层的五个轴点上。'
+  },
+  {
+    id: DOUBLE_SIDED_RACK_COMPONENT_TYPE,
+    name: '双面齿条',
+    description: '沿板材边缘或缝隙拖出直线，两侧可与中间齿轮啮合。'
   }
 ];
 
@@ -139,7 +147,7 @@ const CityChannelMaterialPalette = ({
                   title={component.description}
                 >
                   <span className={`city-channel-material-item__preview is-component-${component.id}`}>
-                    <Cog size={16} />
+                    {component.id === DOUBLE_SIDED_RACK_COMPONENT_TYPE ? <Workflow size={16} /> : <Cog size={16} />}
                   </span>
                   <span className="city-channel-material-item__text">
                     <strong>{component.name}</strong>

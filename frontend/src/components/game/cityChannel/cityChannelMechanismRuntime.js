@@ -54,6 +54,14 @@ export const CITY_CHANNEL_GEAR_CORNER_SOCKETS = new Set([
   'corner_sw'
 ]);
 
+export const CITY_CHANNEL_GEAR_ROTATION_DIRECTIONS = {
+  CLOCKWISE: 'clockwise',
+  COUNTERCLOCKWISE: 'counterclockwise',
+  PASSIVE: 'passive'
+};
+
+export const DEFAULT_CITY_CHANNEL_GEAR_ROTATION_DIRECTION = CITY_CHANNEL_GEAR_ROTATION_DIRECTIONS.CLOCKWISE;
+
 const directionVector = {
   north: { x: 0, y: -1 },
   east: { x: 1, y: 0 },
@@ -117,6 +125,34 @@ export const normalizeMechanismParams = (params = {}) => ({
     CITY_CHANNEL_MECHANISM_LIMITS.horizontalExtensionLength
   )
 });
+
+export const normalizeGearRotationDirection = (direction = DEFAULT_CITY_CHANNEL_GEAR_ROTATION_DIRECTION) => {
+  if (
+    direction === CITY_CHANNEL_GEAR_ROTATION_DIRECTIONS.COUNTERCLOCKWISE
+    || direction === 'left'
+    || direction === 'ccw'
+  ) {
+    return CITY_CHANNEL_GEAR_ROTATION_DIRECTIONS.COUNTERCLOCKWISE;
+  }
+  if (
+    direction === CITY_CHANNEL_GEAR_ROTATION_DIRECTIONS.PASSIVE
+    || direction === 'none'
+    || direction === 'disabled'
+  ) {
+    return CITY_CHANNEL_GEAR_ROTATION_DIRECTIONS.PASSIVE;
+  }
+  return CITY_CHANNEL_GEAR_ROTATION_DIRECTIONS.CLOCKWISE;
+};
+
+export const getGearRotationDirectionSign = (direction = DEFAULT_CITY_CHANNEL_GEAR_ROTATION_DIRECTION) => {
+  const normalized = normalizeGearRotationDirection(direction);
+  if (normalized === CITY_CHANNEL_GEAR_ROTATION_DIRECTIONS.PASSIVE) return 0;
+  return normalized === CITY_CHANNEL_GEAR_ROTATION_DIRECTIONS.COUNTERCLOCKWISE ? -1 : 1;
+};
+
+export const isPassiveGearRotationDirection = (direction = DEFAULT_CITY_CHANNEL_GEAR_ROTATION_DIRECTION) => (
+  normalizeGearRotationDirection(direction) === CITY_CHANNEL_GEAR_ROTATION_DIRECTIONS.PASSIVE
+);
 
 export const isTriggerMechanismTile = (panelType) => CITY_CHANNEL_TRIGGER_MECHANISM_TYPES.has(panelType);
 
@@ -291,7 +327,8 @@ export const normalizeGearMount = (mount = {}) => {
   return {
     ...mount,
     socketKind: mount.socketKind || getGearSocketKind(mount.position),
-    axisBinding
+    axisBinding,
+    rotationDirection: normalizeGearRotationDirection(mount.rotationDirection)
   };
 };
 
@@ -660,6 +697,28 @@ export const getAssemblyForCell = (assemblyGraph, cell) => {
   const key = typeof cell === 'string' ? cell : getMechanismParamKey(cell);
   const id = assemblyGraph?.assemblyByComponentKey?.[key];
   return (assemblyGraph?.assemblies || []).find((assembly) => assembly.id === id) || null;
+};
+
+export const isPressureSourcePlacement = (placement = null) => (
+  placement?.boardRole === 'power_source'
+  || placement?.panelType === CITY_CHANNEL_TILE_TYPES.GEAR_PRESSURE_PLATE
+);
+
+export const assemblyHasPressureSource = (assembly = null, mapData = {}) => (
+  (assembly?.componentKeys || []).some((componentKey) => (
+    isPressureSourcePlacement(mapData.tiles?.[componentKey] || mapData.walls?.[componentKey])
+  ))
+);
+
+export const isPressureLinkedIntermediateGear = ({
+  mapData = {},
+  assemblyGraph = null,
+  componentKey = '',
+  placement = null
+} = {}) => {
+  if (!componentKey || isPressureSourcePlacement(placement)) return false;
+  const assembly = getAssemblyForCell(assemblyGraph, componentKey);
+  return !!assembly && assemblyHasPressureSource(assembly, mapData);
 };
 
 export const findFixedAxisForTrigger = (mapData = {}, cell) => {

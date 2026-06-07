@@ -140,6 +140,7 @@ export const createBaseCityChannelMap = ({
   layers,
   tiles: {},
   walls: {},
+  racks: {},
   entrances: [],
   exits: [],
   safeRoute: [],

@@ -14,8 +14,10 @@ import {
 import {
   buildMechanicalAssemblies,
   createLegacyFixedAxisBinding,
+  getGearRotationDirectionSign,
   getGearMountLocalPosition,
   getGearSocketKind,
+  isPassiveGearRotationDirection,
   normalizeGearAxisBinding
 } from './cityChannelMechanismRuntime';
 import {
@@ -23,12 +25,20 @@ import {
   getGearSurfaceOffsetSignForPanel,
   normalizeGearSurfaceForPanel
 } from './cityChannelGearPressurePlateRender';
+import {
+  getRackAxisBindingStatus,
+  getRackCanonicalSegment,
+  getRackGearContacts,
+  RACK_DIRECTIONS
+} from './cityChannelRackModel';
 
 export const FIXED_AXIS_SYNC_TOLERANCE_DEGREES = 0.5;
 export const ROTATION_COLLISION_STEP_DEGREES = 2;
+export const TRANSLATION_COLLISION_STEP_WORLD = 0.04;
 export const MIN_MEANINGFUL_ROTATION_DEGREES = 12;
 export const DEFAULT_GEAR_TEETH = 18;
 export const CITY_CHANNEL_GEAR_TOOTH_COUNT = DEFAULT_GEAR_TEETH;
+export const RACK_TRANSLATION_MOTION_TYPE = 'rackTranslation';
 export const CITY_CHANNEL_GEAR_PITCH_RADIUS_WORLD = Math.SQRT2 / 4;
 export const CITY_CHANNEL_GEAR_ROOT_RADIUS_WORLD = CITY_CHANNEL_GEAR_PITCH_RADIUS_WORLD * 0.78;
 export const CITY_CHANNEL_GEAR_OUTER_RADIUS_WORLD = CITY_CHANNEL_GEAR_PITCH_RADIUS_WORLD * 1.08;
@@ -118,6 +128,95 @@ export const getGearTorqueRatio = (driveRatio = 1) => {
 export const getGearRatioRadiusForMount = (mount = {}) => (
   Math.max(1, getGearTeeth(mount))
 );
+
+const roundRuntimeNumber = (value = 0) => Number((Number(value) || 0).toFixed(6));
+
+export const isRackTranslationRuntimeEntry = (entry = null) => (
+  entry?.motionType === RACK_TRANSLATION_MOTION_TYPE
+);
+
+export const getRackAxisUnitVector = (rack = {}) => {
+  const segment = getRackCanonicalSegment(rack);
+  if (segment.direction === RACK_DIRECTIONS.Z) return { x: 0, y: 0, z: 1 };
+  if (segment.direction === RACK_DIRECTIONS.Y) return { x: 0, y: 1, z: 0 };
+  return { x: 1, y: 0, z: 0 };
+};
+
+export const getRackAxisValueForPoint = (rack = {}, point = {}) => {
+  const segment = getRackCanonicalSegment(rack);
+  if (segment.direction === RACK_DIRECTIONS.Z) return Number(point.z) || 0;
+  if (segment.direction === RACK_DIRECTIONS.Y) return Number(point.y) || 0;
+  return Number(point.x) || 0;
+};
+
+export const getRackTranslationDistance = (entry = {}, sourceAngle = 0) => {
+  const angle = (Number(entry.driveRatio) || 1) * (Number(sourceAngle) || 0);
+  const radius = Math.max(
+    0.001,
+    Number(entry.pitchRadiusWorld ?? entry.rackPitchRadiusWorld) || CITY_CHANNEL_GEAR_PITCH_RADIUS_WORLD
+  );
+  return (angle * Math.PI * radius) / 180;
+};
+
+export const getRackTranslationOffset = (entry = {}, sourceAngle = 0) => {
+  const axis = entry.translationAxis || getRackAxisUnitVector(entry.rack || {});
+  const distance = getRackTranslationDistance(entry, sourceAngle);
+  return {
+    x: roundRuntimeNumber((Number(axis.x) || 0) * distance),
+    y: roundRuntimeNumber((Number(axis.y) || 0) * distance),
+    z: roundRuntimeNumber((Number(axis.z) || 0) * distance)
+  };
+};
+
+export const translateRuntimePoint = (point = {}, offset = {}) => ({
+  x: roundRuntimeNumber((Number(point.x) || 0) + (Number(offset.x) || 0)),
+  y: roundRuntimeNumber((Number(point.y) || 0) + (Number(offset.y) || 0)),
+  z: roundRuntimeNumber((Number(point.z) || 0) + (Number(offset.z) || 0))
+});
+
+export const getRuntimePlacementForRackTranslationAssemblyMember = ({
+  placement = {},
+  entry = {},
+  sourceAngle = 0,
+  offset = null
+} = {}) => {
+  const translation = offset || getRackTranslationOffset(entry, sourceAngle);
+  const linearDistance = getRackTranslationDistance(entry, sourceAngle);
+  return {
+    ...placement,
+    x: roundRuntimeNumber((Number(placement.x) || 0) + (Number(translation.x) || 0)),
+    y: roundRuntimeNumber((Number(placement.y) || 0) + (Number(translation.y) || 0)),
+    z: roundRuntimeNumber((Number(placement.z) || 0) + (Number(translation.z) || 0)),
+    runtimeMotionType: RACK_TRANSLATION_MOTION_TYPE,
+    runtimeRackId: entry.rackId || entry.sourceRackId || entry.rack?.id || null,
+    runtimeTranslation: translation,
+    runtimeLinearDistance: roundRuntimeNumber(linearDistance),
+    runtimeSourceGearComponentKey: entry.sourceGearComponentKey || null,
+    runtimeSourceGearMountId: entry.sourceGearMountId || null
+  };
+};
+
+export const getRuntimeRackForTranslation = ({
+  rack = {},
+  entry = {},
+  sourceAngle = 0,
+  offset = null
+} = {}) => {
+  const translation = offset || getRackTranslationOffset(entry, sourceAngle);
+  const linearDistance = getRackTranslationDistance(entry, sourceAngle);
+  return {
+    ...rack,
+    start: translateRuntimePoint(rack.start || {}, translation),
+    end: translateRuntimePoint(rack.end || {}, translation),
+    z: roundRuntimeNumber((Number(rack.z) || 0) + (Number(translation.z) || 0)),
+    runtimeMotionType: RACK_TRANSLATION_MOTION_TYPE,
+    runtimeRackId: entry.rackId || entry.sourceRackId || rack.id || null,
+    runtimeTranslation: translation,
+    runtimeLinearDistance: roundRuntimeNumber(linearDistance),
+    runtimeSourceGearComponentKey: entry.sourceGearComponentKey || null,
+    runtimeSourceGearMountId: entry.sourceGearMountId || null
+  };
+};
 
 const getVerticalSurfaceFrame = (placement = {}, mount = {}) => {
   const edge = placement.edge || null;
@@ -278,7 +377,25 @@ const areOppositeSidesOfSamePlane = (a = {}, b = {}) => (
   && getSurfacePlaneWithoutSide(a.surfaceKey) === getSurfacePlaneWithoutSide(b.surfaceKey)
 );
 
-export const buildGearContactGraph = (nodes = [], threshold = getGearContactThreshold()) => {
+const addRackContactEdges = (graph = new Map(), nodes = [], racks = []) => {
+  (Array.isArray(racks) ? racks : []).forEach((rack) => {
+    const contacts = getRackGearContacts(rack, nodes);
+    for (let i = 0; i < contacts.length; i += 1) {
+      for (let j = i + 1; j < contacts.length; j += 1) {
+        const a = contacts[i];
+        const b = contacts[j];
+        if (!a?.node?.id || !b?.node?.id || a.node.id === b.node.id) continue;
+        const sideRatio = a.sideSign === b.sideSign ? 1 : -1;
+        const aRatioRadius = getGearRatioRadius(a.node);
+        const bRatioRadius = getGearRatioRadius(b.node);
+        graph.get(a.node.id)?.push({ id: b.node.id, ratio: sideRatio * (aRatioRadius / bRatioRadius), viaRackId: rack.id });
+        graph.get(b.node.id)?.push({ id: a.node.id, ratio: sideRatio * (bRatioRadius / aRatioRadius), viaRackId: rack.id });
+      }
+    }
+  });
+};
+
+export const buildGearContactGraph = (nodes = [], threshold = getGearContactThreshold(), racks = []) => {
   const graph = new Map(nodes.map((node) => [node.id, []]));
   for (let i = 0; i < nodes.length; i += 1) {
     for (let j = i + 1; j < nodes.length; j += 1) {
@@ -306,6 +423,7 @@ export const buildGearContactGraph = (nodes = [], threshold = getGearContactThre
       graph.get(b.id)?.push({ id: a.id, ratio: -(bRatioRadius / aRatioRadius) });
     }
   }
+  addRackContactEdges(graph, nodes, racks);
   return graph;
 };
 
@@ -338,28 +456,33 @@ export const getDrivenGearRoots = (assembly, nodes = [], sourceComponentKey = ''
   if (nodes.length <= 0) return [];
   const assemblyComponentKeys = new Set(assembly?.componentKeys || []);
   const directDriveNodes = nodes.filter((node) => {
+    if (isPassiveGearRotationDirection(node?.mount?.rotationDirection)) return false;
     const boundComponentKey = node?.mount?.axisBinding?.componentKey;
     return !boundComponentKey || assemblyComponentKeys.has(boundComponentKey);
   });
   if (directDriveNodes.length <= 0) return [];
+  const sortRootEntries = (left, right) => {
+    if (left.distance !== right.distance) return left.distance - right.distance;
+    const leftCenter = getGearSocketKind(left.node?.mount?.position ?? left.node?.position) === 'center';
+    const rightCenter = getGearSocketKind(right.node?.mount?.position ?? right.node?.position) === 'center';
+    if (leftCenter === rightCenter) return 0;
+    return leftCenter ? -1 : 1;
+  };
   const distances = getAssemblyComponentDistances(assembly, sourceComponentKey);
   const reachable = directDriveNodes
     .map((node) => ({ node, distance: distances.has(node.componentKey) ? distances.get(node.componentKey) : Infinity }))
     .filter((item) => Number.isFinite(item.distance));
-  if (reachable.length <= 0) return [directDriveNodes[0]];
-  const minDistance = Math.min(...reachable.map((item) => item.distance));
-  return reachable
-    .filter((item) => item.distance === minDistance)
-    .sort((a, b) => {
-      const aCenter = getGearSocketKind(a.node?.mount?.position ?? a.node?.position) === 'center';
-      const bCenter = getGearSocketKind(b.node?.mount?.position ?? b.node?.position) === 'center';
-      if (aCenter === bCenter) return 0;
-      return aCenter ? -1 : 1;
-    })
-    .map((item) => item.node);
+  if (reachable.length <= 0) {
+    return directDriveNodes
+      .map((node) => ({ node, distance: Infinity }))
+      .sort(sortRootEntries)
+      .map((item) => item.node);
+  }
+  return reachable.sort(sortRootEntries).map((item) => item.node);
 };
 
 export const isDrivenGearAxisBindingActive = (node = null, assembly = null) => {
+  if (isPassiveGearRotationDirection(node?.mount?.rotationDirection)) return false;
   const binding = normalizeGearAxisBinding(node?.mount?.axisBinding);
   if (!binding?.componentKey) return false;
   return !node?.axisBindingSuppressed;
@@ -396,8 +519,9 @@ export const resolveDrivenGearNodes = ({
     if (!root?.id || visited.has(root.id)) return;
     const liveRoot = byId.get(root.id);
     if (!liveRoot) return;
-    liveRoot.driveRatio = 1;
-    liveRoot.direction = 1;
+    const rootDirection = getGearRotationDirectionSign(liveRoot.mount?.rotationDirection) || 1;
+    liveRoot.driveRatio = rootDirection;
+    liveRoot.direction = rootDirection;
     liveRoot.isDriveRoot = true;
     liveRoot.drivenByGearId = null;
     liveRoot.drivenByComponentKey = null;
@@ -612,7 +736,7 @@ export const getRuntimePlacementAroundFixedGear = (
   }
 
   const anchorSocket = fixedMount.axisBinding?.socket || fixedMount.position;
-  const anchorLocal = getGearMountLocalPosition(anchorSocket);
+  const anchorLocal = fixedMount.localPosition || fixedMount.axisBinding?.localPosition || getGearMountLocalPosition(anchorSocket);
   const baseRotation = basePlacement.edge
     ? wallEdgeToRotation(basePlacement.edge)
     : normalizeRotation(basePlacement.rotation || 0);
@@ -765,6 +889,98 @@ export const createAxisBindingRuntimeEntryFromGearNode = ({
   };
 };
 
+export const createRackTranslationRuntimeEntryFromContact = ({
+  mapData = {},
+  assemblyGraph = null,
+  rack = null,
+  contact = null,
+  bindingStatus = null
+} = {}) => {
+  if (!rack?.id || !contact?.node) return null;
+  const status = bindingStatus || getRackAxisBindingStatus({ mapData, rack });
+  const binding = status.valid ? status.binding : null;
+  const boundPlacement = binding?.componentKey
+    ? getPlacementByComponentKey(mapData, binding.componentKey)
+    : null;
+  const resolvedAssemblyGraph = resolveAssemblyGraph(mapData, assemblyGraph);
+  const boundAssembly = binding?.componentKey
+    ? getAssemblyFromGraph(resolvedAssemblyGraph, binding.componentKey) || createSingleComponentAssembly(binding.componentKey)
+    : {
+      id: `rack_free_${rack.id}`,
+      componentKeys: [],
+      edges: [],
+      gearMounts: [],
+      boundGearMounts: [],
+      fixedAxes: [],
+      warnings: []
+    };
+  const basePlacements = binding?.componentKey
+    ? getAssemblyBasePlacements(mapData, boundAssembly)
+    : {};
+  if (binding?.componentKey && boundPlacement) basePlacements[binding.componentKey] = boundPlacement;
+  const contactSideSign = Number(contact.sideSign) < 0 ? -1 : 1;
+  const gearDriveRatio = Number(contact.node.driveRatio) || 1;
+  const pitchRadiusWorld = Math.max(
+    0.001,
+    Number(contact.node.pitchRadiusWorld ?? contact.node.pitchRadius) || CITY_CHANNEL_GEAR_PITCH_RADIUS_WORLD
+  );
+  return {
+    motionType: RACK_TRANSLATION_MOTION_TYPE,
+    assembly: boundAssembly,
+    componentKey: binding?.componentKey || null,
+    axisBinding: binding,
+    rack,
+    rackId: rack.id,
+    sourceRackId: rack.id,
+    translationAxis: getRackAxisUnitVector(rack),
+    basePlacements,
+    basePlacement: boundPlacement,
+    driveRatio: -gearDriveRatio * contactSideSign,
+    pitchRadiusWorld,
+    contactSideSign,
+    contactRackAxis: Number(contact.rackAxis) || 0,
+    contactPoint: contact.point || null,
+    bindingCandidate: status.candidate || null,
+    sourceGearComponentKey: contact.node.componentKey,
+    sourceGearMountId: contact.node.mountId
+  };
+};
+
+export const createRackTranslationRuntimeEntries = ({
+  mapData = {},
+  assemblyGraph = null,
+  nodes = []
+} = {}) => {
+  const drivenNodeIds = new Set((Array.isArray(nodes) ? nodes : []).map((node) => node.id));
+  const entries = [];
+  const seen = new Set();
+  Object.values(mapData.racks || {}).forEach((rack) => {
+    const contacts = getRackGearContacts(rack, nodes).filter((contact) => drivenNodeIds.has(contact.node.id));
+    if (contacts.length <= 0) return;
+    const status = getRackAxisBindingStatus({ mapData, rack });
+    const preferredAxis = status.candidate?.point
+      ? getRackAxisValueForPoint(rack, status.candidate.point)
+      : null;
+    const contact = contacts.reduce((best, item) => {
+      const distance = Number.isFinite(preferredAxis) ? Math.abs((item.rackAxis || 0) - preferredAxis) : 0;
+      return !best || distance < best.distance ? { item, distance } : best;
+    }, null)?.item;
+    const entry = createRackTranslationRuntimeEntryFromContact({
+      mapData,
+      assemblyGraph,
+      rack,
+      contact,
+      bindingStatus: status
+    });
+    if (!entry) return;
+    const entryKey = `${entry.rackId}:${entry.componentKey || 'free'}`;
+    if (seen.has(entryKey)) return;
+    seen.add(entryKey);
+    entries.push(entry);
+  });
+  return entries;
+};
+
 export const buildStaticCollisionBoxes = (mapData = {}, excludedComponentKeys = new Set()) => {
   const entries = [];
   Object.values(mapData.tiles || {}).forEach((tile) => {
@@ -859,6 +1075,72 @@ export const findRotationObstruction = ({
   return null;
 };
 
+export const findRackTranslationObstruction = ({
+  mapData = {},
+  assembly,
+  translationAxis = { x: 1, y: 0, z: 0 },
+  targetDistance = 0,
+  stepDistance = TRANSLATION_COLLISION_STEP_WORLD,
+  excludedComponentKeys = new Set()
+} = {}) => {
+  const componentKeys = Array.isArray(assembly?.componentKeys) ? assembly.componentKeys : [];
+  const target = Number(targetDistance) || 0;
+  if (componentKeys.length <= 0 || Math.abs(target) <= 0.000001) return null;
+
+  const movingKeys = new Set(componentKeys);
+  const staticExcludedKeys = new Set([
+    ...movingKeys,
+    ...(excludedComponentKeys instanceof Set ? excludedComponentKeys : Array.from(excludedComponentKeys || []))
+  ]);
+  const movingEntries = componentKeys
+    .map((componentKey) => ({
+      componentKey,
+      placement: getPlacementByComponentKey(mapData, componentKey)
+    }))
+    .filter((entry) => !!entry.placement);
+  if (movingEntries.length <= 0) return null;
+
+  const staticEntries = buildStaticCollisionBoxes(mapData, staticExcludedKeys);
+  if (staticEntries.length <= 0) return null;
+
+  const direction = target < 0 ? -1 : 1;
+  const maxDistance = Math.abs(target);
+  const step = Math.max(0.01, Math.abs(Number(stepDistance) || TRANSLATION_COLLISION_STEP_WORLD));
+  const steps = Math.max(1, Math.ceil(maxDistance / step));
+
+  for (let index = 1; index <= steps; index += 1) {
+    const distance = direction * Math.min(maxDistance, index * step);
+    const offset = {
+      x: (Number(translationAxis.x) || 0) * distance,
+      y: (Number(translationAxis.y) || 0) * distance,
+      z: (Number(translationAxis.z) || 0) * distance
+    };
+    for (const { placement } of movingEntries) {
+      const runtimePlacement = getRuntimePlacementForRackTranslationAssemblyMember({
+        placement,
+        offset,
+        entry: {
+          motionType: RACK_TRANSLATION_MOTION_TYPE,
+          driveRatio: 1,
+          pitchRadiusWorld: 1
+        }
+      });
+      const movingPrisms = getCityChannelPlacementCollisionPrisms(runtimePlacement);
+      const obstacle = findBoxCollision(runtimePlacement, movingPrisms, staticEntries);
+      if (obstacle) {
+        return {
+          blocked: true,
+          distance,
+          obstacleKey: obstacle.componentKey,
+          obstacle: obstacle.placement
+        };
+      }
+    }
+  }
+
+  return null;
+};
+
 export const getAllowedRotationAngle = ({
   targetAngle = 0,
   obstruction = null,
@@ -911,9 +1193,48 @@ export const createMechanismRuntimeSnapshot = ({
   obstruction = null
 } = {}) => {
   const placements = {};
+  const racks = {};
   const sync = [];
 
   assemblyEntries.forEach((entry) => {
+    if (isRackTranslationRuntimeEntry(entry)) {
+      const translation = getRackTranslationOffset(entry, sourceAngle);
+      const linearDistance = getRackTranslationDistance(entry, sourceAngle);
+      (entry.assembly?.componentKeys || []).forEach((componentKey) => {
+        const placement = entry.basePlacements?.[componentKey] || getPlacementByComponentKey(mapData, componentKey);
+        if (!placement) return;
+        placements[componentKey] = getRuntimePlacementForRackTranslationAssemblyMember({
+          placement,
+          entry,
+          sourceAngle,
+          offset: translation
+        });
+      });
+      const rack = entry.rack || mapData.racks?.[entry.rackId || entry.sourceRackId];
+      const rackId = entry.rackId || entry.sourceRackId || rack?.id;
+      if (rack && rackId) {
+        racks[rackId] = getRuntimeRackForTranslation({
+          rack,
+          entry,
+          sourceAngle,
+          offset: translation
+        });
+      }
+      sync.push({
+        assemblyId: entry.assembly?.id,
+        motionType: RACK_TRANSLATION_MOTION_TYPE,
+        rackId,
+        componentKey: entry.componentKey || null,
+        sourceGearComponentKey: entry.sourceGearComponentKey || null,
+        sourceGearMountId: entry.sourceGearMountId || null,
+        gearAngle: (Number(entry.driveRatio) || 1) * sourceAngle,
+        linearDistance: roundRuntimeNumber(linearDistance),
+        ok: true,
+        error: 0,
+        tolerance: 0
+      });
+      return;
+    }
     const angle = (Number(entry.driveRatio) || 1) * sourceAngle;
     const fixedMount = entry.fixedMount || entry.fixedAxis;
     const anchor = entry.pivotWorld || entry.anchor || getFixedAxisWorldAnchor(mapData, fixedMount);
@@ -966,6 +1287,7 @@ export const createMechanismRuntimeSnapshot = ({
   return {
     sourceAngle,
     placements,
+    racks,
     gears,
     sync,
     obstruction

@@ -26,7 +26,9 @@ import {
 import { GEAR_PITCH_RADIUS_LOCAL } from './cityChannelPhaserSceneUtils';
 import {
   createAxisBindingRuntimeEntryFromGearNode,
+  createRackTranslationRuntimeEntries,
   createMechanismRuntimeSnapshot,
+  findRackTranslationObstruction,
   findRotationObstruction,
   getAllowedRotationAngle,
   getAxisBindingForMount,
@@ -34,7 +36,9 @@ import {
   getGearMeshPlane,
   getGearTeeth,
   getGearWorldPosition,
-  isDrivenGearAxisBindingActive
+  getRackTranslationDistance,
+  isDrivenGearAxisBindingActive,
+  isRackTranslationRuntimeEntry
 } from '../cityChannelMechanismSimulation';
 
 export const triggerMechanismFromHit = (scene, hit) => {
@@ -177,8 +181,7 @@ export const playAssemblyRotation = (scene, assembly, fixedAxis, params) => {
   if (members.length <= 0) return false;
 
   const normalized = normalizeMechanismParams(params);
-  const sign = normalized.rotationDirection === 'left' ? -1 : 1;
-  const targetAngle = sign * normalized.rotationAngle;
+  const targetAngle = normalized.rotationAngle;
   const obstruction = findRotationObstruction({
     mapData: scene.mapData,
     assembly,
@@ -343,8 +346,8 @@ export const getAllGearNodes = (scene, { visibleOnly = false } = {}) => {
 
 export const getGearContactThreshold = () => getGearContactThresholdModel();
 
-export const buildGearContactGraph = (nodes = []) => (
-  buildGearContactGraphModel(nodes, getGearContactThreshold())
+export const buildGearContactGraph = (nodes = [], racks = []) => (
+  buildGearContactGraphModel(nodes, getGearContactThreshold(), racks)
 );
 
 export const getAssemblyComponentDistances = (assembly, sourceComponentKey) => (
@@ -359,7 +362,7 @@ export const resolveDrivenGearNodes = (scene, assembly, sourceComponentKey = '')
   const assemblyNodes = getAssemblyGearNodes(scene, assembly);
   if (assemblyNodes.length <= 0) return [];
   const allNodes = getAllGearNodes(scene);
-  const contactGraph = buildGearContactGraph(allNodes);
+  const contactGraph = buildGearContactGraph(allNodes, Object.values(scene.mapData?.racks || {}));
   return resolveDrivenGearNodesModel({
     assembly,
     assemblyNodes,
@@ -431,7 +434,7 @@ export const playAssemblyGearRotation = (scene, assembly, sourceComponentKey, pa
   const graph = scene.getMechanicalAssemblyGraph?.();
   const seenAxisBindings = new Set();
   const fixedNodes = nodes.filter((node) => isDrivenGearAxisBindingActive(node, assembly));
-  const assemblyEntries = fixedNodes.map((node) => {
+  const axisEntries = fixedNodes.map((node) => {
     const axisBinding = getAxisBindingForMount({
       mapData: scene.mapData,
       mount: node.mount,
@@ -452,10 +455,23 @@ export const playAssemblyGearRotation = (scene, assembly, sourceComponentKey, pa
       driveRatio: node.driveRatio || 1
     });
   }).filter(Boolean);
+  const rackEntries = createRackTranslationRuntimeEntries({
+    mapData: scene.mapData,
+    assemblyGraph: graph,
+    nodes
+  });
+  const assemblyEntries = [
+    ...axisEntries,
+    ...rackEntries
+  ].filter((entry, index, entries) => (
+    entries.findIndex((item) => (
+      (item.componentKey || item.sourceRackId || item.rackId)
+      === (entry.componentKey || entry.sourceRackId || entry.rackId)
+    )) === index
+  ));
   if (assemblyEntries.length <= 0) {
     const normalized = normalizeMechanismParams(params);
-    const sign = normalized.rotationDirection === 'left' ? -1 : 1;
-    const targetAngle = sign * normalized.rotationAngle;
+    const targetAngle = normalized.rotationAngle;
     const duration = Math.max(120, Math.round((Math.max(1, normalized.rotationAngle) / Math.max(1, normalized.rotationSpeedDegPerSec)) * 1000));
     const delay = Math.round(normalized.triggerDelaySeconds * 1000);
     const basePhases = new Map(nodes.map((node) => [node.id, Number(node.mount?.phase) || 0]));
@@ -503,9 +519,31 @@ export const playAssemblyGearRotation = (scene, assembly, sourceComponentKey, pa
     return true;
   }
   const normalized = normalizeMechanismParams(params);
-  const sign = normalized.rotationDirection === 'left' ? -1 : 1;
-  const targetAngle = sign * normalized.rotationAngle;
+  const targetAngle = normalized.rotationAngle;
   const obstructions = assemblyEntries.map((entry) => {
+    if (isRackTranslationRuntimeEntry(entry)) {
+      const targetDistance = getRackTranslationDistance(entry, targetAngle);
+      const obstruction = findRackTranslationObstruction({
+        mapData: scene.mapData,
+        assembly: entry.assembly,
+        translationAxis: entry.translationAxis,
+        targetDistance
+      });
+      if (!obstruction) return null;
+      const distancePerSourceAngle = Math.abs(targetAngle) > 0.000001
+        ? targetDistance / targetAngle
+        : 0;
+      const sourceAngle = Math.abs(distancePerSourceAngle) > 0.000001
+        ? obstruction.distance / distancePerSourceAngle
+        : targetAngle;
+      return {
+        ...obstruction,
+        assemblyId: entry.assembly?.id,
+        rackId: entry.rackId || entry.sourceRackId,
+        linearDistance: obstruction.distance,
+        sourceAngle
+      };
+    }
     const driveRatio = Number(entry.driveRatio) || 1;
     const obstruction = findRotationObstruction({
       mapData: scene.mapData,
@@ -557,7 +595,7 @@ export const playAssemblyGearRotation = (scene, assembly, sourceComponentKey, pa
       scene.applyMechanismRuntimePlacementTransforms?.(
         entry.assembly,
         entry,
-        (Number(entry.driveRatio) || 1) * angle
+        isRackTranslationRuntimeEntry(entry) ? angle : (Number(entry.driveRatio) || 1) * angle
       );
     });
   };

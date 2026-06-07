@@ -14,6 +14,7 @@ import {
   setGearMountPhases,
   triggerMechanismFromHit
 } from './cityChannelMechanismPlayback';
+import { CITY_CHANNEL_GEAR_ROTATION_DIRECTIONS } from '../cityChannelMechanismRuntime';
 import * as mechanismSimulation from '../cityChannelMechanismSimulation';
 import {
   getGearWorldPosition,
@@ -166,7 +167,13 @@ describe('cityChannelMechanismPlayback', () => {
       rotation: 0,
       panelType: CITY_CHANNEL_TILE_TYPES.BASIC_PLATE
     });
-    source.gearMounts = [{ id: 'gear_source', position: 'corner_ne', surface: 'front', axisType: 'freeAxis' }];
+    source.gearMounts = [{
+      id: 'gear_source',
+      position: 'corner_ne',
+      surface: 'front',
+      axisType: 'freeAxis',
+      rotationDirection: CITY_CHANNEL_GEAR_ROTATION_DIRECTIONS.COUNTERCLOCKWISE
+    }];
     remote.gearMounts = [{ id: 'gear_remote', position: 'center', surface: 'front', axisType: 'fixedAxis' }];
     const sourceAssembly = {
       id: 'assembly_source',
@@ -235,7 +242,6 @@ describe('cityChannelMechanismPlayback', () => {
 
     const played = playAssemblyGearRotation(scene, sourceAssembly, sourceKey, {
       rotationAngle: 45,
-      rotationDirection: 'left',
       rotationSpeedDegPerSec: 45,
       triggerDelaySeconds: 0,
       autoReturn: false
@@ -271,7 +277,13 @@ describe('cityChannelMechanismPlayback', () => {
       rotation: 0,
       panelType: CITY_CHANNEL_TILE_TYPES.TRANSMISSION_CROSS_PLATE
     });
-    source.gearMounts = [{ id: 'gear_source', position: 'corner_ne', surface: 'front', axisType: 'freeAxis' }];
+    source.gearMounts = [{
+      id: 'gear_source',
+      position: 'corner_ne',
+      surface: 'front',
+      axisType: 'freeAxis',
+      rotationDirection: CITY_CHANNEL_GEAR_ROTATION_DIRECTIONS.COUNTERCLOCKWISE
+    }];
     fixed.gearMounts = [{
       id: 'gear_fixed',
       position: 'center',
@@ -336,7 +348,6 @@ describe('cityChannelMechanismPlayback', () => {
 
     const played = playAssemblyGearRotation(scene, assembly, sourceKey, {
       rotationAngle: 45,
-      rotationDirection: 'left',
       rotationSpeedDegPerSec: 45,
       triggerDelaySeconds: 0,
       autoReturn: false

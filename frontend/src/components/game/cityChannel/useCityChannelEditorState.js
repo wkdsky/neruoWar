@@ -8,6 +8,10 @@ import {
   normalizeCityChannelMap
 } from './cityChannelSchema';
 import { getCityChannelMaterial } from './cityChannelCatalog';
+import {
+  DOUBLE_SIDED_RACK_COMPONENT_TYPE,
+  DOUBLE_SIDED_RACK_LABEL
+} from './cityChannelRackModel';
 import { validateCityChannelSafeRoute } from './cityChannelValidation';
 import {
   applyPlacementOperationsToMap,
@@ -38,6 +42,7 @@ const createHistorySnapshot = (mapData) => {
     ...next,
     tiles: { ...(next.tiles || {}) },
     walls: { ...(next.walls || {}) },
+    racks: { ...(next.racks || {}) },
     entrances: cloneList(next.entrances),
     exits: cloneList(next.exits),
     mechanisms: cloneList(next.mechanisms),
@@ -185,7 +190,11 @@ const useCityChannelEditorState = (initialMapData = null) => {
     setActiveComponentType(componentType);
     setActiveTileType(null);
     setActiveTool(CITY_CHANNEL_TOOLS.PLACE_COMPONENT);
-    setStatusMessage(componentType === 'gear' ? '当前组件：齿轮。' : `当前组件：${componentType}。`);
+    setStatusMessage(componentType === 'gear'
+      ? '当前组件：齿轮。'
+      : componentType === DOUBLE_SIDED_RACK_COMPONENT_TYPE
+        ? `当前组件：${DOUBLE_SIDED_RACK_LABEL}。`
+        : `当前组件：${componentType}。`);
   }, []);
 
   const selectOperationTool = useCallback((tool) => {

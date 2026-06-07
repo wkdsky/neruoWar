@@ -45,27 +45,27 @@ describe('cityChannelGears', () => {
 
   it('resolves surface visibility and layer keys', () => {
     expect(getGearSurfaceNormal({ edge: 'north' }, 'front')).toEqual({ x: 0, y: -1 });
-    expect(getGearSurfaceNormal({ edge: 'north' }, 'back')).toEqual({ x: -0, y: 1 });
+    expect(getGearSurfaceNormal({ edge: 'north' }, 'back')).toEqual({ x: 0, y: -1 });
 
     const floor = { x: 1, y: 1, z: 0 };
     expect(isGearSurfaceVisible(floor, { surface: 'front' })).toBe(true);
-    expect(isGearSurfaceVisible(floor, { surface: 'back' })).toBe(false);
+    expect(isGearSurfaceVisible(floor, { surface: 'back' })).toBe(true);
     expect(isGearOnCameraSide(floor, { surface: 'front' }, 0)).toBe(true);
 
     const wall = { x: 1, y: 1, z: 0, edge: 'north' };
     const visibleSurface = getVisibleGearSurfaceSide(wall, 0);
-    expect(['front', 'back']).toContain(visibleSurface);
+    expect(visibleSurface).toBe('front');
     expect(isGearOnCameraSide(wall, { surface: visibleSurface }, 0)).toBe(true);
-    expect(isGearOnCameraSide(wall, { surface: visibleSurface === 'front' ? 'back' : 'front' }, 0)).toBe(true);
+    expect(isGearOnCameraSide(wall, { surface: 'back' }, 0)).toBe(true);
     expect(isGearOnCameraSide(
       { ...wall, panelType: CITY_CHANNEL_TILE_TYPES.GEAR_PRESSURE_PLATE },
-      { surface: visibleSurface === 'front' ? 'back' : 'front' },
+      { surface: 'back' },
       0
-    )).toBe(false);
+    )).toBe(true);
     expect(getMountedGearLayerKey('tile', '0:1:2', 'near')).toBe('gear-near:tile:0:1:2');
   });
 
-  it('returns the nearest visible gear hit and ignores hidden floor gears', () => {
+  it('returns the nearest gear hit for legacy front or back surface data', () => {
     const tileKey = createCellKey(1, 1, 0);
     const tile = createTile({
       x: 1,
@@ -107,7 +107,12 @@ describe('cityChannelGears', () => {
       zoom: 1,
       localPoint: { x: 100, y: 100 },
       getGearMountPoint: () => ({ x: 100, y: 100 })
-    })).toBeNull();
+    })).toMatchObject({
+      type: 'gear',
+      hostKind: 'tile',
+      hostKey: tileKey,
+      mount: { id: 'gear_back' }
+    });
   });
 
   it('returns nearest valid gear install socket and marks occupied sockets invalid', () => {
@@ -403,13 +408,13 @@ describe('cityChannelGears', () => {
     expect(getGearSurfaceKey(
       { x: 0, y: 0, z: 1, edge: 'east', panelType: CITY_CHANNEL_TILE_TYPES.GEAR_PRESSURE_PLATE },
       { surface: 'back' }
-    )).toBe('edge:1:east:back');
+    )).toBe('edge:1:east:front');
     expect(getGearSurfaceKey({ x: 0, y: 0, z: 3, isVertical: true, rotation: 90 }, {})).toBe('vertical:3:90:front');
 
     const nodes = [
       { id: 'a', surfaceKey: 'floor:0:front', point: { x: 0, y: 0 }, pitchRadius: 18 },
       { id: 'b', surfaceKey: 'floor:0:front', point: { x: 35, y: 0 }, pitchRadius: 18 },
-      { id: 'c', surfaceKey: 'floor:0:back', point: { x: 35, y: 0 }, pitchRadius: 18 },
+      { id: 'c', surfaceKey: 'floor:1:front', point: { x: 220, y: 0 }, pitchRadius: 18 },
       { id: 'd', surfaceKey: 'floor:0:front', point: { x: 120, y: 0 }, pitchRadius: 18 }
     ];
     const graph = buildGearContactGraph(nodes);
@@ -719,15 +724,15 @@ describe('cityChannelGears', () => {
       },
       {
         id: 'c',
-        surfaceKey: 'vertical:0:0:back',
+        surfaceKey: 'vertical:1:0:front',
         point: { x: 100, y: 100 },
         worldPoint: { x: 10, y: 10, z: 0 },
         pitchRadius: 1,
         pitchRadiusWorld: 0.2,
         meshPlane: {
           kind: 'vertical',
-          normal: { x: 0, y: -1, z: 0 },
-          planeOffset: 0,
+          normal: { x: 0, y: 1, z: 0 },
+          planeOffset: 1,
           u: 0,
           v: 0
         }

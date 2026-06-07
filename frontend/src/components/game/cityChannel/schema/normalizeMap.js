@@ -40,6 +40,10 @@ import {
   getCityChannelMaterial,
   normalizeCityChannelPanelType
 } from '../cityChannelCatalog';
+import {
+  createRackKey,
+  normalizeRack
+} from '../cityChannelRackModel';
 
 const normalizePoint = (point = {}, fallbackIdPrefix = 'point', index = 0, bounds = null) => {
   const x = Number.parseInt(point.x, 10);
@@ -83,6 +87,11 @@ const getRequiredLayerCount = (input = {}) => {
     const [z] = String(key || '').split(':');
     visitLayer(getSourcePlacementLayer(z, value));
   });
+
+  const sourceRacks = Array.isArray(input?.racks)
+    ? input.racks
+    : Object.values(input?.racks && typeof input.racks === 'object' ? input.racks : {});
+  sourceRacks.forEach((rack) => visitLayer(rack?.z ?? rack?.start?.z ?? rack?.end?.z));
 
   (Array.isArray(input?.entrances) ? input.entrances : []).forEach((point) => visitLayer(point?.z));
   (Array.isArray(input?.exits) ? input.exits : []).forEach((point) => visitLayer(point?.z));
@@ -239,8 +248,12 @@ export const normalizeCityChannelMap = (input = {}) => {
   };
   const sourceTiles = input?.tiles && typeof input.tiles === 'object' ? input.tiles : {};
   const sourceWalls = input?.walls && typeof input.walls === 'object' ? input.walls : {};
+  const sourceRacks = Array.isArray(input?.racks)
+    ? input.racks
+    : Object.values(input?.racks && typeof input.racks === 'object' ? input.racks : {});
   const tiles = {};
   const walls = {};
+  const racks = {};
 
   Object.entries(sourceTiles).forEach(([key, value]) => {
     const fallback = parseCellKey(key);
@@ -263,6 +276,12 @@ export const normalizeCityChannelMap = (input = {}) => {
     }, bounds);
     if (!normalized) return;
     walls[createWallKey(normalized.x, normalized.y, normalized.z, normalized.edge)] = normalized;
+  });
+
+  sourceRacks.forEach((rack) => {
+    const normalized = normalizeRack(rack, bounds);
+    if (!normalized) return;
+    racks[createRackKey(normalized)] = normalized;
   });
 
   const sourceEntrances = (Array.isArray(input?.entrances) ? input.entrances : [])
@@ -360,6 +379,7 @@ export const normalizeCityChannelMap = (input = {}) => {
     layers: base.layers,
     tiles,
     walls,
+    racks,
     entrances,
     exits,
     safeRoute,

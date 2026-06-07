@@ -207,7 +207,7 @@ const applyPose = (model, progress, params) => {
   const p = clamp(Number(progress) || 0, 0, 1);
   const normalized = normalizeMechanismParams(params);
   if (!refs.plate || !refs.gear) {
-    model.rotation.z = THREE.MathUtils.degToRad((normalized.rotationDirection === 'left' ? -1 : 1) * normalized.rotationAngle * p);
+    model.rotation.z = THREE.MathUtils.degToRad(normalized.rotationAngle * p);
     return;
   }
   const press = 0.18 * p;

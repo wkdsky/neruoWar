@@ -115,6 +115,32 @@ describe('cityChannelSceneInteraction', () => {
     expect(scene.setSelection).toHaveBeenCalledWith([], [], [], null);
   });
 
+  it('exits tile placement on first right click even when a board is selected', () => {
+    const onExitPlaceMode = jest.fn();
+    const SceneClass = createCityChannelPhaserScene(PhaserStub, {
+      mapData: createBaseCityChannelMap({ name: 'placement context exit' }),
+      activeTool: CITY_CHANNEL_TOOLS.PLACE_TILE,
+      activeTileType: CITY_CHANNEL_TILE_TYPES.BASIC_PLATE,
+      onExitPlaceMode
+    });
+    const scene = new SceneClass();
+    scene.activeTool = CITY_CHANNEL_TOOLS.PLACE_TILE;
+    scene.activeTileType = CITY_CHANNEL_TILE_TYPES.BASIC_PLATE;
+    scene.selectedCells = [createTile({ x: 1, y: 1, z: 0 })];
+    scene.selectedWalls = [];
+    scene.selectedGears = [];
+    scene.hitTest = jest.fn(() => ({ hit: null }));
+    scene.setSelection = jest.fn();
+
+    scene.handleContextAction({
+      event: { button: 2 },
+      rightButtonDown: () => true
+    });
+
+    expect(onExitPlaceMode).toHaveBeenCalledTimes(1);
+    expect(scene.setSelection).not.toHaveBeenCalled();
+  });
+
   it('cancels an active mechanism preview on right click', () => {
     const SceneClass = createCityChannelPhaserScene(PhaserStub, {
       mapData: createBaseCityChannelMap({ name: 'cancel preview context' }),

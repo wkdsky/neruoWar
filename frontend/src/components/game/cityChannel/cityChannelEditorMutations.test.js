@@ -16,6 +16,10 @@ import {
   movePlacementsInMap,
   rotatePlacementTransmissions
 } from './cityChannelEditorMutations';
+import {
+  DOUBLE_SIDED_RACK_COMPONENT_TYPE,
+  createRackKey
+} from './cityChannelRackModel';
 
 describe('cityChannelEditorMutations', () => {
   const expectSameGearPoint = (actual, expected) => {
@@ -41,6 +45,32 @@ describe('cityChannelEditorMutations', () => {
       rotation: 90
     });
     expect(next.walls).toEqual({});
+  });
+
+  it('places a double-sided rack as a root map component', () => {
+    const mapData = createBaseCityChannelMap({ name: 'rack mutation place' });
+    const rack = {
+      componentType: DOUBLE_SIDED_RACK_COMPONENT_TYPE,
+      direction: 'x',
+      z: 0,
+      start: { x: 0.5, y: 0.5, z: 0 },
+      end: { x: 2.5, y: 0.5, z: 0 }
+    };
+
+    const next = applyPlacementOperationsToMap(mapData, [{
+      kind: 'rack',
+      action: 'place',
+      rack
+    }]);
+
+    const key = createRackKey(rack);
+    expect(next.racks[key]).toMatchObject({
+      id: key,
+      componentType: DOUBLE_SIDED_RACK_COMPONENT_TYPE,
+      direction: 'x',
+      start: { x: 0.5, y: 0.5, z: 0 },
+      end: { x: 2.5, y: 0.5, z: 0 }
+    });
   });
 
   it('applies vertical tile placement intent instead of inheriting old pose', () => {

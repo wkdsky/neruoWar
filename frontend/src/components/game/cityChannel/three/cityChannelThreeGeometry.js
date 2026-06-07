@@ -635,6 +635,7 @@ export const getThreeSurfacePoint = (
   localPoint = {},
   {
     lift = 0.012,
+    embedded = false,
     rotate = true,
     surface = 'front'
   } = {}
@@ -652,7 +653,7 @@ export const getThreeSurfacePoint = (
   if (transform.kind === 'tile') {
     return {
       x: position.x + local.x,
-      y: position.y + (size.y * 0.5) + lift,
+      y: embedded ? position.y : position.y + (size.y * 0.5) + lift,
       z: position.z + local.y
     };
   }
@@ -682,7 +683,8 @@ export const getThreeSurfaceNormal = (transform = {}, surface = 'front') => {
 
 export const getThreeGearSurfacePoint = (transform = {}, mount = {}) => (
   getThreeSurfacePoint(transform, gearSocketLocalPoints[mount.position] || gearSocketLocalPoints.center, {
-    lift: (CITY_CHANNEL_GEAR_THICKNESS_WORLD * 0.5) + 0.012,
+    lift: 0,
+    embedded: true,
     rotate: transform.kind === 'tile',
     surface: mount.surface || 'front'
   })

@@ -1,8 +1,11 @@
 import React, { useEffect, useRef } from 'react';
+import { CircleOff, RotateCcw, RotateCw } from 'lucide-react';
 import { getCityChannelMaterial } from './cityChannelCatalog';
 import {
+  CITY_CHANNEL_GEAR_ROTATION_DIRECTIONS,
   CITY_CHANNEL_MECHANISM_LIMITS,
-  isCornerGearSocket
+  isCornerGearSocket,
+  normalizeGearRotationDirection
 } from './cityChannelMechanismRuntime';
 
 const GEAR_POSITION_LABELS = {
@@ -12,6 +15,24 @@ const GEAR_POSITION_LABELS = {
   corner_se: '右下角',
   corner_sw: '左下角'
 };
+
+const GEAR_ROTATION_OPTIONS = [
+  {
+    value: CITY_CHANNEL_GEAR_ROTATION_DIRECTIONS.COUNTERCLOCKWISE,
+    label: '逆时针',
+    Icon: RotateCcw
+  },
+  {
+    value: CITY_CHANNEL_GEAR_ROTATION_DIRECTIONS.CLOCKWISE,
+    label: '顺时针',
+    Icon: RotateCw
+  },
+  {
+    value: CITY_CHANNEL_GEAR_ROTATION_DIRECTIONS.PASSIVE,
+    label: '被动轮',
+    Icon: CircleOff
+  }
+];
 
 const stopMechanismPanelPointerEvent = (event) => {
   event.stopPropagation();
@@ -84,6 +105,33 @@ const CityChannelMechanismNumberParam = ({
   </label>
 );
 
+const CityChannelGearRotationControl = ({
+  value,
+  onChange
+}) => {
+  const normalized = normalizeGearRotationDirection(value);
+  return (
+    <div className="city-channel-gear-direction" role="group" aria-label="齿轮转动方向">
+      <span>转动方向</span>
+      <div className="city-channel-gear-direction__buttons">
+        {GEAR_ROTATION_OPTIONS.map(({ value: optionValue, label, Icon }) => (
+          <button
+            key={optionValue}
+            type="button"
+            className={optionValue === normalized ? 'is-active' : ''}
+            aria-pressed={optionValue === normalized}
+            aria-label={label}
+            title={label}
+            onClick={() => onChange?.(optionValue)}
+          >
+            <Icon size={17} strokeWidth={2.6} aria-hidden="true" />
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+};
+
 export const CityChannelGearAxisPrompt = ({
   prompt,
   onDismiss
@@ -125,6 +173,7 @@ const CityChannelMechanismPanel = ({
   inspectActive,
   selectedGear,
   selectedGearMount,
+  selectedGearCanConfigureRotation = false,
   selectedAssembly,
   activePanelTile,
   activePanelPanelType,
@@ -134,6 +183,7 @@ const CityChannelMechanismPanel = ({
   mechanismPanelParams,
   onCloseInspect,
   onExecute,
+  onUpdateGearRotationDirection,
   onUpdateMechanismParam
 }) => {
   if (!isOpen) return null;
@@ -174,7 +224,7 @@ const CityChannelMechanismPanel = ({
         <div className="city-channel-mechanism-summary">
           <span>{`宿主：${selectedGear?.hostKey || '未知'}`}</span>
           <span>{`位置：${GEAR_POSITION_LABELS[selectedGearMount.position] || selectedGearMount.position}`}</span>
-          <span>{`安装面：${selectedGearMount.surface === 'back' ? '背面' : '正面'}`}</span>
+          <span>安装层：板材中层</span>
         </div>
       ) : (
         <div className="city-channel-mechanism-summary">
@@ -209,6 +259,12 @@ const CityChannelMechanismPanel = ({
                   <span>{`连轴板材：${mount.axisBinding?.componentKey || '未绑定'}`}</span>
                   <span>{invalid ? '被绑定板材已移动或删除' : isCornerGearSocket(mount.position) ? '点击白色光带切换联动板材' : '中心齿轮不绑定板材'}</span>
                 </div>
+                {selectedGearMount && selectedGearCanConfigureRotation ? (
+                  <CityChannelGearRotationControl
+                    value={mount.rotationDirection}
+                    onChange={(rotationDirection) => onUpdateGearRotationDirection?.(mount.id, rotationDirection)}
+                  />
+                ) : null}
               </section>
             );
           })}
@@ -232,16 +288,6 @@ const CityChannelMechanismPanel = ({
             value={mechanismPanelParams.rotationSpeedDegPerSec}
             onChange={onUpdateMechanismParam}
           />
-          <label className="city-channel-mechanism-param">
-            <span>转动方向</span>
-            <select
-              value={mechanismPanelParams.rotationDirection}
-              onChange={(event) => onUpdateMechanismParam?.('rotationDirection', event.target.value)}
-            >
-              <option value="right">右</option>
-              <option value="left">左</option>
-            </select>
-          </label>
           <CityChannelMechanismNumberParam
             label="延迟触发"
             field="triggerDelaySeconds"

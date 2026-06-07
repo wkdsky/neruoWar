@@ -329,6 +329,46 @@
   font-style: normal;
 }
 
+.city-channel-gear-direction {
+  display: grid;
+  grid-template-columns: 62px minmax(0, 1fr);
+  align-items: center;
+  gap: 0.34rem;
+  color: #cbd5e1;
+  font-size: 0.66rem;
+  font-weight: 800;
+}
+
+.city-channel-gear-direction__buttons {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.24rem;
+}
+
+.city-channel-gear-direction__buttons button {
+  display: grid;
+  place-items: center;
+  min-width: 0;
+  min-height: 30px;
+  border: 1px solid rgba(148, 163, 184, 0.26);
+  border-radius: 6px;
+  background: rgba(15, 23, 42, 0.74);
+  color: #bae6fd;
+  cursor: pointer;
+}
+
+.city-channel-gear-direction__buttons button:hover {
+  border-color: rgba(125, 211, 252, 0.72);
+  color: #f8fafc;
+}
+
+.city-channel-gear-direction__buttons button.is-active {
+  border-color: rgba(34, 211, 238, 0.9);
+  background: rgba(14, 116, 144, 0.52);
+  color: #ffffff;
+  box-shadow: 0 0 0 1px rgba(34, 211, 238, 0.16), inset 0 0 16px rgba(34, 211, 238, 0.18);
+}
+
 .city-channel-selection-actions__mode {
   color: #fef3c7;
   font-size: 0.7rem;
