@@ -22,8 +22,9 @@ export const RACK_DIRECTIONS = {
 
 export const DOUBLE_SIDED_RACK_WIDTH_WORLD = 0.16;
 export const DOUBLE_SIDED_RACK_HEIGHT_WORLD = 0.08;
-export const DOUBLE_SIDED_RACK_TOOTH_DEPTH_WORLD = 0.045;
+export const DOUBLE_SIDED_RACK_TOOTH_DEPTH_WORLD = 0.08;
 export const DOUBLE_SIDED_RACK_CONTACT_EPSILON = 0.09;
+export const DOUBLE_SIDED_RACK_SIDE_CONTACT_OFFSET = 0.5;
 
 const sanitizeCoord = (value = 0) => String(Number(value).toFixed(3)).replace(/[-.]/g, '_');
 const RACK_AXIS_BLOCK_STEP = 1;
@@ -704,7 +705,9 @@ const getRackContactRadius = (node = {}) => (
 const isRackContactOffset = (offset = 0, node = {}, epsilon = DOUBLE_SIDED_RACK_CONTACT_EPSILON) => {
   const distance = Math.abs(Number(offset) || 0);
   const radius = getRackContactRadius(node);
-  return distance <= epsilon || Math.abs(distance - radius) <= epsilon;
+  return distance <= epsilon
+    || Math.abs(distance - radius) <= epsilon
+    || Math.abs(distance - DOUBLE_SIDED_RACK_SIDE_CONTACT_OFFSET) <= epsilon;
 };
 
 const getRackContactSideSign = (offset = 0, fallback = 1) => {
@@ -729,13 +732,14 @@ export const getRackGearContacts = (rack = {}, nodes = []) => {
     if (canonical.plane === RACK_PLANES.VERTICAL) {
       const normalCoord = canonical.normalAxis === RACK_DIRECTIONS.X ? Number(point.x) || 0 : Number(point.y) || 0;
       const normalOffset = normalCoord - canonical.line;
-      if (!isRackContactOffset(normalOffset, node)) return null;
+      if (Math.abs(normalOffset) > DOUBLE_SIDED_RACK_CONTACT_EPSILON) return null;
       if (canonical.direction === RACK_DIRECTIONS.Z) {
         const tangentCoord = canonical.normalAxis === RACK_DIRECTIONS.X ? Number(point.y) || 0 : Number(point.x) || 0;
-        if (Math.abs(tangentCoord - canonical.tangentLine) > DOUBLE_SIDED_RACK_CONTACT_EPSILON) return null;
+        const tangentOffset = tangentCoord - canonical.tangentLine;
+        if (!isRackContactOffset(tangentOffset, node)) return null;
         if (!isWithinRackAxis(Number(point.z) || 0, canonical)) return null;
         const hostTangent = canonical.normalAxis === RACK_DIRECTIONS.X ? hostCenter.y : hostCenter.x;
-        const sideSign = getRackContactSideSign(normalOffset, hostTangent >= canonical.tangentLine ? 1 : -1);
+        const sideSign = getRackContactSideSign(tangentOffset, hostTangent >= canonical.tangentLine ? 1 : -1);
         return {
           rack,
           node,

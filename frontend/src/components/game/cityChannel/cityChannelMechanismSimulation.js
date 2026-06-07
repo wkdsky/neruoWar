@@ -29,7 +29,8 @@ import {
   getRackAxisBindingStatus,
   getRackCanonicalSegment,
   getRackGearContacts,
-  RACK_DIRECTIONS
+  RACK_DIRECTIONS,
+  RACK_PLANES
 } from './cityChannelRackModel';
 
 export const FIXED_AXIS_SYNC_TOLERANCE_DEGREES = 0.5;
@@ -45,6 +46,7 @@ export const CITY_CHANNEL_GEAR_OUTER_RADIUS_WORLD = CITY_CHANNEL_GEAR_PITCH_RADI
 export const CITY_CHANNEL_GEAR_HUB_RADIUS_WORLD = CITY_CHANNEL_GEAR_PITCH_RADIUS_WORLD * 0.32;
 export const CITY_CHANNEL_GEAR_AXLE_RADIUS_WORLD = CITY_CHANNEL_GEAR_PITCH_RADIUS_WORLD * 0.14;
 export const CITY_CHANNEL_GEAR_THICKNESS_WORLD = 0.09;
+export const CITY_CHANNEL_GEAR_MESH_TOLERANCE_WORLD = 0.09;
 const VERTICAL_PANEL_BASE_LIFT_WORLD = 4 / 62;
 const VERTICAL_PANEL_SURFACE_OFFSET_WORLD = 0.06;
 
@@ -130,6 +132,7 @@ export const getGearRatioRadiusForMount = (mount = {}) => (
 );
 
 const roundRuntimeNumber = (value = 0) => Number((Number(value) || 0).toFixed(6));
+const RACK_CONTACT_TRAVEL_EPSILON = 0.000001;
 
 export const isRackTranslationRuntimeEntry = (entry = null) => (
   entry?.motionType === RACK_TRANSLATION_MOTION_TYPE
@@ -149,23 +152,94 @@ export const getRackAxisValueForPoint = (rack = {}, point = {}) => {
   return Number(point.x) || 0;
 };
 
-export const getRackTranslationDistance = (entry = {}, sourceAngle = 0) => {
+const getRackContactDriveSign = (rackSegment = {}, sideSign = 1) => (
+  rackSegment.plane === RACK_PLANES.VERTICAL && rackSegment.direction === RACK_DIRECTIONS.Z
+    ? (Number(sideSign) < 0 ? -1 : 1)
+    : (Number(sideSign) < 0 ? 1 : -1)
+);
+
+export const getRackTranslationTravelLimits = (entry = {}) => {
+  if (!entry?.rack) return null;
+  const contactRackAxis = Number(entry.contactRackAxis);
+  if (!Number.isFinite(contactRackAxis)) return null;
+  const rackSegment = getRackCanonicalSegment(entry.rack);
+  if (rackSegment.length < 1) return null;
+  return {
+    min: contactRackAxis - rackSegment.max,
+    max: contactRackAxis - rackSegment.min
+  };
+};
+
+export const clampRackTranslationDistanceToContact = (entry = {}, distance = 0) => {
+  const target = Number(distance) || 0;
+  const limits = getRackTranslationTravelLimits(entry);
+  if (!limits) return target;
+  return Math.min(Math.max(target, limits.min), limits.max);
+};
+
+export const getRackContactLimitedTranslationDistance = (entry = {}, sourceAngle = 0) => (
+  clampRackTranslationDistanceToContact(entry, getRackTranslationDistance(entry, sourceAngle))
+);
+
+export const getRackTranslationDistance = (entry = {}, sourceAngle = 0, options = {}) => {
   const angle = (Number(entry.driveRatio) || 1) * (Number(sourceAngle) || 0);
   const radius = Math.max(
     0.001,
     Number(entry.pitchRadiusWorld ?? entry.rackPitchRadiusWorld) || CITY_CHANNEL_GEAR_PITCH_RADIUS_WORLD
   );
-  return (angle * Math.PI * radius) / 180;
+  const distance = (angle * Math.PI * radius) / 180;
+  return options?.clampToContact
+    ? clampRackTranslationDistanceToContact(entry, distance)
+    : distance;
 };
 
-export const getRackTranslationOffset = (entry = {}, sourceAngle = 0) => {
+export const getRackTranslationOffset = (entry = {}, sourceAngle = 0, options = {}) => {
   const axis = entry.translationAxis || getRackAxisUnitVector(entry.rack || {});
-  const distance = getRackTranslationDistance(entry, sourceAngle);
+  const optionDistance = Number(options?.distance);
+  const distance = Number.isFinite(optionDistance)
+    ? optionDistance
+    : getRackTranslationDistance(entry, sourceAngle, options);
   return {
     x: roundRuntimeNumber((Number(axis.x) || 0) * distance),
     y: roundRuntimeNumber((Number(axis.y) || 0) * distance),
     z: roundRuntimeNumber((Number(axis.z) || 0) * distance)
   };
+};
+
+const setRackPointAxisValue = (point = {}, direction = RACK_DIRECTIONS.X, value = 0) => {
+  if (direction === RACK_DIRECTIONS.Z) return { ...point, z: value };
+  if (direction === RACK_DIRECTIONS.Y) return { ...point, y: value };
+  return { ...point, x: value };
+};
+
+export const getSweptRackForTranslation = (rack = {}, linearDistance = 0) => {
+  const segment = getRackCanonicalSegment(rack);
+  const minTravel = Math.min(0, Number(linearDistance) || 0);
+  const maxTravel = Math.max(0, Number(linearDistance) || 0);
+  return {
+    ...rack,
+    start: setRackPointAxisValue(segment.start, segment.direction, segment.min + minTravel),
+    end: setRackPointAxisValue(segment.end, segment.direction, segment.max + maxTravel),
+    ...(Number.isFinite(Number(segment.z)) ? { z: segment.z } : {})
+  };
+};
+
+export const getRackTravelEngagementDistance = (rack = {}, gearAxis = 0, linearDistance = 0) => {
+  const target = Number(linearDistance) || 0;
+  const axis = Number(gearAxis);
+  if (!Number.isFinite(axis) || Math.abs(target) <= RACK_CONTACT_TRAVEL_EPSILON) return 0;
+  const segment = getRackCanonicalSegment(rack);
+  if (segment.length < 1) return 0;
+  const contactMinTravel = axis - segment.max;
+  const contactMaxTravel = axis - segment.min;
+  if (target > 0) {
+    const start = Math.max(0, contactMinTravel);
+    const end = Math.min(target, contactMaxTravel);
+    return end > start + RACK_CONTACT_TRAVEL_EPSILON ? end - start : 0;
+  }
+  const start = Math.max(target, contactMinTravel);
+  const end = Math.min(0, contactMaxTravel);
+  return end > start + RACK_CONTACT_TRAVEL_EPSILON ? start - end : 0;
 };
 
 export const translateRuntimePoint = (point = {}, offset = {}) => ({
@@ -178,10 +252,13 @@ export const getRuntimePlacementForRackTranslationAssemblyMember = ({
   placement = {},
   entry = {},
   sourceAngle = 0,
-  offset = null
+  offset = null,
+  linearDistance = null
 } = {}) => {
   const translation = offset || getRackTranslationOffset(entry, sourceAngle);
-  const linearDistance = getRackTranslationDistance(entry, sourceAngle);
+  const resolvedLinearDistance = Number.isFinite(Number(linearDistance))
+    ? Number(linearDistance)
+    : getRackTranslationDistance(entry, sourceAngle);
   return {
     ...placement,
     x: roundRuntimeNumber((Number(placement.x) || 0) + (Number(translation.x) || 0)),
@@ -190,7 +267,7 @@ export const getRuntimePlacementForRackTranslationAssemblyMember = ({
     runtimeMotionType: RACK_TRANSLATION_MOTION_TYPE,
     runtimeRackId: entry.rackId || entry.sourceRackId || entry.rack?.id || null,
     runtimeTranslation: translation,
-    runtimeLinearDistance: roundRuntimeNumber(linearDistance),
+    runtimeLinearDistance: roundRuntimeNumber(resolvedLinearDistance),
     runtimeSourceGearComponentKey: entry.sourceGearComponentKey || null,
     runtimeSourceGearMountId: entry.sourceGearMountId || null
   };
@@ -200,10 +277,13 @@ export const getRuntimeRackForTranslation = ({
   rack = {},
   entry = {},
   sourceAngle = 0,
-  offset = null
+  offset = null,
+  linearDistance = null
 } = {}) => {
   const translation = offset || getRackTranslationOffset(entry, sourceAngle);
-  const linearDistance = getRackTranslationDistance(entry, sourceAngle);
+  const resolvedLinearDistance = Number.isFinite(Number(linearDistance))
+    ? Number(linearDistance)
+    : getRackTranslationDistance(entry, sourceAngle);
   return {
     ...rack,
     start: translateRuntimePoint(rack.start || {}, translation),
@@ -212,7 +292,7 @@ export const getRuntimeRackForTranslation = ({
     runtimeMotionType: RACK_TRANSLATION_MOTION_TYPE,
     runtimeRackId: entry.rackId || entry.sourceRackId || rack.id || null,
     runtimeTranslation: translation,
-    runtimeLinearDistance: roundRuntimeNumber(linearDistance),
+    runtimeLinearDistance: roundRuntimeNumber(resolvedLinearDistance),
     runtimeSourceGearComponentKey: entry.sourceGearComponentKey || null,
     runtimeSourceGearMountId: entry.sourceGearMountId || null
   };
@@ -350,6 +430,11 @@ const getGearScreenPitchRadius = (node = {}) => Number(node.pitchRadius) || Numb
 
 const getGearRatioRadius = (node = {}) => Number(node.gearRatioRadius ?? node.pitchRadiusWorld ?? node.pitchRadius) || 1;
 
+const getGearMeshTolerance = (pitchContact = 0) => Math.max(
+  0.035,
+  Math.min(CITY_CHANNEL_GEAR_MESH_TOLERANCE_WORLD, (Number(pitchContact) || 0) * 0.13)
+);
+
 const getGearMeshPlaneDistance = (a = {}, b = {}) => {
   const aPlane = a.meshPlane;
   const bPlane = b.meshPlane;
@@ -412,11 +497,13 @@ export const buildGearContactGraph = (nodes = [], threshold = getGearContactThre
       const aRadius = meshPlaneDistance !== null || sameSurface ? getGearPitchRadius(a) : getGearScreenPitchRadius(a);
       const bRadius = meshPlaneDistance !== null || sameSurface ? getGearPitchRadius(b) : getGearScreenPitchRadius(b);
       const pitchContact = aRadius + bRadius;
-      const contactDistance = meshPlaneDistance !== null || sameSurface
-        ? pitchContact * 1.22
-        : Math.max(pitchContact * 1.22, Math.min(threshold, pitchContact * 1.22));
-      if (distance > contactDistance) continue;
-      if (distance < Math.max(pitchContact * 0.28, 0.08)) continue;
+      if (meshPlaneDistance !== null || sameSurface) {
+        if (Math.abs(distance - pitchContact) > getGearMeshTolerance(pitchContact)) continue;
+      } else {
+        const contactDistance = Math.max(pitchContact * 1.22, Math.min(threshold, pitchContact * 1.22));
+        if (distance > contactDistance) continue;
+        if (distance < Math.max(pitchContact * 0.28, 0.08)) continue;
+      }
       const aRatioRadius = getGearRatioRadius(a);
       const bRatioRadius = getGearRatioRadius(b);
       graph.get(a.id)?.push({ id: b.id, ratio: -(aRatioRadius / bRatioRadius) });
@@ -924,6 +1011,8 @@ export const createRackTranslationRuntimeEntryFromContact = ({
     0.001,
     Number(contact.node.pitchRadiusWorld ?? contact.node.pitchRadius) || CITY_CHANNEL_GEAR_PITCH_RADIUS_WORLD
   );
+  const rackSegment = getRackCanonicalSegment(rack);
+  const contactDriveSign = getRackContactDriveSign(rackSegment, contactSideSign);
   return {
     motionType: RACK_TRANSLATION_MOTION_TYPE,
     assembly: boundAssembly,
@@ -935,12 +1024,13 @@ export const createRackTranslationRuntimeEntryFromContact = ({
     translationAxis: getRackAxisUnitVector(rack),
     basePlacements,
     basePlacement: boundPlacement,
-    driveRatio: -gearDriveRatio * contactSideSign,
+    driveRatio: gearDriveRatio * contactDriveSign,
     pitchRadiusWorld,
     contactSideSign,
     contactRackAxis: Number(contact.rackAxis) || 0,
     contactPoint: contact.point || null,
     bindingCandidate: status.candidate || null,
+    sourceGearNodeId: contact.node.id || null,
     sourceGearComponentKey: contact.node.componentKey,
     sourceGearMountId: contact.node.mountId
   };
@@ -1184,10 +1274,84 @@ export const validateFixedAxisSync = ({
   };
 };
 
+const getGearNodeRuntimeId = (node = {}) => (
+  node.id || (node.componentKey && node.mountId ? `${node.componentKey}:${node.mountId}` : null)
+);
+
+const isRackSourceGearNode = (entry = {}, node = {}) => (
+  !!node
+  && (
+    (!!entry.sourceGearNodeId && getGearNodeRuntimeId(node) === entry.sourceGearNodeId)
+    || (
+      !!entry.sourceGearComponentKey
+      && !!entry.sourceGearMountId
+      && node.componentKey === entry.sourceGearComponentKey
+      && node.mountId === entry.sourceGearMountId
+    )
+  )
+);
+
+const createGearRuntimeState = ({
+  node = {},
+  phase = 0,
+  speedRatio = null,
+  axisBindingOverride = undefined
+} = {}) => {
+  const axisBinding = axisBindingOverride !== undefined
+    ? axisBindingOverride
+    : node.axisBindingSuppressed
+      ? null
+      : normalizeGearAxisBinding(node.mount?.axisBinding);
+  const resolvedSpeedRatio = Number.isFinite(Number(speedRatio))
+    ? Number(speedRatio)
+    : Number(node.driveRatio) || 1;
+  return {
+    componentKey: node.componentKey,
+    mountId: node.mountId,
+    axisType: axisBinding ? 'bound' : (node.mount?.axisType || node.axisType || 'freeAxis'),
+    socketKind: getGearSocketKind(node.mount?.position),
+    axisBinding,
+    phase,
+    speedRatio: resolvedSpeedRatio,
+    torqueRatio: getGearTorqueRatio(resolvedSpeedRatio),
+    teeth: getGearTeeth(node.mount)
+  };
+};
+
+const createRackDrivenGearRuntimeState = ({
+  entry = {},
+  contact = {},
+  linearDistance = 0,
+  sourceAngle = 0,
+  basePhases = new Map()
+} = {}) => {
+  const node = contact.node;
+  const rack = entry.rack || contact.rack;
+  if (!node || !rack || isRackSourceGearNode(entry, node)) return null;
+  const engagedDistance = getRackTravelEngagementDistance(rack, contact.rackAxis, linearDistance);
+  if (Math.abs(engagedDistance) <= RACK_CONTACT_TRAVEL_EPSILON) return null;
+  const rackSegment = getRackCanonicalSegment(rack);
+  const pitchRadius = Math.max(
+    0.001,
+    Number(node.pitchRadiusWorld ?? node.rackPitchRadiusWorld ?? node.pitchRadius) || CITY_CHANNEL_GEAR_PITCH_RADIUS_WORLD
+  );
+  const gearAngle = (engagedDistance * getRackContactDriveSign(rackSegment, contact.sideSign) * 180) / (Math.PI * pitchRadius);
+  const basePhase = basePhases.get(node.id) || 0;
+  const speedRatio = Math.abs(Number(sourceAngle) || 0) > RACK_CONTACT_TRAVEL_EPSILON
+    ? gearAngle / sourceAngle
+    : 0;
+  return createGearRuntimeState({
+    node,
+    phase: normalizeRotation(basePhase + gearAngle),
+    speedRatio
+  });
+};
+
 export const createMechanismRuntimeSnapshot = ({
   mapData = {},
   assemblyEntries = [],
   gearNodes = [],
+  rackContactGearNodes = [],
   sourceAngle = 0,
   basePhases = new Map(),
   obstruction = null
@@ -1195,11 +1359,17 @@ export const createMechanismRuntimeSnapshot = ({
   const placements = {};
   const racks = {};
   const sync = [];
+  const gears = {};
+  const gearNodeById = new Map((Array.isArray(gearNodes) ? gearNodes : []).map((node) => [node.id, node]));
+  const rackDrivenGearStates = new Map();
+  const contactGearNodes = Array.isArray(rackContactGearNodes) && rackContactGearNodes.length > 0
+    ? rackContactGearNodes
+    : gearNodes;
 
   assemblyEntries.forEach((entry) => {
     if (isRackTranslationRuntimeEntry(entry)) {
-      const translation = getRackTranslationOffset(entry, sourceAngle);
-      const linearDistance = getRackTranslationDistance(entry, sourceAngle);
+      const linearDistance = getRackContactLimitedTranslationDistance(entry, sourceAngle);
+      const translation = getRackTranslationOffset(entry, sourceAngle, { distance: linearDistance });
       (entry.assembly?.componentKeys || []).forEach((componentKey) => {
         const placement = entry.basePlacements?.[componentKey] || getPlacementByComponentKey(mapData, componentKey);
         if (!placement) return;
@@ -1207,7 +1377,8 @@ export const createMechanismRuntimeSnapshot = ({
           placement,
           entry,
           sourceAngle,
-          offset: translation
+          offset: translation,
+          linearDistance
         });
       });
       const rack = entry.rack || mapData.racks?.[entry.rackId || entry.sourceRackId];
@@ -1217,7 +1388,24 @@ export const createMechanismRuntimeSnapshot = ({
           rack,
           entry,
           sourceAngle,
-          offset: translation
+          offset: translation,
+          linearDistance
+        });
+        const sweptRack = getSweptRackForTranslation(rack, linearDistance);
+        getRackGearContacts(sweptRack, contactGearNodes).forEach((contact) => {
+          const nodeId = getGearNodeRuntimeId(contact.node);
+          if (!nodeId) return;
+          const state = createRackDrivenGearRuntimeState({
+            entry,
+            contact,
+            linearDistance,
+            sourceAngle,
+            basePhases
+          });
+          if (!state) return;
+          const existing = rackDrivenGearStates.get(nodeId);
+          if (existing && Math.abs(existing.speedRatio || 0) >= Math.abs(state.speedRatio || 0)) return;
+          rackDrivenGearStates.set(nodeId, state);
         });
       }
       sync.push({
@@ -1227,7 +1415,7 @@ export const createMechanismRuntimeSnapshot = ({
         componentKey: entry.componentKey || null,
         sourceGearComponentKey: entry.sourceGearComponentKey || null,
         sourceGearMountId: entry.sourceGearMountId || null,
-        gearAngle: (Number(entry.driveRatio) || 1) * sourceAngle,
+        gearAngle: roundRuntimeNumber((linearDistance * 180) / (Math.PI * Math.max(0.001, Number(entry.pitchRadiusWorld) || CITY_CHANNEL_GEAR_PITCH_RADIUS_WORLD))),
         linearDistance: roundRuntimeNumber(linearDistance),
         ok: true,
         error: 0,
@@ -1264,24 +1452,19 @@ export const createMechanismRuntimeSnapshot = ({
     });
   });
 
-  const gears = {};
   gearNodes.forEach((node) => {
     const basePhase = basePhases.get(node.id) || 0;
     const phase = normalizeRotation(basePhase + ((Number(node.driveRatio) || 1) * sourceAngle));
-    const axisBinding = node.axisBindingSuppressed
-      ? null
-      : normalizeGearAxisBinding(node.mount?.axisBinding);
-    gears[node.id] = {
-      componentKey: node.componentKey,
-      mountId: node.mountId,
-      axisType: axisBinding ? 'bound' : (node.mount?.axisType || node.axisType || 'freeAxis'),
-      socketKind: getGearSocketKind(node.mount?.position),
-      axisBinding,
+    gears[node.id] = createGearRuntimeState({
+      node,
       phase,
-      speedRatio: Number(node.driveRatio) || 1,
-      torqueRatio: getGearTorqueRatio(node.driveRatio),
-      teeth: getGearTeeth(node.mount)
-    };
+      speedRatio: Number(node.driveRatio) || 1
+    });
+  });
+  rackDrivenGearStates.forEach((state, nodeId) => {
+    const drivenNode = gearNodeById.get(nodeId);
+    if (drivenNode?.isDriveRoot) return;
+    gears[nodeId] = state;
   });
 
   return {

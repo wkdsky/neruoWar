@@ -43,11 +43,11 @@ import {
   getAllowedRotationAngle,
   getAxisBindingForMount,
   getFixedAxisWorldAnchor,
+  getRackContactLimitedTranslationDistance,
   getGearMeshPlane,
   getGearRatioRadiusForMount,
   getGearSurfaceKey,
   getGearWorldPosition,
-  getRackTranslationDistance,
   isDrivenGearAxisBindingActive,
   isRackTranslationRuntimeEntry,
   resolveDrivenGearNodes as resolveDrivenGearNodesModel
@@ -71,6 +71,7 @@ import {
   getThreeTransmissionLineSegments,
   getThreeVerticalTopPlacementTarget,
   isThreePlacementVisible,
+  isThreeVerticalSupportPlacement,
   getThreeMapCenter,
   getWallThreeTransform,
   resolveThreeHoverSnapIntent,
@@ -103,7 +104,7 @@ import {
 
 const CAMERA_VIEW_SIZE = 18;
 const MIN_ZOOM = 0.45;
-const MAX_ZOOM = 3;
+const MAX_ZOOM = 4;
 const KEYBOARD_PAN_SPEED = 5.5;
 const KEYBOARD_ROTATION_SPEED = 96;
 const SELECTED_MOVE_HOLD_DELAY = 260;
@@ -267,9 +268,9 @@ const createGearTorusGeometry = (radius, tubeRadius, segments = 56) => {
   return geometry;
 };
 
-const createGearDirectionArcGeometry = (clockwise = true, radius = GEAR_DIRECTION_ICON_RADIUS, segments = 42) => {
+export const createGearDirectionArcGeometry = (clockwise = true, radius = GEAR_DIRECTION_ICON_RADIUS, segments = 42) => {
   const start = clockwise ? Math.PI * 0.78 : Math.PI * 1.22;
-  const sweep = clockwise ? -Math.PI * 1.46 : Math.PI * 1.46;
+  const sweep = clockwise ? Math.PI * 1.46 : -Math.PI * 1.46;
   const points = [];
   for (let index = 0; index <= segments; index += 1) {
     const angle = start + (sweep * (index / segments));
@@ -278,15 +279,28 @@ const createGearDirectionArcGeometry = (clockwise = true, radius = GEAR_DIRECTIO
   return new THREE.BufferGeometry().setFromPoints(points);
 };
 
-const getGearDirectionArrowTip = (clockwise = true, radius = GEAR_DIRECTION_ICON_RADIUS) => {
+export const getGearDirectionArrowTip = (clockwise = true, radius = GEAR_DIRECTION_ICON_RADIUS) => {
   const start = clockwise ? Math.PI * 0.78 : Math.PI * 1.22;
-  const sweep = clockwise ? -Math.PI * 1.46 : Math.PI * 1.46;
+  const sweep = clockwise ? Math.PI * 1.46 : -Math.PI * 1.46;
   const angle = start + sweep;
-  const tangentAngle = angle + (clockwise ? -Math.PI / 2 : Math.PI / 2);
+  const tangentAngle = angle + (clockwise ? Math.PI / 2 : -Math.PI / 2);
   return {
     point: new THREE.Vector3(Math.cos(angle) * radius, 0, Math.sin(angle) * radius),
     tangent: new THREE.Vector3(Math.cos(tangentAngle), 0, Math.sin(tangentAngle)).normalize()
   };
+};
+
+export const createGearDirectionArrowHeadGeometry = (width = 0.075, length = 0.18) => {
+  const geometry = new THREE.BufferGeometry();
+  geometry.setAttribute('position', new THREE.Float32BufferAttribute([
+    0, 0, 0,
+    -width, 0, -length,
+    width, 0, -length
+  ], 3));
+  geometry.setIndex([0, 1, 2]);
+  geometry.computeVertexNormals();
+  geometry.computeBoundingSphere();
+  return geometry;
 };
 
 const createGearDirectionSlashGeometry = (radius = GEAR_DIRECTION_ICON_RADIUS * 0.72) => (
@@ -323,6 +337,52 @@ const createPortalHoodGeometry = () => {
   geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
   geometry.setIndex(indices);
   geometry.computeVertexNormals();
+  return geometry;
+};
+
+const createRackToothGeometry = ({
+  baseLength = 0.06,
+  height = DOUBLE_SIDED_RACK_HEIGHT_WORLD,
+  depth = DOUBLE_SIDED_RACK_TOOTH_DEPTH_WORLD,
+  outwardSign = 1
+} = {}) => {
+  const safeBaseLength = Math.max(0.01, Number(baseLength) || 0.06);
+  const safeHeight = Math.max(0.01, Number(height) || DOUBLE_SIDED_RACK_HEIGHT_WORLD);
+  const safeDepth = Math.max(0.01, Number(depth) || DOUBLE_SIDED_RACK_TOOTH_DEPTH_WORLD);
+  const sign = Number(outwardSign) < 0 ? -1 : 1;
+  const baseHalf = safeBaseLength * 0.5;
+  const tipHalf = baseHalf * 0.36;
+  const innerZ = -sign * safeDepth * 0.5;
+  const outerZ = sign * safeDepth * 0.5;
+  const halfHeight = safeHeight * 0.5;
+  const profile = [
+    { x: -baseHalf, z: innerZ },
+    { x: baseHalf, z: innerZ },
+    { x: tipHalf, z: outerZ },
+    { x: -tipHalf, z: outerZ }
+  ];
+  const positions = [];
+  profile.forEach((point) => positions.push(point.x, halfHeight, point.z));
+  profile.forEach((point) => positions.push(point.x, -halfHeight, point.z));
+  const indices = [
+    0, 1, 2,
+    0, 2, 3,
+    4, 6, 5,
+    4, 7, 6,
+    0, 4, 5,
+    0, 5, 1,
+    1, 5, 6,
+    1, 6, 2,
+    2, 6, 7,
+    2, 7, 3,
+    3, 7, 4,
+    3, 4, 0
+  ];
+  const geometry = new THREE.BufferGeometry();
+  geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+  geometry.setIndex(indices);
+  geometry.computeVertexNormals();
+  geometry.userData.cityChannelRackTooth = true;
   return geometry;
 };
 
@@ -440,6 +500,7 @@ export default class CityChannelThreeRuntime {
     this.carryState = null;
     this.placementGroups = new Map();
     this.gearMeshes = new Map();
+    this.gearMeshPhaseOffsetMap = null;
     this.rackMeshes = new Map();
     this.rackGroups = new Map();
     this.rackPlacementState = null;
@@ -1015,7 +1076,7 @@ export default class CityChannelThreeRuntime {
       42
     );
     this.gearDirectionPassiveSlashGeometry = createGearDirectionSlashGeometry();
-    this.gearDirectionArrowHeadGeometry = new THREE.ConeGeometry(0.07, 0.18, 18);
+    this.gearDirectionArrowHeadGeometry = createGearDirectionArrowHeadGeometry();
     this.portalDeckGeometry = new THREE.BoxGeometry(0.58, 0.028, 0.72);
     this.portalRailGeometry = new THREE.BoxGeometry(0.075, 0.055, 0.78);
     this.portalLipGeometry = new THREE.BoxGeometry(0.58, 0.055, 0.075);
@@ -1311,10 +1372,13 @@ export default class CityChannelThreeRuntime {
     const transforms = [
       ...(this.renderModel?.tiles || []),
       ...(this.renderModel?.walls || [])
-    ].filter((transform) => isThreePlacementVisible(transform.placement, {
-      mapData: this.renderModel?.mapData || {},
-      visibleLayerCutoff
-    }));
+    ].filter((transform) => (
+      isThreePlacementVisible(transform.placement, {
+        mapData: this.renderModel?.mapData || {},
+        visibleLayerCutoff
+      })
+      || isThreeVerticalSupportPlacement(transform.placement)
+    ));
     const visibleComponentKeys = new Set(transforms.map((transform) => transform.key));
 
     transforms.forEach((transform) => {
@@ -1862,14 +1926,24 @@ export default class CityChannelThreeRuntime {
 
     if (!showTeeth) return group;
 
-    const toothPitch = 0.18;
+    const toothPitch = (Math.PI * 2 * CITY_CHANNEL_GEAR_PITCH_RADIUS_WORLD) / CITY_CHANNEL_GEAR_TOOTH_COUNT;
     const toothCount = Math.max(2, Math.floor(length / toothPitch));
     const toothStep = length / toothCount;
-    const toothGeometry = new THREE.BoxGeometry(
-      Math.min(0.12, toothStep * 0.72),
-      DOUBLE_SIDED_RACK_HEIGHT_WORLD * 0.92,
-      DOUBLE_SIDED_RACK_TOOTH_DEPTH_WORLD
-    );
+    const toothBaseLength = Math.min(0.07, toothStep * 0.52);
+    const toothGeometries = {
+      '-1': createRackToothGeometry({
+        baseLength: toothBaseLength,
+        height: DOUBLE_SIDED_RACK_HEIGHT_WORLD * 0.82,
+        depth: DOUBLE_SIDED_RACK_TOOTH_DEPTH_WORLD,
+        outwardSign: -1
+      }),
+      1: createRackToothGeometry({
+        baseLength: toothBaseLength,
+        height: DOUBLE_SIDED_RACK_HEIGHT_WORLD * 0.82,
+        depth: DOUBLE_SIDED_RACK_TOOTH_DEPTH_WORLD,
+        outwardSign: 1
+      })
+    };
     for (let index = 0; index < toothCount; index += 1) {
       const axis = segment.min + ((index + 0.5) * toothStep);
       [-1, 1].forEach((side) => {
@@ -1894,7 +1968,7 @@ export default class CityChannelThreeRuntime {
         const center = new THREE.Vector3(point.x, point.y, point.z)
           .addScaledVector(sideVector, side * ((DOUBLE_SIDED_RACK_WIDTH_WORLD + DOUBLE_SIDED_RACK_TOOTH_DEPTH_WORLD) * 0.5));
         const tooth = this.createRackOrientedBox({
-          geometry: toothGeometry,
+          geometry: toothGeometries[side],
           material: ghost ? (valid ? this.ghostValidMaterial : this.ghostInvalidMaterial) : rackMaterials.tooth,
           center,
           axis: axisVector,
@@ -1902,6 +1976,11 @@ export default class CityChannelThreeRuntime {
           side: sideVector,
           renderOrder: renderOrder + 2
         });
+        tooth.userData.cityChannel = {
+          kind: 'rackTooth',
+          rackId: normalizedRack.id,
+          key: rackKey
+        };
         group.add(tooth);
       });
     }
@@ -2106,6 +2185,47 @@ export default class CityChannelThreeRuntime {
     return this.mechanismRuntimeSnapshot?.gears?.[`${componentKey}:${mountId}`] || null;
   }
 
+  getGearMeshPhaseOffsetMap() {
+    if (this.gearMeshPhaseOffsetMap) return this.gearMeshPhaseOffsetMap;
+    const nodes = this.getAllGearNodes();
+    const graph = buildGearContactGraphModel(nodes);
+    const byId = new Map(nodes.map((node) => [node.id, node]));
+    const offsets = new Map();
+    const getHalfToothDegrees = (node = {}) => {
+      const teeth = Number(node.mount?.teeth ?? node.mount?.toothCount ?? CITY_CHANNEL_GEAR_TOOTH_COUNT);
+      return 180 / Math.max(1, Number.isFinite(teeth) ? teeth : CITY_CHANNEL_GEAR_TOOTH_COUNT);
+    };
+    [...byId.keys()].sort().forEach((rootId) => {
+      if (offsets.has(rootId)) return;
+      offsets.set(rootId, 0);
+      const queue = [rootId];
+      while (queue.length > 0) {
+        const sourceId = queue.shift();
+        const sourceOffset = offsets.get(sourceId) || 0;
+        (graph.get(sourceId) || []).forEach((edge) => {
+          if (edge.viaRackId || !byId.has(edge.id) || offsets.has(edge.id)) return;
+          const target = byId.get(edge.id);
+          const nextOffset = Number(edge.ratio) < 0
+            ? sourceOffset + getHalfToothDegrees(target)
+            : sourceOffset;
+          offsets.set(edge.id, normalizeRotation(nextOffset));
+          queue.push(edge.id);
+        });
+      }
+    });
+    this.gearMeshPhaseOffsetMap = offsets;
+    return offsets;
+  }
+
+  getGearMeshPhaseOffset(componentKey = '', mountId = '') {
+    if (!componentKey || !mountId) return 0;
+    return this.getGearMeshPhaseOffsetMap().get(`${componentKey}:${mountId}`) || 0;
+  }
+
+  getGearVisualPhase(componentKey = '', mountId = '', phase = 0) {
+    return normalizeRotation((Number(phase) || 0) + this.getGearMeshPhaseOffset(componentKey, mountId));
+  }
+
   getGearQuaternion(transform = {}, mount = {}, phase = 0) {
     const surfaceQuaternion = this.getGearSurfaceQuaternion(transform, mount.surface || 'front');
     const surfaceSpinQuaternion = new THREE.Quaternion().setFromAxisAngle(
@@ -2206,11 +2326,14 @@ export default class CityChannelThreeRuntime {
       suppressAxisBinding
     });
     const attachmentHasRuntimePlacement = !!placements?.[attachment.componentKey];
-    const phase = runtimeGear && suppressAxisBinding
+    const basePhase = runtimeGear && suppressAxisBinding
       ? (runtimeGear.phase ?? data.mount.phase ?? 0)
       : attachmentHasRuntimePlacement
       ? (Number(data.mount.phase) || 0)
       : (runtimeGear?.phase ?? data.mount.phase ?? 0);
+    const phase = typeof this.getGearVisualPhase === 'function'
+      ? this.getGearVisualPhase(data.hostKey || data.transform.key, data.mount.id, basePhase)
+      : basePhase;
     const worldPoint = this.getGearAttachmentWorldPoint(attachment, placements);
     if (worldPoint) {
       const position = new THREE.Vector3(worldPoint.x || 0, worldPoint.y || 0, worldPoint.z || 0);
@@ -2562,7 +2685,8 @@ export default class CityChannelThreeRuntime {
       'gear_direction_arrow_head'
     );
     head.position.set(tip.point.x, lift, tip.point.z);
-    head.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), tip.tangent);
+    const angle = Math.atan2(tip.tangent.x, tip.tangent.z);
+    head.quaternion.setFromAxisAngle(new THREE.Vector3(0, 1, 0), angle);
     group.add(head);
     this.overlayGroup.add(group);
     return true;
@@ -2579,7 +2703,10 @@ export default class CityChannelThreeRuntime {
       const gearMaterials = getGearVisualMaterialsForRuntime(this);
       const gear = new THREE.Mesh(this.gearGeometry, gearMaterials.body);
       const runtimeGear = this.getRuntimeGearState(transform.key, mount.id);
-      const phase = runtimeGear?.phase ?? mount.phase ?? 0;
+      const basePhase = runtimeGear?.phase ?? mount.phase ?? 0;
+      const phase = typeof this.getGearVisualPhase === 'function'
+        ? this.getGearVisualPhase(transform.key, mount.id, basePhase)
+        : basePhase;
       gear.userData.sharedGeometry = true;
       gear.userData.sharedMaterial = true;
       gear.position.set(point.x, point.y, point.z);
@@ -5954,6 +6081,7 @@ export default class CityChannelThreeRuntime {
     tile,
     assemblyEntries = [],
     gearNodes = [],
+    rackContactGearNodes = [],
     sourceAngle = 0,
     basePhases = new Map(),
     obstruction = null
@@ -5964,6 +6092,7 @@ export default class CityChannelThreeRuntime {
         mapData,
         assemblyEntries,
         gearNodes,
+        rackContactGearNodes,
         sourceAngle,
         basePhases,
         obstruction
@@ -5990,13 +6119,18 @@ export default class CityChannelThreeRuntime {
     sourceAssembly = null,
     assemblyEntries = [],
     gearNodes = [],
+    rackContactGearNodes = [],
     targetAngle = 0,
     obstruction = null
   } = {}) {
     const normalized = normalizeMechanismParams(params);
     const duration = Math.max(120, Math.round((Math.max(1, Math.abs(targetAngle)) / Math.max(1, normalized.rotationSpeedDegPerSec)) * 1000));
     const delay = Math.round(normalized.triggerDelaySeconds * 1000);
-    const basePhases = new Map(gearNodes.map((node) => [node.id, Number(node.mount?.phase) || 0]));
+    const phaseNodeById = new Map();
+    [...rackContactGearNodes, ...gearNodes].forEach((node) => {
+      if (node?.id && !phaseNodeById.has(node.id)) phaseNodeById.set(node.id, node);
+    });
+    const basePhases = new Map([...phaseNodeById.values()].map((node) => [node.id, Number(node.mount?.phase) || 0]));
     const startedAt = Date.now() + delay;
     const applyAngle = (angle) => {
       const snapshot = this.createRuntimeSnapshotForMechanism({
@@ -6004,6 +6138,7 @@ export default class CityChannelThreeRuntime {
         tile,
         assemblyEntries,
         gearNodes,
+        rackContactGearNodes,
         sourceAngle: angle,
         basePhases,
         obstruction
@@ -6064,6 +6199,9 @@ export default class CityChannelThreeRuntime {
     const targetAngle = normalized.rotationAngle;
     const assemblyGraph = buildMechanicalAssemblies(mapData);
     const sourceAssembly = getAssemblyForCell(assemblyGraph, key);
+    const allGearNodes = sourceAssembly?.gearMounts?.length > 0
+      ? this.getAllGearNodes()
+      : [];
     const gearNodes = sourceAssembly?.gearMounts?.length > 0
       ? this.resolveDrivenGearNodes(sourceAssembly, key)
       : [];
@@ -6096,7 +6234,7 @@ export default class CityChannelThreeRuntime {
 
     const obstructions = assemblyEntries.map((entry) => {
       if (isRackTranslationRuntimeEntry(entry)) {
-        const targetDistance = getRackTranslationDistance(entry, targetAngle);
+        const targetDistance = getRackContactLimitedTranslationDistance(entry, targetAngle);
         const obstruction = findRackTranslationObstruction({
           mapData,
           assembly: entry.assembly,
@@ -6154,6 +6292,7 @@ export default class CityChannelThreeRuntime {
       sourceAssembly,
       assemblyEntries,
       gearNodes,
+      rackContactGearNodes: allGearNodes,
       targetAngle: allowedRotation.angle,
       obstruction: limitingObstruction
     });

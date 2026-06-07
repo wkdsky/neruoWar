@@ -24,7 +24,9 @@ import {
   getGearSurfaceKey,
   getGearWorldPosition,
   getGearTorqueRatio,
+  getRackContactLimitedTranslationDistance,
   getRackTranslationDistance,
+  getRackTranslationTravelLimits,
   isDrivenGearAxisBindingActive,
   resolveDrivenGearNodes,
   getRuntimePlacementAroundFixedGear,
@@ -36,6 +38,7 @@ import {
   clipRackToCornerGearBlocker,
   getRackPlacementRuleStatus,
   isRackPointOnCornerGear,
+  getRackGearContacts,
   getRackSideCandidates
 } from './cityChannelRackModel';
 
@@ -190,6 +193,40 @@ describe('cityChannelMechanismSimulation', () => {
     ]));
   });
 
+  it('meshes center gears on the side pitch line of a double-sided rack', () => {
+    const rack = {
+      id: 'rack_center_side_mesh',
+      componentType: DOUBLE_SIDED_RACK_COMPONENT_TYPE,
+      direction: 'x',
+      z: 0,
+      start: { x: 0.5, y: 1.5, z: 0 },
+      end: { x: 2.5, y: 1.5, z: 0 }
+    };
+    const createNode = (id, x, y) => ({
+      id,
+      componentKey: `${id}_host`,
+      worldPoint: { x, y, z: 0 },
+      point: { x, y, z: 0 },
+      placement: { x, y, z: 0 },
+      pitchRadiusWorld: CITY_CHANNEL_GEAR_PITCH_RADIUS_WORLD,
+      gearRatioRadius: 18,
+      surfaceKey: 'floor:0:front',
+      mount: { id: `${id}_mount`, position: 'center' }
+    });
+    const negative = createNode('negative_center', 1.5, 1);
+    const positive = createNode('positive_center', 1.5, 2);
+    const contacts = getRackGearContacts(rack, [negative, positive]);
+    const graph = buildGearContactGraph([negative, positive], undefined, [rack]);
+
+    expect(contacts).toEqual(expect.arrayContaining([
+      expect.objectContaining({ node: expect.objectContaining({ id: negative.id }), sideSign: -1 }),
+      expect.objectContaining({ node: expect.objectContaining({ id: positive.id }), sideSign: 1 })
+    ]));
+    expect(graph.get(negative.id)).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: positive.id, ratio: -1, viaRackId: rack.id })
+    ]));
+  });
+
   it('moves an unbound rack along its own axis when driven by a meshed gear', () => {
     const rack = {
       id: 'rack_free_drive',
@@ -261,6 +298,52 @@ describe('cityChannelMechanismSimulation', () => {
     };
     const mapData = {
       ...createBaseCityChannelMap({ name: 'side rack translation' }),
+      tiles: {},
+      walls: {},
+      racks: { [rack.id]: rack }
+    };
+
+    const entries = createRackTranslationRuntimeEntries({ mapData, nodes: [node] });
+    const distance = getRackTranslationDistance(entries[0], 90);
+    const snapshot = createMechanismRuntimeSnapshot({
+      mapData,
+      assemblyEntries: entries,
+      gearNodes: [node],
+      sourceAngle: 90
+    });
+
+    expect(entries).toHaveLength(1);
+    expect(entries[0]).toMatchObject({
+      motionType: 'rackTranslation',
+      contactSideSign: -1,
+      rackId: rack.id
+    });
+    expect(snapshot.racks[rack.id].start.x).toBeCloseTo(rack.start.x + distance, 6);
+  });
+
+  it('drives a rack when a neighboring center gear meshes with its side teeth', () => {
+    const rack = {
+      id: 'rack_center_side_drive',
+      componentType: DOUBLE_SIDED_RACK_COMPONENT_TYPE,
+      direction: 'x',
+      z: 0,
+      start: { x: 0.5, y: 1.5, z: 0 },
+      end: { x: 2.5, y: 1.5, z: 0 }
+    };
+    const node = {
+      id: 'driver:gear_center',
+      componentKey: 'driver',
+      mountId: 'gear_center',
+      worldPoint: { x: 1.5, y: 1, z: 0 },
+      point: { x: 1.5, y: 1, z: 0 },
+      placement: { x: 1, y: 1, z: 0 },
+      pitchRadiusWorld: CITY_CHANNEL_GEAR_PITCH_RADIUS_WORLD,
+      gearRatioRadius: 18,
+      driveRatio: 1,
+      mount: { id: 'gear_center', position: 'center' }
+    };
+    const mapData = {
+      ...createBaseCityChannelMap({ name: 'center side rack translation' }),
       tiles: {},
       walls: {},
       racks: { [rack.id]: rack }
@@ -403,8 +486,8 @@ describe('cityChannelMechanismSimulation', () => {
     const createNode = (id, hostX) => ({
       id,
       componentKey: `${id}_host`,
-      worldPoint: { x: 1.5, y: 1, z: 0.5 },
-      point: { x: 1.5, y: 1, z: 0.5 },
+      worldPoint: { x: hostX, y: 1, z: 0.5 },
+      point: { x: hostX, y: 1, z: 0.5 },
       placement: { x: hostX, y: 1, z: 0, isVertical: true },
       pitchRadiusWorld: CITY_CHANNEL_GEAR_PITCH_RADIUS_WORLD,
       gearRatioRadius: 18,
@@ -421,6 +504,193 @@ describe('cityChannelMechanismSimulation', () => {
     expect(graph.get('left')).toEqual(expect.arrayContaining([
       expect.objectContaining({ id: 'right', ratio: -1, viaRackId: 'vertical_rack_mesh' })
     ]));
+  });
+
+  it('moves a vertical rack up and down when driven by a side gear', () => {
+    const rack = {
+      id: 'vertical_rack_drive',
+      componentType: DOUBLE_SIDED_RACK_COMPONENT_TYPE,
+      plane: 'vertical',
+      normalAxis: 'y',
+      direction: 'z',
+      start: { x: 1.5, y: 1, z: 0 },
+      end: { x: 1.5, y: 1, z: 1 }
+    };
+    const node = {
+      id: 'driver:gear_center',
+      componentKey: 'driver',
+      mountId: 'gear_center',
+      worldPoint: { x: 1, y: 1, z: 0.5 },
+      point: { x: 1, y: 1, z: 0.5 },
+      placement: { x: 1, y: 1, z: 0, isVertical: true },
+      pitchRadiusWorld: CITY_CHANNEL_GEAR_PITCH_RADIUS_WORLD,
+      gearRatioRadius: 18,
+      driveRatio: 1,
+      surfaceKey: 'vertical:1:front',
+      mount: { id: 'gear_center', position: 'center' }
+    };
+    const mapData = {
+      ...createBaseCityChannelMap({ name: 'vertical rack translation' }),
+      tiles: {},
+      walls: {},
+      racks: { [rack.id]: rack }
+    };
+
+    const entries = createRackTranslationRuntimeEntries({ mapData, nodes: [node] });
+    const rawForwardDistance = getRackTranslationDistance(entries[0], 90);
+    const forwardDistance = getRackContactLimitedTranslationDistance(entries[0], 90);
+    const forwardSnapshot = createMechanismRuntimeSnapshot({
+      mapData,
+      assemblyEntries: entries,
+      gearNodes: [node],
+      sourceAngle: 90
+    });
+    const rawReverseDistance = getRackTranslationDistance(entries[0], -90);
+    const reverseDistance = getRackContactLimitedTranslationDistance(entries[0], -90);
+    const reverseSnapshot = createMechanismRuntimeSnapshot({
+      mapData,
+      assemblyEntries: entries,
+      gearNodes: [node],
+      sourceAngle: -90
+    });
+
+    expect(entries).toHaveLength(1);
+    expect(entries[0]).toMatchObject({
+      motionType: 'rackTranslation',
+      contactSideSign: -1,
+      rackId: rack.id,
+      translationAxis: { x: 0, y: 0, z: 1 }
+    });
+    expect(Math.abs(forwardDistance)).toBeLessThan(Math.abs(rawForwardDistance));
+    expect(Math.abs(reverseDistance)).toBeLessThan(Math.abs(rawReverseDistance));
+    expect(forwardSnapshot.racks[rack.id].start.z).toBeCloseTo(rack.start.z + forwardDistance, 6);
+    expect(forwardSnapshot.racks[rack.id].end.z).toBeCloseTo(rack.end.z + forwardDistance, 6);
+    expect(reverseSnapshot.racks[rack.id].start.z).toBeCloseTo(rack.start.z + reverseDistance, 6);
+    expect(reverseSnapshot.racks[rack.id].end.z).toBeCloseTo(rack.end.z + reverseDistance, 6);
+    expect(forwardSnapshot.racks[rack.id].start.z).toBeLessThan(rack.start.z);
+    expect(reverseSnapshot.racks[rack.id].start.z).toBeGreaterThan(rack.start.z);
+  });
+
+  it('stops a finite vertical rack when the driving gear reaches the rack end', () => {
+    const rack = {
+      id: 'vertical_rack_contact_stop',
+      componentType: DOUBLE_SIDED_RACK_COMPONENT_TYPE,
+      plane: 'vertical',
+      normalAxis: 'y',
+      direction: 'z',
+      start: { x: 1.5, y: 1, z: 0 },
+      end: { x: 1.5, y: 1, z: 1 }
+    };
+    const node = {
+      id: 'driver:gear_lower',
+      componentKey: 'driver',
+      mountId: 'gear_lower',
+      worldPoint: { x: 1, y: 1, z: 0.5 },
+      point: { x: 1, y: 1, z: 0.5 },
+      placement: { x: 1, y: 1, z: 0, isVertical: true },
+      pitchRadiusWorld: CITY_CHANNEL_GEAR_PITCH_RADIUS_WORLD,
+      gearRatioRadius: 18,
+      driveRatio: 1,
+      surfaceKey: 'vertical:1:front',
+      mount: { id: 'gear_lower', position: 'center' }
+    };
+    const mapData = {
+      ...createBaseCityChannelMap({ name: 'vertical finite rack contact stop' }),
+      tiles: {},
+      walls: {},
+      racks: { [rack.id]: rack }
+    };
+
+    const entries = createRackTranslationRuntimeEntries({ mapData, nodes: [node] });
+    const rawDistance = getRackTranslationDistance(entries[0], -180);
+    const limitedDistance = getRackContactLimitedTranslationDistance(entries[0], -180);
+    const snapshot = createMechanismRuntimeSnapshot({
+      mapData,
+      assemblyEntries: entries,
+      gearNodes: [node],
+      sourceAngle: -180
+    });
+
+    expect(getRackTranslationTravelLimits(entries[0])).toMatchObject({
+      min: -0.5,
+      max: 0.5
+    });
+    expect(rawDistance).toBeGreaterThan(0.5);
+    expect(limitedDistance).toBeCloseTo(0.5, 6);
+    expect(snapshot.racks[rack.id].start.z).toBeCloseTo(0.5, 6);
+    expect(snapshot.racks[rack.id].end.z).toBeCloseTo(1.5, 6);
+    expect(snapshot.racks[rack.id].runtimeLinearDistance).toBeCloseTo(0.5, 6);
+  });
+
+  it('rotates a passive upper gear when a translated rack reaches it', () => {
+    const rack = {
+      id: 'vertical_rack_drives_upper_passive',
+      componentType: DOUBLE_SIDED_RACK_COMPONENT_TYPE,
+      plane: 'vertical',
+      normalAxis: 'y',
+      direction: 'z',
+      start: { x: 1.5, y: 1, z: 0 },
+      end: { x: 1.5, y: 1, z: 1 }
+    };
+    const lowerGear = {
+      id: 'driver:gear_lower',
+      componentKey: 'driver',
+      mountId: 'gear_lower',
+      worldPoint: { x: 1, y: 1, z: 0.5 },
+      point: { x: 1, y: 1, z: 0.5 },
+      placement: { x: 1, y: 1, z: 0, isVertical: true },
+      pitchRadiusWorld: CITY_CHANNEL_GEAR_PITCH_RADIUS_WORLD,
+      gearRatioRadius: 18,
+      driveRatio: 1,
+      surfaceKey: 'vertical:1:front',
+      mount: { id: 'gear_lower', position: 'center' }
+    };
+    const upperGear = {
+      id: 'upper:gear_passive',
+      componentKey: 'upper',
+      mountId: 'gear_passive',
+      worldPoint: { x: 1, y: 1, z: 1.25 },
+      point: { x: 1, y: 1, z: 1.25 },
+      placement: { x: 1, y: 1, z: 1, isVertical: true },
+      pitchRadiusWorld: CITY_CHANNEL_GEAR_PITCH_RADIUS_WORLD,
+      gearRatioRadius: 18,
+      surfaceKey: 'vertical:1:front',
+      mount: { id: 'gear_passive', position: 'center', phase: 0 }
+    };
+    const mapData = {
+      ...createBaseCityChannelMap({ name: 'vertical rack passive gear pickup' }),
+      tiles: {},
+      walls: {},
+      racks: { [rack.id]: rack }
+    };
+
+    const entries = createRackTranslationRuntimeEntries({ mapData, nodes: [lowerGear] });
+    const limitedDistance = getRackContactLimitedTranslationDistance(entries[0], -180);
+    const snapshot = createMechanismRuntimeSnapshot({
+      mapData,
+      assemblyEntries: entries,
+      gearNodes: [lowerGear],
+      rackContactGearNodes: [lowerGear, upperGear],
+      sourceAngle: -180,
+      basePhases: new Map([
+        [lowerGear.id, 0],
+        [upperGear.id, 0]
+      ])
+    });
+    const upperEngagedDistance = limitedDistance - (upperGear.worldPoint.z - rack.end.z);
+    const expectedUpperAngle = (-upperEngagedDistance * 180) / (Math.PI * CITY_CHANNEL_GEAR_PITCH_RADIUS_WORLD);
+    const expectedUpperPhase = ((Math.trunc(expectedUpperAngle) % 360) + 360) % 360;
+
+    expect(limitedDistance).toBeCloseTo(0.5, 6);
+    expect(upperEngagedDistance).toBeCloseTo(0.25, 6);
+    expect(snapshot.gears[lowerGear.id].phase).toBe(180);
+    expect(snapshot.gears[upperGear.id]).toMatchObject({
+      componentKey: upperGear.componentKey,
+      mountId: upperGear.mountId,
+      axisType: 'freeAxis'
+    });
+    expect(snapshot.gears[upperGear.id].phase).toBe(expectedUpperPhase);
+    expect(snapshot.gears[upperGear.id].speedRatio).toBeCloseTo(expectedUpperAngle / -180, 6);
   });
 
   it('creates runtime snapshots without mutating static mapData', () => {
@@ -500,6 +770,14 @@ describe('cityChannelMechanismSimulation', () => {
         worldPoint: { x: 1.4, y: 0, z: 0 },
         pitchRadiusWorld: CITY_CHANNEL_GEAR_PITCH_RADIUS_WORLD,
         gearRatioRadius: 18
+      },
+      {
+        id: 'loose',
+        componentKey: 'loose',
+        surfaceKey: 'floor:0:front',
+        worldPoint: { x: 0.86, y: 0, z: 0 },
+        pitchRadiusWorld: CITY_CHANNEL_GEAR_PITCH_RADIUS_WORLD,
+        gearRatioRadius: 18
       }
     ];
 
@@ -508,6 +786,7 @@ describe('cityChannelMechanismSimulation', () => {
     expect(graph.get('center')).toEqual([{ id: 'corner', ratio: -1 }]);
     expect(graph.get('corner')).toEqual([{ id: 'center', ratio: -1 }]);
     expect(graph.get('far')).toEqual([]);
+    expect(graph.get('loose')).toEqual([]);
   });
 
   it('propagates driven gear direction and phase through the shared contact graph', () => {

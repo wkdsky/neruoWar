@@ -240,7 +240,6 @@ export const getGearRotationDirectionConfigStatus = ({
     Object.values(mapData.racks || {})
   );
   const activeNeighborIds = (contactGraph.get(targetId) || [])
-    .filter((edge) => !edge.viaRackId)
     .map((edge) => edge.id)
     .filter((neighborId) => isActiveGearNode(nodeById.get(neighborId)));
   return {

@@ -33,10 +33,10 @@ import {
   getAllowedRotationAngle,
   getAxisBindingForMount,
   getFixedAxisWorldAnchor,
+  getRackContactLimitedTranslationDistance,
   getGearMeshPlane,
   getGearTeeth,
   getGearWorldPosition,
-  getRackTranslationDistance,
   isDrivenGearAxisBindingActive,
   isRackTranslationRuntimeEntry
 } from '../cityChannelMechanismSimulation';
@@ -431,6 +431,7 @@ export const getGearRotationTransmissionEventKeys = (assembly, assemblyEntries =
 export const playAssemblyGearRotation = (scene, assembly, sourceComponentKey, params) => {
   const nodes = resolveDrivenGearNodes(scene, assembly, sourceComponentKey);
   if (nodes.length <= 0) return false;
+  const allGearNodes = getAllGearNodes(scene);
   const graph = scene.getMechanicalAssemblyGraph?.();
   const seenAxisBindings = new Set();
   const fixedNodes = nodes.filter((node) => isDrivenGearAxisBindingActive(node, assembly));
@@ -522,7 +523,7 @@ export const playAssemblyGearRotation = (scene, assembly, sourceComponentKey, pa
   const targetAngle = normalized.rotationAngle;
   const obstructions = assemblyEntries.map((entry) => {
     if (isRackTranslationRuntimeEntry(entry)) {
-      const targetDistance = getRackTranslationDistance(entry, targetAngle);
+      const targetDistance = getRackContactLimitedTranslationDistance(entry, targetAngle);
       const obstruction = findRackTranslationObstruction({
         mapData: scene.mapData,
         assembly: entry.assembly,
@@ -579,12 +580,17 @@ export const playAssemblyGearRotation = (scene, assembly, sourceComponentKey, pa
   const duration = Math.max(120, Math.round((Math.max(1, normalized.rotationAngle) / Math.max(1, normalized.rotationSpeedDegPerSec)) * 1000));
   const forwardDuration = Math.max(80, Math.round(duration * (Math.abs(blockedTargetAngle) / Math.max(1, Math.abs(targetAngle)))));
   const delay = Math.round(normalized.triggerDelaySeconds * 1000);
-  const basePhases = new Map(nodes.map((node) => [node.id, Number(node.mount?.phase) || 0]));
+  const phaseNodeById = new Map();
+  [...allGearNodes, ...nodes].forEach((node) => {
+    if (node?.id && !phaseNodeById.has(node.id)) phaseNodeById.set(node.id, node);
+  });
+  const basePhases = new Map([...phaseNodeById.values()].map((node) => [node.id, Number(node.mount?.phase) || 0]));
   const applyRuntimeState = (angle) => {
     const snapshot = createMechanismRuntimeSnapshot({
       mapData: scene.mapData,
       assemblyEntries,
       gearNodes: nodes,
+      rackContactGearNodes: allGearNodes,
       sourceAngle: angle,
       basePhases,
       obstruction: limitingObstruction

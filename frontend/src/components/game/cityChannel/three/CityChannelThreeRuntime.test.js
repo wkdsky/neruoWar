@@ -14,6 +14,7 @@ import {
   buildCityChannelThreeRenderModel,
   getThreeGearSurfacePoint,
   getThreeSurfacePoint,
+  isThreeVerticalSupportPlacement,
   isThreePlacementVisible
 } from './cityChannelThreeGeometry';
 import {
@@ -25,7 +26,11 @@ import {
   DOUBLE_SIDED_RACK_COMPONENT_TYPE,
   DOUBLE_SIDED_RACK_TOOTH_DEPTH_WORLD
 } from '../cityChannelRackModel';
-import CityChannelThreeRuntime from './CityChannelThreeRuntime';
+import CityChannelThreeRuntime, {
+  createGearDirectionArcGeometry,
+  createGearDirectionArrowHeadGeometry,
+  getGearDirectionArrowTip
+} from './CityChannelThreeRuntime';
 
 const createRuntimeHarness = (overrides = {}) => ({
   clearLongPressTimer: jest.fn(),
@@ -80,6 +85,33 @@ const pointerDownEvent = {
 };
 
 describe('CityChannelThreeRuntime pointer release flow', () => {
+  it('allows the orthographic canvas to zoom to 400 percent', () => {
+    const runtime = createRuntimeObject({
+      zoom: 3.95,
+      camera: {
+        zoom: 3.95,
+        updateProjectionMatrix: jest.fn()
+      },
+      config: {
+        selection: { cells: [], walls: [] }
+      },
+      requestRender: jest.fn(),
+      emitCamera: jest.fn(),
+      emitStatus: jest.fn()
+    });
+    const event = {
+      deltaY: -1000,
+      preventDefault: jest.fn()
+    };
+
+    CityChannelThreeRuntime.prototype.handleWheel.call(runtime, event);
+
+    expect(runtime.zoom).toBe(4);
+    expect(runtime.camera.zoom).toBe(4);
+    expect(runtime.camera.updateProjectionMatrix).toHaveBeenCalled();
+    expect(runtime.emitCamera).toHaveBeenCalled();
+  });
+
   it('commits the currently displayed placement ghost before recalculating hover', () => {
     const runtime = createRuntimeHarness({
       commitPlacementTarget: jest.fn(() => true)
@@ -909,10 +941,14 @@ describe('CityChannelThreeRuntime pointer release flow', () => {
     });
     const toothMeshes = group.children.filter((child) => (
       child.type === 'Mesh'
-      && child.geometry?.parameters?.depth === DOUBLE_SIDED_RACK_TOOTH_DEPTH_WORLD
+      && child.userData?.cityChannel?.kind === 'rackTooth'
     ));
 
     expect(toothMeshes.length).toBeGreaterThan(0);
+    toothMeshes[0].geometry.computeBoundingBox();
+    const toothDepth = toothMeshes[0].geometry.boundingBox.max.z - toothMeshes[0].geometry.boundingBox.min.z;
+    expect(toothDepth).toBeCloseTo(DOUBLE_SIDED_RACK_TOOTH_DEPTH_WORLD, 6);
+    expect(toothDepth).toBeLessThan(0.1);
   });
 
   it('uses the expected horizontal direction for double-click drag camera rotation', () => {
@@ -2274,6 +2310,58 @@ describe('CityChannelThreeRuntime placement rendering', () => {
     })).toBe(true);
   });
 
+  it('keeps vertical boards mounted in the main canvas even above the floor cutoff', () => {
+    const floor = createTile({
+      x: 1,
+      y: 1,
+      z: 0,
+      panelType: CITY_CHANNEL_TILE_TYPES.BASIC_PLATE
+    });
+    const upperVertical = {
+      ...createTile({
+        x: 3,
+        y: 3,
+        z: 2,
+        panelType: CITY_CHANNEL_TILE_TYPES.BASIC_PLATE,
+        rotation: 90
+      }),
+      isVertical: true
+    };
+    const hiddenFloor = createTile({
+      x: 2,
+      y: 2,
+      z: 1,
+      panelType: CITY_CHANNEL_TILE_TYPES.BASIC_PLATE
+    });
+    const mapData = {
+      ...createBaseCityChannelMap({ width: 5, height: 5, layers: 3 }),
+      tiles: {
+        [createCellKey(1, 1, 0)]: floor,
+        [createCellKey(3, 3, 2)]: upperVertical,
+        [createCellKey(2, 2, 1)]: hiddenFloor
+      },
+      walls: {}
+    };
+    const runtime = {
+      ...createDetailRuntimeHarness(),
+      renderModel: buildCityChannelThreeRenderModel(mapData),
+      config: {
+        wallViewMode: 'semi',
+        visibleLayerCutoff: 0
+      },
+      addRacks: jest.fn(),
+      addGearContactVisuals: jest.fn(),
+      addGroundGrid: jest.fn(),
+      addCoordinateLabels: jest.fn()
+    };
+
+    CityChannelThreeRuntime.prototype.rebuildMap.call(runtime);
+
+    expect(isThreeVerticalSupportPlacement(upperVertical)).toBe(true);
+    expect(runtime.placementGroups.has(createCellKey(3, 3, 2))).toBe(true);
+    expect(runtime.placementGroups.has(createCellKey(2, 2, 1))).toBe(false);
+  });
+
   it('applies runtime rack translation to the whole rack render group', () => {
     const group = new THREE.Group();
     const runtime = {
@@ -2422,7 +2510,7 @@ describe('CityChannelThreeRuntime placement rendering', () => {
     expect(overlay.userData.fill.visible).toBe(false);
     expect(rackOverlayGroup.children.some((child) => (
       child.type === 'Mesh'
-      && child.geometry?.parameters?.depth === DOUBLE_SIDED_RACK_TOOTH_DEPTH_WORLD
+      && child.userData?.cityChannel?.kind === 'rackTooth'
     ))).toBe(true);
 
     runtime.selectedMeshes = [boardMesh];
@@ -2471,6 +2559,9 @@ describe('CityChannelThreeRuntime gear transmission', () => {
     getGearAttachmentContext: CityChannelThreeRuntime.prototype.getGearAttachmentContext,
     getGearNodesForMounts: CityChannelThreeRuntime.prototype.getGearNodesForMounts,
     getAllGearNodes: CityChannelThreeRuntime.prototype.getAllGearNodes,
+    getGearMeshPhaseOffsetMap: CityChannelThreeRuntime.prototype.getGearMeshPhaseOffsetMap,
+    getGearMeshPhaseOffset: CityChannelThreeRuntime.prototype.getGearMeshPhaseOffset,
+    getGearVisualPhase: CityChannelThreeRuntime.prototype.getGearVisualPhase,
     getAssemblyGearNodes: CityChannelThreeRuntime.prototype.getAssemblyGearNodes,
     resolveDrivenGearNodes: CityChannelThreeRuntime.prototype.resolveDrivenGearNodes,
     getGearRotationTransmissionEventKeys: CityChannelThreeRuntime.prototype.getGearRotationTransmissionEventKeys,
@@ -2898,6 +2989,22 @@ describe('CityChannelThreeRuntime gear transmission', () => {
     expect(snapshot.placements).toEqual({});
   });
 
+  it('adds a half-tooth visual phase offset to directly meshed gears', () => {
+    const {
+      sourceKey,
+      drivenKey,
+      mapData
+    } = createMeshedGearMap();
+    const runtime = createTransmissionRuntimeHarness(mapData);
+
+    expect(CityChannelThreeRuntime.prototype.getGearMeshPhaseOffset.call(runtime, sourceKey, 'gear_center'))
+      .toBe(0);
+    expect(CityChannelThreeRuntime.prototype.getGearMeshPhaseOffset.call(runtime, drivenKey, 'gear_corner'))
+      .toBeCloseTo(10, 6);
+    expect(CityChannelThreeRuntime.prototype.getGearVisualPhase.call(runtime, drivenKey, 'gear_corner', 270))
+      .toBe(280);
+  });
+
   it('degrades a meshed bound intersection gear into an unbound passive gear', () => {
     const sourceKey = createCellKey(1, 1, 0);
     const driverKey = createCellKey(2, 1, 0);
@@ -3210,6 +3317,95 @@ describe('CityChannelThreeRuntime gear transmission', () => {
     });
   });
 
+  it('translates a rack-bound board when a pressure-plate center gear meshes with rack side teeth', () => {
+    const sourceKey = createCellKey(1, 1, 0);
+    const boundKey = createCellKey(1, 2, 0);
+    const source = createTile({
+      x: 1,
+      y: 1,
+      z: 0,
+      panelType: CITY_CHANNEL_TILE_TYPES.GEAR_PRESSURE_PLATE
+    });
+    source.gearMounts = [{
+      id: 'gear_center',
+      componentType: 'gear',
+      position: 'center',
+      socketKind: 'center',
+      surface: 'front',
+      teeth: 18,
+      phase: 0
+    }];
+    const bound = createTile({
+      x: 1,
+      y: 2,
+      z: 0,
+      panelType: CITY_CHANNEL_TILE_TYPES.BASIC_PLATE
+    });
+    const rack = {
+      id: 'rack_center_side_pressure_drive',
+      componentType: DOUBLE_SIDED_RACK_COMPONENT_TYPE,
+      direction: 'x',
+      z: 0,
+      start: { x: 0.5, y: 1.5, z: 0 },
+      end: { x: 2.5, y: 1.5, z: 0 },
+      axisBinding: {
+        hostKind: 'tile',
+        componentKey: boundKey
+      }
+    };
+    const mapData = {
+      ...createBaseCityChannelMap({ width: 4, height: 4, layers: 2 }),
+      tiles: {
+        [sourceKey]: source,
+        [boundKey]: bound
+      },
+      walls: {},
+      racks: {
+        [rack.id]: rack
+      }
+    };
+    const runtime = {
+      ...createTransmissionRuntimeHarness(mapData),
+      config: {
+        mechanismParams: {},
+        onToast: jest.fn()
+      },
+      mechanismRuntimeSnapshot: null,
+      cancelMechanismRuntimePreview: jest.fn(),
+      setMechanismRuntimeSnapshot: jest.fn(function setMechanismRuntimeSnapshot(snapshot) {
+        this.mechanismRuntimeSnapshot = snapshot;
+      }),
+      playMechanismRuntimePreview: jest.fn(function playMechanismRuntimePreview(args) {
+        const basePhases = new Map(args.gearNodes.map((node) => [node.id, Number(node.mount?.phase) || 0]));
+        this.setMechanismRuntimeSnapshot(this.createRuntimeSnapshotForMechanism({
+          ...args,
+          sourceAngle: args.targetAngle,
+          basePhases
+        }));
+      }),
+      flashMechanismObstruction: jest.fn()
+    };
+
+    const played = CityChannelThreeRuntime.prototype.triggerMechanismAtCell.call(runtime, { x: 1, y: 1, z: 0 }, {
+      rotationAngle: 90,
+      rotationSpeedDegPerSec: 360,
+      triggerDelaySeconds: 0,
+      autoReturn: false
+    });
+
+    expect(played).toBe(true);
+    expect(runtime.mechanismRuntimeSnapshot.placements[boundKey]).toMatchObject({
+      runtimeMotionType: 'rackTranslation',
+      runtimeRackId: rack.id
+    });
+    expect(runtime.mechanismRuntimeSnapshot.placements[boundKey].runtimeAngle).toBeUndefined();
+    expect(runtime.mechanismRuntimeSnapshot.placements[boundKey].x).not.toBe(bound.x);
+    expect(runtime.mechanismRuntimeSnapshot.racks[rack.id]).toMatchObject({
+      runtimeMotionType: 'rackTranslation',
+      runtimeSourceGearMountId: 'gear_center'
+    });
+  });
+
   it('blocks a bound board when gear transmission would rotate it into the source assembly', () => {
     const {
       mapData
@@ -3440,6 +3636,88 @@ describe('CityChannelThreeRuntime gear transmission', () => {
     });
   });
 
+  it('draws gear direction arrows in the same visible direction as rendered gear phase', () => {
+    const camera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0.1, 200);
+    camera.position.set(9, 8, 9);
+    camera.lookAt(new THREE.Vector3(0, 0, 0));
+    camera.updateMatrixWorld(true);
+    camera.updateProjectionMatrix();
+    const project = (point) => point.clone().project(camera);
+    const getScreenHand = (from, to) => {
+      const start = project(from);
+      const end = project(to);
+      return (start.x * end.y) - (start.y * end.x);
+    };
+    const runtime = {
+      getGearSurfaceQuaternion: CityChannelThreeRuntime.prototype.getGearSurfaceQuaternion,
+      getGearSurfaceRotationDegrees: CityChannelThreeRuntime.prototype.getGearSurfaceRotationDegrees
+    };
+    const transform = {
+      kind: 'tile',
+      key: createCellKey(1, 1, 0),
+      panelType: CITY_CHANNEL_TILE_TYPES.BASIC_PLATE,
+      size: { x: 1, y: 0.08, z: 1 },
+      position: { x: 0, y: 0.04, z: 0 },
+      rotationY: 0,
+      placement: {
+        x: 1,
+        y: 1,
+        z: 0,
+        panelType: CITY_CHANNEL_TILE_TYPES.BASIC_PLATE
+      }
+    };
+    const phaseStart = new THREE.Vector3(1, 0, 0).applyQuaternion(
+      CityChannelThreeRuntime.prototype.getGearQuaternion.call(runtime, transform, { surface: 'front' }, 0)
+    );
+    const clockwisePhaseNext = new THREE.Vector3(1, 0, 0).applyQuaternion(
+      CityChannelThreeRuntime.prototype.getGearQuaternion.call(runtime, transform, { surface: 'front' }, 10)
+    );
+    const counterclockwisePhaseNext = new THREE.Vector3(1, 0, 0).applyQuaternion(
+      CityChannelThreeRuntime.prototype.getGearQuaternion.call(runtime, transform, { surface: 'front' }, -10)
+    );
+    const clockwiseGeometry = createGearDirectionArcGeometry(true, 1, 8);
+    const counterclockwiseGeometry = createGearDirectionArcGeometry(false, 1, 8);
+    const clockwisePositions = clockwiseGeometry.getAttribute('position');
+    const counterclockwisePositions = counterclockwiseGeometry.getAttribute('position');
+    const getPoint = (attribute, index) => new THREE.Vector3(
+      attribute.getX(index),
+      attribute.getY(index),
+      attribute.getZ(index)
+    );
+    const clockwiseStart = getPoint(clockwisePositions, 0);
+    const clockwiseNext = getPoint(clockwisePositions, 1);
+    const counterclockwiseStart = getPoint(counterclockwisePositions, 0);
+    const counterclockwiseNext = getPoint(counterclockwisePositions, 1);
+    const clockwiseTip = getGearDirectionArrowTip(true, 1);
+    const counterclockwiseTip = getGearDirectionArrowTip(false, 1);
+
+    expect(Math.sign(getScreenHand(clockwiseStart, clockwiseNext)))
+      .toBe(Math.sign(getScreenHand(phaseStart, clockwisePhaseNext)));
+    expect(Math.sign(getScreenHand(counterclockwiseStart, counterclockwiseNext)))
+      .toBe(Math.sign(getScreenHand(phaseStart, counterclockwisePhaseNext)));
+    expect(Math.sign(getScreenHand(clockwiseTip.point, clockwiseTip.point.clone().add(clockwiseTip.tangent))))
+      .toBe(Math.sign(getScreenHand(phaseStart, clockwisePhaseNext)));
+    expect(Math.sign(getScreenHand(counterclockwiseTip.point, counterclockwiseTip.point.clone().add(counterclockwiseTip.tangent))))
+      .toBe(Math.sign(getScreenHand(phaseStart, counterclockwisePhaseNext)));
+  });
+
+  it('uses a flat gear direction arrow head with its tip aligned to the tangent', () => {
+    const geometry = createGearDirectionArrowHeadGeometry(0.075, 0.18);
+    const positions = geometry.getAttribute('position');
+    const localTip = new THREE.Vector3(positions.getX(0), positions.getY(0), positions.getZ(0));
+    const localBaseCenter = new THREE.Vector3(
+      (positions.getX(1) + positions.getX(2)) / 2,
+      (positions.getY(1) + positions.getY(2)) / 2,
+      (positions.getZ(1) + positions.getZ(2)) / 2
+    );
+    const clockwiseTip = getGearDirectionArrowTip(true, 1);
+    const angle = Math.atan2(clockwiseTip.tangent.x, clockwiseTip.tangent.z);
+    const rotation = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), angle);
+    const worldDirection = localTip.clone().sub(localBaseCenter).applyQuaternion(rotation).normalize();
+
+    expect(worldDirection.dot(clockwiseTip.tangent)).toBeCloseTo(1, 6);
+  });
+
   it('keeps pressure-linked center gears configurable even when meshed with an active gear', () => {
     const {
       source,
@@ -3490,6 +3768,79 @@ describe('CityChannelThreeRuntime gear transmission', () => {
         componentKey: sourceKey,
         socket: 'corner_ne',
         surface: 'front'
+      }
+    };
+    const runtime = createBindingVisualRuntimeHarness(mapData);
+    const drivenTransform = runtime.renderModel.tiles.find((item) => item.key === drivenKey);
+    setHoveredGear(runtime, {
+      hostKey: drivenKey,
+      host: driven,
+      transform: drivenTransform,
+      mount: driven.gearMounts[0]
+    });
+
+    CityChannelThreeRuntime.prototype.updateGearBindingOverlay.call(runtime);
+
+    const directionIcon = runtime.overlayGroup.children.find((child) => (
+      child.userData.cityChannelGearRole === 'gear_direction_icon'
+    ));
+    expect(directionIcon).toBeUndefined();
+  });
+
+  it('does not draw a direction icon while a rack drives the hovered gear from an active gear', () => {
+    const sourceKey = createCellKey(1, 1, 0);
+    const drivenKey = createCellKey(2, 1, 0);
+    const source = createTile({
+      x: 1,
+      y: 1,
+      z: 0,
+      panelType: CITY_CHANNEL_TILE_TYPES.GEAR_PRESSURE_PLATE
+    });
+    source.gearMounts = [{
+      id: 'gear_corner',
+      componentType: 'gear',
+      position: 'corner_se',
+      socketKind: 'corner',
+      surface: 'front',
+      rotationDirection: CITY_CHANNEL_GEAR_ROTATION_DIRECTIONS.CLOCKWISE
+    }];
+    const driven = createTile({
+      x: 2,
+      y: 1,
+      z: 0,
+      panelType: CITY_CHANNEL_TILE_TYPES.TRANSMISSION_CROSS_PLATE
+    });
+    driven.gearMounts = [{
+      id: 'gear_corner',
+      componentType: 'gear',
+      position: 'corner_sw',
+      socketKind: 'corner',
+      surface: 'front',
+      rotationDirection: CITY_CHANNEL_GEAR_ROTATION_DIRECTIONS.CLOCKWISE,
+      axisBinding: {
+        hostKind: 'tile',
+        componentKey: sourceKey,
+        socket: 'corner_se',
+        surface: 'front'
+      }
+    }];
+    const rack = {
+      id: 'direction_rack',
+      componentType: DOUBLE_SIDED_RACK_COMPONENT_TYPE,
+      direction: 'x',
+      z: 0,
+      start: { x: 0.5, y: 1.5, z: 0 },
+      end: { x: 2.5, y: 1.5, z: 0 }
+    };
+    const mapData = {
+      ...createBaseCityChannelMap({ width: 4, height: 4, layers: 2 }),
+      tiles: {
+        [sourceKey]: source,
+        [drivenKey]: driven
+      },
+      walls: {},
+      racks: {
+        [rack.id]: rack
       }
     };
     const runtime = createBindingVisualRuntimeHarness(mapData);
