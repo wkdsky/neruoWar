@@ -1532,6 +1532,177 @@ describe('CityChannelThreeRuntime carry ghost pose controls', () => {
   });
 });
 
+describe('CityChannelThreeRuntime board interaction component passthrough', () => {
+  const tileData = {
+    kind: 'tile',
+    placement: { x: 1, y: 1, z: 0 },
+    transform: { kind: 'tile' }
+  };
+  const gearData = {
+    kind: 'gear',
+    placement: { x: 1, y: 1, z: 0 },
+    hostKey: createCellKey(1, 1, 0),
+    hostKind: 'tile'
+  };
+
+  it('uses the board behind a gear while placing a board', () => {
+    const gearObject = { userData: { cityChannel: gearData } };
+    const tileObject = { userData: { cityChannel: tileData } };
+    const runtime = createRuntimeObject({
+      config: {
+        activeTool: CITY_CHANNEL_TOOLS.PLACE_TILE,
+        activeTileType: CITY_CHANNEL_TILE_TYPES.BASIC_PLATE
+      },
+      carryState: null
+    });
+
+    const hit = CityChannelThreeRuntime.prototype.choosePickableHit.call(runtime, [
+      { object: gearObject, distance: 1 },
+      { object: tileObject, distance: 2 }
+    ]);
+
+    expect(hit.object).toBe(tileObject);
+  });
+
+  it('keeps component priority outside board placement and movement', () => {
+    const gearObject = { userData: { cityChannel: gearData } };
+    const tileObject = { userData: { cityChannel: tileData } };
+    const runtime = createRuntimeObject({
+      config: {
+        activeTool: CITY_CHANNEL_TOOLS.SELECT,
+        activeTileType: null
+      },
+      carryState: null
+    });
+
+    const hit = CityChannelThreeRuntime.prototype.choosePickableHit.call(runtime, [
+      { object: tileObject, distance: 1 },
+      { object: gearObject, distance: 2 }
+    ]);
+
+    expect(hit.object).toBe(gearObject);
+  });
+
+  it('shows component blockers as passthrough ghost frames and restores them', () => {
+    const gearMaterial = new THREE.MeshBasicMaterial({ color: 0xf59e0b, opacity: 0.98, transparent: true });
+    const rackMaterial = new THREE.MeshBasicMaterial({ color: 0x334155, opacity: 0.96, transparent: true });
+    const rackEdgeMaterial = new THREE.LineBasicMaterial({ color: 0xfef3c7, opacity: 0.86, transparent: true });
+    const gearObject = new THREE.Mesh(new THREE.BoxGeometry(1, 1, 1), gearMaterial);
+    gearObject.userData.cityChannel = gearData;
+    gearObject.userData.sharedMaterial = true;
+    const directionIcon = new THREE.Group();
+    directionIcon.visible = true;
+    directionIcon.userData.cityChannelGearRole = 'gear_direction_icon';
+    directionIcon.position.copy(gearObject.position);
+    const rackGroup = new THREE.Group();
+    const rackObject = new THREE.Mesh(new THREE.BoxGeometry(1, 0.08, 0.16), rackMaterial);
+    rackObject.userData.cityChannel = {
+      kind: 'rack',
+      key: 'rack_1',
+      rackId: 'rack_1'
+    };
+    rackObject.userData.sharedMaterial = true;
+    const rackEdge = new THREE.LineSegments(new THREE.BufferGeometry(), rackEdgeMaterial);
+    rackEdge.userData.sharedMaterial = true;
+    rackGroup.add(rackObject);
+    rackGroup.add(rackEdge);
+    const runtime = createRuntimeObject({
+      config: {
+        activeTool: CITY_CHANNEL_TOOLS.PLACE_TILE,
+        activeTileType: CITY_CHANNEL_TILE_TYPES.BASIC_PLATE
+      },
+      carryState: null,
+      overlayGroup: {
+        children: [directionIcon]
+      },
+      rackGroups: new Map([['rack_1', rackGroup]]),
+      transientPassthroughComponentState: new Map(),
+      requestRender: jest.fn()
+    });
+
+    CityChannelThreeRuntime.prototype.syncTransientPassthroughComponentGhosts.call(runtime, [
+      { object: gearObject },
+      { object: rackObject }
+    ]);
+
+    expect(gearObject.material).not.toBe(gearMaterial);
+    expect(gearObject.material.wireframe).toBe(true);
+    expect(gearObject.material.opacity).toBeLessThan(0.2);
+    expect(rackObject.material).not.toBe(rackMaterial);
+    expect(rackObject.material.wireframe).toBe(true);
+    expect(rackEdge.material.opacity).toBeGreaterThan(0.7);
+    expect(gearObject.userData.sharedMaterial).toBe(false);
+    expect(directionIcon.visible).toBe(false);
+
+    CityChannelThreeRuntime.prototype.syncTransientPassthroughComponentGhosts.call(runtime, []);
+
+    expect(gearObject.material).toBe(gearMaterial);
+    expect(rackObject.material).toBe(rackMaterial);
+    expect(rackEdge.material).toBe(rackEdgeMaterial);
+    expect(gearObject.userData.sharedMaterial).toBe(true);
+    expect(directionIcon.visible).toBe(true);
+    expect(runtime.requestRender).toHaveBeenCalledTimes(2);
+  });
+
+  it('does not ghost or passthrough while placing a gear component', () => {
+    const gearMaterial = new THREE.MeshBasicMaterial();
+    const gearObject = new THREE.Mesh(new THREE.BoxGeometry(1, 1, 1), gearMaterial);
+    gearObject.userData.cityChannel = gearData;
+    const tileObject = { userData: { cityChannel: tileData } };
+    const runtime = createRuntimeObject({
+      config: {
+        activeTool: CITY_CHANNEL_TOOLS.PLACE_COMPONENT,
+        activeComponentType: 'gear'
+      },
+      carryState: null,
+      transientPassthroughComponentState: new Map(),
+      requestRender: jest.fn()
+    });
+
+    const hit = CityChannelThreeRuntime.prototype.choosePickableHit.call(runtime, [
+      { object: gearObject, distance: 1 },
+      { object: tileObject, distance: 2 }
+    ]);
+    CityChannelThreeRuntime.prototype.syncTransientPassthroughComponentGhosts.call(runtime, [
+      { object: gearObject }
+    ]);
+
+    expect(hit.object).toBe(gearObject);
+    expect(gearObject.material).toBe(gearMaterial);
+    expect(runtime.requestRender).not.toHaveBeenCalled();
+  });
+
+  it('does not redraw a direction icon for a passthrough ghosted gear', () => {
+    const gearObject = new THREE.Mesh(new THREE.BoxGeometry(1, 1, 1), new THREE.MeshBasicMaterial());
+    const runtime = createRuntimeObject({
+      config: {
+        activeTool: CITY_CHANNEL_TOOLS.PLACE_TILE,
+        activeTileType: CITY_CHANNEL_TILE_TYPES.BASIC_PLATE
+      },
+      overlayGroup: new THREE.Group(),
+      gearMeshes: new Map([[`${gearData.hostKey}:gear_a`, gearObject]]),
+      transientPassthroughComponentState: new Map([[gearObject, { root: gearObject }]]),
+      getHoveredGearDirectionIconContext: jest.fn(() => ({
+        hostKey: gearData.hostKey,
+        mount: { id: 'gear_a' },
+        point: { x: 0, y: 0, z: 0 },
+        attachment: {}
+      })),
+      isGearDirectionContextPassthroughGhosted: CityChannelThreeRuntime.prototype.isGearDirectionContextPassthroughGhosted,
+      addGearDirectionHoverIcon: jest.fn(),
+      getSelectedRackBindingContext: jest.fn(() => null),
+      getHoveredRackBindingContext: jest.fn(() => null),
+      getSelectedGearBindingContext: jest.fn(() => null),
+      getHoveredGearBindingContext: jest.fn(() => null),
+      addCurrentGearBindingVisual: jest.fn()
+    });
+
+    CityChannelThreeRuntime.prototype.updateGearBindingOverlay.call(runtime);
+
+    expect(runtime.addGearDirectionHoverIcon).not.toHaveBeenCalled();
+  });
+});
+
 describe('CityChannelThreeRuntime click selection', () => {
   const createSelectionRuntime = ({ hoverData, selection }) => ({
     hoverMesh: {
@@ -4667,6 +4838,93 @@ describe('CityChannelThreeRuntime snap candidates', () => {
     });
   });
 
+  it('keeps a wider middle area for replacement snapping', () => {
+    const tile = createTile({
+      x: 1,
+      y: 1,
+      z: 0,
+      panelType: CITY_CHANNEL_TILE_TYPES.BASIC_PLATE
+    });
+    const mapData = {
+      ...createBaseCityChannelMap({ width: 4, height: 4, layers: 3 }),
+      tiles: {
+        [createCellKey(1, 1, 0)]: tile
+      },
+      walls: {}
+    };
+    const transform = getTileThreeTransform(tile, mapData);
+    const runtime = createSnapRuntimeHarness({
+      mapData,
+      transform,
+      point: {
+        x: transform.position.x + 0.34,
+        y: transform.position.y,
+        z: transform.position.z
+      },
+      config: {
+        panelPose: 'floor'
+      }
+    });
+
+    const target = CityChannelThreeRuntime.prototype.getPlacementTargetFromHoverBoard.call(runtime, {
+      allowReplacement: true
+    });
+
+    expect(target).toMatchObject({
+      kind: 'tile',
+      replace: true,
+      snapKind: 'centerReplace',
+      valid: true
+    });
+  });
+
+  it('keeps a wider middle area for vertical board replacement snapping', () => {
+    const wall = createWall({
+      x: 1,
+      y: 1,
+      z: 0,
+      edge: 'east',
+      panelType: CITY_CHANNEL_TILE_TYPES.BASIC_PLATE
+    });
+    const mapData = {
+      ...createBaseCityChannelMap({ width: 4, height: 4, layers: 3 }),
+      tiles: {
+        [createCellKey(1, 1, 0)]: createTile({ x: 1, y: 1, z: 0 })
+      },
+      walls: {
+        [createWallKey(1, 1, 0, 'east')]: wall
+      }
+    };
+    const transform = getWallThreeTransform(wall, mapData);
+    const runtime = createSnapRuntimeHarness({
+      mapData,
+      transform,
+      point: {
+        x: transform.position.x,
+        y: transform.position.y,
+        z: transform.position.z + 0.34
+      },
+      config: {
+        panelPose: 'wall',
+        activeTileType: CITY_CHANNEL_TILE_TYPES.TRANSMISSION_STRAIGHT_PLATE
+      }
+    });
+
+    const target = CityChannelThreeRuntime.prototype.getPlacementTargetFromHoverBoard.call(runtime, {
+      allowReplacement: true,
+      preferWallPose: true
+    });
+
+    expect(target).toMatchObject({
+      kind: 'wall',
+      replace: true,
+      snapKind: 'centerReplace',
+      valid: true,
+      cell: { x: 1, y: 1, z: 0 },
+      edge: 'east'
+    });
+  });
+
   it('snaps a floor-pose board to a vertical wall target on a precise horizontal edge hit', () => {
     const tile = createTile({
       x: 1,
@@ -4732,7 +4990,7 @@ describe('CityChannelThreeRuntime snap candidates', () => {
       mapData,
       transform,
       point: {
-        x: transform.position.x + 0.39,
+        x: transform.position.x + 0.42,
         y: transform.position.y,
         z: transform.position.z
       },
@@ -4751,6 +5009,41 @@ describe('CityChannelThreeRuntime snap candidates', () => {
       valid: true,
       cell: { x: 2, y: 1, z: 0 }
     });
+  });
+
+  it('requires edge snapping to be closer to the board edge', () => {
+    const tile = createTile({
+      x: 1,
+      y: 1,
+      z: 0,
+      panelType: CITY_CHANNEL_TILE_TYPES.BASIC_PLATE
+    });
+    const mapData = {
+      ...createBaseCityChannelMap({ width: 4, height: 4, layers: 3 }),
+      tiles: {
+        [createCellKey(1, 1, 0)]: tile
+      },
+      walls: {}
+    };
+    const transform = getTileThreeTransform(tile, mapData);
+    const runtime = createSnapRuntimeHarness({
+      mapData,
+      transform,
+      point: {
+        x: transform.position.x + 0.35,
+        y: transform.position.y,
+        z: transform.position.z
+      },
+      config: {
+        panelPose: 'floor'
+      }
+    });
+
+    const target = CityChannelThreeRuntime.prototype.getPlacementTargetFromHoverBoard.call(runtime, {
+      allowReplacement: false
+    });
+
+    expect(target).toBeNull();
   });
 
   it('does not create a replacement candidate while moving an existing board', () => {

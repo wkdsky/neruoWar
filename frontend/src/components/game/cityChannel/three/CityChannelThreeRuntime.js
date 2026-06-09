@@ -109,10 +109,10 @@ const KEYBOARD_PAN_SPEED = 5.5;
 const KEYBOARD_ROTATION_SPEED = 96;
 const SELECTED_MOVE_HOLD_DELAY = 260;
 const SELECTED_MOVE_CANCEL_DRAG_DISTANCE = 3;
-const WALL_EDGE_SNAP_WORLD_RADIUS = 0.18;
-const PRECISE_WALL_EDGE_SNAP_WORLD_RADIUS = 0.055;
-const CENTER_REPLACEMENT_RADIUS = 0.31;
-const VERTICAL_CENTER_REPLACEMENT_RADIUS = 0.22;
+const WALL_EDGE_SNAP_WORLD_RADIUS = 0.13;
+const PRECISE_WALL_EDGE_SNAP_WORLD_RADIUS = 0.04;
+const CENTER_REPLACEMENT_RADIUS = 0.36;
+const VERTICAL_CENTER_REPLACEMENT_RADIUS = 0.72;
 const VERTICAL_SIDE_SECONDARY_SNAP_DISTANCE_BIAS = 0.04;
 const GEAR_SOCKET_HOVER_RADIUS = CITY_CHANNEL_GEAR_OUTER_RADIUS_WORLD;
 const GEAR_COMPONENT_TYPE = 'gear';
@@ -140,9 +140,29 @@ const GEAR_BINDING_ACTIVE_RENDER_ORDER = SELECTION_OVERLAY_RENDER_ORDER + 8;
 const MECHANISM_OBSTRUCTION_FLASH_RENDER_ORDER = SELECTION_OVERLAY_RENDER_ORDER + 18;
 const GEAR_DIRECTION_ICON_RENDER_ORDER = SELECTION_OVERLAY_RENDER_ORDER + 26;
 const GEAR_DIRECTION_ICON_RADIUS = CITY_CHANNEL_GEAR_OUTER_RADIUS_WORLD * 1.12;
+const MECHANICAL_PASSTHROUGH_GHOST_COLOR = 0xa5f3fc;
+const MECHANICAL_PASSTHROUGH_MESH_OPACITY = 0.1;
+const MECHANICAL_PASSTHROUGH_LINE_OPACITY = 0.78;
 
-const chooseCityChannelPickableHit = (hits = []) => {
+const isCityChannelMechanicalComponentPickData = (data = null) => (
+  data?.kind === 'gear'
+  || data?.kind === 'rack'
+  || data?.kind === 'rackTooth'
+);
+
+const chooseCityChannelPickableHit = (hits = [], {
+  passthroughMechanicalComponents = false
+} = {}) => {
   if (!Array.isArray(hits) || hits.length <= 0) return null;
+  if (passthroughMechanicalComponents) {
+    return hits.find((hit) => {
+      const data = hit?.object?.userData?.cityChannel || null;
+      return data?.placement && !isCityChannelMechanicalComponentPickData(data);
+    }) || hits.find((hit) => {
+      const data = hit?.object?.userData?.cityChannel || null;
+      return data && !isCityChannelMechanicalComponentPickData(data);
+    }) || null;
+  }
   return hits.find((hit) => {
     const data = hit?.object?.userData?.cityChannel || null;
     return data?.kind === 'gear' || data?.kind === 'rack';
@@ -503,6 +523,7 @@ export default class CityChannelThreeRuntime {
     this.gearMeshPhaseOffsetMap = null;
     this.rackMeshes = new Map();
     this.rackGroups = new Map();
+    this.transientPassthroughComponentState = new Map();
     this.rackPlacementState = null;
     this.mapDataSource = null;
     this.mechanismPreviewTimer = null;
@@ -1320,6 +1341,9 @@ export default class CityChannelThreeRuntime {
       ...this.config,
       ...next
     };
+    if (!this.shouldPassthroughMechanicalComponentsForBoardInteraction()) {
+      this.syncTransientPassthroughComponentGhosts([]);
+    }
     if (
       hasActiveRotationUpdate
       && this.config.activeTool === CITY_CHANNEL_TOOLS.PLACE_TILE
@@ -1349,12 +1373,14 @@ export default class CityChannelThreeRuntime {
   }
 
   rebuildMap() {
+    this.syncTransientPassthroughComponentGhosts?.([]);
     clearGroup(this.worldGroup);
     this.pickables = [];
     this.placementGroups = new Map();
     this.gearMeshes = new Map();
     this.rackMeshes = new Map();
     this.rackGroups = new Map();
+    this.transientPassthroughComponentState = new Map();
     this.hoverMesh = null;
     this.hoverHit = null;
     this.hoverOverlayGroup = null;
@@ -2574,7 +2600,10 @@ export default class CityChannelThreeRuntime {
       || this.hoverHit?.object?.userData?.cityChannel
       || null
     );
-    if (data?.kind === 'gear') return this.getGearDirectionIconContextForGearData(data);
+    if (data?.kind === 'gear') {
+      const context = this.getGearDirectionIconContextForGearData(data);
+      return this.isGearDirectionContextPassthroughGhosted?.(context) ? null : context;
+    }
     if (!data?.placement || !data.key || !data.transform) return null;
     const mapData = this.renderModel?.mapData || {};
     const hostKind = data.kind === 'wall' ? 'wall' : 'tile';
@@ -2589,7 +2618,7 @@ export default class CityChannelThreeRuntime {
       return !best || distance < best.distance ? { mount, distance } : best;
     }, null)?.mount;
     if (!nearestMount) return null;
-    return this.getGearDirectionIconContextForGearData({
+    const context = this.getGearDirectionIconContextForGearData({
       kind: 'gear',
       hostKind,
       hostKey: data.key,
@@ -2599,6 +2628,13 @@ export default class CityChannelThreeRuntime {
       transform: data.transform,
       mount: nearestMount
     });
+    return this.isGearDirectionContextPassthroughGhosted?.(context) ? null : context;
+  }
+
+  isGearDirectionContextPassthroughGhosted(context = null) {
+    if (!context?.hostKey || !context.mount?.id) return false;
+    const gear = this.gearMeshes?.get?.(`${context.hostKey}:${context.mount.id}`);
+    return !!(gear && this.transientPassthroughComponentState?.has?.(gear));
   }
 
   createGearDirectionIconLine(geometry, material, renderOrder, role = '') {
@@ -3744,7 +3780,9 @@ export default class CityChannelThreeRuntime {
   updateHover(event) {
     this.updatePointerRay(event);
     this.pointerSnapVersion = (this.pointerSnapVersion || 0) + 1;
-    const hit = chooseCityChannelPickableHit(this.raycaster.intersectObjects(this.pickables, false));
+    const hits = this.raycaster.intersectObjects(this.pickables, false);
+    this.syncTransientPassthroughComponentGhosts(hits);
+    const hit = this.choosePickableHit(hits);
     const nextMesh = hit?.object || null;
     this.hoverHit = hit;
     if (nextMesh !== this.hoverMesh) {
@@ -3754,8 +3792,163 @@ export default class CityChannelThreeRuntime {
     }
   }
 
-  choosePickableHit(hits = []) {
-    return chooseCityChannelPickableHit(hits);
+  choosePickableHit(hits = [], options = {}) {
+    return chooseCityChannelPickableHit(hits, {
+      passthroughMechanicalComponents: options.passthroughMechanicalComponents
+        ?? this.shouldPassthroughMechanicalComponentsForBoardInteraction()
+    });
+  }
+
+  shouldPassthroughMechanicalComponentsForBoardInteraction() {
+    return !!(
+      this.carryState
+      || (
+        this.config?.activeTool === CITY_CHANNEL_TOOLS.PLACE_TILE
+        && this.config?.activeTileType
+      )
+    );
+  }
+
+  getPassthroughComponentVisualRoot(object = null) {
+    const data = object?.userData?.cityChannel || null;
+    if (!isCityChannelMechanicalComponentPickData(data)) return null;
+    if ((data.kind === 'rack' || data.kind === 'rackTooth') && data.key) {
+      return this.rackGroups?.get?.(data.key) || object;
+    }
+    return object;
+  }
+
+  forEachPassthroughGhostNode(root = null, callback = () => {}) {
+    if (!root) return;
+    if (typeof root.traverse === 'function') {
+      root.traverse(callback);
+      return;
+    }
+    callback(root);
+  }
+
+  createPassthroughGhostMaterial(material = null, object = null) {
+    if (!material || typeof material.clone !== 'function') return material;
+    const clone = material.clone();
+    clone.transparent = true;
+    clone.opacity = (object?.isLine || object?.isLineSegments || object?.type === 'LineSegments')
+      ? MECHANICAL_PASSTHROUGH_LINE_OPACITY
+      : MECHANICAL_PASSTHROUGH_MESH_OPACITY;
+    clone.depthTest = false;
+    clone.depthWrite = false;
+    if (object?.isMesh && Object.prototype.hasOwnProperty.call(clone, 'wireframe')) {
+      clone.wireframe = true;
+    }
+    if (clone.color?.setHex) clone.color.setHex(MECHANICAL_PASSTHROUGH_GHOST_COLOR);
+    clone.needsUpdate = true;
+    return clone;
+  }
+
+  disposePassthroughGhostMaterial(material = null) {
+    const disposeMaterial = (item) => item?.dispose?.();
+    if (Array.isArray(material)) material.forEach(disposeMaterial);
+    else disposeMaterial(material);
+  }
+
+  applyPassthroughGhostToRoot(root = null) {
+    if (!root) return false;
+    if (!this.transientPassthroughComponentState) {
+      this.transientPassthroughComponentState = new Map();
+    }
+    let changed = false;
+    this.forEachPassthroughGhostNode(root, (object) => {
+      if (this.transientPassthroughComponentState.has(object)) return;
+      const originalMaterial = object.material;
+      const originalSharedMaterial = object.userData?.sharedMaterial;
+      this.transientPassthroughComponentState.set(object, {
+        root,
+        material: originalMaterial,
+        sharedMaterial: originalSharedMaterial
+      });
+      if (!originalMaterial) return;
+      object.material = Array.isArray(originalMaterial)
+        ? originalMaterial.map((material) => this.createPassthroughGhostMaterial(material, object))
+        : this.createPassthroughGhostMaterial(originalMaterial, object);
+      if (object.userData) object.userData.sharedMaterial = false;
+      changed = true;
+    });
+    return changed;
+  }
+
+  getPassthroughGearDirectionIconForRoot(root = null) {
+    const data = root?.userData?.cityChannel || null;
+    if (data?.kind !== 'gear') return null;
+    return (this.overlayGroup?.children || []).find((child) => (
+      child?.userData?.cityChannelGearRole === 'gear_direction_icon'
+      && Math.hypot(
+        (child.position?.x || 0) - (root.position?.x || 0),
+        (child.position?.y || 0) - (root.position?.y || 0),
+        (child.position?.z || 0) - (root.position?.z || 0)
+      ) <= GEAR_DIRECTION_ICON_RADIUS
+    )) || null;
+  }
+
+  syncPassthroughGearDirectionIcon(root = null, hide = false) {
+    const icon = this.getPassthroughGearDirectionIconForRoot(root);
+    if (!icon) return false;
+    if (hide) {
+      if (!root.userData) root.userData = {};
+      const entry = root.userData.cityChannelPassthroughDirectionIcon || null;
+      if (entry?.icon === icon && icon.visible === false) return false;
+      if (!entry) {
+        root.userData.cityChannelPassthroughDirectionIcon = {
+          icon,
+          visible: icon.visible !== false
+        };
+      }
+      if (icon.visible === false) return false;
+      icon.visible = false;
+      return true;
+    }
+    const entry = root?.userData?.cityChannelPassthroughDirectionIcon || null;
+    if (!entry?.icon) return false;
+    const changed = entry.icon.visible !== entry.visible;
+    entry.icon.visible = entry.visible;
+    delete root.userData.cityChannelPassthroughDirectionIcon;
+    return changed;
+  }
+
+  restorePassthroughGhosts(nextGhostRoots = new Set()) {
+    const state = this.transientPassthroughComponentState;
+    if (!state || state.size <= 0) return false;
+    let changed = false;
+    [...state.entries()].forEach(([object, entry]) => {
+      if (nextGhostRoots.has(entry.root)) return;
+      if (object.material && object.material !== entry.material) {
+        this.disposePassthroughGhostMaterial(object.material);
+      }
+      object.material = entry.material;
+      if (object.userData) object.userData.sharedMaterial = entry.sharedMaterial;
+      if (object === entry.root && this.syncPassthroughGearDirectionIcon(object, false)) changed = true;
+      state.delete(object);
+      changed = true;
+    });
+    return changed;
+  }
+
+  syncTransientPassthroughComponentGhosts(hits = []) {
+    if (!this.transientPassthroughComponentState) {
+      this.transientPassthroughComponentState = new Map();
+    }
+    const nextGhostRoots = new Set();
+    if (this.shouldPassthroughMechanicalComponentsForBoardInteraction()) {
+      (Array.isArray(hits) ? hits : []).forEach((hit) => {
+        const root = this.getPassthroughComponentVisualRoot(hit?.object);
+        if (root) nextGhostRoots.add(root);
+      });
+    }
+    let changed = this.restorePassthroughGhosts(nextGhostRoots);
+    nextGhostRoots.forEach((root) => {
+      if (this.applyPassthroughGhostToRoot(root)) changed = true;
+      if (this.syncPassthroughGearDirectionIcon(root, true)) changed = true;
+    });
+    if (changed) this.requestRender?.();
+    return changed;
   }
 
   getPointerLayerCell(layer = null) {
@@ -4375,6 +4568,7 @@ export default class CityChannelThreeRuntime {
   endCarryPreview() {
     this.carryState = null;
     this.config.onCarryStateChange?.(false);
+    this.syncTransientPassthroughComponentGhosts([]);
     this.clearCarryGhost();
     this.updatePlacementGhost();
     this.emitStatus();
@@ -5563,7 +5757,9 @@ export default class CityChannelThreeRuntime {
       return;
     }
     const directionContext = this.getHoveredGearDirectionIconContext();
-    if (directionContext) this.addGearDirectionHoverIcon(directionContext);
+    if (directionContext && !this.isGearDirectionContextPassthroughGhosted?.(directionContext)) {
+      this.addGearDirectionHoverIcon(directionContext);
+    }
     const rackContext = typeof this.getSelectedRackBindingContext === 'function'
       ? this.getSelectedRackBindingContext()
       : null;
