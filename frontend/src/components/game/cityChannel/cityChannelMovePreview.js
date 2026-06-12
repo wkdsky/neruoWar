@@ -7,6 +7,8 @@ import {
   isValidCell,
   normalizeRotation
 } from './cityChannelSchema';
+import { getGearSocketWorldPosition } from './cityChannelMechanismRuntime';
+import { isGearPointOnAnyRack } from './cityChannelRackModel';
 import {
   boxSetsIntersect,
   getCityChannelPlacementCollisionBoxes,
@@ -73,6 +75,16 @@ const addCollisionConflicts = (state, leftEntry, rightEntry) => {
   if (rightEntry.moving) {
     addConflict(state, 'placement_occupied', rightEntry.placement, rightEntry.placement.edge || null);
   }
+};
+
+const addGearRackOverlapConflicts = (state, mapData = {}, placement = null) => {
+  if (!placement || !Array.isArray(placement.gearMounts)) return;
+  const hasOverlap = placement.gearMounts.some((mount) => {
+    if (!mount?.componentType) return false;
+    const point = getGearSocketWorldPosition(placement, mount.position, mount.surface || 'front');
+    return isGearPointOnAnyRack(mapData, point);
+  });
+  if (hasOverlap) addConflict(state, 'gear_rack_overlap', placement, placement.edge || null);
 };
 
 const collectStaticCollisionEntries = ({
@@ -386,6 +398,15 @@ export const computeCityChannelMovePreviewModel = ({
         addCollisionConflicts(state, movingEntry, staticEntry);
       }
     });
+  });
+
+  const previewMapData = {
+    ...mapData,
+    tiles: Object.fromEntries(previewTiles),
+    walls: Object.fromEntries(previewWalls)
+  };
+  [...movedTilePlacements, ...movedWallPlacements].forEach((placement) => {
+    addGearRackOverlapConflicts(state, previewMapData, placement);
   });
 
   return {

@@ -736,6 +736,21 @@ describe('cityChannelThreeGeometry', () => {
       transmissionRotation: 90,
       isVertical: true
     });
+    expect(createThreeVerticalTilePlacementOperation({
+      supportPlacement: supportTile,
+      mapData,
+      activeTool: CITY_CHANNEL_TOOLS.PLACE_TILE,
+      activeTileType: CITY_CHANNEL_TILE_TYPES.TRANSMISSION_ENDPOINT_PLATE,
+      activeRotation: 180
+    })).toMatchObject({
+      kind: 'tile',
+      action: 'place',
+      cell: { x: 1, y: 1, z: 1 },
+      panelType: CITY_CHANNEL_TILE_TYPES.TRANSMISSION_ENDPOINT_PLATE,
+      rotation: 90,
+      transmissionRotation: 180,
+      isVertical: true
+    });
   });
 
   it('continues edge walls upward on the same physical wall plane', () => {

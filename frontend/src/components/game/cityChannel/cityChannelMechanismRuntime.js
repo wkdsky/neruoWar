@@ -304,6 +304,20 @@ export const getGearSocketWorldPosition = (placement = {}, socket = 'center', su
   };
 };
 
+const GEAR_OUTER_RADIUS_WORLD = (Math.SQRT2 / 4) * 1.08;
+const GEAR_GROUND_CLEARANCE_EPSILON = 0.001;
+
+export const getGearSocketGroundClearance = (placement = {}, socket = 'center', surface = 'front') => {
+  if (!placement || (!placement.edge && !placement.isVertical)) return Infinity;
+  const pivot = getGearSocketWorldPosition(placement, socket, surface);
+  if (!pivot) return -Infinity;
+  return (Number(pivot.z) || 0) - GEAR_OUTER_RADIUS_WORLD;
+};
+
+export const isGearSocketAboveGround = (placement = {}, socket = 'center', surface = 'front') => (
+  getGearSocketGroundClearance(placement, socket, surface) >= -GEAR_GROUND_CLEARANCE_EPSILON
+);
+
 const sameCornerPivot = (a = {}, b = {}, epsilon = 0.001) => (
   Math.abs((Number(a.x) || 0) - (Number(b.x) || 0)) <= epsilon
   && Math.abs((Number(a.y) || 0) - (Number(b.y) || 0)) <= epsilon
@@ -454,6 +468,37 @@ const arePortsAligned = (fromPort, toPort) => {
   return Math.abs((fromPos.y || 0) - (toPos.y || 0)) <= 0.08;
 };
 
+const getTransmissionSurfaceNormal = (component = {}) => {
+  if (component.edge) {
+    const normal = directionVector[component.edge] || directionVector.north;
+    return { x: normal.x || 0, y: normal.y || 0, z: 0 };
+  }
+  if (component.isVertical) {
+    const normal = rotateGearLocalPosition({ x: 0, y: 1 }, component.rotation || 0);
+    return { x: normal.x || 0, y: normal.y || 0, z: 0 };
+  }
+  return { x: 0, y: 0, z: 1 };
+};
+
+const areTransmissionSurfacesParallel = (a = {}, b = {}, epsilon = 0.001) => {
+  const normalA = getTransmissionSurfaceNormal(a);
+  const normalB = getTransmissionSurfaceNormal(b);
+  const dot = (normalA.x * normalB.x) + (normalA.y * normalB.y) + (normalA.z * normalB.z);
+  return Math.abs(Math.abs(dot) - 1) <= epsilon;
+};
+
+const isHorizontalTransmissionSurface = (component = {}) => (
+  Math.abs(getTransmissionSurfaceNormal(component).z) > 0.98
+);
+
+const areSocketPortsConnectable = (fromComponent, fromPort, toComponent, toPort) => {
+  if (!fromPort || !toPort) return false;
+  if (areTransmissionSurfacesParallel(fromComponent, toComponent)) {
+    return toPort.worldDirection === oppositeDirection[fromPort.worldDirection];
+  }
+  return isHorizontalTransmissionSurface(fromComponent) !== isHorizontalTransmissionSurface(toComponent);
+};
+
 const getCellVerticalEndpoints = (rotation = 0) => {
   const normalized = ((Number.parseInt(rotation, 10) || 0) % 180 + 180) % 180;
   return normalized === 90
@@ -495,6 +540,12 @@ const getSocketKey = (socket = {}) => [
   Math.round((Number(socket.y) || 0) * 1000),
   Math.round((Number(socket.z) || 0) * 1000)
 ].join(':');
+
+const areTransmissionSocketPositionsEqual = (fromComponent, fromPort, toComponent, toPort) => {
+  const fromSocket = getTransmissionSocketPosition(fromComponent, fromPort);
+  const toSocket = getTransmissionSocketPosition(toComponent, toPort);
+  return !!fromSocket && !!toSocket && getSocketKey(fromSocket) === getSocketKey(toSocket);
+};
 
 const addEdge = (graph, a, b, meta) => {
   graph.set(a, graph.get(a) || []);
@@ -595,8 +646,12 @@ export const buildMechanicalAssemblies = (mapData = {}) => {
       const candidateKeys = getCandidateComponentKeysForPort(tile, port, connectableKeys);
       candidateKeys.forEach((candidateKey) => {
         if (candidateKey === key) return;
+        const candidate = components[candidateKey];
         const targetPorts = portByTileKey.get(candidateKey) || [];
-        const targetPort = targetPorts.find((item) => arePortsAligned(port, item));
+        const targetPort = targetPorts.find((item) => (
+          arePortsAligned(port, item)
+          && areTransmissionSocketPositionsEqual(tile, port, candidate, item)
+        ));
         if (!targetPort) return;
         if (key < candidateKey) {
           addEdge(graph, key, candidateKey, {
@@ -627,6 +682,12 @@ export const buildMechanicalAssemblies = (mapData = {}) => {
         const toEntry = entries[toIndex];
         if (fromEntry.componentKey === toEntry.componentKey) continue;
         if (hasGraphEdge(graph, fromEntry.componentKey, toEntry.componentKey)) continue;
+        if (!areSocketPortsConnectable(
+          components[fromEntry.componentKey],
+          fromEntry.port,
+          components[toEntry.componentKey],
+          toEntry.port
+        )) continue;
         addEdge(graph, fromEntry.componentKey, toEntry.componentKey, {
           from: { componentKey: fromEntry.componentKey, portId: fromEntry.port.id },
           to: { componentKey: toEntry.componentKey, portId: toEntry.port.id },

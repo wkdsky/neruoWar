@@ -18,11 +18,14 @@ import {
 import { getCityChannelMaterial } from './cityChannelCatalog';
 import {
   createRackKey,
+  getRackGearIntersections,
+  isGearPointOnAnyRack,
   normalizeRack
 } from './cityChannelRackModel';
 import {
   CITY_CHANNEL_GEAR_CORNER_SOCKETS,
   getGearSocketWorldPosition,
+  isGearSocketAboveGround,
   isCornerGearSocket
 } from './cityChannelMechanismRuntime';
 import { normalizeGearSurfaceForPanel } from './cityChannelGearPressurePlateRender';
@@ -385,6 +388,13 @@ export const applyPlacementOperationsToMap = (current, operations = []) => {
 
   operations.forEach((operation) => {
     if (operation.kind === 'rack') {
+      if (operation.action === 'erase') {
+        const rackId = operation.rack?.id || operation.id;
+        if (rackId) {
+          delete nextRacks[rackId];
+          return;
+        }
+      }
       const rack = normalizeRack(operation.rack || operation, current);
       if (!rack) return;
       const key = createRackKey(rack);
@@ -392,6 +402,8 @@ export const applyPlacementOperationsToMap = (current, operations = []) => {
         delete nextRacks[key];
         return;
       }
+      const nextMapData = { ...current, tiles: nextTiles, walls: nextWalls, racks: nextRacks };
+      if (getRackGearIntersections(nextMapData, rack).length > 0) return;
       nextRacks[key] = rack;
       return;
     }
@@ -428,6 +440,14 @@ export const applyPlacementOperationsToMap = (current, operations = []) => {
             }
             : operation.mount.axisBinding
         };
+        const mountWorld = getGearSocketWorldPosition(
+          existing,
+          normalizedMount.position,
+          normalizedMount.surface || 'front'
+        );
+        const nextMapData = { ...current, tiles: nextTiles, walls: nextWalls, racks: nextRacks };
+        if (isGearPointOnAnyRack(nextMapData, mountWorld)) return;
+        if (!isGearSocketAboveGround(existing, normalizedMount.position, normalizedMount.surface || 'front')) return;
         targetMap[operation.hostKey] = {
           ...existing,
           gearMounts: [...(existing.gearMounts || []), normalizedMount]

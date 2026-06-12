@@ -17,7 +17,9 @@ import {
   getAssemblyForCell,
   getGearAxisBindingStatus,
   getGearMountLocalPosition,
+  getGearSocketWorldPosition,
   getGearSocketKind,
+  isGearSocketAboveGround,
   isCornerGearSocket,
   normalizeGearMount,
   normalizeGearRotationDirection,
@@ -80,7 +82,6 @@ import {
 import { createCityChannelThreeMaterials } from './cityChannelThreeMaterials';
 import {
   DOUBLE_SIDED_RACK_COMPONENT_TYPE,
-  DOUBLE_SIDED_RACK_CONTACT_EPSILON,
   DOUBLE_SIDED_RACK_HEIGHT_WORLD,
   DOUBLE_SIDED_RACK_LABEL,
   DOUBLE_SIDED_RACK_TOOTH_DEPTH_WORLD,
@@ -91,11 +92,11 @@ import {
   getRackAxisBindingStatus,
   getRackBindingCandidateKey,
   getRackCanonicalSegment,
-  getRackGearContacts,
   getRackPlacementRuleStatus,
   getRackSideCandidates,
   clipRackToCornerGearBlocker,
-  isRackPointOnCornerGear,
+  isGearPointOnAnyRack,
+  isRackPointOnGear,
   normalizeRack,
   snapRackCoord,
   snapRackHalfCoord,
@@ -143,6 +144,11 @@ const GEAR_DIRECTION_ICON_RADIUS = CITY_CHANNEL_GEAR_OUTER_RADIUS_WORLD * 1.12;
 const MECHANICAL_PASSTHROUGH_GHOST_COLOR = 0xa5f3fc;
 const MECHANICAL_PASSTHROUGH_MESH_OPACITY = 0.1;
 const MECHANICAL_PASSTHROUGH_LINE_OPACITY = 0.78;
+const getGearTargetBlockMessage = (reason = '') => {
+  if (reason === 'rack_overlap') return '目标齿轮位与齿条重叠。';
+  if (reason === 'below_ground') return '目标齿轮会低于地面。';
+  return '目标齿轮位已被占用。';
+};
 
 const isCityChannelMechanicalComponentPickData = (data = null) => (
   data?.kind === 'gear'
@@ -2036,7 +2042,7 @@ export default class CityChannelThreeRuntime {
       placement: {
         ...(transform.placement || {}),
         panelType: transform.panelType || transform.placement?.panelType,
-        transmissionSkeleton: transform.placement?.transmissionSkeleton || catalogItem.transmissionSkeleton || null,
+        transmissionSkeleton: catalogItem.transmissionSkeleton || null,
         gearMounts: Array.isArray(transform.placement?.gearMounts)
           ? transform.placement.gearMounts
           : (catalogItem.gearMounts || [])
@@ -3625,6 +3631,7 @@ export default class CityChannelThreeRuntime {
   }
 
   handleSpaceSurfaceToggle() {
+    if (this.carryState?.componentType === DOUBLE_SIDED_RACK_COMPONENT_TYPE) return this.cycleRackCarryPlane();
     if (this.carryState) return this.cycleCarrySnapAxisRotation();
     if (!(this.config.activeTool === CITY_CHANNEL_TOOLS.PLACE_TILE && this.config.activeTileType)) return false;
     if (isPortalMaterial(this.config.activeTileType)) {
@@ -3641,6 +3648,7 @@ export default class CityChannelThreeRuntime {
   }
 
   handleRotateSurface(direction = 'forward') {
+    if (this.carryState?.componentType === DOUBLE_SIDED_RACK_COMPONENT_TYPE) return this.rotateRackCarrySurface();
     if (this.carryState) return this.rotateCarryPlacementSurface(direction);
     if (this.config.activeTool === CITY_CHANNEL_TOOLS.PLACE_TILE && this.config.activeTileType) {
       const currentTarget = this.getReusablePlacementSnapTarget();
@@ -3994,30 +4002,28 @@ export default class CityChannelThreeRuntime {
         line: (Number(placement.y) || 0) + (edge === 'south' ? 0.5 : -0.5)
       };
     }
-    if (!placement.isVertical) return null;
-    const rotation = normalizeRotation(placement.rotation || 0);
-    return rotation === 90 || rotation === 270
-      ? { normalAxis: RACK_DIRECTIONS.X, line: Number(placement.x) || 0 }
-      : { normalAxis: RACK_DIRECTIONS.Y, line: Number(placement.y) || 0 };
+    return null;
   }
 
   normalizeRackStartSnapPoint(point = {}) {
     const plane = point.plane === RACK_PLANES.VERTICAL ? RACK_PLANES.VERTICAL : RACK_PLANES.HORIZONTAL;
-    return plane === RACK_PLANES.VERTICAL
-      ? {
-        x: snapRackHalfCoord(point.x),
-        y: snapRackHalfCoord(point.y),
+    if (plane === RACK_PLANES.VERTICAL) {
+      const normalAxis = point.normalAxis === RACK_DIRECTIONS.X ? RACK_DIRECTIONS.X : RACK_DIRECTIONS.Y;
+      return {
+        x: normalAxis === RACK_DIRECTIONS.X ? snapRackHalfCoord(point.x) : snapRackCoord(point.x),
+        y: normalAxis === RACK_DIRECTIONS.Y ? snapRackHalfCoord(point.y) : snapRackCoord(point.y),
         z: snapRackHeightCoord(point.z),
         plane,
-        normalAxis: point.normalAxis === RACK_DIRECTIONS.X ? RACK_DIRECTIONS.X : RACK_DIRECTIONS.Y,
+        normalAxis,
         normalSign: 1
-      }
-      : {
-        x: snapRackCoord(point.x),
-        y: snapRackCoord(point.y),
-        z: Number(point.z) || 0,
-        plane
       };
+    }
+    return {
+      x: snapRackCoord(point.x),
+      y: snapRackCoord(point.y),
+      z: Number(point.z) || 0,
+      plane
+    };
   }
 
   getRackStartPointThreePosition(point = null, lift = 0.1) {
@@ -4112,7 +4118,7 @@ export default class CityChannelThreeRuntime {
         const data = this.getRackPlacementDataFromHit(hit);
         const point = this.getRackSnapPointFromSurfaceHit(hit, data);
         if (!point) return null;
-        if (!start && isRackPointOnCornerGear(this.renderModel?.mapData || {}, point)) return null;
+        if (!start && isRackPointOnGear(this.renderModel?.mapData || {}, point)) return null;
         if (start && !this.isRackSnapPointCompatibleWithStart(point, start)) return null;
         const key = [
           this.getRackSnapPointCompatibilityKey(point),
@@ -4144,7 +4150,7 @@ export default class CityChannelThreeRuntime {
     const mapData = this.renderModel?.mapData || {};
     const point = this.chooseRackSurfaceSnapPoint(this.getRackSurfaceSnapCandidatesFromPointer())
       || this.getRackSnapPointFromHover();
-    return isRackPointOnCornerGear(mapData, point) ? null : point;
+    return isRackPointOnGear(mapData, point) ? null : point;
   }
 
   getRackSnapPointFromHover() {
@@ -4171,8 +4177,12 @@ export default class CityChannelThreeRuntime {
     if (!hit) return null;
     const center = getThreeMapCenter(this.renderModel?.mapData || {});
     const point = {
-      x: snapRackHalfCoord((Number(hit.x) || 0) + center.x),
-      y: snapRackHalfCoord((Number(hit.z) || 0) + center.y),
+      x: start.normalAxis === RACK_DIRECTIONS.X
+        ? snapRackHalfCoord((Number(hit.x) || 0) + center.x)
+        : snapRackCoord((Number(hit.x) || 0) + center.x),
+      y: start.normalAxis === RACK_DIRECTIONS.Y
+        ? snapRackHalfCoord((Number(hit.z) || 0) + center.y)
+        : snapRackCoord((Number(hit.z) || 0) + center.y),
       z: snapRackHeightCoord((Number(hit.y) || 0) / CITY_CHANNEL_THREE_DIMENSIONS.layerHeight),
       plane: RACK_PLANES.VERTICAL,
       normalAxis: start.normalAxis,
@@ -4259,12 +4269,12 @@ export default class CityChannelThreeRuntime {
       if (direction === RACK_DIRECTIONS.Y) {
         return {
           x: start.x,
-          y: snapRackHalfCoord(endPoint.y),
+          y: snapRackCoord(endPoint.y),
           z: start.z
         };
       }
       return {
-        x: snapRackHalfCoord(endPoint.x),
+        x: snapRackCoord(endPoint.x),
         y: start.y,
         z: start.z
       };
@@ -4367,9 +4377,11 @@ export default class CityChannelThreeRuntime {
   }
 
   getRackPlacementBlockStatusMessage(reason = '') {
+    if (reason === 'gearEndpoint') return `${DOUBLE_SIDED_RACK_LABEL}：不能定位到已有齿轮`;
+    if (reason === 'gearBlocked') return `${DOUBLE_SIDED_RACK_LABEL}：被已有齿轮阻挡`;
     if (reason === 'cornerGearEndpoint') return `${DOUBLE_SIDED_RACK_LABEL}：不能定位到交叉口齿轮`;
     if (reason === 'cornerGearBlocked') return `${DOUBLE_SIDED_RACK_LABEL}：被交叉口齿轮阻挡`;
-    if (reason === 'missingSideBoard') return `${DOUBLE_SIDED_RACK_LABEL}：伸长路径两侧至少一侧必须有板材`;
+    if (reason === 'missingSideBoard') return `${DOUBLE_SIDED_RACK_LABEL}：伸长路径至少一处侧面必须邻接板材`;
     return `${DOUBLE_SIDED_RACK_LABEL}：请选择有效的伸长路径`;
   }
 
@@ -4398,6 +4410,354 @@ export default class CityChannelThreeRuntime {
     });
     this.clearPlacementGhost();
     this.requestRender();
+    return true;
+  }
+
+  getSelectedRackForCarry() {
+    const selectedRack = (this.config.selection?.racks || [])[0] || null;
+    if (!selectedRack?.id) return null;
+    return this.renderModel?.mapData?.racks?.[selectedRack.id] || null;
+  }
+
+  getSelectedGearForCarry() {
+    const selectedGear = (this.config.selection?.gears || [])[0] || null;
+    if (!selectedGear?.hostKey || !selectedGear?.mountId) return null;
+    const mapData = this.renderModel?.mapData || {};
+    const hostKind = selectedGear.hostKind === 'wall' ? 'wall' : 'tile';
+    const placement = hostKind === 'wall'
+      ? mapData.walls?.[selectedGear.hostKey]
+      : mapData.tiles?.[selectedGear.hostKey];
+    const mount = (placement?.gearMounts || []).find((item) => item.id === selectedGear.mountId) || null;
+    if (!placement || !mount) return null;
+    return {
+      ...selectedGear,
+      hostKind,
+      placement,
+      mount
+    };
+  }
+
+  startRackCarry() {
+    const rack = this.getSelectedRackForCarry();
+    if (!rack) return false;
+    const segment = getRackCanonicalSegment(rack);
+    this.carryState = {
+      mode: 'move',
+      componentType: DOUBLE_SIDED_RACK_COMPONENT_TYPE,
+      rackId: rack.id,
+      sourceRack: { ...rack, start: { ...(rack.start || {}) }, end: { ...(rack.end || {}) } },
+      plane: segment.plane,
+      direction: segment.direction,
+      normalAxis: segment.normalAxis || RACK_DIRECTIONS.Y,
+      normalSign: segment.normalSign || 1,
+      z: segment.z ?? rack.z ?? rack.start?.z ?? 0,
+      length: Math.max(1, Math.round(segment.length || 1))
+    };
+    this.config.onCarryStateChange?.(true);
+    this.notifyStatus(`${DOUBLE_SIDED_RACK_LABEL}移动预览：点击目标位置完成移动`);
+    this.updateCarryGhost();
+    this.requestRender();
+    return true;
+  }
+
+  startGearCarry() {
+    const gear = this.getSelectedGearForCarry();
+    if (!gear) return false;
+    this.carryState = {
+      mode: 'move',
+      componentType: GEAR_COMPONENT_TYPE,
+      gear
+    };
+    this.config.onCarryStateChange?.(true);
+    this.notifyStatus('齿轮移动预览：点击目标轴点完成移动');
+    this.updateCarryGhost();
+    this.requestRender();
+    return true;
+  }
+
+  getRackCarryHorizontalDirection() {
+    const direction = this.carryState?.direction;
+    return direction === RACK_DIRECTIONS.Y ? RACK_DIRECTIONS.Y : RACK_DIRECTIONS.X;
+  }
+
+  getRackCarryVerticalDirection() {
+    const direction = this.carryState?.direction;
+    if (direction === RACK_DIRECTIONS.Z) return RACK_DIRECTIONS.Z;
+    const normalAxis = this.carryState?.normalAxis === RACK_DIRECTIONS.X ? RACK_DIRECTIONS.X : RACK_DIRECTIONS.Y;
+    return normalAxis === RACK_DIRECTIONS.X ? RACK_DIRECTIONS.Y : RACK_DIRECTIONS.X;
+  }
+
+  getRackCarryStartPointFromPointer() {
+    if (this.carryState?.plane !== RACK_PLANES.VERTICAL) {
+      return this.getRackHorizontalSnapPointFromPointerRay(this.carryState?.z);
+    }
+    const candidates = this.getRackSurfaceSnapCandidatesFromPointer()
+      .filter((candidate) => candidate.point?.plane === RACK_PLANES.VERTICAL);
+    const preferred = candidates.find((candidate) => (
+      candidate.point?.normalAxis === this.carryState?.normalAxis
+    )) || candidates[0] || null;
+    if (!preferred?.point) return null;
+    return {
+      ...preferred.point,
+      normalSign: this.carryState?.normalSign || 1
+    };
+  }
+
+  createRackCarryRackFromStart(start = null) {
+    if (!this.carryState || !start) return null;
+    const length = Math.max(1, Math.round(this.carryState.length || 1));
+    const plane = this.carryState.plane === RACK_PLANES.VERTICAL ? RACK_PLANES.VERTICAL : RACK_PLANES.HORIZONTAL;
+    const direction = plane === RACK_PLANES.VERTICAL
+      ? this.getRackCarryVerticalDirection()
+      : this.getRackCarryHorizontalDirection();
+    const end = { ...start };
+    if (direction === RACK_DIRECTIONS.Z) end.z = (Number(start.z) || 0) + length;
+    else if (direction === RACK_DIRECTIONS.Y) end.y = (Number(start.y) || 0) + length;
+    else end.x = (Number(start.x) || 0) + length;
+    return normalizeRack({
+      ...(this.carryState.sourceRack || {}),
+      id: this.carryState.rackId,
+      componentType: DOUBLE_SIDED_RACK_COMPONENT_TYPE,
+      plane,
+      direction,
+      normalAxis: plane === RACK_PLANES.VERTICAL ? start.normalAxis : undefined,
+      normalSign: start.normalSign || this.carryState.normalSign || 1,
+      z: start.z,
+      start,
+      end
+    }, this.renderModel?.mapData || {});
+  }
+
+  getRackCarryPreview() {
+    if (this.carryState?.componentType !== DOUBLE_SIDED_RACK_COMPONENT_TYPE) return null;
+    const rack = this.createRackCarryRackFromStart(this.getRackCarryStartPointFromPointer());
+    const mapData = this.renderModel?.mapData || {};
+    const status = rack
+      ? getRackPlacementRuleStatus(mapData, rack)
+      : { valid: false, reason: 'invalidRack' };
+    return {
+      rack,
+      valid: !!rack && status.valid,
+      blockReason: status.reason
+    };
+  }
+
+  rotateRackCarrySurface() {
+    if (this.carryState?.componentType !== DOUBLE_SIDED_RACK_COMPONENT_TYPE) return false;
+    if (this.carryState.plane === RACK_PLANES.VERTICAL) {
+      this.carryState.direction = this.carryState.direction === RACK_DIRECTIONS.Z
+        ? this.getRackCarryVerticalDirection()
+        : RACK_DIRECTIONS.Z;
+    } else {
+      this.carryState.direction = this.getRackCarryHorizontalDirection() === RACK_DIRECTIONS.X
+        ? RACK_DIRECTIONS.Y
+        : RACK_DIRECTIONS.X;
+    }
+    this.notifyStatus(`${DOUBLE_SIDED_RACK_LABEL}移动预览：表面朝向已切换`);
+    this.updateCarryGhost();
+    this.requestRender();
+    return true;
+  }
+
+  cycleRackCarryPlane() {
+    if (this.carryState?.componentType !== DOUBLE_SIDED_RACK_COMPONENT_TYPE) return false;
+    if (this.carryState.plane === RACK_PLANES.VERTICAL) {
+      this.carryState.plane = RACK_PLANES.HORIZONTAL;
+      this.carryState.direction = this.carryState.direction === RACK_DIRECTIONS.Y
+        ? RACK_DIRECTIONS.Y
+        : RACK_DIRECTIONS.X;
+      this.notifyStatus(`${DOUBLE_SIDED_RACK_LABEL}移动预览：平行于水平面`);
+    } else {
+      const direction = this.getRackCarryHorizontalDirection();
+      this.carryState.plane = RACK_PLANES.VERTICAL;
+      this.carryState.direction = direction;
+      this.carryState.normalAxis = direction === RACK_DIRECTIONS.X
+        ? RACK_DIRECTIONS.Y
+        : RACK_DIRECTIONS.X;
+      this.notifyStatus(`${DOUBLE_SIDED_RACK_LABEL}移动预览：平行于竖直面`);
+    }
+    this.updateCarryGhost();
+    this.requestRender();
+    return true;
+  }
+
+  updateRackCarryGhost() {
+    const preview = this.getRackCarryPreview();
+    const group = preview?.rack
+      ? this.createRackRenderGroup(preview.rack, {
+        ghost: true,
+        valid: preview.valid,
+        showTeeth: true,
+        showEndpoints: true,
+        renderOrder: PLACEMENT_GHOST_RENDER_ORDER + 8
+      })
+      : null;
+    this.replaceGhostGroup('carryGhostGroup', group);
+    this.requestRender();
+    this.emitStatus();
+    return preview;
+  }
+
+  commitRackCarryTarget() {
+    const preview = this.getRackCarryPreview();
+    if (!preview?.rack || !preview.valid) {
+      this.config.onToast?.(this.getRackPlacementBlockStatusMessage(preview?.blockReason), 'error');
+      return false;
+    }
+    const rackId = this.carryState?.rackId;
+    this.config.onCommitOperations?.([
+      {
+        kind: 'rack',
+        action: 'erase',
+        rack: { id: rackId }
+      },
+      {
+        kind: 'rack',
+        action: 'place',
+        rack: preview.rack
+      }
+    ], { label: `移动${DOUBLE_SIDED_RACK_LABEL}` });
+    this.emitSelection({
+      cells: [],
+      walls: [],
+      gears: [],
+      racks: [{ id: preview.rack.id || rackId }],
+      scope: 'component'
+    });
+    this.endCarryPreview();
+    return true;
+  }
+
+  getGearMoveTargetFromHoverHit() {
+    if (this.carryState?.componentType !== GEAR_COMPONENT_TYPE) return null;
+    const source = this.carryState.gear;
+    const hitData = this.getHoverPlacementData();
+    if (!source?.mount || !hitData?.placement || hitData.kind === 'gear') return null;
+    const placement = hitData.placement;
+    if (placement.panelType === CITY_CHANNEL_TILE_TYPES.ENTRANCE || placement.panelType === CITY_CHANNEL_TILE_TYPES.EXIT) return null;
+    const hostKind = hitData.kind === 'wall' ? 'wall' : 'tile';
+    const hostKey = hitData.key;
+    const transform = hitData.transform;
+    const surface = this.getGearInstallSurfaceForHover(transform, placement);
+    const local = this.getHoverLocalPoint(transform);
+    const candidates = GEAR_SOCKET_POSITIONS.map((socket) => {
+      const point = getThreeGearSurfacePoint(transform, { position: socket, surface });
+      const socketLocal = getGearMountLocalPosition(socket);
+      const occupied = (placement.gearMounts || []).some((mount) => (
+        mount.id !== source.mount.id
+        && mount.position === socket
+        && normalizeGearSurfaceForPanel(placement.panelType, mount.surface || 'front') === surface
+      ));
+      return {
+        socket,
+        point,
+        occupied,
+        distance: local
+          ? Math.hypot((local.x || 0) - (socketLocal.x || 0), (local.y || 0) - (socketLocal.y || 0))
+          : Infinity
+      };
+    }).sort((left, right) => left.distance - right.distance);
+    const nearest = candidates.find((candidate) => !candidate.occupied) || candidates[0];
+    if (!nearest || nearest.distance > GEAR_SOCKET_HOVER_RADIUS) return { valid: false, reason: 'miss', placement };
+    if (nearest.occupied) return { valid: false, reason: 'occupied', placement, point: nearest.point };
+    if (!isGearSocketAboveGround(placement, nearest.socket, surface)) {
+      return { valid: false, reason: 'below_ground', placement, point: nearest.point };
+    }
+    const sameSourceSocket = (
+      hostKey === source.hostKey
+      && hostKind === source.hostKind
+      && source.mount.position === nearest.socket
+      && normalizeGearSurfaceForPanel(placement.panelType, source.mount.surface || 'front') === surface
+    );
+    if (!sameSourceSocket && isCornerGearSocket(nearest.socket) && this.hasCornerGearAtPivot({
+      pivotWorld: nearest.point,
+      surface
+    })) {
+      return { valid: false, reason: 'corner_occupied', placement, point: nearest.point };
+    }
+    const modelPoint = getGearSocketWorldPosition(placement, nearest.socket, surface);
+    if (isGearPointOnAnyRack(this.renderModel?.mapData || {}, modelPoint)) {
+      return { valid: false, reason: 'rack_overlap', placement, point: nearest.point };
+    }
+    const mount = normalizeGearMount({
+      ...source.mount,
+      position: nearest.socket,
+      socketKind: getGearSocketKind(nearest.socket),
+      surface
+    });
+    return {
+      valid: true,
+      hostKind,
+      hostKey,
+      cell: { x: placement.x, y: placement.y, z: placement.z },
+      edge: placement.edge || null,
+      placement,
+      transform,
+      point: nearest.point,
+      mount
+    };
+  }
+
+  updateGearCarryGhost() {
+    const target = this.getGearMoveTargetFromHoverHit();
+    const group = new THREE.Group();
+    if (target?.point) {
+      const gear = new THREE.Mesh(this.gearGeometry, target.valid ? this.gearBindingActiveMaterial : this.ghostInvalidMaterial);
+      gear.userData.sharedGeometry = true;
+      gear.userData.sharedMaterial = true;
+      gear.position.set(target.point.x, target.point.y, target.point.z);
+      gear.quaternion.copy(this.getGearSurfaceQuaternion(target.transform, target.mount?.surface || 'front'));
+      gear.scale.setScalar(1.08);
+      gear.renderOrder = PLACEMENT_GHOST_RENDER_ORDER + 10;
+      this.addGearVisualDetails(gear, gear.renderOrder);
+      group.add(gear);
+    }
+    this.replaceGhostGroup('carryGhostGroup', group.children.length > 0 ? group : null);
+    this.requestRender();
+    this.emitStatus();
+    return target;
+  }
+
+  commitGearCarryTarget() {
+    const target = this.getGearMoveTargetFromHoverHit();
+    if (!target?.valid) {
+      this.config.onToast?.(getGearTargetBlockMessage(target?.reason), 'error');
+      return false;
+    }
+    const source = this.carryState?.gear;
+    if (!source?.hostKey || !source.mount) return false;
+    this.config.onCommitOperations?.([
+      {
+        kind: 'gearMount',
+        action: 'erase',
+        hostKind: source.hostKind,
+        hostKey: source.hostKey,
+        mount: source.mount
+      },
+      {
+        kind: 'gearMount',
+        action: 'place',
+        hostKind: target.hostKind,
+        hostKey: target.hostKey,
+        cell: target.cell,
+        edge: target.edge,
+        mount: target.mount
+      }
+    ], { label: '移动齿轮' });
+    this.emitSelection({
+      cells: [],
+      walls: [],
+      gears: [{
+        hostKind: target.hostKind,
+        hostKey: target.hostKey,
+        mountId: target.mount.id,
+        cell: target.cell,
+        edge: target.edge
+      }],
+      racks: [],
+      scope: 'component'
+    });
+    this.endCarryPreview();
     return true;
   }
 
@@ -4525,9 +4885,15 @@ export default class CityChannelThreeRuntime {
 
   startCarry() {
     const origins = this.getCarryOrigins();
-    if (origins.length <= 0) return false;
-    if ((this.config.selection?.gears || []).length > 0 || (this.config.selection?.racks || []).length > 0) {
-      this.config.onToast?.('Three 编辑器暂不支持拖拽移动组件，请先删除后重新安装。', 'error');
+    const selectedGears = this.config.selection?.gears || [];
+    const selectedRacks = this.config.selection?.racks || [];
+    if (origins.length <= 0) {
+      if (selectedRacks.length === 1 && selectedGears.length <= 0) return this.startRackCarry();
+      if (selectedGears.length === 1 && selectedRacks.length <= 0) return this.startGearCarry();
+      return false;
+    }
+    if (selectedGears.length > 0 || selectedRacks.length > 0) {
+      this.config.onToast?.('暂不支持同时移动板材和组件。', 'error');
       return false;
     }
     const primaryOrigin = origins[0];
@@ -4575,6 +4941,8 @@ export default class CityChannelThreeRuntime {
   }
 
   rotateCarryPlacementSurface(direction = 'forward') {
+    if (this.carryState?.componentType === DOUBLE_SIDED_RACK_COMPONENT_TYPE) return this.rotateRackCarrySurface(direction);
+    if (this.carryState?.componentType === GEAR_COMPONENT_TYPE) return false;
     if (!this.carryState) return false;
     const delta = direction === 'reverse' ? -1 : 1;
     const origins = this.carryState.origins || [];
@@ -4592,6 +4960,8 @@ export default class CityChannelThreeRuntime {
   }
 
   cycleCarrySnapAxisRotation() {
+    if (this.carryState?.componentType === DOUBLE_SIDED_RACK_COMPONENT_TYPE) return this.cycleRackCarryPlane();
+    if (this.carryState?.componentType === GEAR_COMPONENT_TYPE) return false;
     if (!this.carryState) return false;
     const origins = this.carryState.origins || [];
     if (origins.length === 1) {
@@ -4649,6 +5019,12 @@ export default class CityChannelThreeRuntime {
   }
 
   updateCarryGhost() {
+    if (this.carryState?.componentType === DOUBLE_SIDED_RACK_COMPONENT_TYPE) {
+      return this.updateRackCarryGhost();
+    }
+    if (this.carryState?.componentType === GEAR_COMPONENT_TYPE) {
+      return this.updateGearCarryGhost();
+    }
     if (!this.carryState) {
       this.clearCarryGhost();
       return null;
@@ -4733,6 +5109,12 @@ export default class CityChannelThreeRuntime {
   }
 
   commitCarryTarget() {
+    if (this.carryState?.componentType === DOUBLE_SIDED_RACK_COMPONENT_TYPE) {
+      return this.commitRackCarryTarget();
+    }
+    if (this.carryState?.componentType === GEAR_COMPONENT_TYPE) {
+      return this.commitGearCarryTarget();
+    }
     if (!this.carryState) return false;
     let rawTargetCell = this.getCarryTargetFromPointerRay();
     if (
@@ -4831,11 +5213,18 @@ export default class CityChannelThreeRuntime {
     const nearest = candidates.find((candidate) => !candidate.occupied) || candidates[0];
     if (!nearest || nearest.distance > GEAR_SOCKET_HOVER_RADIUS) return { valid: false, reason: 'miss', placement };
     if (!nearest || nearest.occupied) return { valid: false, reason: 'occupied', placement };
+    if (!isGearSocketAboveGround(placement, nearest.socket, surface)) {
+      return { valid: false, reason: 'below_ground', placement, point: nearest.point };
+    }
     if (isCornerGearSocket(nearest.socket) && this.hasCornerGearAtPivot({
       pivotWorld: nearest.point,
       surface
     })) {
       return { valid: false, reason: 'corner_occupied', placement };
+    }
+    const nearestModelPoint = getGearSocketWorldPosition(placement, nearest.socket, surface);
+    if (isGearPointOnAnyRack(this.renderModel?.mapData || {}, nearestModelPoint)) {
+      return { valid: false, reason: 'rack_overlap', placement };
     }
     const mount = normalizeGearMount({
       id: `gear_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 6)}`,
@@ -4870,7 +5259,7 @@ export default class CityChannelThreeRuntime {
     const target = this.getGearInstallTargetFromHoverHit();
     if (!target) return false;
     if (!target.valid) {
-      this.config.onToast?.('目标齿轮位已被占用。', 'error');
+      this.config.onToast?.(getGearTargetBlockMessage(target.reason), 'error');
       return false;
     }
     this.config.onCommitOperations?.([{
@@ -5856,6 +6245,7 @@ export default class CityChannelThreeRuntime {
     const hoverData = this.getHoverPlacementData();
     if (!hoverData?.placement || !hoverData.transform) return;
     const target = this.getGearInstallTargetFromHoverHit();
+    const mapData = this.renderModel?.mapData || {};
     [hoverData].forEach((data) => {
       if (data.placement.panelType === CITY_CHANNEL_TILE_TYPES.ENTRANCE || data.placement.panelType === CITY_CHANNEL_TILE_TYPES.EXIT) return;
       const occupied = new Set((data.placement.gearMounts || []).map((mount) => (
@@ -5864,6 +6254,10 @@ export default class CityChannelThreeRuntime {
       const surface = this.getGearInstallSurfaceForHover(data.transform, data.placement);
       GEAR_SOCKET_POSITIONS.forEach((socket) => {
         const point = getThreeGearSurfacePoint(data.transform, { position: socket, surface });
+        const modelPoint = getGearSocketWorldPosition(data.placement, socket, surface);
+        const blockedByRack = isGearPointOnAnyRack(mapData, modelPoint);
+        const belowGround = !isGearSocketAboveGround(data.placement, socket, surface);
+        const unavailable = occupied.has(`${socket}:${surface}`) || blockedByRack || belowGround;
         const active = !!(
           target?.valid
           && target.hostKey === data.key
@@ -5872,7 +6266,7 @@ export default class CityChannelThreeRuntime {
         );
         const marker = new THREE.Mesh(
           active ? this.gearGeometry : this.gearSocketMarkerGeometry,
-          active ? this.gearBindingActiveMaterial : (occupied.has(`${socket}:${surface}`) ? this.ghostInvalidMaterial : this.gearBindingCandidateMaterial)
+          active ? this.gearBindingActiveMaterial : (unavailable ? this.ghostInvalidMaterial : this.gearBindingCandidateMaterial)
         );
         marker.userData.sharedGeometry = true;
         marker.userData.sharedMaterial = true;
@@ -5881,7 +6275,7 @@ export default class CityChannelThreeRuntime {
         marker.quaternion.copy(this.getGearSurfaceQuaternion(data.transform, surface));
         marker.renderOrder = active ? GEAR_DETAIL_RENDER_ORDER + 8 : GEAR_CONTACT_RENDER_ORDER;
         if (active) this.addGearVisualDetails(marker, marker.renderOrder);
-        if (active || !occupied.has(`${socket}:${surface}`)) {
+        if (active || !unavailable) {
           const glow = new THREE.Mesh(this.gearSocketMarkerGeometry, this.gearBindingActiveMaterial);
           glow.userData.sharedGeometry = true;
           glow.userData.sharedMaterial = true;
@@ -6598,7 +6992,13 @@ export default class CityChannelThreeRuntime {
     };
   }
 
-  createTileTarget(cell = null, { isVertical = false, rotation = this.config.activeRotation, allowReplacement = false, snapMode = 'floor' } = {}) {
+  createTileTarget(cell = null, {
+    isVertical = false,
+    rotation = this.config.activeRotation,
+    transmissionRotation = rotation,
+    allowReplacement = false,
+    snapMode = 'floor'
+  } = {}) {
     if (!cell) return null;
     const mapData = this.renderModel?.mapData || {};
     const transform = getTileThreeTransform({
@@ -6607,7 +7007,7 @@ export default class CityChannelThreeRuntime {
       z: cell.z,
       panelType: this.config.activeTileType,
       rotation,
-      transmissionRotation: rotation,
+      transmissionRotation,
       isVertical
     }, mapData);
     const operation = createThreeTilePlacementOperation({
@@ -6616,6 +7016,7 @@ export default class CityChannelThreeRuntime {
       activeTool: this.config.activeTool,
       activeTileType: this.config.activeTileType,
       activeRotation: rotation,
+      transmissionRotation,
       allowReplacement,
       isVertical
     });
@@ -6696,7 +7097,12 @@ export default class CityChannelThreeRuntime {
       { x: placement.x, y: placement.y, z: placement.z },
       {
         isVertical: transform.kind === 'verticalTile' || !!placement.isVertical,
-        rotation: normalizeRotation(this.config.activeRotation ?? placement.rotation ?? 0),
+        rotation: transform.kind === 'verticalTile' || !!placement.isVertical
+          ? normalizeRotation(placement.rotation ?? this.config.activeRotation ?? 0)
+          : normalizeRotation(this.config.activeRotation ?? placement.rotation ?? 0),
+        transmissionRotation: normalizeRotation(
+          this.config.activeRotation ?? placement.transmissionRotation ?? placement.rotation ?? 0
+        ),
         allowReplacement: true,
         snapMode: 'replace'
       }
@@ -6738,6 +7144,7 @@ export default class CityChannelThreeRuntime {
       return this.createTileTarget(sideCell, {
         isVertical: true,
         rotation: normalizeRotation(placement.rotation || 0),
+        transmissionRotation: this.config.activeRotation,
         allowReplacement: false,
         snapMode: 'sideSnap'
       });
@@ -6898,6 +7305,7 @@ export default class CityChannelThreeRuntime {
     const target = this.createTileTarget(cell, {
       isVertical: true,
       rotation,
+      transmissionRotation: this.config.activeRotation,
       allowReplacement: false,
       snapMode: 'topSnap'
     });
@@ -6914,7 +7322,9 @@ export default class CityChannelThreeRuntime {
       cell,
       mapData: this.renderModel?.mapData || {},
       activeTool: this.config.activeTool,
-      activeTileType: this.config.activeTileType
+      activeTileType: this.config.activeTileType,
+      activeRotation: this.config.activeRotation,
+      transmissionRotation: this.config.activeRotation
     });
     target.valid = !!target.operation;
     return target;
@@ -7103,7 +7513,10 @@ export default class CityChannelThreeRuntime {
     if (target.kind === 'verticalTile') {
       return this.createTileTarget(target.cell, {
         isVertical: true,
-        rotation: this.config.activeRotation,
+        rotation: normalizeRotation(
+          target.operation?.rotation ?? target.transform?.placement?.rotation ?? this.config.activeRotation ?? 0
+        ),
+        transmissionRotation: this.config.activeRotation,
         allowReplacement,
         snapMode
       });
@@ -7258,6 +7671,14 @@ export default class CityChannelThreeRuntime {
 
   emitStatus() {
     if (this.carryState) {
+      if (this.carryState.componentType === DOUBLE_SIDED_RACK_COMPONENT_TYPE) {
+        this.notifyStatus(`${DOUBLE_SIDED_RACK_LABEL}移动预览：R 切换朝向，Space 切换水平/竖直平面，点击完成移动`);
+        return;
+      }
+      if (this.carryState.componentType === GEAR_COMPONENT_TYPE) {
+        this.notifyStatus('齿轮移动预览：点击目标轴点完成移动');
+        return;
+      }
       this.notifyStatus(this.carryState.mode === 'copy' ? '复制预览：点击目标位置完成复制' : '移动预览：点击目标位置完成移动');
       return;
     }
@@ -7313,7 +7734,11 @@ export default class CityChannelThreeRuntime {
         this.notifyStatus(`齿轮安装：${target.cell.x},${target.cell.y},${target.cell.z} ${target.mount.position}`);
         return;
       }
-      this.notifyStatus(target ? '齿轮安装：目标轴点已占用' : '齿轮安装：请选择板材表面');
+      this.notifyStatus(target?.reason === 'rack_overlap'
+        ? '齿轮安装：目标位置与齿条重叠'
+        : target?.reason === 'below_ground'
+          ? '齿轮安装：目标齿轮会低于地面'
+          : (target ? '齿轮安装：目标轴点已占用' : '齿轮安装：请选择板材表面'));
       return;
     }
     if (

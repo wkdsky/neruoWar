@@ -191,6 +191,7 @@ const CityChannelMechanismPanel = ({
   const mechanismPanelMaterial = activePanelPanelType
     ? getCityChannelMaterial(activePanelPanelType)
     : null;
+  const transmissionSkeleton = mechanismPanelMaterial?.transmissionSkeleton || null;
   const canConfigureGearMounts = gearMountsForPanel.length > 0;
 
   return (
@@ -229,14 +230,14 @@ const CityChannelMechanismPanel = ({
       ) : (
         <div className="city-channel-mechanism-summary">
           <span>{`所属整体：${selectedAssembly?.id || '未连接'}`}</span>
-          <span>{`端点：${activePanelTile?.transmissionSkeleton?.ports?.length || 0}`}</span>
+          <span>{`端点：${transmissionSkeleton?.ports?.length || 0}`}</span>
           <span>{`齿轮：${activePanelTile?.gearMounts?.length || 0}`}</span>
         </div>
       )}
-      {activePanelTile?.transmissionSkeleton ? (
+      {transmissionSkeleton ? (
         <div className="city-channel-mechanism-summary is-detail">
-          <span>{`传动骨骼：${activePanelTile.transmissionSkeleton.type}`}</span>
-          <span>{(activePanelTile.transmissionSkeleton.ports || []).map((port) => port.direction).join(' / ')}</span>
+          <span>{`传动骨骼：${transmissionSkeleton.type}`}</span>
+          <span>{(transmissionSkeleton.ports || []).map((port) => port.direction).join(' / ')}</span>
         </div>
       ) : null}
       {selectedAssembly?.warnings?.length > 0 ? (

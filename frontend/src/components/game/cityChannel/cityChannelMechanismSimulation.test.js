@@ -106,6 +106,37 @@ describe('cityChannelMechanismSimulation', () => {
     });
   });
 
+  it('rejects double-sided racks that cross installed gears away from endpoints', () => {
+    const mapData = createBaseCityChannelMap({ width: 5, height: 4, layers: 1, name: 'rack gear overlap path' });
+    const hostKey = createCellKey(2, 1, 0);
+    const host = createTile({
+      x: 2,
+      y: 1,
+      z: 0,
+      panelType: CITY_CHANNEL_TILE_TYPES.BASIC_PLATE
+    });
+    host.gearMounts = [{
+      id: 'gear_path',
+      componentType: 'gear',
+      position: 'corner_ne',
+      surface: 'front'
+    }];
+    mapData.tiles[hostKey] = host;
+    const rack = {
+      id: 'rack_path_overlap',
+      componentType: DOUBLE_SIDED_RACK_COMPONENT_TYPE,
+      direction: 'x',
+      z: 0,
+      start: { x: 0.5, y: 0.5, z: 0 },
+      end: { x: 4.5, y: 0.5, z: 0 }
+    };
+
+    expect(getRackPlacementRuleStatus(mapData, rack)).toMatchObject({
+      valid: false,
+      reason: 'cornerGearBlocked'
+    });
+  });
+
   it('clips rack extension before an installed corner gear blocker', () => {
     const mapData = createBaseCityChannelMap({ width: 5, height: 4, layers: 1, name: 'rack corner blocker' });
     const hostKey = createCellKey(2, 1, 0);
@@ -136,7 +167,7 @@ describe('cityChannelMechanismSimulation', () => {
     });
   });
 
-  it('requires every rack segment to have at least one side board', () => {
+  it('allows a double-sided rack when any segment has side board support', () => {
     const mapData = createBaseCityChannelMap({ width: 4, height: 4, layers: 1, name: 'rack side support rule' });
     mapData.tiles[createCellKey(1, 0, 0)] = createTile({
       x: 1,
@@ -146,6 +177,23 @@ describe('cityChannelMechanismSimulation', () => {
     });
     const rack = {
       id: 'rack_missing_support',
+      componentType: DOUBLE_SIDED_RACK_COMPONENT_TYPE,
+      direction: 'x',
+      z: 0,
+      start: { x: 0.5, y: 0.5, z: 0 },
+      end: { x: 2.5, y: 0.5, z: 0 }
+    };
+
+    expect(getRackPlacementRuleStatus(mapData, rack)).toMatchObject({
+      valid: true,
+      reason: 'ok'
+    });
+  });
+
+  it('rejects double-sided racks without any adjacent side board', () => {
+    const mapData = createBaseCityChannelMap({ width: 4, height: 4, layers: 1, name: 'rack side support missing' });
+    const rack = {
+      id: 'rack_no_support',
       componentType: DOUBLE_SIDED_RACK_COMPONENT_TYPE,
       direction: 'x',
       z: 0,

@@ -4,9 +4,11 @@ import {
   createCellKey,
   createTile,
   createWall,
-  createWallKey
+  createWallKey,
+  normalizeCityChannelMap
 } from './cityChannelSchema';
 import {
+  buildMechanicalAssemblies,
   getGearAxisBindingStatus,
   getGearSocketWorldPosition
 } from './cityChannelMechanismRuntime';
@@ -73,6 +75,79 @@ describe('cityChannelEditorMutations', () => {
     });
   });
 
+  it('skips gear mounts that overlap a rack', () => {
+    const hostKey = createCellKey(1, 1, 0);
+    const mapData = {
+      ...createBaseCityChannelMap({ name: 'gear rack overlap mutation' }),
+      tiles: {
+        [hostKey]: createTile({
+          x: 1,
+          y: 1,
+          z: 0,
+          panelType: CITY_CHANNEL_TILE_TYPES.BASIC_PLATE
+        })
+      },
+      walls: {},
+      racks: {
+        rack_overlap: {
+          id: 'rack_overlap',
+          componentType: DOUBLE_SIDED_RACK_COMPONENT_TYPE,
+          direction: 'x',
+          z: 0,
+          start: { x: 0.5, y: 0.5, z: 0 },
+          end: { x: 2.5, y: 0.5, z: 0 }
+        }
+      }
+    };
+
+    const next = applyPlacementOperationsToMap(mapData, [{
+      kind: 'gearMount',
+      action: 'place',
+      hostKind: 'tile',
+      hostKey,
+      mount: {
+        id: 'gear_overlap',
+        componentType: 'gear',
+        position: 'corner_ne',
+        surface: 'front'
+      }
+    }]);
+
+    expect(next.tiles[hostKey].gearMounts || []).toHaveLength(0);
+  });
+
+  it('skips gear mounts whose vertical gear body would go below ground', () => {
+    const wallKey = createWallKey(1, 1, 0, 'east');
+    const mapData = {
+      ...createBaseCityChannelMap({ name: 'gear below ground mutation' }),
+      tiles: {},
+      walls: {
+        [wallKey]: createWall({
+          x: 1,
+          y: 1,
+          z: 0,
+          edge: 'east',
+          panelType: CITY_CHANNEL_TILE_TYPES.BASIC_PLATE
+        })
+      }
+    };
+
+    const next = applyPlacementOperationsToMap(mapData, [{
+      kind: 'gearMount',
+      action: 'place',
+      hostKind: 'wall',
+      hostKey: wallKey,
+      mount: {
+        id: 'gear_below_ground',
+        componentType: 'gear',
+        position: 'corner_se',
+        surface: 'front'
+      }
+    }]);
+
+    expect(next.walls[wallKey].gearMounts || []).toHaveLength(0);
+  });
+
   it('applies vertical tile placement intent instead of inheriting old pose', () => {
     const tileKey = createCellKey(4, 5, 1);
     const verticalMap = applyPlacementOperationsToMap(createBaseCityChannelMap({ name: 'vertical tile mutation' }), [{
@@ -107,6 +182,48 @@ describe('cityChannelEditorMutations', () => {
       panelType: CITY_CHANNEL_TILE_TYPES.BASIC_PLATE,
       isVertical: false
     });
+  });
+
+  it('splits mechanical assemblies after replacing a middle vertical transmission board', () => {
+    const createVerticalTransmission = (z) => ({
+      ...createTile({
+        x: 2,
+        y: 3,
+        z,
+        panelType: CITY_CHANNEL_TILE_TYPES.TRANSMISSION_STRAIGHT_PLATE,
+        rotation: 0,
+        transmissionRotation: 0
+      }),
+      isVertical: true
+    });
+    const lowerKey = createCellKey(2, 3, 0);
+    const lowerBridgeKey = createCellKey(2, 3, 1);
+    const middleKey = createCellKey(2, 3, 2);
+    const upperKey = createCellKey(2, 3, 3);
+    const mapData = {
+      ...createBaseCityChannelMap({ name: 'replace middle transmission', layers: 4 }),
+      tiles: {
+        [lowerKey]: createVerticalTransmission(0),
+        [lowerBridgeKey]: createVerticalTransmission(1),
+        [middleKey]: createVerticalTransmission(2),
+        [upperKey]: createVerticalTransmission(3)
+      },
+      walls: {}
+    };
+
+    const replaced = normalizeCityChannelMap(applyPlacementOperationsToMap(mapData, [{
+      kind: 'tile',
+      action: 'place',
+      cell: { x: 2, y: 3, z: 2 },
+      panelType: CITY_CHANNEL_TILE_TYPES.TRANSMISSION_L_PLATE,
+      rotation: 0,
+      transmissionRotation: 0,
+      isVertical: true
+    }]));
+    const graph = buildMechanicalAssemblies(replaced);
+
+    expect(graph.assemblyByComponentKey[lowerKey]).toBe(graph.assemblyByComponentKey[lowerBridgeKey]);
+    expect(graph.assemblyByComponentKey[lowerKey]).not.toBe(graph.assemblyByComponentKey[upperKey]);
   });
 
   it('expands map layers when placing above the current layer count', () => {

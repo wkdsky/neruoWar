@@ -108,7 +108,7 @@ const addTransmissionLine = (group, start, end, material) => {
 
 const createBoardModel = (panelType, tile = null) => {
   const material = getCityChannelMaterial(panelType);
-  const transmissionSkeleton = tile?.transmissionSkeleton || material.transmissionSkeleton;
+  const transmissionSkeleton = material.transmissionSkeleton;
   const gearMounts = Array.isArray(tile?.gearMounts) ? tile.gearMounts : (material.gearMounts || []);
   const root = new THREE.Group();
   const stone = createMaterial(0xb8b1a4, { metalness: 0.08, roughness: 0.74 });

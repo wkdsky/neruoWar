@@ -13,7 +13,7 @@ import {
   createPortalGeometry,
   createTileGeometry,
   projectCell
-} from './phaser/renderer/CityChannelGeometry';
+} from './cityChannelIsoGeometry';
 import {
   buildThumbnailAssemblyColorMap,
   getCityChannelThumbnailClassName,

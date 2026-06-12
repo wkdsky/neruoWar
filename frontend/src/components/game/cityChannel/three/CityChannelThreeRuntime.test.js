@@ -24,7 +24,9 @@ import {
 } from '../cityChannelMechanismRuntime';
 import {
   DOUBLE_SIDED_RACK_COMPONENT_TYPE,
-  DOUBLE_SIDED_RACK_TOOTH_DEPTH_WORLD
+  DOUBLE_SIDED_RACK_TOOTH_DEPTH_WORLD,
+  RACK_DIRECTIONS,
+  RACK_PLANES
 } from '../cityChannelRackModel';
 import CityChannelThreeRuntime, {
   createGearDirectionArcGeometry,
@@ -464,9 +466,66 @@ describe('CityChannelThreeRuntime pointer release flow', () => {
       plane: 'vertical',
       normalAxis: 'x',
       x: 1.5,
-      y: 1,
+      y: 1.5,
       z: 0
     });
+  });
+
+  it('snaps vertical rack starts to board-boundary tangent lines', () => {
+    const runtime = createRuntimeObject({});
+
+    expect(CityChannelThreeRuntime.prototype.normalizeRackStartSnapPoint.call(runtime, {
+      x: 1.49,
+      y: 1.05,
+      z: 0.4,
+      plane: 'vertical',
+      normalAxis: 'x'
+    })).toMatchObject({
+      plane: 'vertical',
+      normalAxis: 'x',
+      x: 1.5,
+      y: 1.5,
+      z: 0
+    });
+    expect(CityChannelThreeRuntime.prototype.normalizeRackStartSnapPoint.call(runtime, {
+      x: 1.05,
+      y: 0.51,
+      z: 1.6,
+      plane: 'vertical',
+      normalAxis: 'y'
+    })).toMatchObject({
+      plane: 'vertical',
+      normalAxis: 'y',
+      x: 1.5,
+      y: 0.5,
+      z: 2
+    });
+  });
+
+  it('does not use vertical tile middle faces as rack vertical planes', () => {
+    const verticalTile = {
+      ...createTile({
+        x: 1,
+        y: 1,
+        z: 0,
+        rotation: 0,
+        panelType: CITY_CHANNEL_TILE_TYPES.BASIC_PLATE
+      }),
+      isVertical: true
+    };
+    const mapData = {
+      ...createBaseCityChannelMap({ width: 4, height: 4, layers: 1 }),
+      tiles: {
+        [createCellKey(1, 1, 0)]: verticalTile
+      }
+    };
+    const transform = getTileThreeTransform(verticalTile, mapData);
+
+    expect(CityChannelThreeRuntime.prototype.getRackVerticalPlaneFromPlacement.call(
+      createRuntimeObject({}),
+      verticalTile,
+      transform
+    )).toBeNull();
   });
 
   it('prefers a vertical board ray hit over a horizontal floor hover for rack starts', () => {
@@ -557,7 +616,7 @@ describe('CityChannelThreeRuntime pointer release flow', () => {
       plane: 'vertical',
       normalAxis: 'x',
       x: 1.5,
-      y: 1,
+      y: 1.5,
       z: 0
     });
   });
@@ -771,7 +830,7 @@ describe('CityChannelThreeRuntime pointer release flow', () => {
     });
   });
 
-  it('keeps rack placement invalid when any segment lacks side board support', () => {
+  it('keeps rack placement valid when any segment has side board support', () => {
     const mapData = createBaseCityChannelMap({ width: 4, height: 4, layers: 1 });
     mapData.tiles[createCellKey(1, 0, 0)] = createTile({
       x: 1,
@@ -801,8 +860,8 @@ describe('CityChannelThreeRuntime pointer release flow', () => {
 
     expect(runtime.rackPlacementState).toMatchObject({
       rack,
-      valid: false,
-      blockReason: 'missingSideBoard'
+      valid: true,
+      blockReason: 'ok'
     });
     expect(runtime.createRackRenderGroup).toHaveBeenCalledWith(
       rack,
@@ -1073,6 +1132,162 @@ describe('CityChannelThreeRuntime carry ghost pose controls', () => {
     });
     expect(source.isVertical).toBe(false);
     expect(runtime.updateCarryGhost).toHaveBeenCalledTimes(1);
+  });
+
+  it('routes rack carry R and Space to rack orientation and plane changes', () => {
+    const runtime = createRuntimeObject({
+      carryState: {
+        mode: 'move',
+        componentType: DOUBLE_SIDED_RACK_COMPONENT_TYPE,
+        plane: RACK_PLANES.HORIZONTAL,
+        direction: RACK_DIRECTIONS.X,
+        normalAxis: RACK_DIRECTIONS.Y,
+        length: 2
+      },
+      notifyStatus: jest.fn(),
+      updateCarryGhost: jest.fn(),
+      requestRender: jest.fn()
+    });
+
+    expect(CityChannelThreeRuntime.prototype.rotateCarryPlacementSurface.call(runtime)).toBe(true);
+    expect(runtime.carryState.direction).toBe(RACK_DIRECTIONS.Y);
+
+    expect(CityChannelThreeRuntime.prototype.cycleCarrySnapAxisRotation.call(runtime)).toBe(true);
+    expect(runtime.carryState.plane).toBe(RACK_PLANES.VERTICAL);
+    expect(runtime.carryState.normalAxis).toBe(RACK_DIRECTIONS.X);
+    expect(runtime.updateCarryGhost).toHaveBeenCalledTimes(2);
+  });
+
+  it('rejects gear install targets that overlap a rack', () => {
+    const hostKey = createCellKey(1, 1, 0);
+    const host = createTile({
+      x: 1,
+      y: 1,
+      z: 0,
+      panelType: CITY_CHANNEL_TILE_TYPES.BASIC_PLATE
+    });
+    const mapData = {
+      ...createBaseCityChannelMap({ width: 4, height: 4, layers: 1 }),
+      tiles: { [hostKey]: host },
+      walls: {},
+      racks: {
+        rack_overlap: {
+          id: 'rack_overlap',
+          componentType: DOUBLE_SIDED_RACK_COMPONENT_TYPE,
+          direction: 'x',
+          z: 0,
+          start: { x: 0.5, y: 0.5, z: 0 },
+          end: { x: 2.5, y: 0.5, z: 0 }
+        }
+      }
+    };
+    const transform = getTileThreeTransform(host, mapData);
+    const runtime = createRuntimeObject({
+      renderModel: { mapData },
+      pickables: [],
+      config: {
+        activeTool: CITY_CHANNEL_TOOLS.PLACE_COMPONENT,
+        activeComponentType: 'gear'
+      },
+      getHoverPlacementData: jest.fn(() => ({
+        kind: 'tile',
+        key: hostKey,
+        placement: host,
+        transform
+      })),
+      getHoverLocalPoint: jest.fn(() => ({ x: 0.5, y: -0.5 }))
+    });
+
+    const target = CityChannelThreeRuntime.prototype.getGearInstallTargetFromHoverHit.call(runtime);
+
+    expect(target).toMatchObject({
+      valid: false,
+      reason: 'rack_overlap'
+    });
+  });
+
+  it('rejects gear install targets whose vertical gear body would go below ground', () => {
+    const wallKey = createWallKey(1, 1, 0, 'east');
+    const wall = createWall({
+      x: 1,
+      y: 1,
+      z: 0,
+      edge: 'east',
+      panelType: CITY_CHANNEL_TILE_TYPES.BASIC_PLATE
+    });
+    const mapData = {
+      ...createBaseCityChannelMap({ width: 4, height: 4, layers: 1 }),
+      tiles: {},
+      walls: { [wallKey]: wall }
+    };
+    const transform = getWallThreeTransform(wall, mapData);
+    const runtime = createRuntimeObject({
+      renderModel: { mapData },
+      config: {
+        activeTool: CITY_CHANNEL_TOOLS.PLACE_COMPONENT,
+        activeComponentType: 'gear'
+      },
+      getHoverPlacementData: jest.fn(() => ({
+        kind: 'wall',
+        key: wallKey,
+        placement: wall,
+        transform
+      })),
+      getHoverVerticalSurfaceSide: jest.fn(() => 'front'),
+      getHoverLocalPoint: jest.fn(() => ({ x: 0.5, y: 0.5 }))
+    });
+
+    const target = CityChannelThreeRuntime.prototype.getGearInstallTargetFromHoverHit.call(runtime);
+
+    expect(target).toMatchObject({
+      valid: false,
+      reason: 'below_ground',
+      point: expect.any(Object)
+    });
+  });
+
+  it('rejects gear move targets whose vertical gear body would go below ground', () => {
+    const wallKey = createWallKey(1, 1, 0, 'east');
+    const wall = createWall({
+      x: 1,
+      y: 1,
+      z: 0,
+      edge: 'east',
+      panelType: CITY_CHANNEL_TILE_TYPES.BASIC_PLATE
+    });
+    const mapData = {
+      ...createBaseCityChannelMap({ width: 4, height: 4, layers: 1 }),
+      tiles: {},
+      walls: { [wallKey]: wall }
+    };
+    const transform = getWallThreeTransform(wall, mapData);
+    const runtime = createRuntimeObject({
+      renderModel: { mapData },
+      carryState: {
+        componentType: 'gear',
+        gear: {
+          hostKind: 'tile',
+          hostKey: createCellKey(0, 0, 0),
+          mount: { id: 'gear_source', position: 'center', surface: 'front' }
+        }
+      },
+      getHoverPlacementData: jest.fn(() => ({
+        kind: 'wall',
+        key: wallKey,
+        placement: wall,
+        transform
+      })),
+      getHoverVerticalSurfaceSide: jest.fn(() => 'front'),
+      getHoverLocalPoint: jest.fn(() => ({ x: 0.5, y: 0.5 }))
+    });
+
+    const target = CityChannelThreeRuntime.prototype.getGearMoveTargetFromHoverHit.call(runtime);
+
+    expect(target).toMatchObject({
+      valid: false,
+      reason: 'below_ground',
+      point: expect.any(Object)
+    });
   });
 
   it('keeps a horizontal placement snap target while rotating the active surface with R', () => {
@@ -3160,6 +3375,68 @@ describe('CityChannelThreeRuntime gear transmission', () => {
     expect(snapshot.placements).toEqual({});
   });
 
+  it('does not drive gears above a vertical transmission chain split by a turned middle board', () => {
+    const createVerticalTransmission = (z, panelType, patch = {}) => ({
+      ...createTile({
+        x: 2,
+        y: 3,
+        z,
+        panelType,
+        rotation: 0,
+        transmissionRotation: 0,
+        ...patch
+      }),
+      isVertical: true
+    });
+    const sourceKey = createCellKey(2, 3, 0);
+    const lowerBridgeKey = createCellKey(2, 3, 1);
+    const middleKey = createCellKey(2, 3, 2);
+    const upperKey = createCellKey(2, 3, 3);
+    const source = createVerticalTransmission(0, CITY_CHANNEL_TILE_TYPES.GEAR_PRESSURE_PLATE);
+    source.gearMounts = [{
+      id: 'gear_center',
+      componentType: 'gear',
+      position: 'center',
+      socketKind: 'center',
+      surface: 'front',
+      teeth: 18,
+      phase: 0
+    }];
+    const lowerBridge = createVerticalTransmission(1, CITY_CHANNEL_TILE_TYPES.TRANSMISSION_STRAIGHT_PLATE);
+    const middle = createVerticalTransmission(2, CITY_CHANNEL_TILE_TYPES.TRANSMISSION_STRAIGHT_PLATE, {
+      rotation: 90
+    });
+    const upper = createVerticalTransmission(3, CITY_CHANNEL_TILE_TYPES.TRANSMISSION_STRAIGHT_PLATE);
+    upper.gearMounts = [{
+      id: 'gear_upper',
+      componentType: 'gear',
+      position: 'center',
+      socketKind: 'center',
+      surface: 'front',
+      teeth: 18,
+      phase: 0
+    }];
+    const mapData = {
+      ...createBaseCityChannelMap({ width: 5, height: 5, layers: 4 }),
+      tiles: {
+        [sourceKey]: source,
+        [lowerBridgeKey]: lowerBridge,
+        [middleKey]: middle,
+        [upperKey]: upper
+      },
+      walls: {}
+    };
+    const assemblyGraph = buildMechanicalAssemblies(mapData);
+    const assembly = getAssemblyForCell(assemblyGraph, sourceKey);
+    const runtime = createTransmissionRuntimeHarness(mapData);
+    const nodes = CityChannelThreeRuntime.prototype.resolveDrivenGearNodes.call(runtime, assembly, sourceKey);
+
+    expect(assembly.componentKeys).toEqual(expect.arrayContaining([sourceKey, lowerBridgeKey]));
+    expect(assembly.componentKeys).not.toContain(middleKey);
+    expect(assembly.componentKeys).not.toContain(upperKey);
+    expect(nodes.map((node) => node.id)).toEqual([`${sourceKey}:gear_center`]);
+  });
+
   it('adds a half-tooth visual phase offset to directly meshed gears', () => {
     const {
       sourceKey,
@@ -4923,6 +5200,146 @@ describe('CityChannelThreeRuntime snap candidates', () => {
       cell: { x: 1, y: 1, z: 0 },
       edge: 'east'
     });
+  });
+
+  it.each([
+    [CITY_CHANNEL_TILE_TYPES.TRANSMISSION_STRAIGHT_PLATE, 0, 90],
+    [CITY_CHANNEL_TILE_TYPES.TRANSMISSION_T_PLATE, 90, 0],
+    [CITY_CHANNEL_TILE_TYPES.TRANSMISSION_L_PLATE, 90, 0],
+    [CITY_CHANNEL_TILE_TYPES.TRANSMISSION_ENDPOINT_PLATE, 0, 180]
+  ])('keeps active transmission rotation when snapping %s on top of a vertical support', (
+    panelType,
+    supportRotation,
+    activeRotation
+  ) => {
+    const supportKey = createCellKey(1, 1, 0);
+    const support = {
+      ...createTile({
+        x: 1,
+        y: 1,
+        z: 0,
+        panelType: CITY_CHANNEL_TILE_TYPES.TRANSMISSION_STRAIGHT_PLATE,
+        rotation: supportRotation,
+        transmissionRotation: 0
+      }),
+      isVertical: true
+    };
+    const mapData = {
+      ...createBaseCityChannelMap({ width: 4, height: 4, layers: 3 }),
+      tiles: {
+        [supportKey]: support
+      },
+      walls: {}
+    };
+    const runtime = createRuntimeObject({
+      renderModel: { mapData },
+      config: {
+        activeTool: CITY_CHANNEL_TOOLS.PLACE_TILE,
+        activeTileType: panelType,
+        activeRotation
+      },
+      createTileTarget: CityChannelThreeRuntime.prototype.createTileTarget,
+      createWallTarget: CityChannelThreeRuntime.prototype.createWallTarget
+    });
+
+    const target = CityChannelThreeRuntime.prototype.createVerticalTopSnapTarget.call(runtime, support);
+    const upperKey = createCellKey(1, 1, 1);
+    const upper = {
+      ...createTile({
+        ...target.operation.cell,
+        panelType: target.operation.panelType,
+        rotation: target.operation.rotation,
+        transmissionRotation: target.operation.transmissionRotation
+      }),
+      isVertical: true
+    };
+    const graph = buildMechanicalAssemblies({
+      tiles: {
+        [supportKey]: support,
+        [upperKey]: upper
+      },
+      walls: {}
+    });
+
+    expect(target.operation).toMatchObject({
+      kind: 'tile',
+      cell: { x: 1, y: 1, z: 1 },
+      panelType,
+      rotation: supportRotation,
+      transmissionRotation: activeRotation,
+      isVertical: true
+    });
+    expect(graph.assemblyByComponentKey[supportKey]).not.toBe(graph.assemblyByComponentKey[upperKey]);
+  });
+
+  it('keeps the vertical plane but applies active transmission rotation when replacing a vertical board', () => {
+    const lowerKey = createCellKey(1, 1, 0);
+    const middleKey = createCellKey(1, 1, 1);
+    const upperKey = createCellKey(1, 1, 2);
+    const createVerticalStraight = (z) => ({
+      ...createTile({
+        x: 1,
+        y: 1,
+        z,
+        panelType: CITY_CHANNEL_TILE_TYPES.TRANSMISSION_STRAIGHT_PLATE,
+        rotation: 90,
+        transmissionRotation: 0
+      }),
+      isVertical: true
+    });
+    const lower = createVerticalStraight(0);
+    const middle = createVerticalStraight(1);
+    const upper = createVerticalStraight(2);
+    const mapData = {
+      ...createBaseCityChannelMap({ width: 4, height: 4, layers: 4 }),
+      tiles: {
+        [lowerKey]: lower,
+        [middleKey]: middle,
+        [upperKey]: upper
+      },
+      walls: {}
+    };
+    const runtime = createRuntimeObject({
+      renderModel: { mapData },
+      config: {
+        activeTool: CITY_CHANNEL_TOOLS.PLACE_TILE,
+        activeTileType: CITY_CHANNEL_TILE_TYPES.TRANSMISSION_ENDPOINT_PLATE,
+        activeRotation: 180
+      },
+      createTileTarget: CityChannelThreeRuntime.prototype.createTileTarget
+    });
+    const target = CityChannelThreeRuntime.prototype.createReplacementTargetForPlacement.call(
+      runtime,
+      middle,
+      getTileThreeTransform(middle, mapData)
+    );
+    const replacement = {
+      ...createTile({
+        ...target.operation.cell,
+        panelType: target.operation.panelType,
+        rotation: target.operation.rotation,
+        transmissionRotation: target.operation.transmissionRotation
+      }),
+      isVertical: true
+    };
+    const graph = buildMechanicalAssemblies({
+      tiles: {
+        [lowerKey]: lower,
+        [middleKey]: replacement,
+        [upperKey]: upper
+      },
+      walls: {}
+    });
+
+    expect(target.operation).toMatchObject({
+      kind: 'tile',
+      cell: { x: 1, y: 1, z: 1 },
+      panelType: CITY_CHANNEL_TILE_TYPES.TRANSMISSION_ENDPOINT_PLATE,
+      rotation: 90,
+      transmissionRotation: 180,
+      isVertical: true
+    });
+    expect(graph.assemblyByComponentKey[lowerKey]).not.toBe(graph.assemblyByComponentKey[upperKey]);
   });
 
   it('snaps a floor-pose board to a vertical wall target on a precise horizontal edge hit', () => {

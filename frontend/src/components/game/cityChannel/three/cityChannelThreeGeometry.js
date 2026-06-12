@@ -15,8 +15,8 @@ import {
   EDGE_NEIGHBOR_OFFSETS,
   isPortalMaterial
 } from '../cityChannelPlacementGeometry';
+import { getCityChannelMaterial } from '../cityChannelCatalog';
 import { normalizeGearSurfaceForPanel } from '../cityChannelGearPressurePlateRender';
-import { CITY_CHANNEL_GEAR_THICKNESS_WORLD } from '../cityChannelMechanismSimulation';
 
 export const CITY_CHANNEL_THREE_DIMENSIONS = Object.freeze({
   tileSize: 1,
@@ -262,6 +262,7 @@ export const createThreeTilePlacementOperation = ({
   activeTool = CITY_CHANNEL_TOOLS.BROWSE,
   activeTileType = null,
   activeRotation = 0,
+  transmissionRotation = activeRotation,
   allowReplacement = false,
   isVertical = false
 } = {}) => {
@@ -276,7 +277,7 @@ export const createThreeTilePlacementOperation = ({
     cell: { x: cell.x, y: cell.y, z: cell.z },
     panelType: activeTileType,
     rotation: normalizeRotation(activeRotation),
-    transmissionRotation: normalizeRotation(activeRotation),
+    transmissionRotation: normalizeRotation(transmissionRotation),
     ...(isVertical ? { isVertical: true } : {})
   };
 };
@@ -543,6 +544,8 @@ export const createThreeVerticalTilePlacementOperation = ({
   mapData = {},
   activeTool = CITY_CHANNEL_TOOLS.BROWSE,
   activeTileType = null,
+  activeRotation = undefined,
+  transmissionRotation = activeRotation,
   allowReplacement = false
 } = {}) => {
   const targetCell = cell || getThreeVerticalTilePlacementCell(supportPlacement);
@@ -556,13 +559,14 @@ export const createThreeVerticalTilePlacementOperation = ({
   });
   if (blockReason) return null;
   const rotation = getThreeVerticalTileRotationForSupport(supportPlacement);
+  const surfaceRotation = transmissionRotation !== undefined ? transmissionRotation : rotation;
   return {
     kind: 'tile',
     action: 'place',
     cell: { x: targetCell.x, y: targetCell.y, z: targetCell.z },
     panelType: activeTileType,
     rotation,
-    transmissionRotation: rotation,
+    transmissionRotation: normalizeRotation(surfaceRotation),
     isVertical: true
   };
 };
@@ -744,7 +748,7 @@ export const resolveThreeHoverSnapIntent = (
 };
 
 export const getThreeTransmissionLineSegments = (transform = {}) => {
-  const ports = transform.placement?.transmissionSkeleton?.ports || [];
+  const ports = getCityChannelMaterial(transform.panelType || transform.placement?.panelType)?.transmissionSkeleton?.ports || [];
   if (!Array.isArray(ports) || ports.length <= 0) return [];
   const center = getThreeSurfacePoint(transform, { x: 0, y: 0 }, { lift: 0.028 });
   return ports.map((port) => {

@@ -1,5 +1,5 @@
 import { CITY_CHANNEL_TILE_TYPES } from './cityChannelSchema';
-import { createTileGeometry, getTransmissionMidPlane, getTransmissionPortPlane } from './phaser/renderer/CityChannelGeometry';
+import { createTileGeometry, getTransmissionMidPlane, getTransmissionPortPlane } from './cityChannelIsoGeometry';
 import {
   getGearSurfaceOffsetSignForPanel,
   hasDirectionalGearSurface,

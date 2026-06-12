@@ -3,8 +3,8 @@ import {
   CITY_CHANNEL_WIDTH,
   createCellKey,
   isValidCell
-} from '../../cityChannelSchema';
-import { TILE_HEIGHT, TILE_WIDTH, projectWorldOffset } from '../../cityChannelGeometryUtils';
+} from './cityChannelSchema';
+import { TILE_HEIGHT, TILE_WIDTH, projectWorldOffset } from './cityChannelGeometryUtils';
 
 export const TILE_RENDER_WIDTH = 160;
 export const TILE_RENDER_HEIGHT = 172;

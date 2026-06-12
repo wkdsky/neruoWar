@@ -1,6 +1,5 @@
 import {
   createCellKey,
-  createWallKey,
   isValidCell
 } from './schema/keys';
 import {
@@ -515,15 +514,19 @@ export const getRackSideCandidates = (mapData = {}, rack = {}) => {
   return candidates;
 };
 
-const isInstalledCornerGearMount = (mount = null) => (
+const isInstalledGearMount = (mount = null) => (
   !!mount?.componentType
+);
+
+const isInstalledCornerGearMount = (mount = null) => (
+  isInstalledGearMount(mount)
   && isCornerGearSocket(mount.position)
 );
 
-export const getRackCornerGearPoints = (mapData = {}) => {
+export const getRackGearPoints = (mapData = {}) => {
   const collect = (placements = {}, hostKind = 'tile') => Object.entries(placements || {}).flatMap(([componentKey, placement]) => (
     (placement?.gearMounts || [])
-      .filter(isInstalledCornerGearMount)
+      .filter(isInstalledGearMount)
       .map((mount) => {
         const point = getGearSocketWorldPosition(placement, mount.position, mount.surface || 'front');
         return point ? {
@@ -541,6 +544,10 @@ export const getRackCornerGearPoints = (mapData = {}) => {
     ...collect(mapData.walls, 'wall')
   ];
 };
+
+export const getRackCornerGearPoints = (mapData = {}) => (
+  getRackGearPoints(mapData).filter((gear) => isInstalledCornerGearMount(gear.mount))
+);
 
 const getRackPointAxisValue = (canonical = {}, point = {}) => {
   if (canonical.direction === RACK_DIRECTIONS.Z) return Number(point.z) || 0;
@@ -570,9 +577,11 @@ const getRackGearAxisValueOnSegment = (canonical = {}, point = {}, epsilon = DOU
   return Number(point.x) || 0;
 };
 
-export const getRackCornerGearIntersections = (mapData = {}, rack = {}) => {
+export const getRackGearIntersections = (mapData = {}, rack = {}, {
+  gears = getRackGearPoints(mapData)
+} = {}) => {
   const canonical = getRackCanonicalSegment(rack);
-  return getRackCornerGearPoints(mapData)
+  return (Array.isArray(gears) ? gears : [])
     .map((gear) => {
       const axis = getRackGearAxisValueOnSegment(canonical, gear.point);
       if (!Number.isFinite(axis)) return null;
@@ -584,9 +593,51 @@ export const getRackCornerGearIntersections = (mapData = {}, rack = {}) => {
     .sort((left, right) => left.axis - right.axis);
 };
 
+export const getRackCornerGearIntersections = (mapData = {}, rack = {}) => (
+  getRackGearIntersections(mapData, rack, { gears: getRackCornerGearPoints(mapData) })
+);
+
+export const getRackOverlappingGears = getRackGearIntersections;
+
+export const isGearPointOnRack = (rack = {}, point = null, epsilon = DOUBLE_SIDED_RACK_CONTACT_EPSILON) => {
+  if (!point) return false;
+  const normalized = normalizeRack(rack);
+  if (!normalized) return false;
+  const canonical = getRackCanonicalSegment(normalized);
+  const axis = getRackGearAxisValueOnSegment(canonical, point, epsilon);
+  return Number.isFinite(axis)
+    && axis >= canonical.min - epsilon
+    && axis <= canonical.max + epsilon;
+};
+
+export const getGearRackOverlaps = (mapData = {}, point = null, {
+  excludeRackIds = new Set()
+} = {}) => {
+  if (!point) return [];
+  const excluded = excludeRackIds instanceof Set
+    ? excludeRackIds
+    : new Set(Array.isArray(excludeRackIds) ? excludeRackIds : []);
+  return Object.values(mapData.racks || {})
+    .filter((rack) => rack?.id && !excluded.has(rack.id))
+    .filter((rack) => isGearPointOnRack(rack, point));
+};
+
+export const isGearPointOnAnyRack = (mapData = {}, point = null, options = {}) => (
+  getGearRackOverlaps(mapData, point, options).length > 0
+);
+
 export const isRackPointOnCornerGear = (mapData = {}, point = null, epsilon = DOUBLE_SIDED_RACK_CONTACT_EPSILON) => (
   !!point
   && getRackCornerGearPoints(mapData).some((gear) => (
+    Math.abs((Number(gear.point.x) || 0) - (Number(point.x) || 0)) <= epsilon
+    && Math.abs((Number(gear.point.y) || 0) - (Number(point.y) || 0)) <= epsilon
+    && Math.abs((Number(gear.point.z) || 0) - (Number(point.z) || 0)) <= epsilon
+  ))
+);
+
+export const isRackPointOnGear = (mapData = {}, point = null, epsilon = DOUBLE_SIDED_RACK_CONTACT_EPSILON) => (
+  !!point
+  && getRackGearPoints(mapData).some((gear) => (
     Math.abs((Number(gear.point.x) || 0) - (Number(point.x) || 0)) <= epsilon
     && Math.abs((Number(gear.point.y) || 0) - (Number(point.y) || 0)) <= epsilon
     && Math.abs((Number(gear.point.z) || 0) - (Number(point.z) || 0)) <= epsilon
@@ -613,7 +664,7 @@ export const clipRackToCornerGearBlocker = (mapData = {}, rack = {}) => {
   const delta = endAxis - startAxis;
   const sign = Math.sign(delta);
   if (!sign) return rack;
-  const blocker = getRackCornerGearIntersections(mapData, normalized)
+  const blocker = getRackGearIntersections(mapData, normalized)
     .filter((gear) => {
       const distance = (gear.axis - startAxis) * sign;
       return distance > DOUBLE_SIDED_RACK_CONTACT_EPSILON
@@ -629,22 +680,30 @@ export const getRackPlacementRuleStatus = (mapData = {}, rack = {}) => {
   const normalized = normalizeRack(rack, mapData);
   if (!normalized) return { valid: false, reason: 'invalidRack', rack: null };
   const canonical = getRackCanonicalSegment(normalized);
-  const cornerHits = getRackCornerGearIntersections(mapData, normalized);
-  const endpointBlocked = cornerHits.some((hit) => (
+  const gearHits = getRackGearIntersections(mapData, normalized);
+  const endpointHits = gearHits.filter((hit) => (
     Math.abs(hit.axis - canonical.min) <= DOUBLE_SIDED_RACK_CONTACT_EPSILON
     || Math.abs(hit.axis - canonical.max) <= DOUBLE_SIDED_RACK_CONTACT_EPSILON
   ));
-  if (endpointBlocked) return { valid: false, reason: 'cornerGearEndpoint', rack: normalized, cornerHits };
-  const pathBlocked = cornerHits.some((hit) => (
+  if (endpointHits.length > 0) {
+    const reason = endpointHits.some((hit) => isCornerGearSocket(hit.mount?.position))
+      ? 'cornerGearEndpoint'
+      : 'gearEndpoint';
+    return { valid: false, reason, rack: normalized, gearHits, cornerHits: gearHits };
+  }
+  const pathHits = gearHits.filter((hit) => (
     hit.axis > canonical.min + DOUBLE_SIDED_RACK_CONTACT_EPSILON
     && hit.axis < canonical.max - DOUBLE_SIDED_RACK_CONTACT_EPSILON
   ));
-  if (pathBlocked) return { valid: false, reason: 'cornerGearBlocked', rack: normalized, cornerHits };
+  if (pathHits.length > 0) {
+    const reason = pathHits.some((hit) => isCornerGearSocket(hit.mount?.position))
+      ? 'cornerGearBlocked'
+      : 'gearBlocked';
+    return { valid: false, reason, rack: normalized, gearHits, cornerHits: gearHits };
+  }
 
   const candidates = getRackSideCandidates(mapData, normalized);
-  const coveredSegments = new Set(candidates.map((candidate) => candidate.segmentIndex));
-  const missingSideSupport = getRackSegmentMidpoints(normalized).some((point) => !coveredSegments.has(point.index));
-  if (missingSideSupport) {
+  if (candidates.length <= 0) {
     return {
       valid: false,
       reason: 'missingSideBoard',

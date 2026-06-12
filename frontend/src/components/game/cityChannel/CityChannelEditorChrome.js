@@ -86,6 +86,7 @@ export const CityChannelSelectionActions = ({
   selectedCount,
   selectionScope,
   selectedPlacementCount,
+  selectedRackCount,
   carryActive,
   canInspectSelectedTile,
   isInspectActive,
@@ -154,6 +155,25 @@ export const CityChannelSelectionActions = ({
         </>
       ) : (
         <>
+          <button type="button" className="city-channel-selection-action" onClick={onStartCarry} title="移动 (M)">
+            <Move size={14} />
+            <span>移动</span>
+            <em className="city-channel-shortcut-hint">M</em>
+          </button>
+          {carryActive && selectedRackCount === 1 && (
+            <>
+              <button type="button" className="city-channel-selection-action" onClick={onRotateCarrySurface} title="齿条移动预览朝向 (R / Shift+滚轮)">
+                <RotateCw size={14} />
+                <span>朝向</span>
+                <em className="city-channel-shortcut-hint">R</em>
+              </button>
+              <button type="button" className="city-channel-selection-action" onClick={onCycleCarrySnapAxisRotation} title="齿条移动预览平面切换 (Space)">
+                <PanelTop size={14} />
+                <span>平面</span>
+                <em className="city-channel-shortcut-hint">Space</em>
+              </button>
+            </>
+          )}
           <button
             type="button"
             className="city-channel-selection-action"

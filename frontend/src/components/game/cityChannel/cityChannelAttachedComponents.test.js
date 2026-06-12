@@ -11,6 +11,7 @@ import {
   isInstalledComponentMount
 } from './cityChannelAttachedComponents';
 import { computeCityChannelMovePreviewModel } from './cityChannelMovePreview';
+import { DOUBLE_SIDED_RACK_COMPONENT_TYPE } from './cityChannelRackModel';
 
 describe('cityChannelAttachedComponents', () => {
   it('detects installed component mounts by componentType', () => {
@@ -74,6 +75,48 @@ describe('cityChannelAttachedComponents', () => {
 
     const movedKey = createCellKey(12, 10, 0);
     expect(preview.previewTiles.get(movedKey)?.gearMounts).toEqual(mapData.tiles[createCellKey(10, 10, 0)].gearMounts);
+  });
+
+  it('rejects moved gear mounts that would overlap a rack', () => {
+    const mapData = {
+      ...createBaseCityChannelMap({ name: 'attached gear rack overlap' }),
+      tiles: {
+        [createCellKey(1, 1, 0)]: createTile({
+          x: 1,
+          y: 1,
+          z: 0,
+          panelType: CITY_CHANNEL_TILE_TYPES.BASIC_PLATE
+        })
+      },
+      walls: {},
+      racks: {
+        rack_overlap: {
+          id: 'rack_overlap',
+          componentType: DOUBLE_SIDED_RACK_COMPONENT_TYPE,
+          direction: 'x',
+          z: 0,
+          start: { x: 0.5, y: 1.5, z: 0 },
+          end: { x: 2.5, y: 1.5, z: 0 }
+        }
+      }
+    };
+    mapData.tiles[createCellKey(1, 1, 0)].gearMounts = [{
+      id: 'gear_corner',
+      componentType: 'gear',
+      position: 'corner_ne',
+      surface: 'front'
+    }];
+
+    const preview = computeCityChannelMovePreviewModel({
+      mapData,
+      origins: [{ x: 1, y: 1, z: 0 }],
+      targetCell: { x: 1, y: 2, z: 0 }
+    });
+
+    expect(preview.valid).toBe(false);
+    expect(preview.conflicts).toEqual(expect.arrayContaining([
+      expect.objectContaining({ reason: 'gear_rack_overlap' })
+    ]));
   });
 
   it('keeps installed gear mounts for each origin in multi-select moves', () => {

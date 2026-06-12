@@ -195,7 +195,7 @@ const CityChannelEditor = ({
         }
       : null
   ), [activePanelTile, selectedGearHost]);
-  const activePanelPanelType = mechanismPanel?.panelType || activePanelTile?.panelType || '';
+  const activePanelPanelType = activePanelTile?.panelType || mechanismPanel?.panelType || '';
   const canRunActivePanel = activePanelPanelType === CITY_CHANNEL_TILE_TYPES.GEAR_PRESSURE_PLATE;
   const gearMountsForPanel = useMemo(() => (
     selectedGearMount
@@ -828,6 +828,7 @@ const CityChannelEditor = ({
         selectedCount={selectedCount}
         selectionScope={selectionScope}
         selectedPlacementCount={selectedPlacements.length}
+        selectedRackCount={selectedRacks.length}
         carryActive={carryActive}
         canInspectSelectedTile={canInspectSelectedTile}
         isInspectActive={!!inspectMode?.active}
