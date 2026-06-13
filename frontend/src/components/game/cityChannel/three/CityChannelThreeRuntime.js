@@ -38,20 +38,18 @@ import {
   CITY_CHANNEL_GEAR_THICKNESS_WORLD,
   CITY_CHANNEL_GEAR_TOOTH_COUNT,
   createAxisBindingRuntimeEntryFromGearNode,
+  createMechanismMotionIntentGraph,
   createRackTranslationRuntimeEntries,
   createMechanismRuntimeSnapshot,
-  findRackTranslationObstruction,
-  findRotationObstruction,
+  findMechanismMotionObstructions,
   getAllowedRotationAngle,
   getAxisBindingForMount,
   getFixedAxisWorldAnchor,
-  getRackContactLimitedTranslationDistance,
   getGearMeshPlane,
   getGearRatioRadiusForMount,
   getGearSurfaceKey,
   getGearWorldPosition,
   isDrivenGearAxisBindingActive,
-  isRackTranslationRuntimeEntry,
   resolveDrivenGearNodes as resolveDrivenGearNodesModel
 } from '../cityChannelMechanismSimulation';
 import {
@@ -6419,6 +6417,80 @@ export default class CityChannelThreeRuntime {
     return true;
   }
 
+  addObstructionFlashRack(rack = null) {
+    const normalizedRack = normalizeRack(rack, this.renderModel?.mapData || {});
+    if (!normalizedRack) return false;
+    const rackGroup = this.createRackRenderGroup(normalizedRack, {
+      ghost: true,
+      valid: true,
+      showTeeth: true,
+      showEndpoints: false,
+      renderOrder: MECHANISM_OBSTRUCTION_FLASH_RENDER_ORDER
+    });
+    if (!rackGroup) return false;
+    rackGroup.traverse((child) => {
+      if (!child) return;
+      if (child.isMesh) {
+        child.material = this.mechanismObstructionFillMaterial;
+        child.userData.sharedMaterial = true;
+        child.renderOrder = MECHANISM_OBSTRUCTION_FLASH_RENDER_ORDER;
+      } else if (child.isLineSegments || child.isLine) {
+        child.material = this.mechanismObstructionGlowMaterial;
+        child.userData.sharedMaterial = true;
+        child.renderOrder = MECHANISM_OBSTRUCTION_FLASH_RENDER_ORDER + 1;
+      }
+    });
+    const baseGroup = this.rackGroups?.get(createRackKey(normalizedRack));
+    if (baseGroup) {
+      rackGroup.matrixAutoUpdate = false;
+      rackGroup.matrix.copy(baseGroup.matrix || new THREE.Matrix4());
+      rackGroup.matrixWorldNeedsUpdate = true;
+    }
+    rackGroup.renderOrder = MECHANISM_OBSTRUCTION_FLASH_RENDER_ORDER;
+    this.mechanismFlashGroup.add(rackGroup);
+    return true;
+  }
+
+  addObstructionFlashGearTarget(target = null) {
+    const gearKey = target?.gearKey || (
+      target?.componentKey && target?.mountId ? `${target.componentKey}:${target.mountId}` : ''
+    );
+    const gear = gearKey ? this.gearMeshes?.get?.(gearKey) : null;
+    if (!gear) return false;
+    gear.updateWorldMatrix?.(true, false);
+    const position = new THREE.Vector3();
+    const quaternion = new THREE.Quaternion();
+    const scale = new THREE.Vector3();
+    gear.matrixWorld.decompose(position, quaternion, scale);
+
+    const group = new THREE.Group();
+    group.position.copy(position);
+    group.quaternion.copy(quaternion);
+    group.scale.copy(scale).multiplyScalar(1.075);
+    group.renderOrder = MECHANISM_OBSTRUCTION_FLASH_RENDER_ORDER;
+
+    const gearGeometry = this.gearGeometry || gear.geometry;
+    if (!gearGeometry) return false;
+    const fill = new THREE.Mesh(gearGeometry, this.mechanismObstructionFillMaterial);
+    fill.userData.sharedGeometry = gearGeometry === this.gearGeometry;
+    fill.userData.sharedMaterial = true;
+    fill.userData.cityChannelGearRole = 'mechanism_obstruction_gear_fill';
+    fill.renderOrder = MECHANISM_OBSTRUCTION_FLASH_RENDER_ORDER;
+    group.add(fill);
+
+    const edgeGeometry = this.gearEdgeGeometry || new THREE.EdgesGeometry(gearGeometry);
+    const glow = new THREE.LineSegments(edgeGeometry, this.mechanismObstructionGlowMaterial);
+    glow.userData.sharedGeometry = edgeGeometry === this.gearEdgeGeometry;
+    glow.userData.sharedMaterial = true;
+    glow.userData.cityChannelGearRole = 'mechanism_obstruction_gear_glow';
+    glow.scale.setScalar(1.018);
+    glow.renderOrder = MECHANISM_OBSTRUCTION_FLASH_RENDER_ORDER + 1;
+    group.add(glow);
+
+    this.mechanismFlashGroup.add(group);
+    return true;
+  }
+
   clearMechanismObstructionFlash() {
     this.mechanismObstructionFlash = null;
     clearGroup(this.mechanismFlashGroup);
@@ -6428,10 +6500,50 @@ export default class CityChannelThreeRuntime {
   }
 
   flashMechanismObstruction(obstruction = null) {
-    const placement = obstruction?.obstacle || null;
-    if (!placement || !this.mechanismFlashGroup) return false;
+    const placements = (Array.isArray(obstruction?.obstacles) && obstruction.obstacles.length > 0)
+      ? obstruction.obstacles
+      : [obstruction?.obstacle].filter(Boolean);
+    const mapData = this.renderModel?.mapData || {};
+    const rackIds = [
+      ...(Array.isArray(obstruction?.rackIds) ? obstruction.rackIds : []),
+      obstruction?.rackId
+    ].filter(Boolean);
+    const racks = [
+      ...(Array.isArray(obstruction?.racks) ? obstruction.racks : []),
+      obstruction?.rack,
+      ...rackIds.map((rackId) => mapData.racks?.[rackId])
+    ].filter(Boolean);
+    const rackTargets = [...new Map(racks.map((rack) => [createRackKey(rack), rack])).values()];
+    const gearTargets = [
+      ...(Array.isArray(obstruction?.gearTargets) ? obstruction.gearTargets : []),
+      obstruction?.gearTarget,
+      ...(Array.isArray(obstruction?.gearKeys)
+        ? obstruction.gearKeys.map((gearKey) => ({ gearKey }))
+        : [])
+    ].filter(Boolean);
+    const gearTargetMap = new Map();
+    gearTargets.forEach((target) => {
+      const gearKey = target.gearKey || (
+        target.componentKey && target.mountId ? `${target.componentKey}:${target.mountId}` : ''
+      );
+      if (gearKey) gearTargetMap.set(gearKey, { ...target, gearKey });
+    });
+    const uniqueGearTargets = [...gearTargetMap.values()];
+    if (
+      (placements.length <= 0 && rackTargets.length <= 0 && uniqueGearTargets.length <= 0)
+      || !this.mechanismFlashGroup
+    ) return false;
     this.clearMechanismObstructionFlash();
-    if (!this.addObstructionFlashPlacement(placement)) return false;
+    const added = placements.reduce((count, placement) => (
+      this.addObstructionFlashPlacement(placement) ? count + 1 : count
+    ), 0);
+    const addedRacks = rackTargets.reduce((count, rack) => (
+      this.addObstructionFlashRack(rack) ? count + 1 : count
+    ), 0);
+    const addedGears = uniqueGearTargets.reduce((count, target) => (
+      this.addObstructionFlashGearTarget(target) ? count + 1 : count
+    ), 0);
+    if (added + addedRacks + addedGears <= 0) return false;
     this.mechanismObstructionFlash = {
       startedAt: Date.now(),
       duration: 820
@@ -6525,6 +6637,7 @@ export default class CityChannelThreeRuntime {
       const transform = this.getBasePlacementTransform(mount.componentKey);
       if (!hostKind || !placement || !transform) return null;
       const liveMount = (placement.gearMounts || []).find((item) => item.id === mount.id) || mount;
+      const rotationDirectionConfigured = Object.prototype.hasOwnProperty.call(liveMount, 'rotationDirection');
       const nodeMount = {
         ...liveMount,
         rotationDirection: normalizeGearRotationDirection(liveMount.rotationDirection),
@@ -6554,6 +6667,7 @@ export default class CityChannelThreeRuntime {
         followsAxisBinding: attachment.followsAxisBinding,
         mountId: liveMount.id,
         mount: nodeMount,
+        rotationDirectionConfigured,
         point,
         worldPoint,
         meshPlane: getGearMeshPlane(attachment.placement, attachment.mount, worldPoint),
@@ -6800,12 +6914,7 @@ export default class CityChannelThreeRuntime {
       ...(typeof this.createRackAxisBindingRuntimeEntries === 'function'
         ? this.createRackAxisBindingRuntimeEntries(gearNodes, assemblyGraph)
         : [])
-    ].filter((entry, index, entries) => (
-      entries.findIndex((item) => (
-        (item.componentKey || item.sourceRackId || item.rackId)
-        === (entry.componentKey || entry.sourceRackId || entry.rackId)
-      )) === index
-    ));
+    ];
     let driveFailure = null;
 
     if (gearNodes.length <= 0 && assemblyEntries.length <= 0) {
@@ -6822,49 +6931,54 @@ export default class CityChannelThreeRuntime {
       return false;
     }
 
-    const obstructions = assemblyEntries.map((entry) => {
-      if (isRackTranslationRuntimeEntry(entry)) {
-        const targetDistance = getRackContactLimitedTranslationDistance(entry, targetAngle);
-        const obstruction = findRackTranslationObstruction({
-          mapData,
-          assembly: entry.assembly,
-          translationAxis: entry.translationAxis,
-          targetDistance
-        });
-        if (!obstruction) return null;
-        const distancePerSourceAngle = Math.abs(targetAngle) > 0.000001
-          ? targetDistance / targetAngle
-          : 0;
-        const sourceAngle = Math.abs(distancePerSourceAngle) > 0.000001
-          ? obstruction.distance / distancePerSourceAngle
-          : targetAngle;
-        return {
-          ...obstruction,
-          assemblyId: entry.assembly?.id,
-          rackId: entry.rackId || entry.sourceRackId,
-          linearDistance: obstruction.distance,
-          sourceAngle
-        };
-      }
-      const driveRatio = Number(entry.driveRatio) || 1;
-      const obstruction = findRotationObstruction({
+    const motionIntentGraph = createMechanismMotionIntentGraph({
+      mapData,
+      gearNodes,
+      assemblyEntries
+    });
+    const motionConflict = motionIntentGraph.conflicts[0] || null;
+    if (motionConflict?.type === 'gearDriveConflict') {
+      this.setMechanismRuntimeSnapshot(null);
+      this.flashMechanismObstruction(motionConflict);
+      this.config.onToast?.('主动齿轮之间的啮合方向互相矛盾，齿轮组被卡住。', 'error');
+      return false;
+    }
+    if (motionConflict?.type === 'rackDriveConflict') {
+      this.setMechanismRuntimeSnapshot(null);
+      this.flashMechanismObstruction(motionConflict);
+      this.config.onToast?.('主动齿轮正在把同一齿条推向相反方向，齿条被卡住。', 'error');
+      return false;
+    }
+    if (motionConflict?.type === 'placementMotionConflict') {
+      this.setMechanismRuntimeSnapshot(null);
+      this.flashMechanismObstruction(motionConflict);
+      this.config.onToast?.('同一板材被多个机械约束要求不同运动，传动被卡住。', 'error');
+      return false;
+    }
+
+    assemblyEntries = assemblyEntries.filter((entry, index, entries) => (
+      entries.findIndex((item) => (
+        (item.componentKey || item.sourceRackId || item.rackId)
+        === (entry.componentKey || entry.sourceRackId || entry.rackId)
+      )) === index
+    ));
+
+    const collisionBlocks = findMechanismMotionObstructions({
+      mapData,
+      assemblyEntries,
+      targetAngle
+    });
+    const collisionIntentGraph = collisionBlocks.length > 0
+      ? createMechanismMotionIntentGraph({
         mapData,
-        assembly: entry.assembly,
-        anchor: entry.anchor,
-        fixedMount: entry.fixedMount,
-        targetAngle: targetAngle * driveRatio
-      });
-      if (!obstruction) return null;
-      return {
-        ...obstruction,
-        assemblyId: entry.assembly?.id,
-        fixedAxisId: entry.fixedAxis?.id,
-        assemblyAngle: obstruction.angle,
-        sourceAngle: obstruction.angle / driveRatio
-      };
-    }).filter(Boolean);
-    const obstruction = obstructions.sort((a, b) => Math.abs(a.sourceAngle) - Math.abs(b.sourceAngle))[0] || null;
-    const limitingObstruction = obstruction ? { ...obstruction, angle: obstruction.sourceAngle } : null;
+        gearNodes,
+        assemblyEntries,
+        collisionBlocks
+      })
+      : motionIntentGraph;
+    const limitingObstruction = collisionIntentGraph.conflicts.find((conflict) => (
+      conflict?.type === 'collisionBlock'
+    )) || null;
     const allowedRotation = getAllowedRotationAngle({
       targetAngle,
       obstruction: limitingObstruction
@@ -6997,6 +7111,7 @@ export default class CityChannelThreeRuntime {
     rotation = this.config.activeRotation,
     transmissionRotation = rotation,
     allowReplacement = false,
+    allowLayerExpansion = false,
     snapMode = 'floor'
   } = {}) {
     if (!cell) return null;
@@ -7018,7 +7133,8 @@ export default class CityChannelThreeRuntime {
       activeRotation: rotation,
       transmissionRotation,
       allowReplacement,
-      isVertical
+      isVertical,
+      allowLayerExpansion
     });
     return {
       cell,
@@ -7032,7 +7148,12 @@ export default class CityChannelThreeRuntime {
     };
   }
 
-  createWallTarget(cell = null, edge = 'north', { allowReplacement = false, snapMode = 'edge', structuralSupport = false } = {}) {
+  createWallTarget(cell = null, edge = 'north', {
+    allowReplacement = false,
+    allowLayerExpansion = false,
+    snapMode = 'edge',
+    structuralSupport = false
+  } = {}) {
     if (!cell || !edge) return null;
     const mapData = this.renderModel?.mapData || {};
     const transform = getWallThreeTransform({
@@ -7049,7 +7170,8 @@ export default class CityChannelThreeRuntime {
       mapData,
       activeTool: this.config.activeTool,
       activeTileType: this.config.activeTileType,
-      allowReplacement
+      allowReplacement,
+      allowLayerExpansion
     });
     let operation = createThreeWallPlacementOperation({
       cell,
@@ -7058,7 +7180,8 @@ export default class CityChannelThreeRuntime {
       activeTool: this.config.activeTool,
       activeTileType: this.config.activeTileType,
       activeRotation: this.config.activeRotation,
-      allowReplacement
+      allowReplacement,
+      allowLayerExpansion
     });
     if (!operation && structuralSupport && blockReason === 'unsupported') {
       operation = {
@@ -7297,6 +7420,7 @@ export default class CityChannelThreeRuntime {
     if (topTarget.kind === 'wall') {
       return this.createWallTarget(topTarget.cell, topTarget.edge, {
         allowReplacement: false,
+        allowLayerExpansion: true,
         snapMode: 'topSnap'
       });
     }
@@ -7307,6 +7431,7 @@ export default class CityChannelThreeRuntime {
       rotation,
       transmissionRotation: this.config.activeRotation,
       allowReplacement: false,
+      allowLayerExpansion: true,
       snapMode: 'topSnap'
     });
     if (!target) return null;
@@ -7315,7 +7440,8 @@ export default class CityChannelThreeRuntime {
       cell,
       mapData: this.renderModel?.mapData || {},
       activeTool: this.config.activeTool,
-      activeTileType: this.config.activeTileType
+      activeTileType: this.config.activeTileType,
+      allowLayerExpansion: true
     });
     target.operation = createThreeVerticalTilePlacementOperation({
       supportPlacement: placement,
@@ -7324,7 +7450,8 @@ export default class CityChannelThreeRuntime {
       activeTool: this.config.activeTool,
       activeTileType: this.config.activeTileType,
       activeRotation: this.config.activeRotation,
-      transmissionRotation: this.config.activeRotation
+      transmissionRotation: this.config.activeRotation,
+      allowLayerExpansion: true
     });
     target.valid = !!target.operation;
     return target;

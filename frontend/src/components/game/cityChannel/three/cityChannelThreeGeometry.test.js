@@ -820,7 +820,7 @@ describe('cityChannelThreeGeometry', () => {
     });
   });
 
-  it('blocks vertical tile placement when the target is occupied or invalid', () => {
+  it('blocks occupied vertical tile placement while allowing top placement to expand layers', () => {
     const supportTile = {
       ...createTile({ x: 1, y: 1, z: 1, rotation: 0 }),
       isVertical: true
@@ -855,6 +855,25 @@ describe('cityChannelThreeGeometry', () => {
       mapData: occupiedMap,
       activeTool: CITY_CHANNEL_TOOLS.PLACE_TILE,
       activeTileType: CITY_CHANNEL_TILE_TYPES.BASIC_PLATE
+    })).toBeNull();
+    expect(createThreeVerticalTilePlacementOperation({
+      supportPlacement: topLayerSupport,
+      mapData: occupiedMap,
+      activeTool: CITY_CHANNEL_TOOLS.PLACE_TILE,
+      activeTileType: CITY_CHANNEL_TILE_TYPES.BASIC_PLATE
+    })).toMatchObject({
+      kind: 'tile',
+      cell: { x: 1, y: 1, z: 3 },
+      isVertical: true
+    });
+    expect(getThreeVerticalTilePlacementBlockReason({
+      supportPlacement: {
+        ...supportTile,
+        x: 4
+      },
+      mapData: occupiedMap,
+      activeTool: CITY_CHANNEL_TOOLS.PLACE_TILE,
+      activeTileType: CITY_CHANNEL_TILE_TYPES.BASIC_PLATE
     })).toBe('invalidCell');
     expect(getThreeVerticalTilePlacementBlockReason({
       supportPlacement: supportTile,
@@ -870,5 +889,43 @@ describe('cityChannelThreeGeometry', () => {
       allowReplacement: true,
       isVertical: true
     })).toBeNull();
+  });
+
+  it('allows top wall placement to expand layers for continued vertical stacks', () => {
+    const supportWall = createWall({
+      x: 1,
+      y: 1,
+      z: 3,
+      edge: 'east',
+      panelType: CITY_CHANNEL_TILE_TYPES.BASIC_PLATE
+    });
+    const topTarget = getThreeVerticalTopPlacementTarget(supportWall);
+    const mapData = {
+      ...createBaseCityChannelMap({ width: 4, height: 4, layers: 4 }),
+      walls: {
+        [createWallKey(1, 1, 3, 'east')]: supportWall
+      }
+    };
+
+    expect(getThreeWallPlacementBlockReason({
+      cell: topTarget.cell,
+      edge: topTarget.edge,
+      mapData,
+      activeTool: CITY_CHANNEL_TOOLS.PLACE_TILE,
+      activeTileType: CITY_CHANNEL_TILE_TYPES.BASIC_PLATE,
+      allowLayerExpansion: true
+    })).toBeNull();
+    expect(createThreeWallPlacementOperation({
+      cell: topTarget.cell,
+      edge: topTarget.edge,
+      mapData,
+      activeTool: CITY_CHANNEL_TOOLS.PLACE_TILE,
+      activeTileType: CITY_CHANNEL_TILE_TYPES.BASIC_PLATE,
+      allowLayerExpansion: true
+    })).toMatchObject({
+      kind: 'wall',
+      cell: { x: 1, y: 1, z: 4 },
+      edge: 'east'
+    });
   });
 });

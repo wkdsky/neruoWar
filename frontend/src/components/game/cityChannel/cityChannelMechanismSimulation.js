@@ -9,6 +9,7 @@ import {
   collisionPrismsIntersect,
   getCityChannelPlacementCollisionBoxes,
   getCityChannelPlacementCollisionPrisms,
+  isFloorSupportPlacement,
   isSupportCollisionExempt
 } from './cityChannelPlacementGeometry';
 import {
@@ -29,6 +30,9 @@ import {
   getRackAxisBindingStatus,
   getRackCanonicalSegment,
   getRackGearContacts,
+  DOUBLE_SIDED_RACK_HEIGHT_WORLD,
+  DOUBLE_SIDED_RACK_TOOTH_DEPTH_WORLD,
+  DOUBLE_SIDED_RACK_WIDTH_WORLD,
   RACK_DIRECTIONS,
   RACK_PLANES
 } from './cityChannelRackModel';
@@ -49,6 +53,9 @@ export const CITY_CHANNEL_GEAR_THICKNESS_WORLD = 0.09;
 export const CITY_CHANNEL_GEAR_MESH_TOLERANCE_WORLD = 0.09;
 const VERTICAL_PANEL_BASE_LIFT_WORLD = 4 / 62;
 const VERTICAL_PANEL_SURFACE_OFFSET_WORLD = 0.06;
+const FLOOR_PANEL_COLLISION_THICKNESS = 0.16;
+const RACK_COLLISION_SIDE_HALF_WIDTH = (DOUBLE_SIDED_RACK_WIDTH_WORLD + DOUBLE_SIDED_RACK_TOOTH_DEPTH_WORLD) * 0.5;
+const RACK_COLLISION_NORMAL_HALF_WIDTH = DOUBLE_SIDED_RACK_HEIGHT_WORLD * 0.5;
 
 const worldEdgeTangent = {
   north: { x: 1, y: 0 },
@@ -73,6 +80,25 @@ const worldEdgeCenter = {
 
 const getVerticalAxis = (rotation = 0) => rotatePoint({ x: 1, y: 0 }, normalizeRotation(rotation || 0));
 const getVerticalNormal = (rotation = 0) => rotatePoint({ x: 0, y: 1 }, normalizeRotation(rotation || 0));
+
+const getPointBounds = (points = []) => points.reduce((bounds, point) => ({
+  minX: Math.min(bounds.minX, point.x),
+  maxX: Math.max(bounds.maxX, point.x),
+  minY: Math.min(bounds.minY, point.y),
+  maxY: Math.max(bounds.maxY, point.y)
+}), {
+  minX: Infinity,
+  maxX: -Infinity,
+  minY: Infinity,
+  maxY: -Infinity
+});
+
+const createCollisionPrism = ({ points = [], minZ = 0, maxZ = 0 } = {}) => ({
+  ...getPointBounds(points),
+  points,
+  minZ,
+  maxZ
+});
 
 const getSurfaceOffsetSign = (placement = {}, mount = {}) => (
   getGearSurfaceOffsetSignForPanel(placement.panelType, mount.surface || 'front')
@@ -158,16 +184,95 @@ const getRackContactDriveSign = (rackSegment = {}, sideSign = 1) => (
     : (Number(sideSign) < 0 ? 1 : -1)
 );
 
-export const getRackTranslationTravelLimits = (entry = {}) => {
-  if (!entry?.rack) return null;
-  const contactRackAxis = Number(entry.contactRackAxis);
-  if (!Number.isFinite(contactRackAxis)) return null;
-  const rackSegment = getRackCanonicalSegment(entry.rack);
+const getRackContactDriveRatio = (rack = {}, contact = {}) => {
+  const contactSideSign = Number(contact.sideSign) < 0 ? -1 : 1;
+  const configuredDriveSign = isPassiveGearRotationDirection(contact.node?.mount?.rotationDirection)
+    ? null
+    : getGearRotationDirectionSign(contact.node?.mount?.rotationDirection);
+  const gearDriveRatio = configuredDriveSign || Number(contact.node?.driveRatio) || 1;
+  return gearDriveRatio * getRackContactDriveSign(getRackCanonicalSegment(rack), contactSideSign);
+};
+
+const getRackContactDriveCoefficient = (rack = {}, contact = {}) => {
+  const pitchRadiusWorld = Math.max(
+    0.001,
+    Number(contact.node?.pitchRadiusWorld ?? contact.node?.pitchRadius) || CITY_CHANNEL_GEAR_PITCH_RADIUS_WORLD
+  );
+  return getRackContactDriveRatio(rack, contact) * pitchRadiusWorld;
+};
+
+const createRackDriveConflict = (rack = {}, contacts = []) => {
+  const sources = (Array.isArray(contacts) ? contacts : [])
+    .map((contact) => {
+      if (!contact?.node?.id) return null;
+      return {
+        rackId: rack.id || null,
+        driveCoefficient: getRackContactDriveCoefficient(rack, contact),
+        driveRatio: getRackContactDriveRatio(rack, contact),
+        contactSideSign: Number(contact.sideSign) < 0 ? -1 : 1,
+        contactRackAxis: Number(contact.rackAxis) || 0,
+        sourceGearNodeId: contact.node.id,
+        sourceGearComponentKey: contact.node.componentKey,
+        sourceGearMountId: contact.node.mountId
+      };
+    })
+    .filter(Boolean);
+  if (sources.length <= 1) return null;
+  const reference = sources[0].driveCoefficient;
+  const hasConflict = sources.some((source) => (
+    Math.abs(source.driveCoefficient - reference) > RACK_CONTACT_TRAVEL_EPSILON
+  ));
+  if (!hasConflict) return null;
+  return {
+    blocked: true,
+    type: 'rackDriveConflict',
+    rackId: rack.id || null,
+    sources
+  };
+};
+
+const getRackContactTravelLimits = (rack = {}, contactRackAxis = 0) => {
+  const axis = Number(contactRackAxis);
+  if (!Number.isFinite(axis)) return null;
+  const rackSegment = getRackCanonicalSegment(rack);
   if (rackSegment.length < 1) return null;
   return {
-    min: contactRackAxis - rackSegment.max,
-    max: contactRackAxis - rackSegment.min
+    min: axis - rackSegment.max,
+    max: axis - rackSegment.min
   };
+};
+
+const mergeRackContactTravelLimits = (limits = []) => {
+  const sorted = limits
+    .map((limit) => ({
+      min: Number(limit?.min),
+      max: Number(limit?.max)
+    }))
+    .filter((limit) => Number.isFinite(limit.min) && Number.isFinite(limit.max) && limit.max >= limit.min)
+    .sort((a, b) => a.min - b.min);
+  if (sorted.length <= 0) return null;
+  const merged = [];
+  sorted.forEach((limit) => {
+    const previous = merged[merged.length - 1];
+    if (!previous || limit.min > previous.max + RACK_CONTACT_TRAVEL_EPSILON) {
+      merged.push({ ...limit });
+      return;
+    }
+    previous.max = Math.max(previous.max, limit.max);
+  });
+  return merged.find((limit) => (
+    limit.min <= RACK_CONTACT_TRAVEL_EPSILON
+    && limit.max >= -RACK_CONTACT_TRAVEL_EPSILON
+  )) || null;
+};
+
+export const getRackTranslationTravelLimits = (entry = {}) => {
+  if (!entry?.rack) return null;
+  const sourceLimits = Array.isArray(entry.sourceContactTravelLimits)
+    ? mergeRackContactTravelLimits(entry.sourceContactTravelLimits)
+    : null;
+  if (sourceLimits) return sourceLimits;
+  return getRackContactTravelLimits(entry.rack, entry.contactRackAxis);
 };
 
 export const clampRackTranslationDistanceToContact = (entry = {}, distance = 0) => {
@@ -182,6 +287,7 @@ export const getRackContactLimitedTranslationDistance = (entry = {}, sourceAngle
 );
 
 export const getRackTranslationDistance = (entry = {}, sourceAngle = 0, options = {}) => {
+  if (entry?.driveConflict?.blocked) return 0;
   const angle = (Number(entry.driveRatio) || 1) * (Number(sourceAngle) || 0);
   const radius = Math.max(
     0.001,
@@ -435,6 +541,45 @@ const getGearMeshTolerance = (pitchContact = 0) => Math.max(
   Math.min(CITY_CHANNEL_GEAR_MESH_TOLERANCE_WORLD, (Number(pitchContact) || 0) * 0.13)
 );
 
+const getGearGridMeshTolerance = () => CITY_CHANNEL_GEAR_MESH_TOLERANCE_WORLD;
+
+const isExplicitCenterGearNode = (node = {}) => (
+  node?.mount?.position === 'center'
+  || node?.position === 'center'
+);
+
+const areGearGridValuesClose = (left = 0, right = 0) => (
+  Math.abs((Number(left) || 0) - (Number(right) || 0)) <= getGearGridMeshTolerance()
+);
+
+const isGearGridUnitOffset = (left = 0, right = 0) => (
+  Math.abs(Math.abs((Number(left) || 0) - (Number(right) || 0)) - 1) <= getGearGridMeshTolerance()
+);
+
+const isGearGridNeighborMesh = (a = {}, b = {}, distance = 0) => {
+  if (!isExplicitCenterGearNode(a) || !isExplicitCenterGearNode(b)) return false;
+  if (Math.abs((Number(distance) || 0) - 1) > getGearGridMeshTolerance()) return false;
+  const aPlane = a.meshPlane;
+  const bPlane = b.meshPlane;
+  if (!aPlane || !bPlane || aPlane.kind !== bPlane.kind) return false;
+  const sameHeightOrRow = areGearGridValuesClose(aPlane.v, bPlane.v);
+  const tangentNeighbor = isGearGridUnitOffset(aPlane.u, bPlane.u);
+  if (aPlane.kind === 'vertical') {
+    return sameHeightOrRow && tangentNeighbor;
+  }
+  return (
+    (sameHeightOrRow && tangentNeighbor)
+    || (areGearGridValuesClose(aPlane.u, bPlane.u) && isGearGridUnitOffset(aPlane.v, bPlane.v))
+  );
+};
+
+const isGearMeshDistance = (distance = 0, pitchContact = 0, a = {}, b = {}) => {
+  const parsedDistance = Number(distance);
+  if (!Number.isFinite(parsedDistance)) return false;
+  if (Math.abs(parsedDistance - pitchContact) <= getGearMeshTolerance(pitchContact)) return true;
+  return isGearGridNeighborMesh(a, b, parsedDistance);
+};
+
 const getGearMeshPlaneDistance = (a = {}, b = {}) => {
   const aPlane = a.meshPlane;
   const bPlane = b.meshPlane;
@@ -498,7 +643,7 @@ export const buildGearContactGraph = (nodes = [], threshold = getGearContactThre
       const bRadius = meshPlaneDistance !== null || sameSurface ? getGearPitchRadius(b) : getGearScreenPitchRadius(b);
       const pitchContact = aRadius + bRadius;
       if (meshPlaneDistance !== null || sameSurface) {
-        if (Math.abs(distance - pitchContact) > getGearMeshTolerance(pitchContact)) continue;
+        if (!isGearMeshDistance(distance, pitchContact, a, b)) continue;
       } else {
         const contactDistance = Math.max(pitchContact * 1.22, Math.min(threshold, pitchContact * 1.22));
         if (distance > contactDistance) continue;
@@ -569,10 +714,10 @@ export const getDrivenGearRoots = (assembly, nodes = [], sourceComponentKey = ''
 };
 
 export const isDrivenGearAxisBindingActive = (node = null, assembly = null) => {
-  if (isPassiveGearRotationDirection(node?.mount?.rotationDirection)) return false;
   const binding = normalizeGearAxisBinding(node?.mount?.axisBinding);
   if (!binding?.componentKey) return false;
-  return !node?.axisBindingSuppressed;
+  if (node?.axisBindingSuppressed) return false;
+  return Math.abs(Number(node?.driveRatio) || 0) > RACK_CONTACT_TRAVEL_EPSILON;
 };
 
 const shouldSuppressDrivenAxisBinding = (node = null, nodeById = new Map(), sourceAssembly = null) => {
@@ -589,6 +734,63 @@ const shouldSuppressDrivenAxisBinding = (node = null, nodeById = new Map(), sour
   );
 };
 
+const attachGearDriveConflicts = (nodes = [], conflicts = []) => {
+  Object.defineProperty(nodes, 'driveConflicts', {
+    configurable: true,
+    enumerable: false,
+    value: conflicts
+  });
+  return nodes;
+};
+
+const getExplicitGearDriveRatio = (node = null) => {
+  if (node?.rotationDirectionConfigured === false) return null;
+  if (!Object.prototype.hasOwnProperty.call(node?.mount || {}, 'rotationDirection')) return null;
+  if (isPassiveGearRotationDirection(node?.mount?.rotationDirection)) return null;
+  const ratio = getGearRotationDirectionSign(node?.mount?.rotationDirection);
+  return ratio || null;
+};
+
+const createGearDriveConflictSource = (node = null, role = 'gear', driveRatio = 0) => (
+  node?.id
+    ? {
+      role,
+      driveRatio: Number(driveRatio) || 0,
+      sourceGearNodeId: node.id,
+      sourceGearComponentKey: node.componentKey,
+      sourceGearMountId: node.mountId
+    }
+    : null
+);
+
+const createGearDriveConflict = ({
+  source = null,
+  current = null,
+  target = null,
+  proposedRatio = 0,
+  requiredRatio = 0,
+  viaRackId = null
+} = {}) => {
+  const sourceEntries = [
+    createGearDriveConflictSource(source, 'source', source?.driveRatio),
+    createGearDriveConflictSource(current, 'mesh', current?.driveRatio),
+    createGearDriveConflictSource(target, 'target', requiredRatio)
+  ].filter(Boolean);
+  const seen = new Set();
+  return {
+    blocked: true,
+    type: 'gearDriveConflict',
+    proposedRatio,
+    requiredRatio,
+    viaRackId,
+    sources: sourceEntries.filter((entry) => {
+      if (seen.has(entry.sourceGearNodeId)) return false;
+      seen.add(entry.sourceGearNodeId);
+      return true;
+    })
+  };
+};
+
 export const resolveDrivenGearNodes = ({
   assembly,
   assemblyNodes = [],
@@ -602,34 +804,102 @@ export const resolveDrivenGearNodes = ({
   const roots = getDrivenGearRoots(assembly, assemblyNodes, sourceComponentKey);
   if (roots.length <= 0) return [];
   const visited = new Set();
+  const driveSourceById = new Map();
+  const conflicts = [];
+  const conflictKeys = new Set();
+  const addGearDriveConflict = (conflict = null) => {
+    if (!conflict?.sources?.length) return;
+    const key = conflict.sources
+      .map((source) => source.sourceGearNodeId)
+      .sort()
+      .join('|');
+    if (conflictKeys.has(key)) return;
+    conflictKeys.add(key);
+    conflicts.push(conflict);
+  };
   roots.forEach((root) => {
-    if (!root?.id || visited.has(root.id)) return;
+    if (!root?.id) return;
     const liveRoot = byId.get(root.id);
     if (!liveRoot) return;
     const rootDirection = getGearRotationDirectionSign(liveRoot.mount?.rotationDirection) || 1;
+    if (visited.has(root.id)) {
+      const explicitRatio = getExplicitGearDriveRatio(liveRoot);
+      if (
+        explicitRatio !== null
+        && !liveRoot.drivenViaRackId
+        && Math.abs((Number(liveRoot.driveRatio) || 0) - explicitRatio) > RACK_CONTACT_TRAVEL_EPSILON
+      ) {
+        const driver = liveRoot.drivenByGearId ? byId.get(liveRoot.drivenByGearId) : null;
+        const source = driveSourceById.has(root.id) ? byId.get(driveSourceById.get(root.id)) : driver;
+        addGearDriveConflict(createGearDriveConflict({
+          source,
+          current: driver,
+          target: liveRoot,
+          proposedRatio: Number(liveRoot.driveRatio) || 0,
+          requiredRatio: explicitRatio
+        }));
+      }
+      return;
+    }
     liveRoot.driveRatio = rootDirection;
     liveRoot.direction = rootDirection;
     liveRoot.isDriveRoot = true;
+    liveRoot.drivenViaRackId = null;
+    liveRoot.driveSourceNodeId = liveRoot.id;
     liveRoot.drivenByGearId = null;
     liveRoot.drivenByComponentKey = null;
     liveRoot.drivenByMountId = null;
     visited.add(root.id);
+    driveSourceById.set(root.id, root.id);
     const queue = [root.id];
     while (queue.length > 0) {
       const currentId = queue.shift();
       const current = byId.get(currentId);
       (graph.get(currentId) || []).forEach((edge) => {
         const nextId = edge.id;
-        if (visited.has(nextId)) return;
         const next = byId.get(nextId);
         if (!next || !current) return;
-        next.driveRatio = (current.driveRatio || 1) * (edge.ratio || -1);
+        const proposedRatio = (current.driveRatio || 1) * (edge.ratio || -1);
+        const source = driveSourceById.has(currentId) ? byId.get(driveSourceById.get(currentId)) : current;
+        if (visited.has(nextId)) {
+          if (Math.abs((Number(next.driveRatio) || 0) - proposedRatio) > RACK_CONTACT_TRAVEL_EPSILON) {
+            addGearDriveConflict(createGearDriveConflict({
+              source,
+              current,
+              target: next,
+              proposedRatio,
+              requiredRatio: Number(next.driveRatio) || 0,
+              viaRackId: edge.viaRackId || null
+            }));
+          }
+          return;
+        }
+        const explicitRatio = getExplicitGearDriveRatio(next);
+        if (
+          !edge.viaRackId
+          && explicitRatio !== null
+          && Math.abs(explicitRatio - proposedRatio) > RACK_CONTACT_TRAVEL_EPSILON
+        ) {
+          addGearDriveConflict(createGearDriveConflict({
+            source,
+            current,
+            target: next,
+            proposedRatio,
+            requiredRatio: explicitRatio,
+            viaRackId: edge.viaRackId || null
+          }));
+          return;
+        }
+        next.driveRatio = proposedRatio;
         next.direction = next.driveRatio >= 0 ? 1 : -1;
         next.isDriveRoot = false;
+        next.drivenViaRackId = edge.viaRackId || null;
+        next.driveSourceNodeId = source?.id || current.id;
         next.drivenByGearId = current.id;
         next.drivenByComponentKey = current.componentKey;
         next.drivenByMountId = current.mountId;
         visited.add(nextId);
+        driveSourceById.set(nextId, next.driveSourceNodeId);
         queue.push(nextId);
       });
     }
@@ -639,19 +909,20 @@ export const resolveDrivenGearNodes = ({
     node.axisBindingSuppressed = shouldSuppressDrivenAxisBinding(node, byId, assembly);
   });
   return driven.length > 0
-    ? driven
-    : assemblyNodes.map((node, index) => {
+    ? attachGearDriveConflicts(driven, conflicts)
+    : attachGearDriveConflicts(assemblyNodes.map((node, index) => {
       const next = {
         ...node,
         driveRatio: index % 2 === 0 ? 1 : -1,
         direction: index % 2 === 0 ? 1 : -1,
-        isDriveRoot: index === 0
+        isDriveRoot: index === 0,
+        drivenViaRackId: null
       };
       return {
         ...next,
         axisBindingSuppressed: shouldSuppressDrivenAxisBinding(next, byId, assembly)
       };
-    });
+    }), conflicts);
 };
 
 export const getGearPhase = (node, angle = 0, basePhase = 0) => normalizeRotation(
@@ -981,6 +1252,8 @@ export const createRackTranslationRuntimeEntryFromContact = ({
   assemblyGraph = null,
   rack = null,
   contact = null,
+  sourceContacts = [],
+  driveConflict = null,
   bindingStatus = null
 } = {}) => {
   if (!rack?.id || !contact?.node) return null;
@@ -1013,6 +1286,19 @@ export const createRackTranslationRuntimeEntryFromContact = ({
   );
   const rackSegment = getRackCanonicalSegment(rack);
   const contactDriveSign = getRackContactDriveSign(rackSegment, contactSideSign);
+  const sourceContactTravelLimits = (Array.isArray(sourceContacts) && sourceContacts.length > 0 ? sourceContacts : [contact])
+    .map((sourceContact) => {
+      const limits = getRackContactTravelLimits(rack, sourceContact.rackAxis);
+      if (!limits) return null;
+      return {
+        ...limits,
+        contactRackAxis: Number(sourceContact.rackAxis) || 0,
+        sourceGearNodeId: sourceContact.node?.id || null,
+        sourceGearComponentKey: sourceContact.node?.componentKey || null,
+        sourceGearMountId: sourceContact.node?.mountId || null
+      };
+    })
+    .filter(Boolean);
   return {
     motionType: RACK_TRANSLATION_MOTION_TYPE,
     assembly: boundAssembly,
@@ -1029,11 +1315,22 @@ export const createRackTranslationRuntimeEntryFromContact = ({
     contactSideSign,
     contactRackAxis: Number(contact.rackAxis) || 0,
     contactPoint: contact.point || null,
+    sourceContactTravelLimits,
+    driveConflict,
     bindingCandidate: status.candidate || null,
     sourceGearNodeId: contact.node.id || null,
     sourceGearComponentKey: contact.node.componentKey,
     sourceGearMountId: contact.node.mountId
   };
+};
+
+const isRackDriveSourceContact = (rack = {}, contact = {}) => {
+  const node = contact.node;
+  if (!node?.id) return false;
+  if (node.isDriveRoot) return true;
+  if (node.drivenViaRackId === rack.id && isPassiveGearRotationDirection(node.mount?.rotationDirection)) return false;
+  if (!node.drivenViaRackId) return true;
+  return !isPassiveGearRotationDirection(node.mount?.rotationDirection);
 };
 
 export const createRackTranslationRuntimeEntries = ({
@@ -1046,20 +1343,28 @@ export const createRackTranslationRuntimeEntries = ({
   const seen = new Set();
   Object.values(mapData.racks || {}).forEach((rack) => {
     const contacts = getRackGearContacts(rack, nodes).filter((contact) => drivenNodeIds.has(contact.node.id));
-    if (contacts.length <= 0) return;
+    const driveContacts = contacts.filter((contact) => isRackDriveSourceContact(rack, contact));
+    if (driveContacts.length <= 0) return;
     const status = getRackAxisBindingStatus({ mapData, rack });
     const preferredAxis = status.candidate?.point
       ? getRackAxisValueForPoint(rack, status.candidate.point)
       : null;
-    const contact = contacts.reduce((best, item) => {
+    const contact = driveContacts.reduce((best, item) => {
       const distance = Number.isFinite(preferredAxis) ? Math.abs((item.rackAxis || 0) - preferredAxis) : 0;
       return !best || distance < best.distance ? { item, distance } : best;
     }, null)?.item;
+    const driveConflict = createRackDriveConflict(rack, driveContacts);
+    const driveCoefficient = getRackContactDriveCoefficient(rack, contact);
+    const sourceContacts = driveContacts.filter((item) => (
+      Math.abs(getRackContactDriveCoefficient(rack, item) - driveCoefficient) <= RACK_CONTACT_TRAVEL_EPSILON
+    ));
     const entry = createRackTranslationRuntimeEntryFromContact({
       mapData,
       assemblyGraph,
       rack,
       contact,
+      sourceContacts,
+      driveConflict,
       bindingStatus: status
     });
     if (!entry) return;
@@ -1090,16 +1395,88 @@ export const buildStaticCollisionBoxes = (mapData = {}, excludedComponentKeys = 
   return entries;
 };
 
-const findBoxCollision = (movingPlacement = null, movingPrisms = [], staticEntries = []) => {
+const findBoxCollisions = (movingPlacement = null, movingPrisms = [], staticEntries = []) => {
+  const collisions = [];
   for (const movingPrism of movingPrisms) {
     for (const entry of staticEntries) {
       if (isSupportCollisionExempt(movingPlacement, entry.placement)) continue;
       if ((entry.prisms || []).some((staticPrism) => collisionPrismsIntersect(movingPrism, staticPrism, 0.015))) {
-        return entry;
+        if (!collisions.some((collision) => collision.componentKey === entry.componentKey)) {
+          collisions.push(entry);
+        }
       }
     }
   }
-  return null;
+  return collisions;
+};
+
+const findBoxCollision = (movingPlacement = null, movingPrisms = [], staticEntries = []) => {
+  const collisions = findBoxCollisions(movingPlacement, movingPrisms, staticEntries);
+  return collisions[0] || null;
+};
+
+const getVerticalRackCollisionPrisms = (rack = null, offset = {}) => {
+  if (!rack) return [];
+  const segment = getRackCanonicalSegment(rack);
+  if (segment.plane !== RACK_PLANES.VERTICAL || segment.direction !== RACK_DIRECTIONS.Z) return [];
+  const x = Number(segment.start?.x) || 0;
+  const y = Number(segment.start?.y) || 0;
+  const zOffset = Number(offset.z) || 0;
+  const minZ = (Number(segment.min) || 0) + zOffset + FLOOR_PANEL_COLLISION_THICKNESS;
+  const maxZ = (Number(segment.max) || 0) + zOffset;
+  if (maxZ <= minZ + 0.001) return [];
+
+  const halfSide = RACK_COLLISION_SIDE_HALF_WIDTH;
+  const halfNormal = RACK_COLLISION_NORMAL_HALF_WIDTH;
+  const bounds = segment.normalAxis === RACK_DIRECTIONS.X
+    ? {
+      minX: x - halfNormal,
+      maxX: x + halfNormal,
+      minY: y - halfSide,
+      maxY: y + halfSide
+    }
+    : {
+      minX: x - halfSide,
+      maxX: x + halfSide,
+      minY: y - halfNormal,
+      maxY: y + halfNormal
+    };
+
+  return [createCollisionPrism({
+    points: [
+      { x: bounds.minX, y: bounds.minY },
+      { x: bounds.maxX, y: bounds.minY },
+      { x: bounds.maxX, y: bounds.maxY },
+      { x: bounds.minX, y: bounds.maxY }
+    ],
+    minZ,
+    maxZ
+  })];
+};
+
+const findRackBodyCollisions = (rack = null, offset = {}, staticEntries = []) => {
+  const rackPrisms = getVerticalRackCollisionPrisms(rack, offset);
+  if (rackPrisms.length <= 0) return [];
+  return findBoxCollisions(
+    { componentType: RACK_TRANSLATION_MOTION_TYPE, id: rack?.id },
+    rackPrisms,
+    staticEntries.filter((entry) => isFloorSupportPlacement(entry.placement))
+  );
+};
+
+const getCollisionResult = ({ distance = null, angle = null, collisions = [], rackId = null } = {}) => {
+  const obstacle = collisions[0] || null;
+  if (!obstacle) return null;
+  return {
+    blocked: true,
+    ...(angle !== null && angle !== undefined && Number.isFinite(Number(angle)) ? { angle } : {}),
+    ...(distance !== null && distance !== undefined && Number.isFinite(Number(distance)) ? { distance } : {}),
+    ...(rackId ? { rackId } : {}),
+    obstacleKey: obstacle.componentKey,
+    obstacle: obstacle.placement,
+    obstacleKeys: collisions.map((collision) => collision.componentKey),
+    obstacles: collisions.map((collision) => collision.placement)
+  };
 };
 
 export const findRotationObstruction = ({
@@ -1168,6 +1545,7 @@ export const findRotationObstruction = ({
 export const findRackTranslationObstruction = ({
   mapData = {},
   assembly,
+  rack = null,
   translationAxis = { x: 1, y: 0, z: 0 },
   targetDistance = 0,
   stepDistance = TRANSLATION_COLLISION_STEP_WORLD,
@@ -1175,7 +1553,8 @@ export const findRackTranslationObstruction = ({
 } = {}) => {
   const componentKeys = Array.isArray(assembly?.componentKeys) ? assembly.componentKeys : [];
   const target = Number(targetDistance) || 0;
-  if (componentKeys.length <= 0 || Math.abs(target) <= 0.000001) return null;
+  const hasRackBody = !!rack;
+  if ((componentKeys.length <= 0 && !hasRackBody) || Math.abs(target) <= 0.000001) return null;
 
   const movingKeys = new Set(componentKeys);
   const staticExcludedKeys = new Set([
@@ -1188,7 +1567,7 @@ export const findRackTranslationObstruction = ({
       placement: getPlacementByComponentKey(mapData, componentKey)
     }))
     .filter((entry) => !!entry.placement);
-  if (movingEntries.length <= 0) return null;
+  if (movingEntries.length <= 0 && !hasRackBody) return null;
 
   const staticEntries = buildStaticCollisionBoxes(mapData, staticExcludedKeys);
   if (staticEntries.length <= 0) return null;
@@ -1226,9 +1605,397 @@ export const findRackTranslationObstruction = ({
         };
       }
     }
+    const rackCollisions = findRackBodyCollisions(rack, offset, staticEntries);
+    if (rackCollisions.length > 0) {
+      return getCollisionResult({
+        distance,
+        collisions: rackCollisions,
+        rackId: rack.id
+      });
+    }
   }
 
   return null;
+};
+
+const createConflictPlacementTargets = (mapData = {}, sources = []) => {
+  const obstacleMap = new Map();
+  (Array.isArray(sources) ? sources : []).forEach((source) => {
+    const componentKey = source.sourceGearComponentKey || source.componentKey;
+    const placement = componentKey ? getPlacementByComponentKey(mapData, componentKey) : null;
+    if (componentKey && placement) obstacleMap.set(componentKey, placement);
+  });
+  return {
+    obstacleKeys: [...obstacleMap.keys()],
+    obstacles: [...obstacleMap.values()],
+    obstacle: [...obstacleMap.values()][0] || null
+  };
+};
+
+const createConflictRackTargets = (mapData = {}, rackIds = []) => {
+  const rackMap = new Map();
+  (Array.isArray(rackIds) ? rackIds : [rackIds]).forEach((rackId) => {
+    const rack = rackId ? mapData.racks?.[rackId] : null;
+    if (rackId && rack) rackMap.set(rackId, rack);
+  });
+  return {
+    rackIds: [...rackMap.keys()],
+    racks: [...rackMap.values()],
+    rack: [...rackMap.values()][0] || null
+  };
+};
+
+const createConflictGearTargets = (sources = []) => {
+  const gearMap = new Map();
+  (Array.isArray(sources) ? sources : []).forEach((source) => {
+    const componentKey = source.sourceGearComponentKey || source.componentKey;
+    const nodeId = source.sourceGearNodeId || source.id || '';
+    const parsedMountId = componentKey && nodeId.startsWith(`${componentKey}:`)
+      ? nodeId.slice(componentKey.length + 1)
+      : null;
+    const mountId = source.sourceGearMountId || source.mountId || parsedMountId;
+    if (!componentKey || !mountId) return;
+    const gearKey = `${componentKey}:${mountId}`;
+    gearMap.set(gearKey, {
+      gearKey,
+      componentKey,
+      mountId,
+      role: source.role || null,
+      sourceGearNodeId: nodeId || null
+    });
+  });
+  return {
+    gearKeys: [...gearMap.keys()],
+    gearTargets: [...gearMap.values()],
+    gearTarget: [...gearMap.values()][0] || null
+  };
+};
+
+const MECHANISM_CONFLICT_PRIORITY = {
+  gearDriveConflict: 10,
+  rackDriveConflict: 20,
+  placementMotionConflict: 30,
+  collisionBlock: 40
+};
+
+const sortMechanismConflicts = (conflicts = []) => (
+  (Array.isArray(conflicts) ? conflicts : [])
+    .map((conflict, index) => ({ conflict, index }))
+    .sort((a, b) => {
+      const leftPriority = MECHANISM_CONFLICT_PRIORITY[a.conflict?.type] ?? 1000;
+      const rightPriority = MECHANISM_CONFLICT_PRIORITY[b.conflict?.type] ?? 1000;
+      return leftPriority === rightPriority
+        ? a.index - b.index
+        : leftPriority - rightPriority;
+    })
+    .map(({ conflict }) => conflict)
+);
+
+const createMotionVector3 = (vector = {}, scale = 1) => ({
+  x: roundRuntimeNumber((Number(vector.x) || 0) * scale),
+  y: roundRuntimeNumber((Number(vector.y) || 0) * scale),
+  z: roundRuntimeNumber((Number(vector.z) || 0) * scale)
+});
+
+const areMotionNumbersClose = (a = 0, b = 0) => (
+  Math.abs((Number(a) || 0) - (Number(b) || 0)) <= RACK_CONTACT_TRAVEL_EPSILON
+);
+
+const areMotionVectorsClose = (a = {}, b = {}) => (
+  areMotionNumbersClose(a.x, b.x)
+  && areMotionNumbersClose(a.y, b.y)
+  && areMotionNumbersClose(a.z, b.z)
+);
+
+const getMotionPoint = (point = null) => {
+  if (!point) return null;
+  return {
+    x: roundRuntimeNumber(point.x),
+    y: roundRuntimeNumber(point.y),
+    z: roundRuntimeNumber(point.z)
+  };
+};
+
+const getPlacementRotationPlaneKey = (mapData = {}, entry = {}) => {
+  const fixedMount = entry.fixedMount || entry.fixedAxis;
+  const fixedPlacement = fixedMount?.componentKey
+    ? getPlacementByComponentKey(mapData, fixedMount.componentKey)
+    : null;
+  if (fixedPlacement?.edge) return `wall:${fixedPlacement.edge}`;
+  if (fixedPlacement?.isVertical) {
+    return `vertical:${normalizeRotation(fixedPlacement.rotation || 0)}:${fixedMount.surface || fixedMount.axisBinding?.surface || 'front'}`;
+  }
+  return 'horizontal:z';
+};
+
+const getPlacementRotationAnchor = (mapData = {}, entry = {}) => {
+  if (entry.pivotWorld || entry.anchor) return entry.pivotWorld || entry.anchor;
+  const fixedMount = entry.fixedMount || entry.fixedAxis;
+  if (!fixedMount?.componentKey && !fixedMount?.cell) return null;
+  return getFixedAxisWorldAnchor(mapData, fixedMount);
+};
+
+const createPlacementTranslationIntent = (componentKey = '', entry = {}) => {
+  const pitchRadiusWorld = Math.max(
+    0.001,
+    Number(entry.pitchRadiusWorld ?? entry.rackPitchRadiusWorld) || CITY_CHANNEL_GEAR_PITCH_RADIUS_WORLD
+  );
+  const travelCoefficient = (Number(entry.driveRatio) || 0) * pitchRadiusWorld;
+  const translationPerSourceAngle = createMotionVector3(
+    entry.translationAxis || getRackAxisUnitVector(entry.rack || {}),
+    travelCoefficient
+  );
+  return {
+    id: componentKey,
+    kind: 'placement',
+    motionType: 'rigidTranslation',
+    componentKey,
+    axis: entry.translationAxis,
+    valuePerSourceAngle: Number(entry.driveRatio) || 0,
+    translationPerSourceAngle,
+    sourceIds: [entry.sourceGearNodeId].filter(Boolean),
+    constraints: [{
+      type: 'rackCarry',
+      rackId: entry.rackId || entry.sourceRackId
+    }],
+    motionSignature: {
+      type: 'rigidTranslation',
+      translationPerSourceAngle
+    }
+  };
+};
+
+const createPlacementRotationIntent = (mapData = {}, componentKey = '', entry = {}) => {
+  const fixedMount = entry.fixedMount || entry.fixedAxis;
+  const anchor = getPlacementRotationAnchor(mapData, entry);
+  const rotationPlaneKey = getPlacementRotationPlaneKey(mapData, entry);
+  const angularPerSourceAngle = Number(entry.driveRatio) || 1;
+  return {
+    id: componentKey,
+    kind: 'placement',
+    motionType: 'rigidRotation',
+    componentKey,
+    valuePerSourceAngle: angularPerSourceAngle,
+    angularPerSourceAngle,
+    anchor: getMotionPoint(anchor),
+    rotationPlaneKey,
+    fixedAxisId: fixedMount?.id || null,
+    sourceIds: [entry.sourceGearNodeId].filter(Boolean),
+    constraints: [{
+      type: 'axisBinding',
+      fixedAxisId: fixedMount?.id || null
+    }],
+    motionSignature: {
+      type: 'rigidRotation',
+      angularPerSourceAngle,
+      anchor: getMotionPoint(anchor),
+      rotationPlaneKey,
+      fixedAxisId: fixedMount?.id || null
+    }
+  };
+};
+
+const arePlacementMotionIntentsCompatible = (a = {}, b = {}) => {
+  const left = a.motionSignature || a;
+  const right = b.motionSignature || b;
+  if (left.type !== right.type) return false;
+  if (left.type === 'rigidTranslation') {
+    return areMotionVectorsClose(left.translationPerSourceAngle, right.translationPerSourceAngle);
+  }
+  if (left.type === 'rigidRotation') {
+    if (!areMotionNumbersClose(left.angularPerSourceAngle, right.angularPerSourceAngle)) return false;
+    if ((left.rotationPlaneKey || '') !== (right.rotationPlaneKey || '')) return false;
+    if (left.anchor && right.anchor) return areMotionVectorsClose(left.anchor, right.anchor);
+    return !!left.fixedAxisId && left.fixedAxisId === right.fixedAxisId;
+  }
+  return (
+    a.motionType === b.motionType
+    && areMotionNumbersClose(a.valuePerSourceAngle, b.valuePerSourceAngle)
+  );
+};
+
+export const createMechanismMotionIntentGraph = ({
+  mapData = {},
+  gearNodes = [],
+  assemblyEntries = [],
+  collisionBlocks = []
+} = {}) => {
+  const gears = (Array.isArray(gearNodes) ? gearNodes : []).map((node) => ({
+    id: getGearNodeRuntimeId(node),
+    kind: 'gear',
+    motionType: 'rotation',
+    componentKey: node.componentKey,
+    mountId: node.mountId,
+    valuePerSourceAngle: Number(node.driveRatio) || 0,
+    sourceIds: [node.driveSourceNodeId || node.id].filter(Boolean),
+    constraints: [
+      ...(node.drivenByGearId ? [{
+        type: node.drivenViaRackId ? 'rackPinion' : 'gearMesh',
+        sourceGearNodeId: node.drivenByGearId,
+        viaRackId: node.drivenViaRackId || null
+      }] : [])
+    ]
+  }));
+  const racks = [];
+  const placements = [];
+  (Array.isArray(assemblyEntries) ? assemblyEntries : []).forEach((entry) => {
+    if (isRackTranslationRuntimeEntry(entry)) {
+      racks.push({
+        id: entry.rackId || entry.sourceRackId,
+        kind: 'rack',
+        motionType: 'translation',
+        rackId: entry.rackId || entry.sourceRackId,
+        axis: entry.translationAxis,
+        valuePerSourceAngle: Number(entry.driveRatio) || 0,
+        sourceIds: [entry.sourceGearNodeId].filter(Boolean),
+        constraints: (entry.sourceContactTravelLimits || []).map((limit) => ({
+          type: 'rackPinion',
+          sourceGearNodeId: limit.sourceGearNodeId,
+          sourceGearComponentKey: limit.sourceGearComponentKey,
+          sourceGearMountId: limit.sourceGearMountId,
+          contactRackAxis: limit.contactRackAxis
+        }))
+      });
+      (entry.assembly?.componentKeys || []).forEach((componentKey) => {
+        placements.push(createPlacementTranslationIntent(componentKey, entry));
+      });
+      return;
+    }
+    (entry.assembly?.componentKeys || []).forEach((componentKey) => {
+      placements.push(createPlacementRotationIntent(mapData, componentKey, entry));
+    });
+  });
+  const gearConflicts = (Array.isArray(gearNodes.driveConflicts) ? gearNodes.driveConflicts : [])
+    .filter((conflict) => conflict?.type === 'gearDriveConflict')
+    .map((conflict) => ({
+      ...conflict,
+      ...createConflictPlacementTargets(mapData, conflict.sources),
+      ...createConflictGearTargets(conflict.sources),
+      ...createConflictRackTargets(mapData, conflict.viaRackId ? [conflict.viaRackId] : [])
+    }));
+  const rackConflicts = (Array.isArray(assemblyEntries) ? assemblyEntries : [])
+    .map((entry) => {
+      if (!isRackTranslationRuntimeEntry(entry) || !entry.driveConflict?.blocked) return null;
+      const rackId = entry.rackId || entry.sourceRackId;
+      return {
+        blocked: true,
+        type: 'rackDriveConflict',
+        rackId,
+        conflictSources: entry.driveConflict.sources || [],
+        ...createConflictPlacementTargets(mapData, entry.driveConflict.sources),
+        ...createConflictGearTargets(entry.driveConflict.sources),
+        ...createConflictRackTargets(mapData, [rackId])
+      };
+    })
+    .filter(Boolean);
+  const placementConflicts = [];
+  const placementsById = new Map();
+  placements.forEach((placement) => {
+    if (!placement.id) return;
+    const group = placementsById.get(placement.id) || [];
+    group.push(placement);
+    placementsById.set(placement.id, group);
+  });
+  placementsById.forEach((group, componentKey) => {
+    if (group.length <= 1) return;
+    const reference = group[0];
+    const hasConflict = group.some((placement) => (
+      !arePlacementMotionIntentsCompatible(reference, placement)
+    ));
+    if (!hasConflict) return;
+    const placement = getPlacementByComponentKey(mapData, componentKey);
+    placementConflicts.push({
+      blocked: true,
+      type: 'placementMotionConflict',
+      componentKey,
+      intents: group,
+      obstacleKey: placement ? componentKey : null,
+      obstacle: placement,
+      obstacleKeys: placement ? [componentKey] : [],
+      obstacles: placement ? [placement] : []
+    });
+  });
+  const collisionConflicts = (Array.isArray(collisionBlocks) ? collisionBlocks : [])
+    .filter((block) => block?.blocked)
+    .map((block) => ({
+      ...block,
+      type: block.type || 'collisionBlock',
+      ...createConflictRackTargets(mapData, block.rackIds || [block.rackId])
+    }));
+  return {
+    gears,
+    racks,
+    placements,
+    conflicts: sortMechanismConflicts([
+      ...gearConflicts,
+      ...rackConflicts,
+      ...placementConflicts,
+      ...collisionConflicts
+    ])
+  };
+};
+
+export const findMechanismMotionObstructions = ({
+  mapData = {},
+  assemblyEntries = [],
+  targetAngle = 0
+} = {}) => {
+  const sourceTargetAngle = Number(targetAngle) || 0;
+  if (Math.abs(sourceTargetAngle) <= 0.000001) return [];
+  return (Array.isArray(assemblyEntries) ? assemblyEntries : [])
+    .map((entry) => {
+      if (isRackTranslationRuntimeEntry(entry)) {
+        const targetDistance = getRackContactLimitedTranslationDistance(entry, sourceTargetAngle);
+        const obstruction = findRackTranslationObstruction({
+          mapData,
+          assembly: entry.assembly,
+          rack: entry.rack || mapData.racks?.[entry.rackId || entry.sourceRackId] || null,
+          translationAxis: entry.translationAxis,
+          targetDistance
+        });
+        if (!obstruction) return null;
+        const distancePerSourceAngle = Math.abs(sourceTargetAngle) > 0.000001
+          ? targetDistance / sourceTargetAngle
+          : 0;
+        const sourceAngle = Math.abs(distancePerSourceAngle) > 0.000001
+          ? obstruction.distance / distancePerSourceAngle
+          : sourceTargetAngle;
+        return {
+          ...obstruction,
+          blocked: true,
+          type: 'collisionBlock',
+          collisionMotionType: RACK_TRANSLATION_MOTION_TYPE,
+          assemblyId: entry.assembly?.id,
+          rackId: entry.rackId || entry.sourceRackId,
+          linearDistance: obstruction.distance,
+          sourceAngle,
+          angle: sourceAngle
+        };
+      }
+      const driveRatio = Number(entry.driveRatio) || 1;
+      const obstruction = findRotationObstruction({
+        mapData,
+        assembly: entry.assembly,
+        anchor: entry.anchor,
+        fixedMount: entry.fixedMount,
+        targetAngle: sourceTargetAngle * driveRatio
+      });
+      if (!obstruction) return null;
+      const sourceAngle = obstruction.angle / driveRatio;
+      return {
+        ...obstruction,
+        blocked: true,
+        type: 'collisionBlock',
+        collisionMotionType: 'rotation',
+        assemblyId: entry.assembly?.id,
+        fixedAxisId: entry.fixedAxis?.id,
+        assemblyAngle: obstruction.angle,
+        sourceAngle,
+        angle: sourceAngle
+      };
+    })
+    .filter(Boolean)
+    .sort((a, b) => Math.abs(a.sourceAngle) - Math.abs(b.sourceAngle));
 };
 
 export const getAllowedRotationAngle = ({
@@ -1343,8 +2110,107 @@ const createRackDrivenGearRuntimeState = ({
   return createGearRuntimeState({
     node,
     phase: normalizeRotation(basePhase + gearAngle),
-    speedRatio
+    speedRatio,
+    axisBindingOverride: null
   });
+};
+
+const propagateRackDrivenGearMeshStates = ({
+  rackDrivenGearStates = new Map(),
+  nodes = [],
+  sourceAngle = 0,
+  basePhases = new Map(),
+  blockedRootIds = new Set()
+} = {}) => {
+  if (!(rackDrivenGearStates instanceof Map) || rackDrivenGearStates.size <= 0) return rackDrivenGearStates;
+  const nodeById = new Map(
+    (Array.isArray(nodes) ? nodes : [])
+      .map((node) => [getGearNodeRuntimeId(node), node])
+      .filter(([id]) => !!id)
+  );
+  if (nodeById.size <= 0) return rackDrivenGearStates;
+  const meshGraph = buildGearContactGraph([...nodeById.values()], undefined, []);
+  const queue = Array.from(rackDrivenGearStates.keys());
+  const maxSteps = Math.max(1, nodeById.size * nodeById.size);
+  let steps = 0;
+  while (queue.length > 0 && steps < maxSteps) {
+    steps += 1;
+    const currentId = queue.shift();
+    const currentState = rackDrivenGearStates.get(currentId);
+    const currentSpeedRatio = Number(currentState?.speedRatio) || 0;
+    if (Math.abs(currentSpeedRatio) <= RACK_CONTACT_TRAVEL_EPSILON) continue;
+    (meshGraph.get(currentId) || []).forEach((edge) => {
+      const nextId = edge.id;
+      if (!nextId || blockedRootIds.has(nextId)) return;
+      const nextNode = nodeById.get(nextId);
+      if (!nextNode) return;
+      const nextSpeedRatio = currentSpeedRatio * (Number(edge.ratio) || -1);
+      if (Math.abs(nextSpeedRatio) <= RACK_CONTACT_TRAVEL_EPSILON) return;
+      const existing = rackDrivenGearStates.get(nextId);
+      if (existing && Math.abs(Number(existing.speedRatio) || 0) >= Math.abs(nextSpeedRatio)) return;
+      const basePhase = basePhases.get(nextId) || 0;
+      rackDrivenGearStates.set(nextId, createGearRuntimeState({
+        node: nextNode,
+        phase: normalizeRotation(basePhase + ((Number(sourceAngle) || 0) * nextSpeedRatio)),
+        speedRatio: nextSpeedRatio,
+        axisBindingOverride: null
+      }));
+      queue.push(nextId);
+    });
+  }
+  return rackDrivenGearStates;
+};
+
+const createRackDrivenAxisBindingRuntimeEntries = ({
+  mapData = {},
+  rackDrivenGearStates = new Map(),
+  nodes = [],
+  gearNodeById = new Map()
+} = {}) => {
+  if (!(rackDrivenGearStates instanceof Map) || rackDrivenGearStates.size <= 0) return [];
+  const nodeById = new Map(
+    (Array.isArray(nodes) ? nodes : [])
+      .map((node) => [getGearNodeRuntimeId(node), node])
+      .filter(([id]) => !!id)
+  );
+  if (nodeById.size <= 0) return [];
+  const assemblyGraph = buildMechanicalAssemblies(mapData);
+  const entries = [];
+  const seen = new Set();
+  rackDrivenGearStates.forEach((state, nodeId) => {
+    if (gearNodeById.has(nodeId)) return;
+    const node = nodeById.get(nodeId);
+    if (!node || node.axisBindingSuppressed) return;
+    const speedRatio = Number(state?.speedRatio) || 0;
+    if (Math.abs(speedRatio) <= RACK_CONTACT_TRAVEL_EPSILON) return;
+    const axisBinding = getAxisBindingForMount({
+      mapData,
+      mount: node.mount,
+      componentKey: node.componentKey,
+      placement: node.placement,
+      pivotWorld: node.worldPoint
+    });
+    if (!axisBinding?.componentKey) return;
+    const entry = createAxisBindingRuntimeEntryFromGearNode({
+      mapData,
+      assemblyGraph,
+      gearNode: node,
+      axisBinding,
+      pivotWorld: node.worldPoint || getGearWorldPosition(node.placement, node.mount),
+      driveRatio: speedRatio
+    });
+    if (!entry) return;
+    const entryKey = `${entry.componentKey}:${entry.fixedMount?.id || node.mountId}:${nodeId}`;
+    if (seen.has(entryKey)) return;
+    seen.add(entryKey);
+    rackDrivenGearStates.set(nodeId, createGearRuntimeState({
+      node,
+      phase: state.phase,
+      speedRatio
+    }));
+    entries.push(entry);
+  });
+  return entries;
 };
 
 export const createMechanismRuntimeSnapshot = ({
@@ -1362,9 +2228,44 @@ export const createMechanismRuntimeSnapshot = ({
   const gears = {};
   const gearNodeById = new Map((Array.isArray(gearNodes) ? gearNodes : []).map((node) => [node.id, node]));
   const rackDrivenGearStates = new Map();
+  const blockedRackDrivenRootIds = new Set(
+    (Array.isArray(gearNodes) ? gearNodes : [])
+      .filter((node) => node?.isDriveRoot)
+      .map((node) => getGearNodeRuntimeId(node))
+      .filter(Boolean)
+  );
   const contactGearNodes = Array.isArray(rackContactGearNodes) && rackContactGearNodes.length > 0
     ? rackContactGearNodes
     : gearNodes;
+  const applyAxisBindingRuntimeEntry = (entry) => {
+    const angle = (Number(entry.driveRatio) || 1) * sourceAngle;
+    const fixedMount = entry.fixedMount || entry.fixedAxis;
+    const anchor = entry.pivotWorld || entry.anchor || getFixedAxisWorldAnchor(mapData, fixedMount);
+    const fixedPlacement = fixedMount?.componentKey
+      ? (entry.basePlacements?.[fixedMount.componentKey] || getPlacementByComponentKey(mapData, fixedMount.componentKey))
+      : null;
+    (entry.assembly?.componentKeys || []).forEach((componentKey) => {
+      const placement = entry.basePlacements?.[componentKey] || getPlacementByComponentKey(mapData, componentKey);
+      if (!placement) return;
+      placements[componentKey] = getRuntimePlacementForFixedAxisAssemblyMember({
+        placement,
+        componentKey,
+        fixedMount,
+        fixedPlacement,
+        pivotWorld: anchor,
+        degrees: angle
+      });
+    });
+    sync.push({
+      assemblyId: entry.assembly?.id,
+      fixedAxisId: fixedMount?.id,
+      axisBindingMountId: fixedMount?.id,
+      componentKey: fixedMount?.componentKey,
+      gearAngle: angle,
+      assemblyAngle: angle,
+      ...validateFixedAxisSync({ gearAngle: angle, assemblyAngle: angle })
+    });
+  };
 
   assemblyEntries.forEach((entry) => {
     if (isRackTranslationRuntimeEntry(entry)) {
@@ -1423,33 +2324,7 @@ export const createMechanismRuntimeSnapshot = ({
       });
       return;
     }
-    const angle = (Number(entry.driveRatio) || 1) * sourceAngle;
-    const fixedMount = entry.fixedMount || entry.fixedAxis;
-    const anchor = entry.pivotWorld || entry.anchor || getFixedAxisWorldAnchor(mapData, fixedMount);
-    const fixedPlacement = fixedMount?.componentKey
-      ? (entry.basePlacements?.[fixedMount.componentKey] || getPlacementByComponentKey(mapData, fixedMount.componentKey))
-      : null;
-    (entry.assembly?.componentKeys || []).forEach((componentKey) => {
-      const placement = entry.basePlacements?.[componentKey] || getPlacementByComponentKey(mapData, componentKey);
-      if (!placement) return;
-      placements[componentKey] = getRuntimePlacementForFixedAxisAssemblyMember({
-        placement,
-        componentKey,
-        fixedMount,
-        fixedPlacement,
-        pivotWorld: anchor,
-        degrees: angle
-      });
-    });
-    sync.push({
-      assemblyId: entry.assembly?.id,
-      fixedAxisId: fixedMount?.id,
-      axisBindingMountId: fixedMount?.id,
-      componentKey: fixedMount?.componentKey,
-      gearAngle: angle,
-      assemblyAngle: angle,
-      ...validateFixedAxisSync({ gearAngle: angle, assemblyAngle: angle })
-    });
+    applyAxisBindingRuntimeEntry(entry);
   });
 
   gearNodes.forEach((node) => {
@@ -1461,6 +2336,19 @@ export const createMechanismRuntimeSnapshot = ({
       speedRatio: Number(node.driveRatio) || 1
     });
   });
+  propagateRackDrivenGearMeshStates({
+    rackDrivenGearStates,
+    nodes: contactGearNodes,
+    sourceAngle,
+    basePhases,
+    blockedRootIds: blockedRackDrivenRootIds
+  });
+  createRackDrivenAxisBindingRuntimeEntries({
+    mapData,
+    rackDrivenGearStates,
+    nodes: contactGearNodes,
+    gearNodeById
+  }).forEach(applyAxisBindingRuntimeEntry);
   rackDrivenGearStates.forEach((state, nodeId) => {
     const drivenNode = gearNodeById.get(nodeId);
     if (drivenNode?.isDriveRoot) return;

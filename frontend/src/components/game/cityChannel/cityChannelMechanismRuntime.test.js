@@ -563,6 +563,64 @@ describe('city channel mechanism runtime', () => {
     });
   });
 
+  it('resolves gear axis bindings through the bound board mechanical assembly', () => {
+    const hostKey = createCellKey(0, 0, 0);
+    const pivotKey = createCellKey(1, 1, 0);
+    const linkedKey = createCellKey(2, 1, 0);
+    const host = createTile({ x: 0, y: 0, z: 0 });
+    const pivotBoard = createTile({
+      x: 1,
+      y: 1,
+      z: 0,
+      panelType: CITY_CHANNEL_TILE_TYPES.TRANSMISSION_L_PLATE
+    });
+    const linkedBoard = createTile({
+      x: 2,
+      y: 1,
+      z: 0,
+      panelType: CITY_CHANNEL_TILE_TYPES.TRANSMISSION_STRAIGHT_PLATE,
+      transmissionRotation: 90
+    });
+    const mount = {
+      id: 'gear_bound_to_assembly_member',
+      componentType: 'gear',
+      position: 'corner_se',
+      surface: 'front',
+      axisBinding: {
+        componentKey: linkedKey,
+        hostKind: 'tile',
+        socket: 'corner_nw',
+        surface: 'front'
+      }
+    };
+    const mapData = {
+      tiles: {
+        [hostKey]: host,
+        [pivotKey]: pivotBoard,
+        [linkedKey]: linkedBoard
+      },
+      walls: {}
+    };
+    const graph = buildMechanicalAssemblies(mapData);
+
+    expect(graph.assemblyByComponentKey[pivotKey]).toBe(graph.assemblyByComponentKey[linkedKey]);
+    expect(getGearAxisBindingStatus({ mapData, placement: host, mount })).toMatchObject({
+      bound: true,
+      valid: true,
+      reason: 'ok',
+      binding: {
+        componentKey: pivotKey,
+        hostKind: 'tile',
+        socket: 'corner_nw',
+        surface: 'front'
+      },
+      resolvedFromBinding: expect.objectContaining({
+        componentKey: linkedKey,
+        socket: 'corner_nw'
+      })
+    });
+  });
+
   it('validates gear axis bindings on vertical wall surfaces', () => {
     const hostKey = createWallKey(0, 0, 0, 'east');
     const boundKey = createWallKey(0, 0, 1, 'east');

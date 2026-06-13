@@ -23,6 +23,9 @@ import {
   getAssemblyForCell
 } from '../cityChannelMechanismRuntime';
 import {
+  getRackContactLimitedTranslationDistance
+} from '../cityChannelMechanismSimulation';
+import {
   DOUBLE_SIDED_RACK_COMPONENT_TYPE,
   DOUBLE_SIDED_RACK_TOOTH_DEPTH_WORLD,
   RACK_DIRECTIONS,
@@ -2360,6 +2363,72 @@ describe('CityChannelThreeRuntime placement rendering', () => {
     expect(bodyWorldAfter.distanceTo(bodyWorldBefore)).toBeGreaterThan(0.4);
   });
 
+  it('uses rack-driven free-axis runtime phase even when the stored gear has an axis binding', () => {
+    const runtime = createDetailRuntimeHarness();
+    const key = createCellKey(1, 1, 0);
+    const tile = createTile({
+      x: 1,
+      y: 1,
+      z: 0,
+      panelType: CITY_CHANNEL_TILE_TYPES.TRANSMISSION_CROSS_PLATE
+    });
+    tile.gearMounts = [{
+      id: 'gear_corner',
+      componentType: 'gear',
+      position: 'corner_ne',
+      surface: 'front',
+      phase: 15,
+      axisBinding: {
+        componentKey: createCellKey(2, 1, 0),
+        hostKind: 'tile',
+        socket: 'corner_nw',
+        surface: 'front'
+      }
+    }];
+    const boundKey = createCellKey(2, 1, 0);
+    const bound = createTile({
+      x: 2,
+      y: 1,
+      z: 0,
+      panelType: CITY_CHANNEL_TILE_TYPES.BASIC_PLATE
+    });
+    const mapData = {
+      ...createBaseCityChannelMap({ width: 4, height: 4, layers: 2 }),
+      tiles: {
+        [key]: tile,
+        [boundKey]: bound
+      },
+      walls: {}
+    };
+    runtime.renderModel = buildCityChannelThreeRenderModel(mapData);
+    const transform = runtime.renderModel.tiles.find((item) => item.key === key);
+    const group = CityChannelThreeRuntime.prototype.createPlacementRenderGroup.call(runtime, transform);
+    runtime.placementGroups.set(key, group);
+    const gear = runtime.gearMeshes.get(`${key}:gear_corner`);
+    const expected = CityChannelThreeRuntime.prototype.getGearQuaternion.call(runtime, transform, tile.gearMounts[0], 225);
+
+    runtime.mechanismRuntimeSnapshot = {
+      placements: {
+        [key]: {
+          runtimeAngle: 90,
+          runtimeFixedMountId: 'gear_corner'
+        }
+      },
+      gears: {
+        [`${key}:gear_corner`]: {
+          phase: 225,
+          axisType: 'freeAxis',
+          axisBinding: null
+        }
+      }
+    };
+
+    CityChannelThreeRuntime.prototype.syncMechanismRuntimeTransforms.call(runtime);
+
+    expect(gear.userData.cityChannel.axisBindingSuppressed).toBe(true);
+    expect(gear.quaternion.angleTo(expected)).toBeCloseTo(0, 6);
+  });
+
   it('rotates a center gear with its board surface orientation', () => {
     const runtime = createDetailRuntimeHarness();
     const key = createCellKey(1, 1, 0);
@@ -3375,6 +3444,57 @@ describe('CityChannelThreeRuntime gear transmission', () => {
     expect(snapshot.placements).toEqual({});
   });
 
+  it('blocks meshed active gears whose configured directions conflict', () => {
+    const {
+      sourceKey,
+      drivenKey,
+      source,
+      driven,
+      mapData
+    } = createMeshedGearMap();
+    source.gearMounts[0].rotationDirection = CITY_CHANNEL_GEAR_ROTATION_DIRECTIONS.CLOCKWISE;
+    driven.gearMounts[0].rotationDirection = CITY_CHANNEL_GEAR_ROTATION_DIRECTIONS.CLOCKWISE;
+    const runtime = {
+      ...createTransmissionRuntimeHarness(mapData),
+      config: {
+        mechanismParams: {},
+        onToast: jest.fn()
+      },
+      mechanismRuntimeSnapshot: { stale: true },
+      cancelMechanismRuntimePreview: jest.fn(),
+      setMechanismRuntimeSnapshot: jest.fn(function setMechanismRuntimeSnapshot(snapshot) {
+        this.mechanismRuntimeSnapshot = snapshot;
+      }),
+      playMechanismRuntimePreview: jest.fn(),
+      flashMechanismObstruction: jest.fn()
+    };
+
+    const played = CityChannelThreeRuntime.prototype.triggerMechanismAtCell.call(runtime, { x: 1, y: 1, z: 0 }, {
+      rotationAngle: 90,
+      rotationSpeedDegPerSec: 360,
+      triggerDelaySeconds: 0,
+      autoReturn: false
+    });
+
+    expect(played).toBe(false);
+    expect(runtime.playMechanismRuntimePreview).not.toHaveBeenCalled();
+    expect(runtime.mechanismRuntimeSnapshot).toBeNull();
+    expect(runtime.flashMechanismObstruction).toHaveBeenCalledWith(expect.objectContaining({
+      type: 'gearDriveConflict',
+      gearKeys: expect.arrayContaining([`${sourceKey}:gear_center`, `${drivenKey}:gear_corner`]),
+      gearTargets: expect.arrayContaining([
+        expect.objectContaining({ componentKey: sourceKey, mountId: 'gear_center' }),
+        expect.objectContaining({ componentKey: drivenKey, mountId: 'gear_corner' })
+      ]),
+      obstacleKeys: expect.arrayContaining([sourceKey, drivenKey]),
+      obstacles: expect.arrayContaining([source, driven])
+    }));
+    expect(runtime.config.onToast).toHaveBeenLastCalledWith(
+      '主动齿轮之间的啮合方向互相矛盾，齿轮组被卡住。',
+      'error'
+    );
+  });
+
   it('does not drive gears above a vertical transmission chain split by a turned middle board', () => {
     const createVerticalTransmission = (z, panelType, patch = {}) => ({
       ...createTile({
@@ -3854,6 +3974,421 @@ describe('CityChannelThreeRuntime gear transmission', () => {
     });
   });
 
+  it('stops a vertical rack at the source gear contact limit instead of remotely driving an upper gear', () => {
+    const sourceKey = createCellKey(1, 1, 0);
+    const upperKey = createCellKey(1, 1, 1);
+    const source = createTile({
+      x: 1,
+      y: 1,
+      z: 0,
+      isVertical: true,
+      rotation: 0,
+      panelType: CITY_CHANNEL_TILE_TYPES.GEAR_PRESSURE_PLATE
+    });
+    source.gearMounts = [{
+      id: 'gear_lower',
+      componentType: 'gear',
+      position: 'center',
+      socketKind: 'center',
+      surface: 'front',
+      teeth: 18,
+      phase: 0,
+      rotationDirection: CITY_CHANNEL_GEAR_ROTATION_DIRECTIONS.COUNTERCLOCKWISE
+    }];
+    const upper = createTile({
+      x: 1,
+      y: 1,
+      z: 1,
+      isVertical: true,
+      rotation: 0,
+      panelType: CITY_CHANNEL_TILE_TYPES.BASIC_PLATE
+    });
+    upper.gearMounts = [{
+      id: 'gear_upper',
+      componentType: 'gear',
+      position: 'center',
+      socketKind: 'center',
+      surface: 'front',
+      teeth: 18,
+      phase: 0,
+      rotationDirection: CITY_CHANNEL_GEAR_ROTATION_DIRECTIONS.PASSIVE
+    }];
+    const rack = {
+      id: 'rack_vertical_pickup',
+      componentType: DOUBLE_SIDED_RACK_COMPONENT_TYPE,
+      plane: 'vertical',
+      normalAxis: 'y',
+      direction: 'z',
+      start: { x: 1.5, y: 1, z: 0 },
+      end: { x: 1.5, y: 1, z: 1 }
+    };
+    const mapData = {
+      ...createBaseCityChannelMap({ width: 4, height: 4, layers: 3 }),
+      tiles: {
+        [sourceKey]: source,
+        [upperKey]: upper
+      },
+      walls: {},
+      racks: {
+        [rack.id]: rack
+      }
+    };
+    const runtime = {
+      ...createTransmissionRuntimeHarness(mapData),
+      config: {
+        mechanismParams: {},
+        onToast: jest.fn()
+      },
+      mechanismRuntimeSnapshot: null,
+      cancelMechanismRuntimePreview: jest.fn(),
+      setMechanismRuntimeSnapshot: jest.fn(function setMechanismRuntimeSnapshot(snapshot) {
+        this.mechanismRuntimeSnapshot = snapshot;
+      }),
+      playMechanismRuntimePreview: jest.fn(function playMechanismRuntimePreview(args) {
+        const basePhases = new Map(
+          [...args.rackContactGearNodes, ...args.gearNodes]
+            .map((node) => [node.id, Number(node.mount?.phase) || 0])
+        );
+        this.setMechanismRuntimeSnapshot(this.createRuntimeSnapshotForMechanism({
+          ...args,
+          sourceAngle: args.targetAngle,
+          basePhases
+        }));
+      }),
+      flashMechanismObstruction: jest.fn()
+    };
+    const assemblyGraph = buildMechanicalAssemblies(mapData);
+    const sourceAssembly = getAssemblyForCell(assemblyGraph, sourceKey);
+    const gearNodes = runtime.resolveDrivenGearNodes(sourceAssembly, sourceKey);
+    const [rackEntry] = runtime.createRackAxisBindingRuntimeEntries(gearNodes, assemblyGraph);
+    const expectedDistance = getRackContactLimitedTranslationDistance(rackEntry, 360);
+
+    const played = CityChannelThreeRuntime.prototype.triggerMechanismAtCell.call(runtime, { x: 1, y: 1, z: 0 }, {
+      rotationAngle: 360,
+      rotationSpeedDegPerSec: 360,
+      triggerDelaySeconds: 0,
+      autoReturn: false
+    });
+    const upperState = runtime.mechanismRuntimeSnapshot?.gears?.[`${upperKey}:gear_upper`];
+
+    expect(played).toBe(true);
+    expect(runtime.flashMechanismObstruction).not.toHaveBeenCalled();
+    expect(runtime.mechanismRuntimeSnapshot.racks[rack.id]).toMatchObject({
+      runtimeMotionType: 'rackTranslation'
+    });
+    expect(expectedDistance).toBeGreaterThan(0);
+    expect(runtime.mechanismRuntimeSnapshot.racks[rack.id].runtimeLinearDistance).toBeCloseTo(expectedDistance, 6);
+    expect(runtime.mechanismRuntimeSnapshot.racks[rack.id].start.z).toBeCloseTo(rack.start.z + expectedDistance, 6);
+    expect(runtime.mechanismRuntimeSnapshot.racks[rack.id].end.z).toBeCloseTo(rack.end.z + expectedDistance, 6);
+    expect(upperState).toBeUndefined();
+  });
+
+  it('lets a middle active gear continue driving a vertical rack after the lower gear disengages', () => {
+    const sourceKey = createCellKey(1, 1, 0);
+    const middleKey = createCellKey(1, 1, 1);
+    const source = createTile({
+      x: 1,
+      y: 1,
+      z: 0,
+      isVertical: true,
+      rotation: 0,
+      panelType: CITY_CHANNEL_TILE_TYPES.GEAR_PRESSURE_PLATE
+    });
+    source.gearMounts = [{
+      id: 'gear_lower',
+      componentType: 'gear',
+      position: 'center',
+      socketKind: 'center',
+      surface: 'front',
+      teeth: 18,
+      phase: 0,
+      rotationDirection: CITY_CHANNEL_GEAR_ROTATION_DIRECTIONS.COUNTERCLOCKWISE
+    }];
+    const middle = createTile({
+      x: 1,
+      y: 1,
+      z: 1,
+      isVertical: true,
+      rotation: 0,
+      panelType: CITY_CHANNEL_TILE_TYPES.BASIC_PLATE
+    });
+    middle.gearMounts = [{
+      id: 'gear_middle',
+      componentType: 'gear',
+      position: 'center',
+      socketKind: 'center',
+      surface: 'front',
+      teeth: 18,
+      phase: 0,
+      rotationDirection: CITY_CHANNEL_GEAR_ROTATION_DIRECTIONS.COUNTERCLOCKWISE
+    }];
+    const rack = {
+      id: 'rack_vertical_multi_active',
+      componentType: DOUBLE_SIDED_RACK_COMPONENT_TYPE,
+      plane: 'vertical',
+      normalAxis: 'y',
+      direction: 'z',
+      start: { x: 1.5, y: 1, z: 0 },
+      end: { x: 1.5, y: 1, z: 2 }
+    };
+    const mapData = {
+      ...createBaseCityChannelMap({ width: 4, height: 4, layers: 4 }),
+      tiles: {
+        [sourceKey]: source,
+        [middleKey]: middle
+      },
+      walls: {},
+      racks: {
+        [rack.id]: rack
+      }
+    };
+    const runtime = {
+      ...createTransmissionRuntimeHarness(mapData),
+      config: {
+        mechanismParams: {},
+        onToast: jest.fn()
+      },
+      mechanismRuntimeSnapshot: null,
+      cancelMechanismRuntimePreview: jest.fn(),
+      setMechanismRuntimeSnapshot: jest.fn(function setMechanismRuntimeSnapshot(snapshot) {
+        this.mechanismRuntimeSnapshot = snapshot;
+      }),
+      playMechanismRuntimePreview: jest.fn(function playMechanismRuntimePreview(args) {
+        const basePhases = new Map(
+          [...args.rackContactGearNodes, ...args.gearNodes]
+            .map((node) => [node.id, Number(node.mount?.phase) || 0])
+        );
+        this.setMechanismRuntimeSnapshot(this.createRuntimeSnapshotForMechanism({
+          ...args,
+          sourceAngle: args.targetAngle,
+          basePhases
+        }));
+      }),
+      flashMechanismObstruction: jest.fn()
+    };
+    const assemblyGraph = buildMechanicalAssemblies(mapData);
+    const sourceAssembly = getAssemblyForCell(assemblyGraph, sourceKey);
+    const gearNodes = runtime.resolveDrivenGearNodes(sourceAssembly, sourceKey);
+    const [rackEntry] = runtime.createRackAxisBindingRuntimeEntries(gearNodes, assemblyGraph);
+    const lowerLimit = rackEntry.sourceContactTravelLimits.find((limit) => (
+      limit.sourceGearComponentKey === sourceKey
+    ));
+    const expectedDistance = getRackContactLimitedTranslationDistance(rackEntry, 720);
+
+    const played = CityChannelThreeRuntime.prototype.triggerMechanismAtCell.call(runtime, { x: 1, y: 1, z: 0 }, {
+      rotationAngle: 720,
+      rotationSpeedDegPerSec: 360,
+      triggerDelaySeconds: 0,
+      autoReturn: false
+    });
+    const middleState = runtime.mechanismRuntimeSnapshot?.gears?.[`${middleKey}:gear_middle`];
+
+    expect(played).toBe(true);
+    expect(runtime.flashMechanismObstruction).not.toHaveBeenCalled();
+    expect(rackEntry.sourceContactTravelLimits).toHaveLength(2);
+    expect(expectedDistance).toBeGreaterThan(lowerLimit.max);
+    expect(runtime.mechanismRuntimeSnapshot.racks[rack.id].runtimeLinearDistance).toBeCloseTo(expectedDistance, 6);
+    expect(runtime.mechanismRuntimeSnapshot.racks[rack.id].runtimeLinearDistance).toBeGreaterThan(lowerLimit.max);
+    expect(middleState).toMatchObject({
+      componentKey: middleKey,
+      mountId: 'gear_middle'
+    });
+  });
+
+  it('blocks conflicting same-side active gears that drive one vertical rack in opposite directions', () => {
+    const sourceKey = createCellKey(1, 1, 0);
+    const middleKey = createCellKey(1, 1, 1);
+    const source = createTile({
+      x: 1,
+      y: 1,
+      z: 0,
+      isVertical: true,
+      rotation: 0,
+      panelType: CITY_CHANNEL_TILE_TYPES.GEAR_PRESSURE_PLATE
+    });
+    source.gearMounts = [{
+      id: 'gear_lower',
+      componentType: 'gear',
+      position: 'center',
+      socketKind: 'center',
+      surface: 'front',
+      teeth: 18,
+      phase: 0,
+      rotationDirection: CITY_CHANNEL_GEAR_ROTATION_DIRECTIONS.COUNTERCLOCKWISE
+    }];
+    const middle = createTile({
+      x: 1,
+      y: 1,
+      z: 1,
+      isVertical: true,
+      rotation: 0,
+      panelType: CITY_CHANNEL_TILE_TYPES.BASIC_PLATE
+    });
+    middle.gearMounts = [{
+      id: 'gear_middle',
+      componentType: 'gear',
+      position: 'center',
+      socketKind: 'center',
+      surface: 'front',
+      teeth: 18,
+      phase: 0,
+      rotationDirection: CITY_CHANNEL_GEAR_ROTATION_DIRECTIONS.CLOCKWISE
+    }];
+    const rack = {
+      id: 'rack_vertical_conflicting_active',
+      componentType: DOUBLE_SIDED_RACK_COMPONENT_TYPE,
+      plane: 'vertical',
+      normalAxis: 'y',
+      direction: 'z',
+      start: { x: 1.5, y: 1, z: 0 },
+      end: { x: 1.5, y: 1, z: 2 }
+    };
+    const mapData = {
+      ...createBaseCityChannelMap({ width: 4, height: 4, layers: 4 }),
+      tiles: {
+        [sourceKey]: source,
+        [middleKey]: middle
+      },
+      walls: {},
+      racks: {
+        [rack.id]: rack
+      }
+    };
+    const runtime = {
+      ...createTransmissionRuntimeHarness(mapData),
+      config: {
+        mechanismParams: {},
+        onToast: jest.fn()
+      },
+      mechanismRuntimeSnapshot: { stale: true },
+      cancelMechanismRuntimePreview: jest.fn(),
+      setMechanismRuntimeSnapshot: jest.fn(function setMechanismRuntimeSnapshot(snapshot) {
+        this.mechanismRuntimeSnapshot = snapshot;
+      }),
+      playMechanismRuntimePreview: jest.fn(),
+      flashMechanismObstruction: jest.fn()
+    };
+
+    const played = CityChannelThreeRuntime.prototype.triggerMechanismAtCell.call(runtime, { x: 1, y: 1, z: 0 }, {
+      rotationAngle: 720,
+      rotationSpeedDegPerSec: 360,
+      triggerDelaySeconds: 0,
+      autoReturn: false
+    });
+
+    expect(played).toBe(false);
+    expect(runtime.playMechanismRuntimePreview).not.toHaveBeenCalled();
+    expect(runtime.mechanismRuntimeSnapshot).toBeNull();
+    expect(runtime.flashMechanismObstruction).toHaveBeenCalledWith(expect.objectContaining({
+      type: 'rackDriveConflict',
+      rackId: rack.id,
+      rackIds: [rack.id],
+      racks: expect.arrayContaining([expect.objectContaining({ id: rack.id })]),
+      obstacleKeys: expect.arrayContaining([sourceKey, middleKey]),
+      obstacles: expect.arrayContaining([source, middle])
+    }));
+    expect(runtime.config.onToast).toHaveBeenLastCalledWith(
+      '主动齿轮正在把同一齿条推向相反方向，齿条被卡住。',
+      'error'
+    );
+  });
+
+  it('blocks one board receiving incompatible rotation and translation trends', () => {
+    const sourceKey = createCellKey(1, 1, 0);
+    const boundKey = createCellKey(2, 1, 0);
+    const source = createTile({
+      x: 1,
+      y: 1,
+      z: 0,
+      panelType: CITY_CHANNEL_TILE_TYPES.GEAR_PRESSURE_PLATE
+    });
+    source.gearMounts = [{
+      id: 'gear_center',
+      componentType: 'gear',
+      position: 'center',
+      socketKind: 'center',
+      surface: 'front',
+      teeth: 18,
+      phase: 0,
+      rotationDirection: CITY_CHANNEL_GEAR_ROTATION_DIRECTIONS.CLOCKWISE
+    }];
+    const bound = createTile({
+      x: 2,
+      y: 1,
+      z: 0,
+      panelType: CITY_CHANNEL_TILE_TYPES.BASIC_PLATE
+    });
+    const mapData = {
+      ...createBaseCityChannelMap({ width: 4, height: 4, layers: 2 }),
+      tiles: {
+        [sourceKey]: source,
+        [boundKey]: bound
+      },
+      walls: {}
+    };
+    const fakeGearNode = {
+      id: `${sourceKey}:gear_center`,
+      componentKey: sourceKey,
+      mountId: 'gear_center',
+      driveRatio: 1,
+      mount: source.gearMounts[0]
+    };
+    const rotationEntry = {
+      assembly: { id: 'rotate_bound', componentKeys: [boundKey] },
+      componentKey: boundKey,
+      driveRatio: 1,
+      fixedAxis: { id: 'fixed_axis' }
+    };
+    const rackEntry = {
+      motionType: 'rackTranslation',
+      assembly: { id: 'translate_bound', componentKeys: [boundKey] },
+      componentKey: boundKey,
+      rackId: 'rack_bound',
+      sourceRackId: 'rack_bound',
+      translationAxis: { x: 1, y: 0, z: 0 },
+      driveRatio: 1,
+      sourceGearNodeId: fakeGearNode.id
+    };
+    const runtime = {
+      ...createTransmissionRuntimeHarness(mapData),
+      config: {
+        mechanismParams: {},
+        onToast: jest.fn()
+      },
+      mechanismRuntimeSnapshot: { stale: true },
+      cancelMechanismRuntimePreview: jest.fn(),
+      setMechanismRuntimeSnapshot: jest.fn(function setMechanismRuntimeSnapshot(snapshot) {
+        this.mechanismRuntimeSnapshot = snapshot;
+      }),
+      resolveDrivenGearNodes: jest.fn(() => [fakeGearNode]),
+      createAxisBindingRuntimeEntries: jest.fn(() => [rotationEntry]),
+      createRackAxisBindingRuntimeEntries: jest.fn(() => [rackEntry]),
+      playMechanismRuntimePreview: jest.fn(),
+      flashMechanismObstruction: jest.fn()
+    };
+
+    const played = CityChannelThreeRuntime.prototype.triggerMechanismAtCell.call(runtime, { x: 1, y: 1, z: 0 }, {
+      rotationAngle: 90,
+      rotationSpeedDegPerSec: 360,
+      triggerDelaySeconds: 0,
+      autoReturn: false
+    });
+
+    expect(played).toBe(false);
+    expect(runtime.playMechanismRuntimePreview).not.toHaveBeenCalled();
+    expect(runtime.mechanismRuntimeSnapshot).toBeNull();
+    expect(runtime.flashMechanismObstruction).toHaveBeenCalledWith(expect.objectContaining({
+      type: 'placementMotionConflict',
+      componentKey: boundKey,
+      obstacleKeys: [boundKey],
+      obstacles: [bound]
+    }));
+    expect(runtime.config.onToast).toHaveBeenLastCalledWith(
+      '同一板材被多个机械约束要求不同运动，传动被卡住。',
+      'error'
+    );
+  });
+
   it('blocks a bound board when gear transmission would rotate it into the source assembly', () => {
     const {
       mapData
@@ -4042,6 +4577,150 @@ describe('CityChannelThreeRuntime gear transmission', () => {
     expect(marker.material).toBe(runtime.gearContactActiveMaterial);
     expect(marker.scale.x).toBeGreaterThan(0.9);
     expect(activeTube).toBeInstanceOf(THREE.Mesh);
+  });
+
+  it('renders contact cues between adjacent vertical center gears', () => {
+    const leftKey = createCellKey(1, 1, 1);
+    const rightKey = createCellKey(2, 1, 1);
+    const left = createTile({
+      x: 1,
+      y: 1,
+      z: 1,
+      isVertical: true,
+      rotation: 0,
+      panelType: CITY_CHANNEL_TILE_TYPES.BASIC_PLATE
+    });
+    left.gearMounts = [{
+      id: 'gear_center',
+      componentType: 'gear',
+      position: 'center',
+      socketKind: 'center',
+      surface: 'front',
+      teeth: 18,
+      phase: 0
+    }];
+    const right = createTile({
+      x: 2,
+      y: 1,
+      z: 1,
+      isVertical: true,
+      rotation: 0,
+      panelType: CITY_CHANNEL_TILE_TYPES.BASIC_PLATE
+    });
+    right.gearMounts = [{
+      id: 'gear_center',
+      componentType: 'gear',
+      position: 'center',
+      socketKind: 'center',
+      surface: 'front',
+      teeth: 18,
+      phase: 0
+    }];
+    const mapData = {
+      ...createBaseCityChannelMap({ width: 4, height: 4, layers: 3 }),
+      tiles: {
+        [leftKey]: left,
+        [rightKey]: right
+      },
+      walls: {}
+    };
+    const runtime = {
+      ...createTransmissionRuntimeHarness(mapData),
+      worldGroup: new THREE.Group(),
+      mechanismRuntimeSnapshot: null,
+      gearContactMarkerGeometry: new THREE.SphereGeometry(0.05, 8, 6),
+      gearContactMaterial: new THREE.MeshBasicMaterial(),
+      gearContactActiveMaterial: new THREE.MeshBasicMaterial(),
+      getRuntimeTransform: CityChannelThreeRuntime.prototype.getRuntimeTransform,
+      getGearAttachmentContext: CityChannelThreeRuntime.prototype.getGearAttachmentContext,
+      getRuntimeGearState: CityChannelThreeRuntime.prototype.getRuntimeGearState,
+      getRuntimeGearSurfacePointForNode: CityChannelThreeRuntime.prototype.getRuntimeGearSurfacePointForNode,
+      addGearContactVisuals: CityChannelThreeRuntime.prototype.addGearContactVisuals,
+      addTransmissionTube: CityChannelThreeRuntime.prototype.addTransmissionTube
+    };
+
+    CityChannelThreeRuntime.prototype.addGearContactVisuals.call(runtime, new Set([leftKey, rightKey]));
+
+    const marker = runtime.worldGroup.children.find((child) => child.geometry === runtime.gearContactMarkerGeometry);
+    const tube = runtime.worldGroup.children.find((child) => (
+      child.geometry !== runtime.gearContactMarkerGeometry
+      && child.material === runtime.gearContactMaterial
+    ));
+    expect(marker).toBeInstanceOf(THREE.Mesh);
+    expect(marker.material).toBe(runtime.gearContactMaterial);
+    expect(tube).toBeInstanceOf(THREE.Mesh);
+  });
+
+  it('renders contact cues between vertical center and corner gears across adjacent cells', () => {
+    const centerKey = createCellKey(1, 1, 1);
+    const cornerKey = createCellKey(0, 1, 2);
+    const center = createTile({
+      x: 1,
+      y: 1,
+      z: 1,
+      isVertical: true,
+      rotation: 0,
+      panelType: CITY_CHANNEL_TILE_TYPES.BASIC_PLATE
+    });
+    center.gearMounts = [{
+      id: 'gear_center',
+      componentType: 'gear',
+      position: 'center',
+      socketKind: 'center',
+      surface: 'front',
+      teeth: 18,
+      phase: 0
+    }];
+    const corner = createTile({
+      x: 0,
+      y: 1,
+      z: 2,
+      isVertical: true,
+      rotation: 0,
+      panelType: CITY_CHANNEL_TILE_TYPES.BASIC_PLATE
+    });
+    corner.gearMounts = [{
+      id: 'gear_corner',
+      componentType: 'gear',
+      position: 'corner_se',
+      socketKind: 'corner',
+      surface: 'front',
+      teeth: 18,
+      phase: 0
+    }];
+    const mapData = {
+      ...createBaseCityChannelMap({ width: 4, height: 4, layers: 4 }),
+      tiles: {
+        [centerKey]: center,
+        [cornerKey]: corner
+      },
+      walls: {}
+    };
+    const runtime = {
+      ...createTransmissionRuntimeHarness(mapData),
+      worldGroup: new THREE.Group(),
+      mechanismRuntimeSnapshot: null,
+      gearContactMarkerGeometry: new THREE.SphereGeometry(0.05, 8, 6),
+      gearContactMaterial: new THREE.MeshBasicMaterial(),
+      gearContactActiveMaterial: new THREE.MeshBasicMaterial(),
+      getRuntimeTransform: CityChannelThreeRuntime.prototype.getRuntimeTransform,
+      getGearAttachmentContext: CityChannelThreeRuntime.prototype.getGearAttachmentContext,
+      getRuntimeGearState: CityChannelThreeRuntime.prototype.getRuntimeGearState,
+      getRuntimeGearSurfacePointForNode: CityChannelThreeRuntime.prototype.getRuntimeGearSurfacePointForNode,
+      addGearContactVisuals: CityChannelThreeRuntime.prototype.addGearContactVisuals,
+      addTransmissionTube: CityChannelThreeRuntime.prototype.addTransmissionTube
+    };
+
+    CityChannelThreeRuntime.prototype.addGearContactVisuals.call(runtime, new Set([centerKey, cornerKey]));
+
+    const marker = runtime.worldGroup.children.find((child) => child.geometry === runtime.gearContactMarkerGeometry);
+    const tube = runtime.worldGroup.children.find((child) => (
+      child.geometry !== runtime.gearContactMarkerGeometry
+      && child.material === runtime.gearContactMaterial
+    ));
+    expect(marker).toBeInstanceOf(THREE.Mesh);
+    expect(marker.material).toBe(runtime.gearContactMaterial);
+    expect(tube).toBeInstanceOf(THREE.Mesh);
   });
 
   it('uses the last configured gear rotation direction for new gear install targets', () => {
@@ -4757,6 +5436,150 @@ describe('CityChannelThreeRuntime mechanism preview cancellation', () => {
         'mechanism_obstruction_glow',
         'mechanism_obstruction_outline'
       ]));
+    expect(runtime.mechanismObstructionFillMaterial.opacity).toBeGreaterThan(0);
+    expect(runtime.requestRender).toHaveBeenCalled();
+  });
+
+  it('creates red flash overlays for multiple mechanism obstruction boards', () => {
+    const leftKey = createCellKey(1, 1, 0);
+    const rightKey = createCellKey(2, 1, 0);
+    const leftObstacle = createTile({
+      x: 1,
+      y: 1,
+      z: 0,
+      panelType: CITY_CHANNEL_TILE_TYPES.BASIC_PLATE
+    });
+    const rightObstacle = createTile({
+      x: 2,
+      y: 1,
+      z: 0,
+      panelType: CITY_CHANNEL_TILE_TYPES.BASIC_PLATE
+    });
+    const mapData = {
+      ...createBaseCityChannelMap({ width: 4, height: 4, layers: 2 }),
+      tiles: {
+        [leftKey]: leftObstacle,
+        [rightKey]: rightObstacle
+      },
+      walls: {}
+    };
+    const runtime = {
+      renderModel: buildCityChannelThreeRenderModel(mapData),
+      mechanismFlashGroup: new THREE.Group(),
+      mechanismObstructionFillMaterial: new THREE.MeshBasicMaterial({ transparent: true, opacity: 0 }),
+      mechanismObstructionOutlineMaterial: new THREE.LineBasicMaterial({ transparent: true, opacity: 0 }),
+      mechanismObstructionGlowMaterial: new THREE.LineBasicMaterial({ transparent: true, opacity: 0 }),
+      mechanismObstructionFlash: null,
+      requestRender: jest.fn(),
+      getObstructionPlacementTransform: CityChannelThreeRuntime.prototype.getObstructionPlacementTransform,
+      addObstructionFlashPlacement: CityChannelThreeRuntime.prototype.addObstructionFlashPlacement,
+      clearMechanismObstructionFlash: CityChannelThreeRuntime.prototype.clearMechanismObstructionFlash,
+      flashMechanismObstruction: CityChannelThreeRuntime.prototype.flashMechanismObstruction,
+      updateMechanismObstructionFlash: CityChannelThreeRuntime.prototype.updateMechanismObstructionFlash
+    };
+
+    const flashed = CityChannelThreeRuntime.prototype.flashMechanismObstruction.call(runtime, {
+      obstacles: [leftObstacle, rightObstacle]
+    });
+    const roles = runtime.mechanismFlashGroup.children.map((child) => child.userData.cityChannelGearRole);
+
+    expect(flashed).toBe(true);
+    expect(roles.filter((role) => role === 'mechanism_obstruction_fill')).toHaveLength(2);
+    expect(roles.filter((role) => role === 'mechanism_obstruction_glow')).toHaveLength(2);
+    expect(roles.filter((role) => role === 'mechanism_obstruction_outline')).toHaveLength(2);
+    expect(runtime.mechanismObstructionFillMaterial.opacity).toBeGreaterThan(0);
+  });
+
+  it('creates a red flash overlay for mechanism obstruction racks', () => {
+    const rack = {
+      id: 'rack_flash_target',
+      componentType: DOUBLE_SIDED_RACK_COMPONENT_TYPE,
+      plane: RACK_PLANES.VERTICAL,
+      normalAxis: 'y',
+      direction: RACK_DIRECTIONS.Z,
+      start: { x: 1.5, y: 1, z: 0 },
+      end: { x: 1.5, y: 1, z: 2 }
+    };
+    const mapData = {
+      ...createBaseCityChannelMap({ width: 4, height: 4, layers: 3 }),
+      tiles: {},
+      walls: {},
+      racks: {
+        [rack.id]: rack
+      }
+    };
+    const rackFlashGroup = new THREE.Group();
+    const rackBody = new THREE.Mesh(new THREE.BoxGeometry(1, 1, 1), new THREE.MeshBasicMaterial());
+    const rackEdge = new THREE.LineSegments(new THREE.BufferGeometry(), new THREE.LineBasicMaterial());
+    rackFlashGroup.add(rackBody);
+    rackFlashGroup.add(rackEdge);
+    const runtime = {
+      renderModel: buildCityChannelThreeRenderModel(mapData),
+      rackGroups: new Map(),
+      mechanismFlashGroup: new THREE.Group(),
+      mechanismObstructionFillMaterial: new THREE.MeshBasicMaterial({ transparent: true, opacity: 0 }),
+      mechanismObstructionOutlineMaterial: new THREE.LineBasicMaterial({ transparent: true, opacity: 0 }),
+      mechanismObstructionGlowMaterial: new THREE.LineBasicMaterial({ transparent: true, opacity: 0 }),
+      mechanismObstructionFlash: null,
+      requestRender: jest.fn(),
+      createRackRenderGroup: jest.fn(() => rackFlashGroup),
+      addObstructionFlashRack: CityChannelThreeRuntime.prototype.addObstructionFlashRack,
+      clearMechanismObstructionFlash: CityChannelThreeRuntime.prototype.clearMechanismObstructionFlash,
+      flashMechanismObstruction: CityChannelThreeRuntime.prototype.flashMechanismObstruction,
+      updateMechanismObstructionFlash: CityChannelThreeRuntime.prototype.updateMechanismObstructionFlash
+    };
+
+    const flashed = CityChannelThreeRuntime.prototype.flashMechanismObstruction.call(runtime, {
+      rackId: rack.id
+    });
+
+    expect(flashed).toBe(true);
+    expect(runtime.createRackRenderGroup).toHaveBeenCalledWith(
+      expect.objectContaining({ id: rack.id }),
+      expect.objectContaining({ ghost: true, showTeeth: true })
+    );
+    expect(runtime.mechanismFlashGroup.children).toContain(rackFlashGroup);
+    expect(rackBody.material).toBe(runtime.mechanismObstructionFillMaterial);
+    expect(rackEdge.material).toBe(runtime.mechanismObstructionGlowMaterial);
+    expect(runtime.mechanismObstructionFillMaterial.opacity).toBeGreaterThan(0);
+    expect(runtime.requestRender).toHaveBeenCalled();
+  });
+
+  it('creates a red flash overlay for mechanism obstruction gears', () => {
+    const gearKey = `${createCellKey(2, 2, 0)}:gear_center`;
+    const gearMesh = new THREE.Mesh(new THREE.BoxGeometry(1, 1, 1), new THREE.MeshBasicMaterial());
+    gearMesh.position.set(1, 2, 3);
+    gearMesh.updateMatrixWorld(true);
+    const runtime = {
+      renderModel: buildCityChannelThreeRenderModel(createBaseCityChannelMap({ width: 4, height: 4, layers: 2 })),
+      gearMeshes: new Map([[gearKey, gearMesh]]),
+      gearGeometry: new THREE.BoxGeometry(1, 1, 1),
+      gearEdgeGeometry: new THREE.EdgesGeometry(new THREE.BoxGeometry(1, 1, 1)),
+      mechanismFlashGroup: new THREE.Group(),
+      mechanismObstructionFillMaterial: new THREE.MeshBasicMaterial({ transparent: true, opacity: 0 }),
+      mechanismObstructionOutlineMaterial: new THREE.LineBasicMaterial({ transparent: true, opacity: 0 }),
+      mechanismObstructionGlowMaterial: new THREE.LineBasicMaterial({ transparent: true, opacity: 0 }),
+      mechanismObstructionFlash: null,
+      requestRender: jest.fn(),
+      addObstructionFlashGearTarget: CityChannelThreeRuntime.prototype.addObstructionFlashGearTarget,
+      clearMechanismObstructionFlash: CityChannelThreeRuntime.prototype.clearMechanismObstructionFlash,
+      flashMechanismObstruction: CityChannelThreeRuntime.prototype.flashMechanismObstruction,
+      updateMechanismObstructionFlash: CityChannelThreeRuntime.prototype.updateMechanismObstructionFlash
+    };
+
+    const flashed = CityChannelThreeRuntime.prototype.flashMechanismObstruction.call(runtime, {
+      gearTargets: [{ gearKey }]
+    });
+    const gearFlashGroup = runtime.mechanismFlashGroup.children[0];
+    const roles = gearFlashGroup.children.map((child) => child.userData.cityChannelGearRole);
+
+    expect(flashed).toBe(true);
+    expect(runtime.mechanismFlashGroup.children).toHaveLength(1);
+    expect(gearFlashGroup.position.toArray()).toEqual([1, 2, 3]);
+    expect(roles).toEqual(expect.arrayContaining([
+      'mechanism_obstruction_gear_fill',
+      'mechanism_obstruction_gear_glow'
+    ]));
     expect(runtime.mechanismObstructionFillMaterial.opacity).toBeGreaterThan(0);
     expect(runtime.requestRender).toHaveBeenCalled();
   });
@@ -6015,6 +6838,54 @@ describe('CityChannelThreeRuntime snap candidates', () => {
     expect(target.operation).toMatchObject({
       kind: 'tile',
       cell: { x: 1, y: 1, z: 2 },
+      isVertical: true
+    });
+  });
+
+  it('keeps vertical top snapping valid above the default four layers', () => {
+    const tiles = {};
+    for (let z = 0; z < 4; z += 1) {
+      tiles[createCellKey(1, 1, z)] = {
+        ...createTile({
+          x: 1,
+          y: 1,
+          z,
+          rotation: 0,
+          panelType: CITY_CHANNEL_TILE_TYPES.BASIC_PLATE
+        }),
+        isVertical: true
+      };
+    }
+    const mapData = {
+      ...createBaseCityChannelMap({ width: 4, height: 4, layers: 4 }),
+      tiles
+    };
+    const topVertical = tiles[createCellKey(1, 1, 3)];
+    const transform = getTileThreeTransform(topVertical, mapData);
+    const runtime = createSnapRuntimeHarness({
+      mapData,
+      transform,
+      point: {
+        x: transform.position.x,
+        y: transform.position.y + (transform.size.y * 0.5) - 0.02,
+        z: transform.position.z
+      }
+    });
+
+    const target = CityChannelThreeRuntime.prototype.getPlacementTargetFromHoverBoard.call(runtime, {
+      allowReplacement: false,
+      preferWallPose: true
+    });
+
+    expect(target).toMatchObject({
+      kind: 'verticalTile',
+      snapKind: 'verticalTop',
+      valid: true,
+      cell: { x: 1, y: 1, z: 4 }
+    });
+    expect(target.operation).toMatchObject({
+      kind: 'tile',
+      cell: { x: 1, y: 1, z: 4 },
       isVertical: true
     });
   });

@@ -346,6 +346,57 @@ export const normalizeGearMount = (mount = {}) => {
   };
 };
 
+const getPlacementByComponentKey = (mapData = {}, componentKey = '') => (
+  mapData.tiles?.[componentKey] || mapData.walls?.[componentKey] || null
+);
+
+const getPlacementHostKind = (mapData = {}, componentKey = '') => (
+  mapData.walls?.[componentKey] ? 'wall' : 'tile'
+);
+
+const getGearBindingCandidateSurfaces = (placement = {}, preferredSurface = 'front') => {
+  const preferred = normalizeGearSurfaceForPanel(placement.panelType, preferredSurface || 'front');
+  const surfaces = [preferred];
+  ['front', 'back'].forEach((surface) => {
+    const normalized = normalizeGearSurfaceForPanel(placement.panelType, surface);
+    if (!surfaces.includes(normalized)) surfaces.push(normalized);
+  });
+  return surfaces;
+};
+
+const findAssemblyAxisBindingPivotCandidate = ({
+  mapData = {},
+  binding = null,
+  hostPivot = null,
+  epsilon = 0.001
+} = {}) => {
+  if (!binding?.componentKey || !hostPivot) return null;
+  const assemblyGraph = buildMechanicalAssemblies(mapData);
+  const assemblyId = assemblyGraph.assemblyByComponentKey?.[binding.componentKey];
+  const assembly = (assemblyGraph.assemblies || []).find((item) => item.id === assemblyId) || null;
+  const componentKeys = assembly?.componentKeys?.length > 0
+    ? assembly.componentKeys
+    : [binding.componentKey];
+  for (const componentKey of componentKeys) {
+    const placement = getPlacementByComponentKey(mapData, componentKey);
+    if (!placement) continue;
+    for (const socket of CITY_CHANNEL_GEAR_CORNER_SOCKETS) {
+      for (const surface of getGearBindingCandidateSurfaces(placement, binding.surface)) {
+        const pivot = getGearSocketWorldPosition(placement, socket, surface);
+        if (!sameCornerPivot(pivot, hostPivot, epsilon)) continue;
+        return {
+          componentKey,
+          hostKind: getPlacementHostKind(mapData, componentKey),
+          socket,
+          surface,
+          component: placement
+        };
+      }
+    }
+  }
+  return null;
+};
+
 export const getGearAxisBindingStatus = ({
   mapData = {},
   placement = null,
@@ -390,7 +441,22 @@ export const getGearAxisBindingStatus = ({
     binding.socket,
     normalizeGearSurfaceForPanel(boundPlacement.panelType, binding.surface || 'front')
   );
-  if (!sameCornerPivot(hostPivot, boundPivot, epsilon)) {
+  if (hostPivot && boundPivot && sameCornerPivot(hostPivot, boundPivot, epsilon)) {
+    return {
+      bound: true,
+      valid: true,
+      binding,
+      reason: 'ok',
+      component: boundPlacement
+    };
+  }
+  const assemblyCandidate = findAssemblyAxisBindingPivotCandidate({
+    mapData,
+    binding,
+    hostPivot,
+    epsilon
+  });
+  if (!assemblyCandidate) {
     return {
       bound: true,
       valid: false,
@@ -401,9 +467,15 @@ export const getGearAxisBindingStatus = ({
   return {
     bound: true,
     valid: true,
-    binding,
+    binding: {
+      componentKey: assemblyCandidate.componentKey,
+      hostKind: assemblyCandidate.hostKind,
+      socket: assemblyCandidate.socket,
+      surface: assemblyCandidate.surface
+    },
     reason: 'ok',
-    component: boundPlacement
+    component: assemblyCandidate.component,
+    resolvedFromBinding: binding
   };
 };
 

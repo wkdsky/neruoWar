@@ -240,19 +240,33 @@ export const hasThreeWallSupport = ({
   });
 };
 
+const getMapDataWithExpandedPlacementLayer = (mapData = {}, cell = null, allowLayerExpansion = false) => {
+  const targetZ = Number(cell?.z);
+  if (!allowLayerExpansion || !Number.isInteger(targetZ)) return mapData;
+  const currentLayers = Number.isInteger(mapData?.layers) ? mapData.layers : 0;
+  const requiredLayers = targetZ + 1;
+  if (requiredLayers <= currentLayers) return mapData;
+  return {
+    ...mapData,
+    layers: requiredLayers
+  };
+};
+
 export const getThreeWallPlacementBlockReason = ({
   cell = null,
   edge = CITY_CHANNEL_WALL_EDGES.NORTH,
   mapData = {},
   activeTool = CITY_CHANNEL_TOOLS.BROWSE,
   activeTileType = null,
-  allowReplacement = false
+  allowReplacement = false,
+  allowLayerExpansion = false
 } = {}) => {
   if (activeTool !== CITY_CHANNEL_TOOLS.PLACE_TILE || !activeTileType || !cell) return 'inactive';
   if (isPortalMaterial(activeTileType)) return 'invalidMaterial';
-  if (!isValidCell(cell.x, cell.y, cell.z, mapData)) return 'invalidCell';
-  if (!allowReplacement && isThreeWallPhysicalPlaneOccupied({ mapData, cell, edge })) return 'occupied';
-  if (!hasThreeWallSupport({ mapData, cell, edge })) return 'unsupported';
+  const placementMapData = getMapDataWithExpandedPlacementLayer(mapData, cell, allowLayerExpansion);
+  if (!isValidCell(cell.x, cell.y, cell.z, placementMapData)) return 'invalidCell';
+  if (!allowReplacement && isThreeWallPhysicalPlaneOccupied({ mapData: placementMapData, cell, edge })) return 'occupied';
+  if (!hasThreeWallSupport({ mapData: placementMapData, cell, edge })) return 'unsupported';
   return null;
 };
 
@@ -264,11 +278,13 @@ export const createThreeTilePlacementOperation = ({
   activeRotation = 0,
   transmissionRotation = activeRotation,
   allowReplacement = false,
-  isVertical = false
+  isVertical = false,
+  allowLayerExpansion = false
 } = {}) => {
   if (activeTool !== CITY_CHANNEL_TOOLS.PLACE_TILE || !activeTileType || !cell) return null;
   if (isVertical && isPortalMaterial(activeTileType)) return null;
-  if (!isValidCell(cell.x, cell.y, cell.z, mapData)) return null;
+  const placementMapData = getMapDataWithExpandedPlacementLayer(mapData, cell, allowLayerExpansion);
+  if (!isValidCell(cell.x, cell.y, cell.z, placementMapData)) return null;
   const key = createCellKey(cell.x, cell.y, cell.z);
   if (!allowReplacement && mapData.tiles?.[key]) return null;
   return {
@@ -289,7 +305,8 @@ export const createThreeWallPlacementOperation = ({
   activeTool = CITY_CHANNEL_TOOLS.BROWSE,
   activeTileType = null,
   activeRotation = 0,
-  allowReplacement = false
+  allowReplacement = false,
+  allowLayerExpansion = false
 } = {}) => {
   const blockReason = getThreeWallPlacementBlockReason({
     cell,
@@ -297,7 +314,8 @@ export const createThreeWallPlacementOperation = ({
     mapData,
     activeTool,
     activeTileType,
-    allowReplacement
+    allowReplacement,
+    allowLayerExpansion
   });
   if (blockReason) return null;
   return {
@@ -527,13 +545,15 @@ export const getThreeVerticalTilePlacementBlockReason = ({
   mapData = {},
   activeTool = CITY_CHANNEL_TOOLS.BROWSE,
   activeTileType = null,
-  allowReplacement = false
+  allowReplacement = false,
+  allowLayerExpansion = true
 } = {}) => {
   if (activeTool !== CITY_CHANNEL_TOOLS.PLACE_TILE || !activeTileType) return 'inactive';
   if (isPortalMaterial(activeTileType)) return 'invalidMaterial';
   if (!supportPlacement?.isVertical || supportPlacement.edge) return 'unsupported';
   const targetCell = cell || getThreeVerticalTilePlacementCell(supportPlacement);
-  if (!targetCell || !isValidCell(targetCell.x, targetCell.y, targetCell.z, mapData)) return 'invalidCell';
+  const placementMapData = getMapDataWithExpandedPlacementLayer(mapData, targetCell, allowLayerExpansion);
+  if (!targetCell || !isValidCell(targetCell.x, targetCell.y, targetCell.z, placementMapData)) return 'invalidCell';
   if (!allowReplacement && mapData.tiles?.[createCellKey(targetCell.x, targetCell.y, targetCell.z)]) return 'occupied';
   return null;
 };
@@ -546,7 +566,8 @@ export const createThreeVerticalTilePlacementOperation = ({
   activeTileType = null,
   activeRotation = undefined,
   transmissionRotation = activeRotation,
-  allowReplacement = false
+  allowReplacement = false,
+  allowLayerExpansion = true
 } = {}) => {
   const targetCell = cell || getThreeVerticalTilePlacementCell(supportPlacement);
   const blockReason = getThreeVerticalTilePlacementBlockReason({
@@ -555,7 +576,8 @@ export const createThreeVerticalTilePlacementOperation = ({
     mapData,
     activeTool,
     activeTileType,
-    allowReplacement
+    allowReplacement,
+    allowLayerExpansion
   });
   if (blockReason) return null;
   const rotation = getThreeVerticalTileRotationForSupport(supportPlacement);
