@@ -240,3 +240,6 @@ git diff --check
   - `rackDriveConflict`
   - `placementMotionConflict`
   - `collisionBlock`
+- 额外修复：交叉口根齿轮现在会使用安装时记录的源板材/源 socket 作为姿态参考，竖直板面上的交叉口齿轮不再被水平 fallback transform 固定为平放；传动节点的 `meshPlane` 也随源面计算。
+- 交叉口根齿轮选择不再要求 `placement`，`hostKind: 'intersection'` 会进入 component selection；Runtime 的齿轮移动预览和 Editor 的 Delete 删除路径都能识别 `mapData.gears` 中的根齿轮。
+- 本轮验证通过：`npm test -- --watchAll=false src/components/game/cityChannel`，16 个 test suites、354 个 tests 全部通过；`git diff --check` 通过。补充覆盖空白点击不会在 `getPlacementSelectionFromData(null)` 报错。

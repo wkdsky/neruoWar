@@ -157,12 +157,19 @@ const CityChannelEditor = ({
     : (selectedTile || selectedWall);
   const selectedGear = selectedGears.length === 1 ? selectedGears[0] : null;
   const selectedGearHost = selectedGear
-    ? (selectedGear.hostKind === 'wall' ? mapData.walls?.[selectedGear.hostKey] : mapData.tiles?.[selectedGear.hostKey])
+    ? (selectedGear.hostKind === 'intersection'
+      ? null
+      : (selectedGear.hostKind === 'wall' ? mapData.walls?.[selectedGear.hostKey] : mapData.tiles?.[selectedGear.hostKey]))
     : null;
-  const selectedGearMount = selectedGearHost?.gearMounts?.find((mount) => mount.id === selectedGear?.mountId) || null;
+  const selectedGearMount = selectedGear
+    ? (selectedGear.hostKind === 'intersection'
+      ? mapData.gears?.[selectedGear.hostKey] || null
+      : selectedGearHost?.gearMounts?.find((mount) => mount.id === selectedGear?.mountId) || null)
+    : null;
   const selectedGearCanConfigureRotation = !!(
     selectedGear
     && selectedGearMount
+    && selectedGear.hostKind !== 'intersection'
     && canConfigureGearRotationDirection({
       mapData,
       assemblyGraph,
@@ -173,11 +180,15 @@ const CityChannelEditor = ({
   );
   const selectedGearItems = useMemo(() => (
     selectedGears.map((gear) => {
+      if (gear.hostKind === 'intersection') {
+        const mount = mapData.gears?.[gear.hostKey] || null;
+        return mount ? { gear, host: null, mount, root: true } : null;
+      }
       const host = gear.hostKind === 'wall' ? mapData.walls?.[gear.hostKey] : mapData.tiles?.[gear.hostKey];
       const mount = host?.gearMounts?.find((item) => item.id === gear.mountId) || null;
-      return host && mount ? { gear, host, mount } : null;
+      return host && mount ? { gear, host, mount, root: false } : null;
     }).filter(Boolean)
-  ), [mapData.tiles, mapData.walls, selectedGears]);
+  ), [mapData.gears, mapData.tiles, mapData.walls, selectedGears]);
   const activePanelPlacement = useMemo(() => (
     activePanelTile
       ? {
@@ -203,14 +214,28 @@ const CityChannelEditor = ({
       : Array.isArray(activePanelTile?.gearMounts) ? activePanelTile.gearMounts : []
   ), [activePanelTile?.gearMounts, selectedGearMount]);
   const gearMountBindingStatusById = useMemo(() => {
-    const placement = selectedGearMount ? selectedGearHost : activePanelTile;
+    const placement = selectedGear?.hostKind === 'intersection' && selectedGearMount
+      ? (selectedGearMount.sourceHostKind === 'wall'
+        ? mapData.walls?.[selectedGearMount.sourceHostKey]
+        : mapData.tiles?.[selectedGearMount.sourceHostKey])
+      : (selectedGearMount ? selectedGearHost : activePanelTile);
     return (gearMountsForPanel || []).reduce((statuses, mount) => {
       if (mount?.id) {
-        statuses[mount.id] = getGearAxisBindingStatus({ mapData, placement, mount });
+        statuses[mount.id] = getGearAxisBindingStatus({
+          mapData,
+          placement,
+          mount: selectedGear?.hostKind === 'intersection'
+            ? {
+              ...mount,
+              position: mount.sourceSocket || mount.position,
+              socketKind: isCornerGearSocket(mount.sourceSocket || mount.position) ? 'corner' : mount.socketKind
+            }
+            : mount
+        });
       }
       return statuses;
     }, {});
-  }, [activePanelTile, gearMountsForPanel, mapData, selectedGearHost, selectedGearMount]);
+  }, [activePanelTile, gearMountsForPanel, mapData, selectedGear, selectedGearHost, selectedGearMount]);
   const mechanismPanelParams = useMemo(() => (
     normalizeMechanismParams(mechanismParams[activePanelKey])
   ), [activePanelKey, mechanismParams]);
@@ -375,6 +400,31 @@ const CityChannelEditor = ({
   }, [activePanelKey]);
 
   const updateGearMountConfig = useCallback((mountId, patch = {}) => {
+    if (selectedGear?.hostKind === 'intersection' && selectedGearMount?.id === mountId) {
+      const gearId = selectedGear.hostKey || mountId;
+      const currentGear = mapData.gears?.[gearId] || selectedGearMount;
+      if (!currentGear) return;
+      const nextMount = {
+        ...currentGear,
+        ...patch,
+        id: gearId,
+        componentType: 'gear',
+        position: 'intersection',
+        socketKind: 'intersection',
+        surface: currentGear.surface || 'front',
+        followMode: 'none',
+        followDelaySeconds: 0
+      };
+      if (nextMount.axisBinding === undefined) nextMount.axisBinding = currentGear.axisBinding || null;
+      handleCommitOperations([{
+        kind: 'gearMount',
+        action: 'update',
+        hostKind: 'intersection',
+        hostKey: gearId,
+        mount: nextMount
+      }]);
+      return;
+    }
     if (!activePanelPlacement || !mountId) return;
     updatePlacement(activePanelPlacement, (placement) => {
       const mounts = Array.isArray(placement.gearMounts) ? placement.gearMounts : [];
@@ -389,7 +439,7 @@ const CityChannelEditor = ({
       });
       return { gearMounts: nextMounts };
     }, '齿轮承动配置已更新。');
-  }, [activePanelPlacement, updatePlacement]);
+  }, [activePanelPlacement, handleCommitOperations, mapData.gears, selectedGear, selectedGearMount, updatePlacement]);
 
   const updateGearMountRotationDirection = useCallback((mountId, direction) => {
     const rotationDirection = normalizeGearRotationDirection(direction);
@@ -398,9 +448,25 @@ const CityChannelEditor = ({
   }, [updateGearMountConfig]);
 
   const clearSelectedGearBindings = useCallback(() => {
-    if (selectedGearItems.length <= 0) return;
+    const rootGearItems = selectedGearItems.filter((item) => item.root);
+    const boardGearItems = selectedGearItems.filter((item) => !item.root);
+    if (rootGearItems.length <= 0 && boardGearItems.length <= 0) return;
+    const rootGearOperations = rootGearItems.map(({ gear, mount }) => ({
+      kind: 'gearMount',
+      action: 'update',
+      hostKind: 'intersection',
+      hostKey: gear.hostKey,
+      mount: {
+        ...mount,
+        axisBinding: null
+      }
+    }));
+    if (rootGearOperations.length > 0) {
+      handleCommitOperations(rootGearOperations);
+    }
+    if (boardGearItems.length <= 0) return;
     const groups = new Map();
-    selectedGearItems.forEach(({ gear, host }) => {
+    boardGearItems.forEach(({ gear, host }) => {
       if (!groups.has(gear.hostKey)) {
         groups.set(gear.hostKey, {
           placement: {
@@ -429,7 +495,7 @@ const CityChannelEditor = ({
         ))
       }), '已取消选中齿轮的连轴绑定。');
     });
-  }, [selectedGearItems, updatePlacement]);
+  }, [handleCommitOperations, selectedGearItems, updatePlacement]);
 
   const updatePromptGearAxis = useCallback(() => {
     setGearAxisPrompt(null);
@@ -478,7 +544,16 @@ const CityChannelEditor = ({
     if (selectionScope === 'component') {
       if (selectedGearItems.length <= 0 && selectedRacks.length <= 0) return;
       const groups = new Map();
-      selectedGearItems.forEach(({ gear, host }) => {
+      const rootGearOperations = selectedGearItems
+        .filter((item) => item.root)
+        .map(({ gear, mount }) => ({
+          kind: 'gearMount',
+          action: 'erase',
+          hostKind: 'intersection',
+          hostKey: gear.hostKey,
+          mount
+        }));
+      selectedGearItems.filter((item) => !item.root).forEach(({ gear, host }) => {
         if (!groups.has(gear.hostKey)) {
           groups.set(gear.hostKey, {
             placement: {
@@ -497,6 +572,9 @@ const CityChannelEditor = ({
           gearMounts: (currentPlacement.gearMounts || []).filter((mount) => !mountIds.has(mount.id))
         }), '已删除选中齿轮。');
       });
+      if (rootGearOperations.length > 0) {
+        handleCommitOperations(rootGearOperations);
+      }
       const rackOperations = selectedRacks.map((rack) => {
         const existing = mapData.racks?.[rack.id];
         return existing ? {

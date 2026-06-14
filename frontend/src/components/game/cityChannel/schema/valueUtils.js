@@ -24,6 +24,22 @@ export const cloneGearMounts = (gearMounts = []) => (
     : []
 );
 
+export const cloneRootGears = (gears = {}) => (
+  gears && typeof gears === 'object' && !Array.isArray(gears)
+    ? Object.entries(gears).reduce((next, [key, gear]) => {
+      if (!key || !gear || typeof gear !== 'object') return next;
+      next[key] = {
+        ...gear,
+        surface: gear.surface || 'front',
+        ...(gear.axisBinding && typeof gear.axisBinding === 'object'
+          ? { axisBinding: { ...gear.axisBinding, surface: gear.axisBinding.surface || 'front' } }
+          : {})
+      };
+      return next;
+    }, {})
+    : {}
+);
+
 export const clonePlainObject = (value) => (
   value && typeof value === 'object' && !Array.isArray(value) ? JSON.parse(JSON.stringify(value)) : {}
 );

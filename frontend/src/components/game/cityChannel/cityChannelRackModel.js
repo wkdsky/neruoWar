@@ -520,7 +520,7 @@ const isInstalledGearMount = (mount = null) => (
 
 const isInstalledCornerGearMount = (mount = null) => (
   isInstalledGearMount(mount)
-  && isCornerGearSocket(mount.position)
+  && (isCornerGearSocket(mount.position) || mount.position === 'intersection')
 );
 
 export const getRackGearPoints = (mapData = {}) => {
@@ -539,9 +539,21 @@ export const getRackGearPoints = (mapData = {}) => {
       })
       .filter(Boolean)
   ));
+  const rootGears = Object.entries(mapData.gears || {}).map(([componentKey, gear]) => (
+    gear?.componentType
+      ? {
+        hostKind: 'intersection',
+        componentKey,
+        placement: null,
+        mount: gear,
+        point: { x: Number(gear.x) || 0, y: Number(gear.y) || 0, z: Number(gear.z) || 0 }
+      }
+      : null
+  )).filter(Boolean);
   return [
     ...collect(mapData.tiles, 'tile'),
-    ...collect(mapData.walls, 'wall')
+    ...collect(mapData.walls, 'wall'),
+    ...rootGears
   ];
 };
 

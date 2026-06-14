@@ -149,6 +149,54 @@ const gearSocketOccupied = (placement = {}, socket = '', surface = 'front') => (
   ))
 );
 
+const isCornerGearPivotOccupied = (mapData = {}, pivotWorld = null, surface = 'front') => {
+  if (!pivotWorld) return false;
+  const rootOccupied = Object.values(mapData.gears || {}).some((gear) => (
+    normalizeGearSurfaceForPanel(null, gear.surface || 'front') === normalizeGearSurfaceForPanel(null, surface || 'front')
+    && sameGearWorldPoint(gear, pivotWorld)
+  ));
+  if (rootOccupied) return true;
+  const visitPlacement = (placement = null) => (
+    (placement?.gearMounts || []).some((mount) => {
+      if (!isCornerGearSocket(mount.position)) return false;
+      if (
+        normalizeGearSurfaceForPanel(placement.panelType, mount.surface || 'front')
+        !== normalizeGearSurfaceForPanel(placement.panelType, surface || 'front')
+      ) {
+        return false;
+      }
+      return sameGearWorldPoint(
+        getGearSocketWorldPosition(placement, mount.position, mount.surface || 'front'),
+        pivotWorld
+      );
+    })
+  );
+  return Object.values(mapData.tiles || {}).some(visitPlacement)
+    || Object.values(mapData.walls || {}).some(visitPlacement);
+};
+
+const createRootIntersectionGear = ({
+  mount = {},
+  sourceHostKind = 'tile',
+  sourceHostKey = '',
+  sourceSocket = '',
+  surface = 'front',
+  pivotWorld = null
+} = {}) => ({
+  ...mount,
+  id: mount.id,
+  componentType: 'gear',
+  position: 'intersection',
+  socketKind: 'intersection',
+  surface: surface || 'front',
+  sourceHostKind,
+  sourceHostKey,
+  sourceSocket,
+  x: Number(pivotWorld?.x) || 0,
+  y: Number(pivotWorld?.y) || 0,
+  z: Number(pivotWorld?.z) || 0
+});
+
 const getAxisBindingToRemovedPlacement = ({ hostKind, componentKey, placement, mount }) => ({
   componentKey,
   hostKind,
@@ -379,6 +427,7 @@ const resetPortalTiles = (tiles = {}, marker) => (
 export const applyPlacementOperationsToMap = (current, operations = []) => {
   let nextTiles = { ...(current.tiles || {}) };
   const nextWalls = { ...(current.walls || {}) };
+  const nextGears = { ...(current.gears || {}) };
   const nextRacks = { ...(current.racks || {}) };
   let nextEntrances = current.entrances || [];
   let nextExits = current.exits || [];
@@ -409,46 +458,156 @@ export const applyPlacementOperationsToMap = (current, operations = []) => {
     }
     if (operation.kind === 'gearMount') {
       if (!operation.hostKey || !operation.mount) return;
-      const targetMap = operation.hostKind === 'wall' ? nextWalls : nextTiles;
-      const existing = targetMap[operation.hostKey];
+      if (operation.hostKind === 'intersection') {
+        const gearId = operation.mount.id || operation.hostKey;
+        if (!gearId) return;
+        if (operation.action === 'erase') {
+          delete nextGears[gearId];
+          return;
+        }
+        if (operation.action === 'update') {
+          const existingGear = nextGears[gearId];
+          if (!existingGear) return;
+          const pivotWorld = {
+            x: Number(existingGear.x) || 0,
+            y: Number(existingGear.y) || 0,
+            z: Number(existingGear.z) || 0
+          };
+          const surface = normalizeGearSurfaceForPanel(null, operation.mount.surface || existingGear.surface || 'front');
+          nextGears[gearId] = createRootIntersectionGear({
+            mount: {
+              ...existingGear,
+              ...operation.mount,
+              id: gearId,
+              position: 'intersection',
+              socketKind: 'intersection',
+              followMode: 'none',
+              followDelaySeconds: 0
+            },
+            sourceHostKind: operation.mount.sourceHostKind || existingGear.sourceHostKind || 'tile',
+            sourceHostKey: operation.mount.sourceHostKey || existingGear.sourceHostKey || '',
+            sourceSocket: operation.mount.sourceSocket || existingGear.sourceSocket || '',
+            surface,
+            pivotWorld
+          });
+          return;
+        }
+        const pivotWorld = {
+          x: Number(operation.mount.x) || 0,
+          y: Number(operation.mount.y) || 0,
+          z: Number(operation.mount.z) || 0
+        };
+        const surface = normalizeGearSurfaceForPanel(null, operation.mount.surface || 'front');
+        if (
+          isCornerGearPivotOccupied(
+            { ...current, tiles: nextTiles, walls: nextWalls, gears: nextGears, racks: nextRacks },
+            pivotWorld,
+            surface
+          )
+        ) {
+          return;
+        }
+        const nextMapData = { ...current, tiles: nextTiles, walls: nextWalls, gears: nextGears, racks: nextRacks };
+        if (isGearPointOnAnyRack(nextMapData, pivotWorld)) return;
+        nextGears[gearId] = createRootIntersectionGear({
+          mount: {
+            ...operation.mount,
+            id: gearId,
+            axisBinding: null,
+            followMode: 'none',
+            followDelaySeconds: 0
+          },
+          sourceHostKind: operation.mount.sourceHostKind || 'tile',
+          sourceHostKey: operation.mount.sourceHostKey || '',
+          sourceSocket: operation.mount.sourceSocket || '',
+          surface,
+          pivotWorld
+        });
+        return;
+      }
+      let targetHostKind = operation.hostKind === 'wall' ? 'wall' : 'tile';
+      let targetHostKey = operation.hostKey;
+      let targetMap = targetHostKind === 'wall' ? nextWalls : nextTiles;
+      let existing = targetMap[targetHostKey];
       if (!existing) return;
       if (operation.action === 'erase') {
-        targetMap[operation.hostKey] = {
+        targetMap[targetHostKey] = {
           ...existing,
           gearMounts: (existing.gearMounts || []).filter((mount) => mount.id !== operation.mount.id)
         };
         return;
       }
+      let operationMount = operation.mount;
+      let operationSurface = normalizeGearSurfaceForPanel(existing.panelType, operationMount.surface || 'front');
+      let operationPivot = getGearSocketWorldPosition(existing, operationMount.position, operationSurface);
+      if (isCornerGearSocket(operationMount.position)) {
+        if (
+          isCornerGearPivotOccupied(
+            { ...current, tiles: nextTiles, walls: nextWalls, gears: nextGears, racks: nextRacks },
+            operationPivot,
+            operationSurface
+          )
+        ) {
+          return;
+        }
+        const nextMapData = { ...current, tiles: nextTiles, walls: nextWalls, gears: nextGears, racks: nextRacks };
+        if (isGearPointOnAnyRack(nextMapData, operationPivot)) return;
+        if (!isGearSocketAboveGround(existing, operationMount.position, operationSurface)) return;
+        nextGears[operationMount.id] = createRootIntersectionGear({
+          mount: {
+            ...operationMount,
+            axisBinding: null,
+            followMode: 'none',
+            followDelaySeconds: 0
+          },
+          sourceHostKind: targetHostKind,
+          sourceHostKey: targetHostKey,
+          sourceSocket: operationMount.position,
+          surface: operationSurface,
+          pivotWorld: operationPivot
+        });
+        return;
+      }
       const duplicate = (existing.gearMounts || []).some((mount) => (
-        mount.position === operation.mount.position
+        mount.position === operationMount.position
         && normalizeGearSurfaceForPanel(existing.panelType, mount.surface || 'front')
-          === normalizeGearSurfaceForPanel(existing.panelType, operation.mount.surface || 'front')
+          === normalizeGearSurfaceForPanel(existing.panelType, operationMount.surface || 'front')
       ));
       if (!duplicate) {
-        const bindingPlacement = operation.mount.axisBinding
-          ? (operation.mount.axisBinding.hostKind === 'wall'
-            ? nextWalls[operation.mount.axisBinding.componentKey]
-            : nextTiles[operation.mount.axisBinding.componentKey])
+        if (
+          isCornerGearSocket(operationMount.position)
+          && isCornerGearPivotOccupied(
+            { ...current, tiles: nextTiles, walls: nextWalls, gears: nextGears, racks: nextRacks },
+            operationPivot,
+            operationSurface
+          )
+        ) {
+          return;
+        }
+        const bindingPlacement = operationMount.axisBinding
+          ? (operationMount.axisBinding.hostKind === 'wall'
+            ? nextWalls[operationMount.axisBinding.componentKey]
+            : nextTiles[operationMount.axisBinding.componentKey])
           : null;
         const normalizedMount = {
-          ...operation.mount,
-          surface: normalizeGearSurfaceForPanel(existing.panelType, operation.mount.surface || 'front'),
-          axisBinding: operation.mount.axisBinding
+          ...operationMount,
+          surface: normalizeGearSurfaceForPanel(existing.panelType, operationMount.surface || 'front'),
+          axisBinding: operationMount.axisBinding
             ? {
-              ...operation.mount.axisBinding,
-              surface: normalizeGearSurfaceForPanel(bindingPlacement?.panelType, operation.mount.axisBinding.surface || 'front')
+              ...operationMount.axisBinding,
+              surface: normalizeGearSurfaceForPanel(bindingPlacement?.panelType, operationMount.axisBinding.surface || 'front')
             }
-            : operation.mount.axisBinding
+            : operationMount.axisBinding
         };
         const mountWorld = getGearSocketWorldPosition(
           existing,
           normalizedMount.position,
           normalizedMount.surface || 'front'
         );
-        const nextMapData = { ...current, tiles: nextTiles, walls: nextWalls, racks: nextRacks };
+        const nextMapData = { ...current, tiles: nextTiles, walls: nextWalls, gears: nextGears, racks: nextRacks };
         if (isGearPointOnAnyRack(nextMapData, mountWorld)) return;
         if (!isGearSocketAboveGround(existing, normalizedMount.position, normalizedMount.surface || 'front')) return;
-        targetMap[operation.hostKey] = {
+        targetMap[targetHostKey] = {
           ...existing,
           gearMounts: [...(existing.gearMounts || []), normalizedMount]
         };
@@ -665,6 +824,7 @@ export const applyPlacementOperationsToMap = (current, operations = []) => {
     ))),
     tiles: nextTiles,
     walls: nextWalls,
+    gears: nextGears,
     racks: nextRacks,
     entrances: nextEntrances,
     exits: nextExits,

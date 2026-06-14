@@ -420,14 +420,24 @@ const getVerticalSurfaceFrame = (placement = {}, mount = {}) => {
 
 const getVerticalSurfaceBaseRotation = (placement = {}) => normalizeRotation(placement.transmissionRotation ?? 0);
 
-const getVerticalSurfaceRuntimeRotation = (placement = {}) => (
+const getSurfaceRuntimeRotation = (placement = {}) => (
   Number.isFinite(Number(placement.runtimeSurfaceRotation))
     ? Number(placement.runtimeSurfaceRotation)
     : 0
 );
 
 const getVerticalSurfaceLocalRotation = (placement = {}) => normalizeRotation(
-  getVerticalSurfaceBaseRotation(placement) + getVerticalSurfaceRuntimeRotation(placement)
+  getVerticalSurfaceBaseRotation(placement) + getSurfaceRuntimeRotation(placement)
+);
+
+const getHorizontalSurfaceBaseRotation = (placement = {}) => normalizeRotation(
+  Number.isFinite(Number(placement.runtimeBaseSurfaceRotation))
+    ? Number(placement.runtimeBaseSurfaceRotation)
+    : (placement.transmissionRotation ?? placement.rotation ?? 0)
+);
+
+const getHorizontalSurfaceLocalRotation = (placement = {}) => normalizeRotation(
+  getHorizontalSurfaceBaseRotation(placement) + getSurfaceRuntimeRotation(placement)
 );
 
 const getVerticalSurfaceWorldPosition = (placement = {}, mount = {}, local = null) => {
@@ -456,7 +466,7 @@ export const getGearWorldPosition = (placement = {}, mount = {}) => {
     return getVerticalSurfaceWorldPosition(placement, mount, local);
   }
 
-  const rotation = normalizeRotation(placement.rotation || 0);
+  const rotation = getHorizontalSurfaceLocalRotation(placement);
   const rotated = rotatePoint(local, rotation);
   return {
     x: (Number(placement.x) || 0) + rotated.x,
@@ -532,6 +542,11 @@ const getGearContactPoint = (node = {}) => node.worldPoint || node.point || { x:
 
 const getGearPitchRadius = (node = {}) => Number(node.pitchRadiusWorld ?? node.pitchRadius) || 1;
 
+const getGearOuterRadius = (node = {}) => (
+  Number(node.outerRadiusWorld ?? node.outerRadius)
+  || (getGearPitchRadius(node) * 1.08)
+);
+
 const getGearScreenPitchRadius = (node = {}) => Number(node.pitchRadius) || Number(node.pitchRadiusWorld) || 1;
 
 const getGearRatioRadius = (node = {}) => Number(node.gearRatioRadius ?? node.pitchRadiusWorld ?? node.pitchRadius) || 1;
@@ -543,41 +558,97 @@ const getGearMeshTolerance = (pitchContact = 0) => Math.max(
 
 const getGearGridMeshTolerance = () => CITY_CHANNEL_GEAR_MESH_TOLERANCE_WORLD;
 
-const isExplicitCenterGearNode = (node = {}) => (
-  node?.mount?.position === 'center'
-  || node?.position === 'center'
-);
-
 const areGearGridValuesClose = (left = 0, right = 0) => (
   Math.abs((Number(left) || 0) - (Number(right) || 0)) <= getGearGridMeshTolerance()
 );
 
-const isGearGridUnitOffset = (left = 0, right = 0) => (
-  Math.abs(Math.abs((Number(left) || 0) - (Number(right) || 0)) - 1) <= getGearGridMeshTolerance()
+const isGearGridOffset = (left = 0, right = 0, target = 0) => (
+  Math.abs(Math.abs((Number(left) || 0) - (Number(right) || 0)) - target) <= getGearGridMeshTolerance()
 );
 
-const isGearGridNeighborMesh = (a = {}, b = {}, distance = 0) => {
-  if (!isExplicitCenterGearNode(a) || !isExplicitCenterGearNode(b)) return false;
-  if (Math.abs((Number(distance) || 0) - 1) > getGearGridMeshTolerance()) return false;
+const getGearNodeSocketKind = (node = {}) => getGearSocketKind(node?.mount?.position ?? node?.position);
+
+const isGearStandardSocketMesh = (a = {}, b = {}) => {
   const aPlane = a.meshPlane;
   const bPlane = b.meshPlane;
   if (!aPlane || !bPlane || aPlane.kind !== bPlane.kind) return false;
-  const sameHeightOrRow = areGearGridValuesClose(aPlane.v, bPlane.v);
-  const tangentNeighbor = isGearGridUnitOffset(aPlane.u, bPlane.u);
-  if (aPlane.kind === 'vertical') {
-    return sameHeightOrRow && tangentNeighbor;
+  const aKind = getGearNodeSocketKind(a);
+  const bKind = getGearNodeSocketKind(b);
+  const centerCount = [aKind, bKind].filter((kind) => kind === 'center').length;
+  if (centerCount === 2) {
+    const horizontalNeighbor = areGearGridValuesClose(aPlane.v, bPlane.v)
+      && isGearGridOffset(aPlane.u, bPlane.u, 1);
+    if (aPlane.kind === 'vertical') return horizontalNeighbor;
+    return horizontalNeighbor || (
+      areGearGridValuesClose(aPlane.u, bPlane.u)
+      && isGearGridOffset(aPlane.v, bPlane.v, 1)
+    );
   }
-  return (
-    (sameHeightOrRow && tangentNeighbor)
-    || (areGearGridValuesClose(aPlane.u, bPlane.u) && isGearGridUnitOffset(aPlane.v, bPlane.v))
-  );
+  if (centerCount === 1 && [aKind, bKind].includes('corner')) {
+    return isGearGridOffset(aPlane.u, bPlane.u, 0.5)
+      && isGearGridOffset(aPlane.v, bPlane.v, 0.5);
+  }
+  return false;
+};
+
+const getGearPointInMeshPlane = (plane = null, point = null) => {
+  if (!plane || !point) return null;
+  if (plane.kind === 'horizontal') {
+    const normalZ = Number(plane.normal?.z) || 1;
+    return {
+      planeOffset: (Number(point.z) || 0) * normalZ,
+      u: Number(point.x) || 0,
+      v: Number(point.y) || 0
+    };
+  }
+  if (plane.kind === 'vertical') {
+    const normal = plane.normal || {};
+    const normalX = Number(normal.x) || 0;
+    const normalY = Number(normal.y) || 0;
+    if (Math.abs(normalX) + Math.abs(normalY) <= 0.001) return null;
+    return {
+      planeOffset: ((Number(point.x) || 0) * normalX) + ((Number(point.y) || 0) * normalY),
+      u: ((Number(point.x) || 0) * -normalY) + ((Number(point.y) || 0) * normalX),
+      v: Number(point.z) || 0
+    };
+  }
+  return null;
+};
+
+const isIntersectionCenterMeshInPlane = (intersection = {}, center = {}) => {
+  const centerPlane = center.meshPlane;
+  const intersectionPoint = getGearContactPoint(intersection);
+  const projectedIntersection = getGearPointInMeshPlane(centerPlane, intersectionPoint);
+  if (!projectedIntersection || !centerPlane) return false;
+  if (Math.abs(projectedIntersection.planeOffset - (Number(centerPlane.planeOffset) || 0)) > getGearGridMeshTolerance()) {
+    return false;
+  }
+  return isGearGridOffset(projectedIntersection.u, centerPlane.u, 0.5)
+    && isGearGridOffset(projectedIntersection.v, centerPlane.v, 0.5);
+};
+
+const isIntersectionCenterGearMesh = (a = {}, b = {}) => {
+  const aIsIntersection = a.hostKind === 'intersection';
+  const bIsIntersection = b.hostKind === 'intersection';
+  if (aIsIntersection === bIsIntersection) return false;
+  const intersection = aIsIntersection ? a : b;
+  const center = aIsIntersection ? b : a;
+  if (getGearNodeSocketKind(center) !== 'center') return false;
+  if (isIntersectionCenterMeshInPlane(intersection, center)) return true;
+  const intersectionPoint = getGearContactPoint(intersection);
+  const centerPoint = getGearContactPoint(center);
+  return areGearGridValuesClose(intersectionPoint.z, centerPoint.z)
+    && isGearGridOffset(intersectionPoint.x, centerPoint.x, 0.5)
+    && isGearGridOffset(intersectionPoint.y, centerPoint.y, 0.5);
 };
 
 const isGearMeshDistance = (distance = 0, pitchContact = 0, a = {}, b = {}) => {
   const parsedDistance = Number(distance);
   if (!Number.isFinite(parsedDistance)) return false;
   if (Math.abs(parsedDistance - pitchContact) <= getGearMeshTolerance(pitchContact)) return true;
-  return isGearGridNeighborMesh(a, b, parsedDistance);
+  const outerContact = getGearOuterRadius(a) + getGearOuterRadius(b);
+  if (parsedDistance > 0.08 && parsedDistance <= outerContact + getGearMeshTolerance(outerContact)) return true;
+  return false;
 };
 
 const getGearMeshPlaneDistance = (a = {}, b = {}) => {
@@ -631,23 +702,26 @@ export const buildGearContactGraph = (nodes = [], threshold = getGearContactThre
     for (let j = i + 1; j < nodes.length; j += 1) {
       const a = nodes[i];
       const b = nodes[j];
+      const intersectionCenterMesh = isIntersectionCenterGearMesh(a, b);
       const sameSurface = a.surfaceKey === b.surfaceKey;
-      if (!sameSurface && areOppositeSidesOfSamePlane(a, b)) continue;
+      if (!intersectionCenterMesh && !sameSurface && areOppositeSidesOfSamePlane(a, b)) continue;
       const meshPlaneDistance = getGearMeshPlaneDistance(a, b);
-      if ((a.meshPlane || b.meshPlane) && meshPlaneDistance === null) continue;
+      if (!intersectionCenterMesh && (a.meshPlane || b.meshPlane) && meshPlaneDistance === null) continue;
       const aPoint = meshPlaneDistance !== null || sameSurface ? getGearContactPoint(a) : (a.point || getGearContactPoint(a));
       const bPoint = meshPlaneDistance !== null || sameSurface ? getGearContactPoint(b) : (b.point || getGearContactPoint(b));
-      if (meshPlaneDistance === null && sameSurface && Math.abs((Number(aPoint.z) || 0) - (Number(bPoint.z) || 0)) > 0.08) continue;
+      if (!intersectionCenterMesh && meshPlaneDistance === null && sameSurface && Math.abs((Number(aPoint.z) || 0) - (Number(bPoint.z) || 0)) > 0.08) continue;
       const distance = meshPlaneDistance ?? Math.hypot(aPoint.x - bPoint.x, aPoint.y - bPoint.y);
       const aRadius = meshPlaneDistance !== null || sameSurface ? getGearPitchRadius(a) : getGearScreenPitchRadius(a);
       const bRadius = meshPlaneDistance !== null || sameSurface ? getGearPitchRadius(b) : getGearScreenPitchRadius(b);
       const pitchContact = aRadius + bRadius;
-      if (meshPlaneDistance !== null || sameSurface) {
-        if (!isGearMeshDistance(distance, pitchContact, a, b)) continue;
-      } else {
-        const contactDistance = Math.max(pitchContact * 1.22, Math.min(threshold, pitchContact * 1.22));
-        if (distance > contactDistance) continue;
-        if (distance < Math.max(pitchContact * 0.28, 0.08)) continue;
+      if (!intersectionCenterMesh) {
+        if (meshPlaneDistance !== null || sameSurface) {
+          if (!isGearStandardSocketMesh(a, b) && !isGearMeshDistance(distance, pitchContact, a, b)) continue;
+        } else {
+          const contactDistance = Math.max(pitchContact * 1.22, Math.min(threshold, pitchContact * 1.22));
+          if (distance > contactDistance) continue;
+          if (distance < Math.max(pitchContact * 0.28, 0.08)) continue;
+        }
       }
       const aRatioRadius = getGearRatioRadius(a);
       const bRatioRadius = getGearRatioRadius(b);
@@ -751,6 +825,20 @@ const getExplicitGearDriveRatio = (node = null) => {
   return ratio || null;
 };
 
+const clearGearDriveRuntimeState = (node = null) => {
+  if (!node) return;
+  node.driveRatio = 0;
+  node.direction = 0;
+  node.isDriveRoot = undefined;
+  node.drivenViaRackId = null;
+  node.driveSourceNodeId = null;
+  node.drivenByGearId = null;
+  node.drivenByComponentKey = null;
+  node.drivenByMountId = null;
+  node.axisBindingSuppressed = false;
+  node.sourceAssemblyDriveActive = false;
+};
+
 const createGearDriveConflictSource = (node = null, role = 'gear', driveRatio = 0) => (
   node?.id
     ? {
@@ -799,10 +887,19 @@ export const resolveDrivenGearNodes = ({
   sourceComponentKey = ''
 } = {}) => {
   if (assemblyNodes.length <= 0) return [];
+  allNodes.forEach(clearGearDriveRuntimeState);
+  const sourceAssemblyComponentKeys = new Set(assembly?.componentKeys || []);
+  const isExplicitDriveActiveInSourceAssembly = (node = null) => (
+    !!node?.componentKey && sourceAssemblyComponentKeys.has(node.componentKey)
+  );
   const byId = new Map(allNodes.map((node) => [node.id, node]));
   const graph = contactGraph || buildGearContactGraph(allNodes);
   const roots = getDrivenGearRoots(assembly, assemblyNodes, sourceComponentKey);
   if (roots.length <= 0) return [];
+  roots.forEach((root) => {
+    const liveRoot = byId.get(root?.id);
+    if (liveRoot) liveRoot.sourceAssemblyDriveActive = true;
+  });
   const visited = new Set();
   const driveSourceById = new Map();
   const conflicts = [];
@@ -874,7 +971,9 @@ export const resolveDrivenGearNodes = ({
           }
           return;
         }
-        const explicitRatio = getExplicitGearDriveRatio(next);
+        const explicitRatio = isExplicitDriveActiveInSourceAssembly(next)
+          ? getExplicitGearDriveRatio(next)
+          : null;
         if (
           !edge.viaRackId
           && explicitRatio !== null
@@ -1328,8 +1427,10 @@ const isRackDriveSourceContact = (rack = {}, contact = {}) => {
   const node = contact.node;
   if (!node?.id) return false;
   if (node.isDriveRoot) return true;
-  if (node.drivenViaRackId === rack.id && isPassiveGearRotationDirection(node.mount?.rotationDirection)) return false;
+  if (node.sourceAssemblyDriveActive) return true;
+  if (node.drivenViaRackId === rack.id) return false;
   if (!node.drivenViaRackId) return true;
+  if (node.sourceAssemblyDriveActive === false) return false;
   return !isPassiveGearRotationDirection(node.mount?.rotationDirection);
 };
 

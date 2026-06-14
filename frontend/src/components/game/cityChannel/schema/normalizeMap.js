@@ -26,6 +26,7 @@ import {
 import {
   cloneConnectors,
   cloneGearMounts,
+  cloneRootGears,
   cloneHiddenModule,
   clonePlainObject,
   cloneTransmissionSkeleton
@@ -243,6 +244,7 @@ export const normalizeCityChannelMap = (input = {}) => {
   const sourceRacks = Array.isArray(input?.racks)
     ? input.racks
     : Object.values(input?.racks && typeof input.racks === 'object' ? input.racks : {});
+  const gears = cloneRootGears(input?.gears || {});
   const tiles = {};
   const walls = {};
   const racks = {};
@@ -371,6 +373,7 @@ export const normalizeCityChannelMap = (input = {}) => {
     layers: base.layers,
     tiles,
     walls,
+    gears,
     racks,
     entrances,
     exits,

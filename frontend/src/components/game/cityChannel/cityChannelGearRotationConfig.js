@@ -18,7 +18,6 @@ import {
   getGearSurfaceKey,
   getGearWorldPosition
 } from './cityChannelMechanismSimulation';
-import { normalizeGearSurfaceForPanel } from './cityChannelGearPressurePlateRender';
 
 const getPlacementByComponentKey = (mapData = {}, componentKey = '') => (
   mapData.tiles?.[componentKey] || mapData.walls?.[componentKey] || null
@@ -37,35 +36,13 @@ const getGearAttachmentForConfig = ({
     mount
   });
   const binding = status?.valid ? status.binding : null;
-  if (!binding?.componentKey) {
-    return {
-      componentKey,
-      hostKind,
-      placement,
-      mount,
-      followsAxisBinding: false
-    };
-  }
-  const attachmentPlacement = getPlacementByComponentKey(mapData, binding.componentKey);
-  if (!attachmentPlacement) {
-    return {
-      componentKey,
-      hostKind,
-      placement,
-      mount,
-      followsAxisBinding: false
-    };
-  }
   return {
-    componentKey: binding.componentKey,
-    hostKind: binding.hostKind === 'wall' ? 'wall' : 'tile',
-    placement: attachmentPlacement,
-    mount: {
-      ...mount,
-      position: binding.socket,
-      surface: normalizeGearSurfaceForPanel(attachmentPlacement.panelType, binding.surface || 'front')
-    },
-    followsAxisBinding: true
+    componentKey,
+    hostKind,
+    placement,
+    mount,
+    binding,
+    followsAxisBinding: false
   };
 };
 

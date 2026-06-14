@@ -23,6 +23,7 @@ import {
   getAssemblyForCell
 } from '../cityChannelMechanismRuntime';
 import {
+  buildGearContactGraph,
   getRackContactLimitedTranslationDistance
 } from '../cityChannelMechanismSimulation';
 import {
@@ -1862,10 +1863,11 @@ describe('CityChannelThreeRuntime board interaction component passthrough', () =
     expect(runtime.requestRender).toHaveBeenCalledTimes(2);
   });
 
-  it('does not ghost or passthrough while placing a gear component', () => {
+  it('uses the board behind a gear while placing another gear component', () => {
     const gearMaterial = new THREE.MeshBasicMaterial();
     const gearObject = new THREE.Mesh(new THREE.BoxGeometry(1, 1, 1), gearMaterial);
     gearObject.userData.cityChannel = gearData;
+    gearObject.userData.sharedMaterial = true;
     const tileObject = { userData: { cityChannel: tileData } };
     const runtime = createRuntimeObject({
       config: {
@@ -1885,9 +1887,11 @@ describe('CityChannelThreeRuntime board interaction component passthrough', () =
       { object: gearObject }
     ]);
 
-    expect(hit.object).toBe(gearObject);
-    expect(gearObject.material).toBe(gearMaterial);
-    expect(runtime.requestRender).not.toHaveBeenCalled();
+    expect(hit.object).toBe(tileObject);
+    expect(gearObject.material).not.toBe(gearMaterial);
+    expect(gearObject.material.wireframe).toBe(true);
+    expect(gearObject.material.opacity).toBeLessThan(0.2);
+    expect(runtime.requestRender).toHaveBeenCalledTimes(1);
   });
 
   it('does not redraw a direction icon for a passthrough ghosted gear', () => {
@@ -1984,6 +1988,28 @@ describe('CityChannelThreeRuntime click selection', () => {
       cells: [],
       walls: [],
       gears: [],
+      scope: null
+    });
+  });
+
+  it('clears selection when clicking empty space', () => {
+    const runtime = createSelectionRuntime({
+      hoverData: null,
+      selection: {
+        cells: [{ x: 2, y: 3, z: 0 }],
+        walls: [],
+        gears: [],
+        scope: 'board'
+      }
+    });
+
+    CityChannelThreeRuntime.prototype.selectHovered.call(runtime, false);
+
+    expect(runtime.config.selection).toEqual({
+      cells: [],
+      walls: [],
+      gears: [],
+      racks: [],
       scope: null
     });
   });
@@ -2479,7 +2505,7 @@ describe('CityChannelThreeRuntime placement rendering', () => {
     expect(direction.z).toBeCloseTo(1, 6);
   });
 
-  it('moves a bound corner gear with the board it is bound to when that board surface turns', () => {
+  it('keeps a bound corner gear at its installed socket when the bound board surface turns', () => {
     const runtime = createDetailRuntimeHarness();
     const hostKey = createCellKey(1, 1, 0);
     const boundKey = createCellKey(2, 1, 0);
@@ -2537,23 +2563,14 @@ describe('CityChannelThreeRuntime placement rendering', () => {
       gears: {}
     };
     CityChannelThreeRuntime.prototype.syncMechanismRuntimeTransforms.call(runtime);
-    const runtimeBoundTransform = getTileThreeTransform({
-      ...bound,
-      runtimeSurfaceRotation: 90
-    }, mapData);
-    const expectedPoint = getThreeGearSurfacePoint(runtimeBoundTransform, {
-      position: 'corner_nw',
-      surface: 'front'
-    });
     const gearWorld = gear.getWorldPosition(new THREE.Vector3());
 
     expect(gear.userData.cityChannel).toMatchObject({
-      attachmentComponentKey: boundKey,
-      followsAxisBinding: true
+      attachmentComponentKey: hostKey,
+      followsAxisBinding: false
     });
-    expect(gearWorld.x).toBeCloseTo(expectedPoint.x, 6);
-    expect(gearWorld.z).toBeCloseTo(expectedPoint.z, 6);
-    expect(gearWorld.distanceTo(baseWorld)).toBeGreaterThan(0.4);
+    expect(gearWorld.x).toBeCloseTo(baseWorld.x, 6);
+    expect(gearWorld.z).toBeCloseTo(baseWorld.z, 6);
   });
 
   it('spins a degraded free-axis corner gear when it is driven by a meshed active gear', () => {
@@ -3241,8 +3258,12 @@ describe('CityChannelThreeRuntime gear transmission', () => {
       config: {
         activeTool: CITY_CHANNEL_TOOLS.SELECT,
         activeComponentType: null,
+        onUpdateGearMountConfig: jest.fn(),
+        onGearAxisPrompt: jest.fn(),
         selection: { cells: [], walls: [], gears: [], scope: null }
       },
+      requestRender: jest.fn(),
+      notifyStatus: jest.fn(),
       getVisiblePlacementTransforms: CityChannelThreeRuntime.prototype.getVisiblePlacementTransforms,
       getRuntimeTransform: CityChannelThreeRuntime.prototype.getRuntimeTransform,
       getRuntimeWorldPointForPlacement: CityChannelThreeRuntime.prototype.getRuntimeWorldPointForPlacement,
@@ -3261,6 +3282,9 @@ describe('CityChannelThreeRuntime gear transmission', () => {
       getGearAttachmentContext: CityChannelThreeRuntime.prototype.getGearAttachmentContext,
       getGearAttachmentWorldPoint: CityChannelThreeRuntime.prototype.getGearAttachmentWorldPoint,
       getGearAttachmentWorldQuaternion: CityChannelThreeRuntime.prototype.getGearAttachmentWorldQuaternion,
+      getRootGearTransform: CityChannelThreeRuntime.prototype.getRootGearTransform,
+      getRootGearSourceContext: CityChannelThreeRuntime.prototype.getRootGearSourceContext,
+      getRootGearAttachmentContext: CityChannelThreeRuntime.prototype.getRootGearAttachmentContext,
       getGearDirectionIconContextForGearData: CityChannelThreeRuntime.prototype.getGearDirectionIconContextForGearData,
       getHoveredGearDirectionIconContext: CityChannelThreeRuntime.prototype.getHoveredGearDirectionIconContext,
       createGearDirectionIconLine: CityChannelThreeRuntime.prototype.createGearDirectionIconLine,
@@ -3378,6 +3402,156 @@ describe('CityChannelThreeRuntime gear transmission', () => {
     ]));
   });
 
+  it('offers binding candidates for an intersection root gear', () => {
+    const hostKey = createCellKey(16, 16, 0);
+    const eastKey = createCellKey(17, 16, 0);
+    const southKey = createCellKey(16, 17, 0);
+    const diagonalKey = createCellKey(17, 17, 0);
+    const host = createTile({
+      x: 16,
+      y: 16,
+      z: 0,
+      panelType: CITY_CHANNEL_TILE_TYPES.BASIC_PLATE
+    });
+    const rootGear = {
+      id: 'gear_root',
+      componentType: 'gear',
+      position: 'intersection',
+      socketKind: 'intersection',
+      surface: 'front',
+      sourceHostKind: 'tile',
+      sourceHostKey: hostKey,
+      sourceSocket: 'corner_se',
+      x: 16.5,
+      y: 16.5,
+      z: 0
+    };
+    const mapData = {
+      ...createBaseCityChannelMap({ width: 20, height: 20, layers: 2 }),
+      tiles: {
+        [hostKey]: host,
+        [eastKey]: createTile({ x: 17, y: 16, z: 0 }),
+        [southKey]: createTile({ x: 16, y: 17, z: 0 }),
+        [diagonalKey]: createTile({ x: 17, y: 17, z: 0 })
+      },
+      walls: {},
+      gears: {
+        gear_root: rootGear
+      }
+    };
+    const runtime = createBindingVisualRuntimeHarness(mapData);
+    runtime.config.selection = {
+      cells: [],
+      walls: [],
+      gears: [{
+        hostKind: 'intersection',
+        hostKey: 'gear_root',
+        mountId: 'gear_root'
+      }],
+      scope: 'component'
+    };
+
+    const context = CityChannelThreeRuntime.prototype.getSelectedGearBindingContext.call(runtime);
+
+    expect(context).toMatchObject({
+      hostKind: 'intersection',
+      hostKey: 'gear_root',
+      mount: expect.objectContaining({
+        id: 'gear_root',
+        position: 'corner_se',
+        socketKind: 'corner'
+      })
+    });
+    expect(context.candidates).toEqual(expect.arrayContaining([
+      expect.objectContaining({ componentKey: hostKey, socket: 'corner_se' }),
+      expect.objectContaining({ componentKey: eastKey, socket: 'corner_sw' }),
+      expect.objectContaining({ componentKey: southKey, socket: 'corner_ne' }),
+      expect.objectContaining({ componentKey: diagonalKey, socket: 'corner_nw' })
+    ]));
+  });
+
+  it('updates an intersection root gear binding from a hovered candidate board', () => {
+    const hostKey = createCellKey(16, 16, 0);
+    const eastKey = createCellKey(17, 16, 0);
+    const host = createTile({
+      x: 16,
+      y: 16,
+      z: 0,
+      panelType: CITY_CHANNEL_TILE_TYPES.BASIC_PLATE
+    });
+    const east = createTile({
+      x: 17,
+      y: 16,
+      z: 0,
+      panelType: CITY_CHANNEL_TILE_TYPES.BASIC_PLATE
+    });
+    const rootGear = {
+      id: 'gear_root',
+      componentType: 'gear',
+      position: 'intersection',
+      socketKind: 'intersection',
+      surface: 'front',
+      sourceHostKind: 'tile',
+      sourceHostKey: hostKey,
+      sourceSocket: 'corner_se',
+      x: 16.5,
+      y: 16.5,
+      z: 0
+    };
+    const mapData = {
+      ...createBaseCityChannelMap({ width: 20, height: 20, layers: 2 }),
+      tiles: {
+        [hostKey]: host,
+        [eastKey]: east
+      },
+      walls: {},
+      gears: {
+        gear_root: rootGear
+      }
+    };
+    const runtime = createBindingVisualRuntimeHarness(mapData);
+    const eastTransform = runtime.renderModel.tiles.find((item) => item.key === eastKey);
+    runtime.config.selection = {
+      cells: [],
+      walls: [],
+      gears: [{
+        hostKind: 'intersection',
+        hostKey: 'gear_root',
+        mountId: 'gear_root'
+      }],
+      scope: 'component'
+    };
+    const hoverPoint = getThreeGearSurfacePoint(eastTransform, {
+      position: 'corner_sw',
+      surface: 'front'
+    });
+    runtime.hoverHit = {
+      point: hoverPoint,
+      object: {
+        userData: {
+          cityChannel: {
+            kind: eastTransform.kind,
+            key: eastTransform.key,
+            placement: eastTransform.placement,
+            transform: eastTransform
+          }
+        }
+      }
+    };
+
+    const committed = CityChannelThreeRuntime.prototype.commitGearBindingCandidate.call(runtime);
+
+    expect(committed).toBe(true);
+    expect(runtime.config.onUpdateGearMountConfig).toHaveBeenCalledWith('gear_root', {
+      axisBinding: {
+        hostKind: 'tile',
+        componentKey: eastKey,
+        socket: 'corner_sw',
+        surface: 'front'
+      }
+    });
+  });
+
   it('only gives directional vertical boards separate front and back binding surfaces', () => {
     const basicWall = createWall({
       x: 1,
@@ -3444,6 +3618,259 @@ describe('CityChannelThreeRuntime gear transmission', () => {
     expect(snapshot.placements).toEqual({});
   });
 
+  it('meshes a center gear with a touching intersection gear regardless of the corner gear host board', () => {
+    const centerKey = createCellKey(1, 1, 0);
+    const cornerHosts = [
+      { key: createCellKey(1, 1, 0), x: 1, y: 1, socket: 'corner_ne' },
+      { key: createCellKey(2, 1, 0), x: 2, y: 1, socket: 'corner_nw' },
+      { key: createCellKey(1, 0, 0), x: 1, y: 0, socket: 'corner_se' },
+      { key: createCellKey(2, 0, 0), x: 2, y: 0, socket: 'corner_sw' }
+    ];
+
+    cornerHosts.forEach((cornerHost) => {
+      const center = createTile({
+        x: 1,
+        y: 1,
+        z: 0,
+        panelType: CITY_CHANNEL_TILE_TYPES.TRANSMISSION_CROSS_PLATE
+      });
+      center.gearMounts = [{
+        id: 'gear_center',
+        componentType: 'gear',
+        position: 'center',
+        socketKind: 'center',
+        surface: 'front',
+        teeth: 18,
+        phase: 0
+      }];
+      const corner = createTile({
+        x: cornerHost.x,
+        y: cornerHost.y,
+        z: 0,
+        panelType: CITY_CHANNEL_TILE_TYPES.TRANSMISSION_CROSS_PLATE
+      });
+      corner.gearMounts = [{
+        id: 'gear_corner',
+        componentType: 'gear',
+        position: cornerHost.socket,
+        socketKind: 'corner',
+        surface: 'front',
+        teeth: 18,
+        phase: 0
+      }];
+      const tiles = {
+        [centerKey]: center,
+        [cornerHost.key]: corner
+      };
+      if (cornerHost.key === centerKey) {
+        tiles[centerKey] = {
+          ...center,
+          gearMounts: [
+            center.gearMounts[0],
+            corner.gearMounts[0]
+          ]
+        };
+      }
+      const mapData = {
+        ...createBaseCityChannelMap({ width: 4, height: 4, layers: 2 }),
+        tiles,
+        walls: {}
+      };
+      const runtime = createTransmissionRuntimeHarness(mapData);
+      const nodes = CityChannelThreeRuntime.prototype.getAllGearNodes.call(runtime);
+      const graph = buildGearContactGraph(nodes);
+
+      expect(graph.get(`${centerKey}:gear_center`)?.map((edge) => edge.id)).toContain(`${cornerHost.key}:gear_corner`);
+    });
+  });
+
+  it('meshes a center gear with a transmission-rotated corner socket that visually touches it', () => {
+    const centerKey = createCellKey(1, 1, 0);
+    const cornerKey = createCellKey(2, 1, 0);
+    const center = createTile({
+      x: 1,
+      y: 1,
+      z: 0,
+      panelType: CITY_CHANNEL_TILE_TYPES.TRANSMISSION_CROSS_PLATE
+    });
+    center.gearMounts = [{
+      id: 'gear_center',
+      componentType: 'gear',
+      position: 'center',
+      socketKind: 'center',
+      surface: 'front',
+      teeth: 18,
+      phase: 0
+    }];
+    const corner = createTile({
+      x: 2,
+      y: 1,
+      z: 0,
+      panelType: CITY_CHANNEL_TILE_TYPES.TRANSMISSION_CROSS_PLATE,
+      rotation: 0,
+      transmissionRotation: 270
+    });
+    corner.gearMounts = [{
+      id: 'gear_corner',
+      componentType: 'gear',
+      position: 'corner_ne',
+      socketKind: 'corner',
+      surface: 'front',
+      teeth: 18,
+      phase: 0
+    }];
+    const mapData = {
+      ...createBaseCityChannelMap({ width: 4, height: 4, layers: 2 }),
+      tiles: {
+        [centerKey]: center,
+        [cornerKey]: corner
+      },
+      walls: {}
+    };
+    const runtime = createTransmissionRuntimeHarness(mapData);
+    const nodes = CityChannelThreeRuntime.prototype.getAllGearNodes.call(runtime);
+    const graph = buildGearContactGraph(nodes);
+
+    expect(graph.get(`${centerKey}:gear_center`)?.map((edge) => edge.id)).toContain(`${cornerKey}:gear_corner`);
+  });
+
+  it('keeps contact graph nodes on the installed gear socket when the gear has an axis binding', () => {
+    const centerKey = createCellKey(1, 1, 0);
+    const cornerKey = createCellKey(2, 1, 0);
+    const center = createTile({
+      x: 1,
+      y: 1,
+      z: 0,
+      panelType: CITY_CHANNEL_TILE_TYPES.TRANSMISSION_CROSS_PLATE
+    });
+    center.gearMounts = [{
+      id: 'gear_center',
+      componentType: 'gear',
+      position: 'center',
+      socketKind: 'center',
+      surface: 'front',
+      teeth: 18,
+      phase: 0
+    }];
+    const corner = createTile({
+      x: 2,
+      y: 1,
+      z: 0,
+      panelType: CITY_CHANNEL_TILE_TYPES.TRANSMISSION_CROSS_PLATE
+    });
+    corner.gearMounts = [{
+      id: 'gear_corner',
+      componentType: 'gear',
+      position: 'corner_nw',
+      socketKind: 'corner',
+      surface: 'front',
+      teeth: 18,
+      phase: 0,
+      axisBinding: {
+        hostKind: 'tile',
+        componentKey: centerKey,
+        socket: 'corner_ne',
+        surface: 'front'
+      }
+    }];
+    const mapData = {
+      ...createBaseCityChannelMap({ width: 4, height: 4, layers: 2 }),
+      tiles: {
+        [centerKey]: center,
+        [cornerKey]: corner
+      },
+      walls: {}
+    };
+    const runtime = createTransmissionRuntimeHarness(mapData);
+    const nodes = CityChannelThreeRuntime.prototype.getAllGearNodes.call(runtime);
+    const cornerNode = nodes.find((node) => node.id === `${cornerKey}:gear_corner`);
+    const graph = buildGearContactGraph(nodes);
+
+    expect(cornerNode).toMatchObject({
+      componentKey: cornerKey,
+      attachmentComponentKey: cornerKey,
+      followsAxisBinding: false,
+      mount: expect.objectContaining({
+        axisBinding: expect.objectContaining({ componentKey: centerKey })
+      }),
+      attachmentMount: expect.objectContaining({
+        position: 'corner_nw'
+      })
+    });
+    expect(graph.get(`${centerKey}:gear_center`)?.map((edge) => edge.id)).toContain(`${cornerKey}:gear_corner`);
+  });
+
+  it('meshes an intersection root gear with all four surrounding center gears when it has board binding', () => {
+    const northWestKey = createCellKey(1, 1, 0);
+    const northEastKey = createCellKey(2, 1, 0);
+    const southWestKey = createCellKey(1, 2, 0);
+    const southEastKey = createCellKey(2, 2, 0);
+    const createCenterTile = (x, y) => {
+      const tile = createTile({
+        x,
+        y,
+        z: 0,
+        panelType: CITY_CHANNEL_TILE_TYPES.TRANSMISSION_CROSS_PLATE
+      });
+      tile.gearMounts = [{
+        id: 'gear_center',
+        componentType: 'gear',
+        position: 'center',
+        socketKind: 'center',
+        surface: 'front',
+        teeth: 18,
+        phase: 0
+      }];
+      return tile;
+    };
+    const rootGear = {
+      id: 'gear_root',
+      componentType: 'gear',
+      position: 'intersection',
+      socketKind: 'intersection',
+      surface: 'front',
+      sourceHostKind: 'tile',
+      sourceHostKey: northWestKey,
+      sourceSocket: 'corner_se',
+      x: 1.5,
+      y: 1.5,
+      z: 0,
+      axisBinding: {
+        hostKind: 'tile',
+        componentKey: southEastKey,
+        socket: 'corner_nw',
+        surface: 'front'
+      }
+    };
+    const mapData = {
+      ...createBaseCityChannelMap({ width: 4, height: 4, layers: 2 }),
+      tiles: {
+        [northWestKey]: createCenterTile(1, 1),
+        [northEastKey]: createCenterTile(2, 1),
+        [southWestKey]: createCenterTile(1, 2),
+        [southEastKey]: createCenterTile(2, 2)
+      },
+      walls: {},
+      gears: {
+        gear_root: rootGear
+      }
+    };
+    const runtime = createTransmissionRuntimeHarness(mapData);
+    const nodes = CityChannelThreeRuntime.prototype.getAllGearNodes.call(runtime);
+    const graph = buildGearContactGraph(nodes);
+    const expectedCenterIds = [
+      `${northWestKey}:gear_center`,
+      `${northEastKey}:gear_center`,
+      `${southWestKey}:gear_center`,
+      `${southEastKey}:gear_center`
+    ];
+
+    expect(graph.get('gear_root:gear_root')?.map((edge) => edge.id).sort()).toEqual(expectedCenterIds.sort());
+    expectedCenterIds.forEach((centerId) => {
+      expect(graph.get(centerId)?.map((edge) => edge.id)).toContain('gear_root:gear_root');
+    });
+  });
+
   it('blocks meshed active gears whose configured directions conflict', () => {
     const {
       sourceKey,
@@ -3493,6 +3920,85 @@ describe('CityChannelThreeRuntime gear transmission', () => {
       '主动齿轮之间的啮合方向互相矛盾，齿轮组被卡住。',
       'error'
     );
+  });
+
+  it('treats a same-position meshed gear outside the current pressure assembly as passive', () => {
+    const sourceKey = createCellKey(1, 1, 0);
+    const drivenKey = createCellKey(2, 1, 0);
+    const source = createTile({
+      x: 1,
+      y: 1,
+      z: 0,
+      panelType: CITY_CHANNEL_TILE_TYPES.GEAR_PRESSURE_PLATE
+    });
+    source.gearMounts = [{
+      id: 'gear_center',
+      componentType: 'gear',
+      position: 'center',
+      socketKind: 'center',
+      surface: 'front',
+      teeth: 18,
+      phase: 0,
+      rotationDirection: CITY_CHANNEL_GEAR_ROTATION_DIRECTIONS.CLOCKWISE
+    }];
+    const driven = createTile({
+      x: 2,
+      y: 1,
+      z: 0,
+      panelType: CITY_CHANNEL_TILE_TYPES.BASIC_PLATE
+    });
+    driven.gearMounts = [{
+      id: 'gear_corner',
+      componentType: 'gear',
+      position: 'corner_nw',
+      socketKind: 'corner',
+      surface: 'front',
+      teeth: 18,
+      phase: 0,
+      rotationDirection: CITY_CHANNEL_GEAR_ROTATION_DIRECTIONS.CLOCKWISE
+    }];
+    const mapData = {
+      ...createBaseCityChannelMap({ width: 4, height: 4, layers: 2 }),
+      tiles: {
+        [sourceKey]: source,
+        [drivenKey]: driven
+      },
+      walls: {}
+    };
+    const runtime = {
+      ...createTransmissionRuntimeHarness(mapData),
+      config: {
+        mechanismParams: {},
+        onToast: jest.fn()
+      },
+      cancelMechanismRuntimePreview: jest.fn(),
+      setMechanismRuntimeSnapshot: jest.fn(function setMechanismRuntimeSnapshot(snapshot) {
+        this.mechanismRuntimeSnapshot = snapshot;
+      }),
+      playMechanismRuntimePreview: jest.fn(),
+      flashMechanismObstruction: jest.fn()
+    };
+
+    const played = CityChannelThreeRuntime.prototype.triggerMechanismAtCell.call(runtime, { x: 1, y: 1, z: 0 }, {
+      rotationAngle: 90,
+      rotationSpeedDegPerSec: 360,
+      triggerDelaySeconds: 0,
+      autoReturn: false
+    });
+
+    expect(played).toBe(true);
+    expect(runtime.flashMechanismObstruction).not.toHaveBeenCalled();
+    expect(runtime.playMechanismRuntimePreview).toHaveBeenCalledWith(expect.objectContaining({
+      gearNodes: expect.arrayContaining([
+        expect.objectContaining({
+          id: `${drivenKey}:gear_corner`,
+          driveRatio: -1,
+          isDriveRoot: false,
+          drivenByGearId: `${sourceKey}:gear_center`
+        })
+      ])
+    }));
+    expect(runtime.config.onToast).toHaveBeenLastCalledWith(expect.stringContaining('齿轮传动预览'), 'success');
   });
 
   it('does not drive gears above a vertical transmission chain split by a turned middle board', () => {
@@ -3573,6 +4079,32 @@ describe('CityChannelThreeRuntime gear transmission', () => {
       .toBe(280);
   });
 
+  it('invalidates gear mesh phase offsets when map data changes between gear placements', () => {
+    const {
+      sourceKey,
+      drivenKey,
+      source,
+      mapData
+    } = createMeshedGearMap();
+    const firstMapData = {
+      ...mapData,
+      tiles: {
+        [sourceKey]: source
+      }
+    };
+    const runtime = {
+      ...createTransmissionRuntimeHarness(firstMapData),
+      rebuildMap: jest.fn()
+    };
+
+    expect(CityChannelThreeRuntime.prototype.getGearMeshPhaseOffset.call(runtime, sourceKey, 'gear_center')).toBe(0);
+    CityChannelThreeRuntime.prototype.setMapData.call(runtime, mapData);
+
+    expect(runtime.gearMeshPhaseOffsetMap).toBeNull();
+    expect(CityChannelThreeRuntime.prototype.getGearMeshPhaseOffset.call(runtime, drivenKey, 'gear_corner'))
+      .toBeCloseTo(10, 6);
+  });
+
   it('degrades a meshed bound intersection gear into an unbound passive gear', () => {
     const sourceKey = createCellKey(1, 1, 0);
     const driverKey = createCellKey(2, 1, 0);
@@ -3649,6 +4181,102 @@ describe('CityChannelThreeRuntime gear transmission', () => {
     expect(assemblyEntries).toHaveLength(0);
     expect(snapshot.placements).toEqual({});
     expect(snapshot.gears[`${driverKey}:gear_corner`]).toMatchObject({
+      axisType: 'freeAxis',
+      axisBinding: null,
+      phase: 270,
+      speedRatio: -1
+    });
+  });
+
+  it('degrades a meshed bound root intersection gear into an unbound passive gear', () => {
+    const sourceKey = createCellKey(1, 1, 0);
+    const driverKey = createCellKey(2, 1, 0);
+    const source = createTile({
+      x: 1,
+      y: 1,
+      z: 0,
+      panelType: CITY_CHANNEL_TILE_TYPES.GEAR_PRESSURE_PLATE
+    });
+    source.gearMounts = [{
+      id: 'gear_center',
+      componentType: 'gear',
+      position: 'center',
+      socketKind: 'center',
+      surface: 'front',
+      teeth: 18,
+      phase: 0
+    }];
+    const driver = createTile({
+      x: 2,
+      y: 1,
+      z: 0,
+      panelType: CITY_CHANNEL_TILE_TYPES.TRANSMISSION_CROSS_PLATE
+    });
+    const rootGear = {
+      id: 'gear_root',
+      componentType: 'gear',
+      position: 'intersection',
+      socketKind: 'intersection',
+      surface: 'front',
+      sourceHostKind: 'tile',
+      sourceHostKey: driverKey,
+      sourceSocket: 'corner_nw',
+      x: 1.5,
+      y: 0.5,
+      z: 0,
+      axisBinding: {
+        hostKind: 'tile',
+        componentKey: sourceKey,
+        socket: 'corner_ne',
+        surface: 'front'
+      }
+    };
+    const mapData = {
+      ...createBaseCityChannelMap({ width: 4, height: 4, layers: 2 }),
+      tiles: {
+        [sourceKey]: source,
+        [driverKey]: driver
+      },
+      walls: {},
+      gears: {
+        gear_root: rootGear
+      }
+    };
+    const runtime = createTransmissionRuntimeHarness(mapData);
+    const assemblyGraph = buildMechanicalAssemblies(mapData);
+    const assembly = getAssemblyForCell(assemblyGraph, sourceKey);
+    const nodes = CityChannelThreeRuntime.prototype.resolveDrivenGearNodes.call(runtime, assembly, sourceKey);
+    const assemblyEntries = CityChannelThreeRuntime.prototype.createAxisBindingRuntimeEntries.call(
+      runtime,
+      nodes,
+      assemblyGraph,
+      assembly
+    );
+    const snapshot = CityChannelThreeRuntime.prototype.createRuntimeSnapshotForMechanism.call(runtime, {
+      key: sourceKey,
+      tile: source,
+      assemblyEntries,
+      gearNodes: nodes,
+      sourceAngle: 90,
+      basePhases: new Map(nodes.map((node) => [node.id, Number(node.mount?.phase) || 0]))
+    });
+    const rootNode = nodes.find((node) => node.id === 'gear_root:gear_root');
+
+    expect(nodes.map((node) => node.id)).toEqual([`${sourceKey}:gear_center`, 'gear_root:gear_root']);
+    expect(rootNode).toMatchObject({
+      componentKey: 'gear_root',
+      hostKind: 'intersection',
+      driveRatio: -1,
+      isDriveRoot: false,
+      axisBindingSuppressed: true,
+      mount: expect.objectContaining({
+        position: 'corner_nw',
+        axisBinding: expect.objectContaining({ componentKey: sourceKey })
+      })
+    });
+    expect(assemblyEntries).toHaveLength(0);
+    expect(snapshot.placements).toEqual({});
+    expect(snapshot.gears['gear_root:gear_root']).toMatchObject({
       axisType: 'freeAxis',
       axisBinding: null,
       phase: 270,
@@ -4110,7 +4738,7 @@ describe('CityChannelThreeRuntime gear transmission', () => {
       z: 1,
       isVertical: true,
       rotation: 0,
-      panelType: CITY_CHANNEL_TILE_TYPES.BASIC_PLATE
+      panelType: CITY_CHANNEL_TILE_TYPES.TRANSMISSION_STRAIGHT_PLATE
     });
     middle.gearMounts = [{
       id: 'gear_middle',
@@ -4222,7 +4850,7 @@ describe('CityChannelThreeRuntime gear transmission', () => {
       z: 1,
       isVertical: true,
       rotation: 0,
-      panelType: CITY_CHANNEL_TILE_TYPES.BASIC_PLATE
+      panelType: CITY_CHANNEL_TILE_TYPES.TRANSMISSION_STRAIGHT_PLATE
     });
     middle.gearMounts = [{
       id: 'gear_middle',
@@ -4291,6 +4919,128 @@ describe('CityChannelThreeRuntime gear transmission', () => {
       '主动齿轮正在把同一齿条推向相反方向，齿条被卡住。',
       'error'
     );
+  });
+
+  it('does not let a disconnected configured gear keep driving the rack after the assembly splits', () => {
+    const sourceKey = createCellKey(1, 1, 0);
+    const middleKey = createCellKey(1, 1, 1);
+    const source = createTile({
+      x: 1,
+      y: 1,
+      z: 0,
+      isVertical: true,
+      rotation: 0,
+      panelType: CITY_CHANNEL_TILE_TYPES.GEAR_PRESSURE_PLATE
+    });
+    source.gearMounts = [{
+      id: 'gear_lower',
+      componentType: 'gear',
+      position: 'center',
+      socketKind: 'center',
+      surface: 'front',
+      teeth: 18,
+      phase: 0,
+      rotationDirection: CITY_CHANNEL_GEAR_ROTATION_DIRECTIONS.COUNTERCLOCKWISE
+    }];
+    const middle = createTile({
+      x: 1,
+      y: 1,
+      z: 1,
+      isVertical: true,
+      rotation: 0,
+      panelType: CITY_CHANNEL_TILE_TYPES.BASIC_PLATE
+    });
+    middle.gearMounts = [{
+      id: 'gear_middle',
+      componentType: 'gear',
+      position: 'center',
+      socketKind: 'center',
+      surface: 'front',
+      teeth: 18,
+      phase: 0,
+      rotationDirection: CITY_CHANNEL_GEAR_ROTATION_DIRECTIONS.CLOCKWISE
+    }];
+    const rack = {
+      id: 'rack_vertical_split_active',
+      componentType: DOUBLE_SIDED_RACK_COMPONENT_TYPE,
+      plane: 'vertical',
+      normalAxis: 'y',
+      direction: 'z',
+      start: { x: 1.5, y: 1, z: 0 },
+      end: { x: 1.5, y: 1, z: 2 }
+    };
+    const mapData = {
+      ...createBaseCityChannelMap({ width: 4, height: 4, layers: 4 }),
+      tiles: {
+        [sourceKey]: source,
+        [middleKey]: middle
+      },
+      walls: {},
+      racks: {
+        [rack.id]: rack
+      }
+    };
+    const runtime = {
+      ...createTransmissionRuntimeHarness(mapData),
+      config: {
+        mechanismParams: {},
+        onToast: jest.fn()
+      },
+      mechanismRuntimeSnapshot: null,
+      cancelMechanismRuntimePreview: jest.fn(),
+      setMechanismRuntimeSnapshot: jest.fn(function setMechanismRuntimeSnapshot(snapshot) {
+        this.mechanismRuntimeSnapshot = snapshot;
+      }),
+      playMechanismRuntimePreview: jest.fn(function playMechanismRuntimePreview(args) {
+        const basePhases = new Map(
+          [...args.rackContactGearNodes, ...args.gearNodes]
+            .map((node) => [node.id, Number(node.mount?.phase) || 0])
+        );
+        this.setMechanismRuntimeSnapshot(this.createRuntimeSnapshotForMechanism({
+          ...args,
+          sourceAngle: args.targetAngle,
+          basePhases
+        }));
+      }),
+      flashMechanismObstruction: jest.fn()
+    };
+    const assemblyGraph = buildMechanicalAssemblies(mapData);
+    const sourceAssembly = getAssemblyForCell(assemblyGraph, sourceKey);
+    const gearNodes = runtime.resolveDrivenGearNodes(sourceAssembly, sourceKey);
+    const [rackEntry] = runtime.createRackAxisBindingRuntimeEntries(gearNodes, assemblyGraph);
+
+    const played = CityChannelThreeRuntime.prototype.triggerMechanismAtCell.call(runtime, { x: 1, y: 1, z: 0 }, {
+      rotationAngle: 720,
+      rotationSpeedDegPerSec: 360,
+      triggerDelaySeconds: 0,
+      autoReturn: false
+    });
+
+    expect(sourceAssembly.componentKeys).toContain(sourceKey);
+    expect(sourceAssembly.componentKeys).not.toContain(middleKey);
+    expect(rackEntry.driveConflict).toBeNull();
+    expect(rackEntry.sourceContactTravelLimits).toHaveLength(1);
+    expect(rackEntry.sourceContactTravelLimits[0]).toMatchObject({
+      sourceGearComponentKey: sourceKey
+    });
+    expect(played).toBe(true);
+    expect(runtime.flashMechanismObstruction).not.toHaveBeenCalled();
+    expect(runtime.playMechanismRuntimePreview).toHaveBeenCalledWith(expect.objectContaining({
+      rackContactGearNodes: expect.arrayContaining([
+        expect.objectContaining({
+          id: `${sourceKey}:gear_lower`
+        })
+      ]),
+      gearNodes: expect.arrayContaining([
+        expect.objectContaining({
+          id: `${sourceKey}:gear_lower`
+        })
+      ])
+    }));
+    expect(runtime.mechanismRuntimeSnapshot.racks[rack.id]).toMatchObject({
+      runtimeMotionType: 'rackTranslation',
+      runtimeSourceGearComponentKey: sourceKey
+    });
   });
 
   it('blocks one board receiving incompatible rotation and translation trends', () => {
@@ -4541,42 +5291,56 @@ describe('CityChannelThreeRuntime gear transmission', () => {
     expect(runtime.config.onToast).toHaveBeenLastCalledWith(expect.stringContaining('2 块板材'), 'success');
   });
 
+  const withContactVisualHarness = (runtime, mechanismRuntimeSnapshot = null) => ({
+    ...runtime,
+    worldGroup: new THREE.Group(),
+    contactGroup: new THREE.Group(),
+    mechanismRuntimeSnapshot,
+    gearContactMarkerGeometry: new THREE.SphereGeometry(0.04, 12, 8),
+    gearContactBarGeometry: new THREE.BoxGeometry(0.22, 0.01, 0.018),
+    gearContactMaterial: new THREE.MeshBasicMaterial(),
+    gearContactActiveMaterial: new THREE.MeshBasicMaterial(),
+    getRuntimeTransform: CityChannelThreeRuntime.prototype.getRuntimeTransform,
+    getGearAttachmentContext: CityChannelThreeRuntime.prototype.getGearAttachmentContext,
+    getRuntimeGearState: CityChannelThreeRuntime.prototype.getRuntimeGearState,
+    getRuntimeGearSurfacePointForNode: CityChannelThreeRuntime.prototype.getRuntimeGearSurfacePointForNode,
+    createGearContactMarkerGroup: CityChannelThreeRuntime.prototype.createGearContactMarkerGroup,
+    addGearContactVisuals: CityChannelThreeRuntime.prototype.addGearContactVisuals
+  });
+
+  const expectContactMarker = (runtime, active = false) => {
+    const marker = runtime.contactGroup.children.find((child) => (
+      child.userData.cityChannelGearRole === (active ? 'gear_contact_marker_active' : 'gear_contact_marker')
+    ));
+    expect(marker).toBeInstanceOf(THREE.Group);
+    expect(marker.children.map((child) => child.userData.cityChannelGearRole))
+      .toEqual(expect.arrayContaining([
+        'gear_contact_bar',
+        'gear_contact_dot'
+      ]));
+    expect(marker.children.find((child) => child.userData.cityChannelGearRole === 'gear_contact_bar').material)
+      .toBe(active ? runtime.gearContactActiveMaterial : runtime.gearContactMaterial);
+    return marker;
+  };
+
   it('renders active contact cues between meshed gears', () => {
     const {
       sourceKey,
       drivenKey,
       mapData
     } = createMeshedGearMap();
-    const runtime = {
-      ...createTransmissionRuntimeHarness(mapData),
-      worldGroup: new THREE.Group(),
-      mechanismRuntimeSnapshot: {
-        sourceAngle: 45,
-        gears: {
-          [`${sourceKey}:gear_center`]: { phase: 45, speedRatio: 1 }
-        }
-      },
-      gearContactMarkerGeometry: new THREE.SphereGeometry(0.05, 8, 6),
-      gearContactMaterial: new THREE.MeshBasicMaterial(),
-      gearContactActiveMaterial: new THREE.MeshBasicMaterial(),
-      getRuntimeTransform: CityChannelThreeRuntime.prototype.getRuntimeTransform,
-      getGearAttachmentContext: CityChannelThreeRuntime.prototype.getGearAttachmentContext,
-      getRuntimeGearState: CityChannelThreeRuntime.prototype.getRuntimeGearState,
-      getRuntimeGearSurfacePointForNode: CityChannelThreeRuntime.prototype.getRuntimeGearSurfacePointForNode,
-      addGearContactVisuals: CityChannelThreeRuntime.prototype.addGearContactVisuals,
-      addTransmissionTube: CityChannelThreeRuntime.prototype.addTransmissionTube
-    };
+    const runtime = withContactVisualHarness(createTransmissionRuntimeHarness(mapData), {
+      sourceAngle: 45,
+      gears: {
+        [`${sourceKey}:gear_center`]: { phase: 45, speedRatio: 1 }
+      }
+    });
 
     CityChannelThreeRuntime.prototype.addGearContactVisuals.call(runtime, new Set([sourceKey, drivenKey]));
 
-    const marker = runtime.worldGroup.children.find((child) => child.geometry === runtime.gearContactMarkerGeometry);
-    const activeTube = runtime.worldGroup.children.find((child) => (
-      child.geometry !== runtime.gearContactMarkerGeometry
-      && child.material === runtime.gearContactActiveMaterial
-    ));
-    expect(marker.material).toBe(runtime.gearContactActiveMaterial);
+    const marker = expectContactMarker(runtime, true);
     expect(marker.scale.x).toBeGreaterThan(0.9);
-    expect(activeTube).toBeInstanceOf(THREE.Mesh);
+    expect(runtime.worldGroup.children).toHaveLength(0);
   });
 
   it('renders contact cues between adjacent vertical center gears', () => {
@@ -4624,31 +5388,12 @@ describe('CityChannelThreeRuntime gear transmission', () => {
       },
       walls: {}
     };
-    const runtime = {
-      ...createTransmissionRuntimeHarness(mapData),
-      worldGroup: new THREE.Group(),
-      mechanismRuntimeSnapshot: null,
-      gearContactMarkerGeometry: new THREE.SphereGeometry(0.05, 8, 6),
-      gearContactMaterial: new THREE.MeshBasicMaterial(),
-      gearContactActiveMaterial: new THREE.MeshBasicMaterial(),
-      getRuntimeTransform: CityChannelThreeRuntime.prototype.getRuntimeTransform,
-      getGearAttachmentContext: CityChannelThreeRuntime.prototype.getGearAttachmentContext,
-      getRuntimeGearState: CityChannelThreeRuntime.prototype.getRuntimeGearState,
-      getRuntimeGearSurfacePointForNode: CityChannelThreeRuntime.prototype.getRuntimeGearSurfacePointForNode,
-      addGearContactVisuals: CityChannelThreeRuntime.prototype.addGearContactVisuals,
-      addTransmissionTube: CityChannelThreeRuntime.prototype.addTransmissionTube
-    };
+    const runtime = withContactVisualHarness(createTransmissionRuntimeHarness(mapData));
 
     CityChannelThreeRuntime.prototype.addGearContactVisuals.call(runtime, new Set([leftKey, rightKey]));
 
-    const marker = runtime.worldGroup.children.find((child) => child.geometry === runtime.gearContactMarkerGeometry);
-    const tube = runtime.worldGroup.children.find((child) => (
-      child.geometry !== runtime.gearContactMarkerGeometry
-      && child.material === runtime.gearContactMaterial
-    ));
-    expect(marker).toBeInstanceOf(THREE.Mesh);
-    expect(marker.material).toBe(runtime.gearContactMaterial);
-    expect(tube).toBeInstanceOf(THREE.Mesh);
+    expectContactMarker(runtime, false);
+    expect(runtime.worldGroup.children).toHaveLength(0);
   });
 
   it('renders contact cues between vertical center and corner gears across adjacent cells', () => {
@@ -4696,31 +5441,12 @@ describe('CityChannelThreeRuntime gear transmission', () => {
       },
       walls: {}
     };
-    const runtime = {
-      ...createTransmissionRuntimeHarness(mapData),
-      worldGroup: new THREE.Group(),
-      mechanismRuntimeSnapshot: null,
-      gearContactMarkerGeometry: new THREE.SphereGeometry(0.05, 8, 6),
-      gearContactMaterial: new THREE.MeshBasicMaterial(),
-      gearContactActiveMaterial: new THREE.MeshBasicMaterial(),
-      getRuntimeTransform: CityChannelThreeRuntime.prototype.getRuntimeTransform,
-      getGearAttachmentContext: CityChannelThreeRuntime.prototype.getGearAttachmentContext,
-      getRuntimeGearState: CityChannelThreeRuntime.prototype.getRuntimeGearState,
-      getRuntimeGearSurfacePointForNode: CityChannelThreeRuntime.prototype.getRuntimeGearSurfacePointForNode,
-      addGearContactVisuals: CityChannelThreeRuntime.prototype.addGearContactVisuals,
-      addTransmissionTube: CityChannelThreeRuntime.prototype.addTransmissionTube
-    };
+    const runtime = withContactVisualHarness(createTransmissionRuntimeHarness(mapData));
 
     CityChannelThreeRuntime.prototype.addGearContactVisuals.call(runtime, new Set([centerKey, cornerKey]));
 
-    const marker = runtime.worldGroup.children.find((child) => child.geometry === runtime.gearContactMarkerGeometry);
-    const tube = runtime.worldGroup.children.find((child) => (
-      child.geometry !== runtime.gearContactMarkerGeometry
-      && child.material === runtime.gearContactMaterial
-    ));
-    expect(marker).toBeInstanceOf(THREE.Mesh);
-    expect(marker.material).toBe(runtime.gearContactMaterial);
-    expect(tube).toBeInstanceOf(THREE.Mesh);
+    expectContactMarker(runtime, false);
+    expect(runtime.worldGroup.children).toHaveLength(0);
   });
 
   it('uses the last configured gear rotation direction for new gear install targets', () => {
@@ -4750,6 +5476,7 @@ describe('CityChannelThreeRuntime gear transmission', () => {
         transform
       })),
       getGearInstallSurfaceForHover: CityChannelThreeRuntime.prototype.getGearInstallSurfaceForHover,
+      getCanonicalGearHoverTarget: CityChannelThreeRuntime.prototype.getCanonicalGearHoverTarget,
       getHoverLocalPoint: jest.fn(() => ({ x: 0, y: 0 })),
       hasCornerGearAtPivot: jest.fn(() => false)
     };
@@ -4760,6 +5487,216 @@ describe('CityChannelThreeRuntime gear transmission', () => {
     expect(target.mount).toMatchObject({
       position: 'center',
       rotationDirection: CITY_CHANNEL_GEAR_ROTATION_DIRECTIONS.COUNTERCLOCKWISE
+    });
+  });
+
+  it('creates an intersection gear install target with hovered surface metadata', () => {
+    const canonicalKey = createCellKey(1, 0, 0);
+    const westKey = createCellKey(1, 1, 0);
+    const eastKey = createCellKey(2, 1, 0);
+    const tiles = {};
+    [
+      { key: canonicalKey, x: 1, y: 0 },
+      { key: createCellKey(2, 0, 0), x: 2, y: 0 },
+      { key: westKey, x: 1, y: 1 },
+      { key: eastKey, x: 2, y: 1 }
+    ].forEach(({ key, x, y }) => {
+      tiles[key] = createTile({
+        x,
+        y,
+        z: 0,
+        panelType: CITY_CHANNEL_TILE_TYPES.TRANSMISSION_CROSS_PLATE
+      });
+    });
+    const mapData = {
+      ...createBaseCityChannelMap({ width: 4, height: 4, layers: 2 }),
+      tiles,
+      walls: {}
+    };
+    const createRuntimeForHover = (key, local) => {
+      const placement = mapData.tiles[key];
+      const transform = getTileThreeTransform(placement, mapData);
+      return createRuntimeObject({
+        renderModel: { mapData },
+        config: {
+          activeTool: CITY_CHANNEL_TOOLS.PLACE_COMPONENT,
+          activeComponentType: 'gear'
+        },
+        getHoverPlacementData: jest.fn(() => ({
+          kind: 'tile',
+          key,
+          placement,
+          transform
+        })),
+        getGearInstallSurfaceForHover: CityChannelThreeRuntime.prototype.getGearInstallSurfaceForHover,
+        getCanonicalGearHoverTarget: CityChannelThreeRuntime.prototype.getCanonicalGearHoverTarget,
+        getHoverLocalPoint: jest.fn(() => local),
+        hasCornerGearAtPivot: jest.fn(() => false)
+      });
+    };
+
+    const westTarget = CityChannelThreeRuntime.prototype.getGearInstallTargetFromHoverHit.call(
+      createRuntimeForHover(westKey, { x: 0.5, y: -0.5 })
+    );
+    const eastTarget = CityChannelThreeRuntime.prototype.getGearInstallTargetFromHoverHit.call(
+      createRuntimeForHover(eastKey, { x: -0.5, y: -0.5 })
+    );
+
+    expect(westTarget).toMatchObject({
+      valid: true,
+      hostKind: 'intersection',
+      displayHostKey: westKey,
+      displaySocket: 'corner_ne',
+      mount: expect.objectContaining({
+        position: 'intersection',
+        sourceHostKind: 'tile',
+        sourceHostKey: westKey,
+        sourceSocket: 'corner_ne'
+      })
+    });
+    expect(westTarget.hostKey).toBe(westTarget.mount.id);
+    expect(eastTarget).toMatchObject({
+      valid: true,
+      hostKind: 'intersection',
+      displayHostKey: eastKey,
+      displaySocket: 'corner_nw',
+      mount: expect.objectContaining({
+        position: 'intersection',
+        sourceHostKind: 'tile',
+        sourceHostKey: eastKey,
+        sourceSocket: 'corner_nw'
+      })
+    });
+    expect(eastTarget.hostKey).toBe(eastTarget.mount.id);
+  });
+
+  it('selects an intersection root gear without requiring a host placement', () => {
+    const selection = CityChannelThreeRuntime.prototype.getPlacementSelectionFromData({
+      kind: 'gear',
+      hostKind: 'intersection',
+      hostKey: 'gear_root',
+      cell: { x: 1.5, y: 1.5, z: 0 },
+      edge: null,
+      placement: null,
+      mount: {
+        id: 'gear_root',
+        position: 'corner_se',
+        socketKind: 'intersection'
+      }
+    });
+
+    expect(selection).toEqual({
+      cells: [],
+      walls: [],
+      gears: [{
+        hostKind: 'intersection',
+        hostKey: 'gear_root',
+        mountId: 'gear_root',
+        cell: { x: 1.5, y: 1.5, z: 0 },
+        edge: null
+      }],
+      scope: 'component'
+    });
+  });
+
+  it('starts gear carry for a selected intersection root gear', () => {
+    const rootGear = {
+      id: 'gear_root',
+      componentType: 'gear',
+      position: 'intersection',
+      socketKind: 'intersection',
+      surface: 'front',
+      sourceHostKind: 'tile',
+      sourceHostKey: createCellKey(1, 1, 0),
+      sourceSocket: 'corner_se',
+      x: 1.5,
+      y: 1.5,
+      z: 0
+    };
+    const runtime = {
+      config: {
+        selection: {
+          gears: [{
+            hostKind: 'intersection',
+            hostKey: 'gear_root',
+            mountId: 'gear_root'
+          }]
+        }
+      },
+      renderModel: {
+        mapData: {
+          gears: {
+            gear_root: rootGear
+          }
+        }
+      }
+    };
+
+    const gear = CityChannelThreeRuntime.prototype.getSelectedGearForCarry.call(runtime);
+
+    expect(gear).toMatchObject({
+      hostKind: 'intersection',
+      hostKey: 'gear_root',
+      mount: rootGear
+    });
+  });
+
+  it('orients an intersection root gear from the vertical source board surface', () => {
+    const sourceKey = createCellKey(2, 2, 0);
+    const source = {
+      ...createTile({
+        x: 2,
+        y: 2,
+        z: 0,
+        panelType: CITY_CHANNEL_TILE_TYPES.TRANSMISSION_CROSS_PLATE,
+        rotation: 0
+      }),
+      isVertical: true
+    };
+    const rootGear = {
+      id: 'gear_root',
+      componentType: 'gear',
+      position: 'intersection',
+      socketKind: 'intersection',
+      surface: 'front',
+      sourceHostKind: 'tile',
+      sourceHostKey: sourceKey,
+      sourceSocket: 'corner_ne',
+      x: 2.5,
+      y: 1.5,
+      z: 0.5,
+      teeth: 18
+    };
+    const mapData = {
+      ...createBaseCityChannelMap({ width: 4, height: 4, layers: 2 }),
+      tiles: {
+        [sourceKey]: source
+      },
+      walls: {},
+      gears: {
+        gear_root: rootGear
+      }
+    };
+    const runtime = createRuntimeObject({
+      renderModel: buildCityChannelThreeRenderModel(mapData)
+    });
+
+    const context = CityChannelThreeRuntime.prototype.getRootGearAttachmentContext.call(
+      runtime,
+      'gear_root',
+      rootGear
+    );
+    const nodes = CityChannelThreeRuntime.prototype.getRootGearNodes.call(runtime);
+
+    expect(context.transform.kind).toBe('verticalTile');
+    expect(context.mount).toMatchObject({
+      position: 'corner_ne',
+      socketKind: 'corner'
+    });
+    expect(nodes[0]).toMatchObject({
+      id: 'gear_root:gear_root',
+      hostKind: 'intersection',
+      meshPlane: expect.objectContaining({ kind: 'vertical' })
     });
   });
 
@@ -5252,21 +6189,29 @@ describe('CityChannelThreeRuntime gear transmission', () => {
     const sourceMarker = runtime.overlayGroup.children.find((child) => child.userData.cityChannelGearRole === 'binding_source_ambient');
     const fillWorld = boardOverlay.userData.fill.position;
     const meshWorld = mesh.getWorldPosition(new THREE.Vector3());
-    const socket = getThreeGearSurfacePoint(transform, {
+    const boundSocket = getThreeGearSurfacePoint(transform, {
       position: 'corner_nw',
       surface: 'front'
     });
-    const socketWorld = new THREE.Vector3(socket.x, socket.y, socket.z).applyMatrix4(group.matrixWorld);
+    const boundSocketWorld = new THREE.Vector3(boundSocket.x, boundSocket.y, boundSocket.z).applyMatrix4(group.matrixWorld);
+    const sourceTransform = runtime.renderModel.tiles.find((item) => item.key === createCellKey(1, 1, 0));
+    const sourceSocket = getThreeGearSurfacePoint(sourceTransform, {
+      position: 'corner_ne',
+      surface: 'front'
+    });
+    const endpointMarker = runtime.overlayGroup.children.find((child) => child.userData.cityChannelGearRole === 'binding_endpoint_ambient');
     expect(fillWorld.x).toBeCloseTo(meshWorld.x, 6);
     expect(fillWorld.z).toBeCloseTo(meshWorld.z, 6);
     expect(fillWorld.x).not.toBeCloseTo(transform.position.x, 6);
-    expect(sourceMarker.position.x).toBeCloseTo(socketWorld.x, 6);
-    expect(sourceMarker.position.z).toBeCloseTo(socketWorld.z, 6);
-    expect(sourceMarker.position.x).not.toBeCloseTo(socket.x, 6);
+    expect(sourceMarker.position.x).toBeCloseTo(sourceSocket.x, 6);
+    expect(sourceMarker.position.z).toBeCloseTo(sourceSocket.z, 6);
+    expect(endpointMarker.position.x).toBeCloseTo(boundSocketWorld.x, 6);
+    expect(endpointMarker.position.z).toBeCloseTo(boundSocketWorld.z, 6);
+    expect(endpointMarker.position.x).not.toBeCloseTo(boundSocket.x, 6);
   });
 
   it('keeps bound gear binding visuals aligned with runtime surface turns', () => {
-    const { drivenKey, mapData } = createBoundCornerGearMap();
+    const { sourceKey, drivenKey, mapData } = createBoundCornerGearMap();
     const runtime = createBindingVisualRuntimeHarness(mapData);
     runtime.mechanismRuntimeSnapshot = {
       placements: {
@@ -5276,6 +6221,11 @@ describe('CityChannelThreeRuntime gear transmission', () => {
       },
       gears: {}
     };
+    const sourceTransform = runtime.renderModel.tiles.find((item) => item.key === sourceKey);
+    const sourceSocket = getThreeGearSurfacePoint(sourceTransform, {
+      position: 'corner_ne',
+      surface: 'front'
+    });
     const driven = mapData.tiles[drivenKey];
     const runtimeDrivenTransform = getTileThreeTransform({
       ...driven,
@@ -5293,10 +6243,10 @@ describe('CityChannelThreeRuntime gear transmission', () => {
 
     const sourceMarker = runtime.overlayGroup.children.find((child) => child.userData.cityChannelGearRole === 'binding_source_ambient');
     const endpointMarker = runtime.overlayGroup.children.find((child) => child.userData.cityChannelGearRole === 'binding_endpoint_ambient');
-    expect(visuals[0].context.pivotWorld.x).toBeCloseTo(expectedSocket.x, 6);
-    expect(visuals[0].context.pivotWorld.z).toBeCloseTo(expectedSocket.z, 6);
-    expect(sourceMarker.position.x).toBeCloseTo(expectedSocket.x, 6);
-    expect(sourceMarker.position.z).toBeCloseTo(expectedSocket.z, 6);
+    expect(visuals[0].context.pivotWorld.x).toBeCloseTo(sourceSocket.x, 6);
+    expect(visuals[0].context.pivotWorld.z).toBeCloseTo(sourceSocket.z, 6);
+    expect(sourceMarker.position.x).toBeCloseTo(sourceSocket.x, 6);
+    expect(sourceMarker.position.z).toBeCloseTo(sourceSocket.z, 6);
     expect(endpointMarker.position.x).toBeCloseTo(expectedSocket.x, 6);
     expect(endpointMarker.position.z).toBeCloseTo(expectedSocket.z, 6);
   });

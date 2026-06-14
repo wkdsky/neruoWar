@@ -1689,7 +1689,7 @@ describe('cityChannelMechanismSimulation', () => {
         id: 'loose',
         componentKey: 'loose',
         surfaceKey: 'floor:0:front',
-        worldPoint: { x: 0.86, y: 0, z: 0 },
+        worldPoint: { x: 0.86, y: -1, z: 0 },
         pitchRadiusWorld: CITY_CHANNEL_GEAR_PITCH_RADIUS_WORLD,
         gearRatioRadius: 18
       }
@@ -1701,6 +1701,217 @@ describe('cityChannelMechanismSimulation', () => {
     expect(graph.get('corner')).toEqual([{ id: 'center', ratio: -1 }]);
     expect(graph.get('far')).toEqual([]);
     expect(graph.get('loose')).toEqual([]);
+  });
+
+  it('meshes standard installed sockets by grid adjacency before radius distance', () => {
+    const centerPlacement = createTile({
+      x: 1,
+      y: 1,
+      z: 0,
+      panelType: CITY_CHANNEL_TILE_TYPES.TRANSMISSION_CROSS_PLATE
+    });
+    const cornerPlacement = createTile({
+      x: 2,
+      y: 1,
+      z: 0,
+      panelType: CITY_CHANNEL_TILE_TYPES.TRANSMISSION_CROSS_PLATE
+    });
+    const createNode = (id, componentKey, placement, mount, pitchRadiusWorld) => {
+      const worldPoint = getGearWorldPosition(placement, mount);
+      return {
+        id,
+        componentKey,
+        mountId: mount.id,
+        mount,
+        placement,
+        worldPoint,
+        point: worldPoint,
+        meshPlane: getGearMeshPlane(placement, mount, worldPoint),
+        surfaceKey: getGearSurfaceKey(placement, mount),
+        pitchRadiusWorld,
+        gearRatioRadius: 18
+      };
+    };
+    const center = createNode('center', 'center_board', centerPlacement, {
+      id: 'gear_center',
+      position: 'center',
+      surface: 'front'
+    }, CITY_CHANNEL_GEAR_PITCH_RADIUS_WORLD * 0.5);
+    const corner = createNode('corner', 'corner_board', cornerPlacement, {
+      id: 'gear_corner',
+      position: 'corner_nw',
+      surface: 'front'
+    }, CITY_CHANNEL_GEAR_PITCH_RADIUS_WORLD * 0.5);
+    const graph = buildGearContactGraph([center, corner]);
+
+    expect(graph.get('center')).toEqual([{ id: 'corner', ratio: -1 }]);
+    expect(graph.get('corner')).toEqual([{ id: 'center', ratio: -1 }]);
+  });
+
+  it('meshes an intersection gear with all four surrounding center gears regardless of root attachment plane', () => {
+    const createCenterNode = (id, x, y) => {
+      const placement = createTile({
+        x,
+        y,
+        z: 0,
+        panelType: CITY_CHANNEL_TILE_TYPES.TRANSMISSION_CROSS_PLATE
+      });
+      const mount = {
+        id: `gear_${id}`,
+        position: 'center',
+        surface: 'front'
+      };
+      const worldPoint = getGearWorldPosition(placement, mount);
+      return {
+        id,
+        componentKey: id,
+        mountId: mount.id,
+        mount,
+        placement,
+        worldPoint,
+        point: worldPoint,
+        meshPlane: getGearMeshPlane(placement, mount, worldPoint),
+        surfaceKey: getGearSurfaceKey(placement, mount),
+        pitchRadiusWorld: CITY_CHANNEL_GEAR_PITCH_RADIUS_WORLD,
+        gearRatioRadius: 18
+      };
+    };
+    const root = {
+      id: 'root',
+      componentKey: 'root',
+      hostKind: 'intersection',
+      mountId: 'gear_root',
+      mount: {
+        id: 'gear_root',
+        position: 'corner_se',
+        surface: 'front'
+      },
+      worldPoint: { x: 1.5, y: 1.5, z: 0 },
+      point: { x: 1.5, y: 1.5, z: 0 },
+      meshPlane: {
+        kind: 'vertical',
+        normal: { x: 0, y: 1, z: 0 },
+        planeOffset: 99,
+        u: 0,
+        v: 0
+      },
+      surfaceKey: 'vertical:99:0:front',
+      pitchRadiusWorld: CITY_CHANNEL_GEAR_PITCH_RADIUS_WORLD,
+      gearRatioRadius: 18
+    };
+    const centers = [
+      createCenterNode('north_west', 1, 1),
+      createCenterNode('north_east', 2, 1),
+      createCenterNode('south_west', 1, 2),
+      createCenterNode('south_east', 2, 2)
+    ];
+
+    const graph = buildGearContactGraph([root, ...centers]);
+
+    expect(graph.get('root')?.map((edge) => edge.id).sort()).toEqual([
+      'north_east',
+      'north_west',
+      'south_east',
+      'south_west'
+    ]);
+    centers.forEach((center) => {
+      expect(graph.get(center.id)?.map((edge) => edge.id)).toContain('root');
+    });
+  });
+
+  it('meshes horizontal gears using transmission-rotated socket positions', () => {
+    const centerPlacement = createTile({
+      x: 1,
+      y: 1,
+      z: 0,
+      panelType: CITY_CHANNEL_TILE_TYPES.TRANSMISSION_CROSS_PLATE
+    });
+    const cornerPlacement = createTile({
+      x: 2,
+      y: 1,
+      z: 0,
+      panelType: CITY_CHANNEL_TILE_TYPES.TRANSMISSION_CROSS_PLATE,
+      rotation: 0,
+      transmissionRotation: 270
+    });
+    const createNode = (id, componentKey, placement, mount) => {
+      const worldPoint = getGearWorldPosition(placement, mount);
+      return {
+        id,
+        componentKey,
+        mountId: mount.id,
+        mount,
+        placement,
+        worldPoint,
+        point: worldPoint,
+        meshPlane: getGearMeshPlane(placement, mount, worldPoint),
+        surfaceKey: getGearSurfaceKey(placement, mount),
+        pitchRadiusWorld: CITY_CHANNEL_GEAR_PITCH_RADIUS_WORLD,
+        gearRatioRadius: 18
+      };
+    };
+    const center = createNode('center', 'center_board', centerPlacement, {
+      id: 'gear_center',
+      position: 'center',
+      surface: 'front'
+    });
+    const corner = createNode('corner', 'corner_board', cornerPlacement, {
+      id: 'gear_corner',
+      position: 'corner_ne',
+      surface: 'front'
+    });
+
+    const graph = buildGearContactGraph([center, corner]);
+
+    expect(corner.worldPoint.x).toBeCloseTo(1.5, 6);
+    expect(corner.worldPoint.y).toBeCloseTo(0.5, 6);
+    expect(corner.worldPoint.z).toBeCloseTo(0, 6);
+    expect(graph.get('center')).toEqual([{ id: 'corner', ratio: -1 }]);
+    expect(graph.get('corner')).toEqual([{ id: 'center', ratio: -1 }]);
+  });
+
+  it('meshes coplanar gears when their outer teeth overlap before exact pitch contact', () => {
+    const nodes = [
+      {
+        id: 'left',
+        componentKey: 'left_board',
+        surfaceKey: 'floor:0:front',
+        worldPoint: { x: 0, y: 0, z: 0 },
+        point: { x: 0, y: 0, z: 0 },
+        meshPlane: {
+          kind: 'horizontal',
+          normal: { x: 0, y: 0, z: 1 },
+          planeOffset: 0,
+          u: 0,
+          v: 0
+        },
+        pitchRadiusWorld: CITY_CHANNEL_GEAR_PITCH_RADIUS_WORLD,
+        gearRatioRadius: 18,
+        mount: { id: 'gear_left', position: 'corner_ne' }
+      },
+      {
+        id: 'right',
+        componentKey: 'right_board',
+        surfaceKey: 'floor:0:front',
+        worldPoint: { x: 0.58, y: 0, z: 0 },
+        point: { x: 0.58, y: 0, z: 0 },
+        meshPlane: {
+          kind: 'horizontal',
+          normal: { x: 0, y: 0, z: 1 },
+          planeOffset: 0,
+          u: 0.58,
+          v: 0
+        },
+        pitchRadiusWorld: CITY_CHANNEL_GEAR_PITCH_RADIUS_WORLD,
+        gearRatioRadius: 18,
+        mount: { id: 'gear_right', position: 'corner_nw' }
+      }
+    ];
+
+    const graph = buildGearContactGraph(nodes);
+
+    expect(graph.get('left')).toEqual([{ id: 'right', ratio: -1 }]);
+    expect(graph.get('right')).toEqual([{ id: 'left', ratio: -1 }]);
   });
 
   it('meshes center gears on adjacent vertical board grid cells', () => {
@@ -1742,7 +1953,7 @@ describe('cityChannelMechanismSimulation', () => {
     const loose = {
       ...createNode('loose', {
         ...rightPlacement,
-        x: 1.86
+        x: 3.2
       }),
       id: 'loose',
       componentKey: 'loose'
@@ -1903,6 +2114,69 @@ describe('cityChannelMechanismSimulation', () => {
         ])
       })]
     });
+  });
+
+  it('rechecks the source assembly before treating a meshed configured gear as active', () => {
+    const joinedAssembly = {
+      componentKeys: ['source', 'driven'],
+      edges: [{ componentKey: 'source', key: 'driven' }]
+    };
+    const splitAssembly = {
+      componentKeys: ['source'],
+      edges: []
+    };
+    const allNodes = [
+      {
+        id: 'source:gear_center',
+        componentKey: 'source',
+        surfaceKey: 'floor:0:front',
+        worldPoint: { x: 0, y: 0, z: 0 },
+        pitchRadiusWorld: CITY_CHANNEL_GEAR_PITCH_RADIUS_WORLD,
+        gearRatioRadius: 18,
+        mount: {
+          id: 'gear_center',
+          position: 'center',
+          rotationDirection: CITY_CHANNEL_GEAR_ROTATION_DIRECTIONS.CLOCKWISE
+        }
+      },
+      {
+        id: 'driven:gear_corner',
+        componentKey: 'driven',
+        surfaceKey: 'floor:0:front',
+        worldPoint: { x: 0.5, y: 0.5, z: 0 },
+        pitchRadiusWorld: CITY_CHANNEL_GEAR_PITCH_RADIUS_WORLD,
+        gearRatioRadius: 18,
+        mount: {
+          id: 'gear_corner',
+          position: 'corner_nw',
+          rotationDirection: CITY_CHANNEL_GEAR_ROTATION_DIRECTIONS.CLOCKWISE
+        }
+      }
+    ];
+
+    const joinedDriven = resolveDrivenGearNodes({
+      assembly: joinedAssembly,
+      assemblyNodes: allNodes,
+      allNodes,
+      sourceComponentKey: 'source'
+    });
+    const splitDriven = resolveDrivenGearNodes({
+      assembly: splitAssembly,
+      assemblyNodes: [allNodes[0]],
+      allNodes,
+      sourceComponentKey: 'source'
+    });
+
+    expect(joinedDriven.driveConflicts).toHaveLength(1);
+    expect(splitDriven.driveConflicts).toEqual([]);
+    expect(splitDriven).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        id: 'driven:gear_corner',
+        driveRatio: -1,
+        isDriveRoot: false,
+        drivenByGearId: 'source:gear_center'
+      })
+    ]));
   });
 
   it('allows a gear-rack-gear loop when gear mesh and rack constraints agree', () => {

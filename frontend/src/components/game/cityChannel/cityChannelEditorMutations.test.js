@@ -148,6 +148,137 @@ describe('cityChannelEditorMutations', () => {
     expect(next.walls[wallKey].gearMounts || []).toHaveLength(0);
   });
 
+  it('stores intersection gear mounts as root gears regardless of source host board', () => {
+    const canonicalKey = createCellKey(1, 0, 0);
+    const westKey = createCellKey(1, 1, 0);
+    const eastKey = createCellKey(2, 1, 0);
+    const tiles = {};
+    [
+      { key: canonicalKey, x: 1, y: 0 },
+      { key: createCellKey(2, 0, 0), x: 2, y: 0 },
+      { key: westKey, x: 1, y: 1 },
+      { key: eastKey, x: 2, y: 1 }
+    ].forEach(({ key, x, y }) => {
+      tiles[key] = createTile({
+        x,
+        y,
+        z: 0,
+        panelType: CITY_CHANNEL_TILE_TYPES.TRANSMISSION_CROSS_PLATE
+      });
+    });
+    const mapData = {
+      ...createBaseCityChannelMap({ name: 'canonical corner gear mutation' }),
+      tiles,
+      walls: {}
+    };
+
+    const first = applyPlacementOperationsToMap(mapData, [{
+      kind: 'gearMount',
+      action: 'place',
+      hostKind: 'tile',
+      hostKey: westKey,
+      mount: {
+        id: 'gear_from_west',
+        componentType: 'gear',
+        position: 'corner_ne',
+        surface: 'front'
+      }
+    }]);
+    const second = applyPlacementOperationsToMap(first, [{
+      kind: 'gearMount',
+      action: 'place',
+      hostKind: 'tile',
+      hostKey: eastKey,
+      mount: {
+        id: 'gear_from_east',
+        componentType: 'gear',
+        position: 'corner_nw',
+        surface: 'front'
+      }
+    }]);
+    const allTileMounts = Object.values(second.tiles).flatMap((tile) => tile.gearMounts || []);
+    const rootGears = Object.values(second.gears || {});
+
+    expect(first.tiles[canonicalKey].gearMounts || []).toEqual([]);
+    expect(first.tiles[westKey].gearMounts || []).toEqual([]);
+    expect(first.gears.gear_from_west).toEqual(expect.objectContaining({
+      id: 'gear_from_west',
+      position: 'intersection',
+      socketKind: 'intersection',
+      sourceHostKind: 'tile',
+      sourceHostKey: westKey,
+      sourceSocket: 'corner_ne'
+    }));
+    expect(allTileMounts).toHaveLength(0);
+    expect(rootGears).toHaveLength(1);
+    expect(rootGears[0]).toEqual(expect.objectContaining({ id: 'gear_from_west' }));
+  });
+
+  it('updates an intersection root gear binding without reinstalling it', () => {
+    const westKey = createCellKey(1, 1, 0);
+    const eastKey = createCellKey(2, 1, 0);
+    const mapData = {
+      ...createBaseCityChannelMap({ name: 'root gear binding update' }),
+      tiles: {
+        [westKey]: createTile({
+          x: 1,
+          y: 1,
+          z: 0,
+          panelType: CITY_CHANNEL_TILE_TYPES.TRANSMISSION_CROSS_PLATE
+        }),
+        [eastKey]: createTile({
+          x: 2,
+          y: 1,
+          z: 0,
+          panelType: CITY_CHANNEL_TILE_TYPES.TRANSMISSION_CROSS_PLATE
+        })
+      },
+      walls: {}
+    };
+    const installed = applyPlacementOperationsToMap(mapData, [{
+      kind: 'gearMount',
+      action: 'place',
+      hostKind: 'tile',
+      hostKey: westKey,
+      mount: {
+        id: 'gear_root',
+        componentType: 'gear',
+        position: 'corner_ne',
+        surface: 'front'
+      }
+    }]);
+    const updated = applyPlacementOperationsToMap(installed, [{
+      kind: 'gearMount',
+      action: 'update',
+      hostKind: 'intersection',
+      hostKey: 'gear_root',
+      mount: {
+        ...installed.gears.gear_root,
+        axisBinding: {
+          hostKind: 'tile',
+          componentKey: eastKey,
+          socket: 'corner_nw',
+          surface: 'front'
+        }
+      }
+    }]);
+
+    expect(Object.values(updated.gears || {})).toHaveLength(1);
+    expect(updated.gears.gear_root).toEqual(expect.objectContaining({
+      id: 'gear_root',
+      position: 'intersection',
+      socketKind: 'intersection',
+      sourceHostKey: westKey,
+      sourceSocket: 'corner_ne',
+      axisBinding: {
+        hostKind: 'tile',
+        componentKey: eastKey,
+        socket: 'corner_nw',
+        surface: 'front'
+      }
+    }));
+  });
+
   it('applies vertical tile placement intent instead of inheriting old pose', () => {
     const tileKey = createCellKey(4, 5, 1);
     const verticalMap = applyPlacementOperationsToMap(createBaseCityChannelMap({ name: 'vertical tile mutation' }), [{

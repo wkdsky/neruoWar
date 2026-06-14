@@ -238,10 +238,26 @@ export const getGearMountLocalPosition = (position = 'center') => {
   return lookup[position] || lookup.center;
 };
 
+const getSurfaceRuntimeRotation = (placement = {}) => (
+  Number.isFinite(Number(placement.runtimeSurfaceRotation))
+    ? Number(placement.runtimeSurfaceRotation)
+    : 0
+);
+
+const getHorizontalSurfaceBaseRotation = (placement = {}) => normalizeRotation(
+  Number.isFinite(Number(placement.runtimeBaseSurfaceRotation))
+    ? Number(placement.runtimeBaseSurfaceRotation)
+    : (placement.transmissionRotation ?? placement.rotation ?? 0)
+);
+
+const getHorizontalSurfaceLocalRotation = (placement = {}) => normalizeRotation(
+  getHorizontalSurfaceBaseRotation(placement) + getSurfaceRuntimeRotation(placement)
+);
+
 export const getHorizontalGearSocketWorldPosition = (placement = {}, socket = 'center') => {
   if (!placement || placement.edge || placement.isVertical) return null;
   const local = getGearMountLocalPosition(socket);
-  const rotated = rotateGearLocalPosition(local, placement.rotation || 0);
+  const rotated = rotateGearLocalPosition(local, getHorizontalSurfaceLocalRotation(placement));
   return {
     x: (Number(placement.x) || 0) + rotated.x,
     y: (Number(placement.y) || 0) + rotated.y,
@@ -368,12 +384,15 @@ const findAssemblyAxisBindingPivotCandidate = ({
   mapData = {},
   binding = null,
   hostPivot = null,
-  epsilon = 0.001
+  epsilon = 0.001,
+  assemblyGraph = null
 } = {}) => {
   if (!binding?.componentKey || !hostPivot) return null;
-  const assemblyGraph = buildMechanicalAssemblies(mapData);
-  const assemblyId = assemblyGraph.assemblyByComponentKey?.[binding.componentKey];
-  const assembly = (assemblyGraph.assemblies || []).find((item) => item.id === assemblyId) || null;
+  const graphForLookup = assemblyGraph?.assemblyByComponentKey
+    ? assemblyGraph
+    : buildMechanicalAssemblies(mapData);
+  const assemblyId = graphForLookup.assemblyByComponentKey?.[binding.componentKey];
+  const assembly = (graphForLookup.assemblies || []).find((item) => item.id === assemblyId) || null;
   const componentKeys = assembly?.componentKeys?.length > 0
     ? assembly.componentKeys
     : [binding.componentKey];
@@ -401,7 +420,8 @@ export const getGearAxisBindingStatus = ({
   mapData = {},
   placement = null,
   mount = {},
-  epsilon = 0.001
+  epsilon = 0.001,
+  assemblyGraph = null
 } = {}) => {
   const binding = normalizeGearAxisBinding(mount?.axisBinding);
   if (!binding) {
@@ -454,7 +474,8 @@ export const getGearAxisBindingStatus = ({
     mapData,
     binding,
     hostPivot,
-    epsilon
+    epsilon,
+    assemblyGraph
   });
   if (!assemblyCandidate) {
     return {
@@ -504,6 +525,72 @@ export const getCornerGearBindingCandidates = ({
     });
   });
   return candidates;
+};
+
+const getCanonicalGearTargetFallback = ({
+  hostKind = 'tile',
+  hostKey = '',
+  placement = null,
+  socket = '',
+  surface = 'front',
+  pivotWorld = null
+} = {}) => ({
+  hostKind: hostKind === 'wall' ? 'wall' : 'tile',
+  hostKey,
+  componentKey: hostKey,
+  placement,
+  socket,
+  surface: normalizeGearSurfaceForPanel(placement?.panelType, surface || 'front'),
+  pivotWorld
+});
+
+export const getCanonicalGearMountTarget = ({
+  mapData = {},
+  hostKind = 'tile',
+  hostKey = '',
+  placement = null,
+  socket = '',
+  surface = 'front',
+  pivotWorld = null,
+  epsilon = 0.001
+} = {}) => {
+  const fallback = getCanonicalGearTargetFallback({
+    hostKind,
+    hostKey,
+    placement,
+    socket,
+    surface,
+    pivotWorld
+  });
+  if (!isCornerGearSocket(socket) || !placement || placement.edge || placement.isVertical) return fallback;
+  const resolvedPivot = pivotWorld || getGearSocketWorldPosition(placement, socket, surface);
+  if (!resolvedPivot) return fallback;
+  const targetSurface = fallback.surface;
+  const candidates = [];
+  Object.entries(mapData.tiles || {}).forEach(([componentKey, tile]) => {
+    if (!tile || tile.edge || tile.isVertical) return;
+    if (Math.abs((Number(tile.z) || 0) - (Number(resolvedPivot.z) || 0)) > epsilon) return;
+    CITY_CHANNEL_GEAR_CORNER_SOCKETS.forEach((candidateSocket) => {
+      const candidateSurface = normalizeGearSurfaceForPanel(tile.panelType, targetSurface);
+      const candidatePivot = getGearSocketWorldPosition(tile, candidateSocket, candidateSurface);
+      if (!sameCornerPivot(candidatePivot, resolvedPivot, epsilon)) return;
+      candidates.push({
+        hostKind: 'tile',
+        hostKey: componentKey,
+        componentKey,
+        placement: tile,
+        socket: candidateSocket,
+        surface: candidateSurface,
+        pivotWorld: candidatePivot
+      });
+    });
+  });
+  if (candidates.length <= 0) return { ...fallback, pivotWorld: resolvedPivot };
+  return candidates.sort((left, right) => (
+    String(left.hostKind).localeCompare(String(right.hostKind))
+    || String(left.hostKey).localeCompare(String(right.hostKey))
+    || String(left.socket).localeCompare(String(right.socket))
+  ))[0];
 };
 
 export const createLegacyFixedAxisBinding = ({
@@ -634,7 +721,13 @@ const pushUnique = (list, value) => {
   if (value && !list.includes(value)) list.push(value);
 };
 
-const normalizeAssemblyGearMount = ({ mapData = {}, placement = null, componentKey = '', mount = {} } = {}) => {
+const normalizeAssemblyGearMount = ({
+  mapData = {},
+  placement = null,
+  componentKey = '',
+  mount = {},
+  assemblyGraph = null
+} = {}) => {
   const normalizedMount = normalizeGearMount({
     ...mount,
     axisBinding: mount.axisBinding || createLegacyFixedAxisBinding({
@@ -647,7 +740,8 @@ const normalizeAssemblyGearMount = ({ mapData = {}, placement = null, componentK
   const bindingStatus = getGearAxisBindingStatus({
     mapData,
     placement,
-    mount: normalizedMount
+    mount: normalizedMount,
+    assemblyGraph
   });
   return {
     ...normalizedMount,
@@ -769,7 +863,7 @@ export const buildMechanicalAssemblies = (mapData = {}) => {
     }
   });
 
-  const assemblies = [];
+  const assemblySkeletons = [];
   const assemblyByComponentKey = {};
   const visited = new Set();
   connectableKeys.forEach((key) => {
@@ -786,30 +880,48 @@ export const buildMechanicalAssemblies = (mapData = {}) => {
         queue.push(nextKey);
       });
     }
-    const id = `assembly_${assemblies.length + 1}`;
-    const gearMounts = componentKeys.flatMap((componentKey) => {
+    const id = `assembly_${assemblySkeletons.length + 1}`;
+    componentKeys.forEach((componentKey) => {
+      assemblyByComponentKey[componentKey] = id;
+    });
+    const assembly = {
+      id,
+      componentKeys,
+      edges: componentKeys.flatMap((componentKey) => (graph.get(componentKey) || []).map((edge) => ({ componentKey, ...edge }))),
+      warnings: []
+    };
+    assemblySkeletons.push(assembly);
+  });
+
+  const assemblyGraphForBindings = {
+    assemblies: assemblySkeletons,
+    assemblyByComponentKey,
+    graph
+  };
+
+  const assemblies = assemblySkeletons.map((assembly) => {
+    const gearMounts = assembly.componentKeys.flatMap((componentKey) => {
       const tile = components[componentKey];
       return (Array.isArray(tile.gearMounts) ? tile.gearMounts : []).map((mount) => ({
-        ...normalizeAssemblyGearMount({ mapData, placement: tile, componentKey, mount }),
+        ...normalizeAssemblyGearMount({
+          mapData,
+          placement: tile,
+          componentKey,
+          mount,
+          assemblyGraph: assemblyGraphForBindings
+        }),
         componentKey,
         cell: parseCellKey(componentKey)
       }));
     });
     const boundGearMounts = gearMounts.filter((mount) => !!mount.axisBinding);
     const fixedAxes = boundGearMounts;
-    const assembly = {
-      id,
-      componentKeys,
-      edges: componentKeys.flatMap((componentKey) => (graph.get(componentKey) || []).map((edge) => ({ componentKey, ...edge }))),
+    return {
+      ...assembly,
       gearMounts,
       boundGearMounts,
-      fixedAxes,
-      warnings: []
+      fixedAxes
     };
-    assemblies.push(assembly);
-    componentKeys.forEach((componentKey) => {
-      assemblyByComponentKey[componentKey] = id;
-    });
   });
 
   Object.entries(components).forEach(([key, tile]) => {

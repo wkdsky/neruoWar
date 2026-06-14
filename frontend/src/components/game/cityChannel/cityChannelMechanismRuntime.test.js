@@ -2,6 +2,7 @@ import {
   buildMechanicalAssemblies,
   getGearAxisBindingStatus,
   getGearMountLocalPosition,
+  getGearSocketWorldPosition,
   getWorldTransmissionPorts
 } from './cityChannelMechanismRuntime';
 import {
@@ -18,6 +19,22 @@ describe('city channel mechanism runtime', () => {
   it('uses true board corners for gear mounts', () => {
     expect(getGearMountLocalPosition('corner_ne')).toEqual({ x: 0.5, y: -0.5, z: 0 });
     expect(getGearMountLocalPosition('corner_sw')).toEqual({ x: -0.5, y: 0.5, z: 0 });
+  });
+
+  it('uses transmission rotation for horizontal gear socket world positions', () => {
+    const tile = createTile({
+      x: 2,
+      y: 1,
+      z: 0,
+      panelType: CITY_CHANNEL_TILE_TYPES.TRANSMISSION_CROSS_PLATE,
+      rotation: 0,
+      transmissionRotation: 270
+    });
+
+    const point = getGearSocketWorldPosition(tile, 'corner_ne', 'front');
+    expect(point.x).toBeCloseTo(1.5, 6);
+    expect(point.y).toBeCloseTo(0.5, 6);
+    expect(point.z).toBeCloseTo(0, 6);
   });
 
   it('rotates transmission ports by runtime surface rotation', () => {
@@ -619,6 +636,64 @@ describe('city channel mechanism runtime', () => {
         socket: 'corner_nw'
       })
     });
+  });
+
+  it('normalizes assembly gear mounts through bound board assemblies without recursion', () => {
+    const hostKey = createCellKey(0, 0, 0);
+    const pivotKey = createCellKey(1, 1, 0);
+    const linkedKey = createCellKey(2, 1, 0);
+    const host = createTile({
+      x: 0,
+      y: 0,
+      z: 0,
+      panelType: CITY_CHANNEL_TILE_TYPES.TRANSMISSION_STRAIGHT_PLATE
+    });
+    const pivotBoard = createTile({
+      x: 1,
+      y: 1,
+      z: 0,
+      panelType: CITY_CHANNEL_TILE_TYPES.TRANSMISSION_L_PLATE
+    });
+    const linkedBoard = createTile({
+      x: 2,
+      y: 1,
+      z: 0,
+      panelType: CITY_CHANNEL_TILE_TYPES.TRANSMISSION_STRAIGHT_PLATE,
+      transmissionRotation: 90
+    });
+    host.gearMounts = [{
+      id: 'gear_bound_to_future_assembly',
+      componentType: 'gear',
+      position: 'corner_se',
+      surface: 'front',
+      axisBinding: {
+        componentKey: linkedKey,
+        hostKind: 'tile',
+        socket: 'corner_nw',
+        surface: 'front'
+      }
+    }];
+
+    const graph = buildMechanicalAssemblies({
+      tiles: {
+        [hostKey]: host,
+        [pivotKey]: pivotBoard,
+        [linkedKey]: linkedBoard
+      },
+      walls: {}
+    });
+    const hostAssembly = graph.assemblies.find((assembly) => assembly.componentKeys.includes(hostKey));
+
+    expect(hostAssembly?.gearMounts[0]).toMatchObject({
+      axisBinding: {
+        componentKey: pivotKey,
+        hostKind: 'tile',
+        socket: 'corner_nw',
+        surface: 'front'
+      },
+      axisBindingInvalid: false
+    });
+    expect(hostAssembly?.fixedAxes).toHaveLength(1);
   });
 
   it('validates gear axis bindings on vertical wall surfaces', () => {
