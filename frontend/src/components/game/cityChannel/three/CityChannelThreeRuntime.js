@@ -6892,9 +6892,18 @@ export default class CityChannelThreeRuntime {
   }
 
   flashMechanismObstruction(obstruction = null) {
-    const placements = (Array.isArray(obstruction?.obstacles) && obstruction.obstacles.length > 0)
-      ? obstruction.obstacles
-      : [obstruction?.obstacle].filter(Boolean);
+    const obstructionPlacements = [
+      ...(Array.isArray(obstruction?.placements) ? obstruction.placements : []),
+      obstruction?.placement,
+      ...(Array.isArray(obstruction?.obstacles) ? obstruction.obstacles : []),
+      obstruction?.obstacle
+    ].filter(Boolean);
+    const placements = [...new Map(obstructionPlacements.map((placement) => [
+      placement.edge
+        ? `${placement.x}:${placement.y}:${placement.z}:${placement.edge}`
+        : `${placement.x}:${placement.y}:${placement.z}:${placement.isVertical ? 'vertical' : 'horizontal'}:${placement.runtimeSurfaceRotation ?? placement.rotation ?? 0}`,
+      placement
+    ])).values()];
     const mapData = this.renderModel?.mapData || {};
     const rackIds = [
       ...(Array.isArray(obstruction?.rackIds) ? obstruction.rackIds : []),
@@ -7133,6 +7142,16 @@ export default class CityChannelThreeRuntime {
     ];
   }
 
+  mergeDrivenGearRuntimeState(allNodes = [], drivenNodes = []) {
+    if (!Array.isArray(allNodes) || allNodes.length <= 0) return [];
+    if (!Array.isArray(drivenNodes) || drivenNodes.length <= 0) return allNodes;
+    const drivenById = new Map(drivenNodes.map((node) => [node.id, node]).filter(([id]) => !!id));
+    return allNodes.map((node) => {
+      const drivenNode = drivenById.get(node.id);
+      return drivenNode ? { ...node, ...drivenNode } : node;
+    });
+  }
+
   getAssemblyGearNodes(assembly = null) {
     return this.getGearNodesForMounts(assembly?.gearMounts || []);
   }
@@ -7322,6 +7341,10 @@ export default class CityChannelThreeRuntime {
     applyAngle(0);
     animateTo(0, targetAngle, () => {
       applyAngle(targetAngle);
+      if (obstruction?.blocked) {
+        this.flashMechanismObstruction(obstruction);
+        return;
+      }
       if (!normalized.autoReturn) return;
       this.mechanismPreviewTimer = setTimeout(() => {
         animateTo(targetAngle, 0, () => {
@@ -7349,6 +7372,10 @@ export default class CityChannelThreeRuntime {
     const gearNodes = sourceAssembly?.gearMounts?.length > 0
       ? this.resolveDrivenGearNodes(sourceAssembly, key)
       : [];
+    const mergeDrivenGearRuntimeState = typeof this.mergeDrivenGearRuntimeState === 'function'
+      ? this.mergeDrivenGearRuntimeState
+      : CityChannelThreeRuntime.prototype.mergeDrivenGearRuntimeState;
+    const rackContactGearNodes = mergeDrivenGearRuntimeState.call(this, allGearNodes, gearNodes);
     let assemblyEntries = [
       ...this.createAxisBindingRuntimeEntries(gearNodes, assemblyGraph, sourceAssembly),
       ...(typeof this.createRackAxisBindingRuntimeEntries === 'function'
@@ -7406,6 +7433,8 @@ export default class CityChannelThreeRuntime {
     const collisionBlocks = findMechanismMotionObstructions({
       mapData,
       assemblyEntries,
+      gearNodes,
+      rackContactGearNodes,
       targetAngle
     });
     const collisionIntentGraph = collisionBlocks.length > 0
@@ -7418,15 +7447,21 @@ export default class CityChannelThreeRuntime {
       : motionIntentGraph;
     const limitingObstruction = collisionIntentGraph.conflicts.find((conflict) => (
       conflict?.type === 'collisionBlock'
+      || conflict?.type === 'rackDriveConflict'
     )) || null;
     const allowedRotation = getAllowedRotationAngle({
       targetAngle,
       obstruction: limitingObstruction
     });
-    if (limitingObstruction || !allowedRotation.canRotate) {
+    if (!allowedRotation.canRotate) {
       this.setMechanismRuntimeSnapshot(null);
       this.flashMechanismObstruction(limitingObstruction);
-      this.config.onToast?.('旁边有遮挡物，当前齿轮组没有足够转动空间。', 'error');
+      this.config.onToast?.(
+        limitingObstruction?.type === 'rackDriveConflict'
+          ? '齿条刚启动就会撞上相反主动齿轮，齿轮组被卡住。'
+          : '旁边有遮挡物，当前齿轮组没有足够转动空间。',
+        'error'
+      );
       return false;
     }
     this.playMechanismRuntimePreview({
@@ -7436,7 +7471,7 @@ export default class CityChannelThreeRuntime {
       sourceAssembly,
       assemblyEntries,
       gearNodes,
-      rackContactGearNodes: allGearNodes,
+      rackContactGearNodes,
       targetAngle: allowedRotation.angle,
       obstruction: limitingObstruction
     });
@@ -7445,10 +7480,12 @@ export default class CityChannelThreeRuntime {
       count + (entry.assembly?.componentKeys?.length || 0)
     ), 0);
     this.config.onToast?.(
-      gearCount > 0
+      limitingObstruction
+        ? '传动预览：机构运行到冲突点后卡住停止。'
+        : gearCount > 0
         ? `齿轮传动预览：${gearCount} 个齿轮，${drivenBoardCount} 块板材。`
         : `固定轴预览：${drivenBoardCount || 1} 块板材。`,
-      'success'
+      limitingObstruction ? 'warning' : 'success'
     );
     return true;
   }

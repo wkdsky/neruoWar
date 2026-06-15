@@ -4639,7 +4639,7 @@ describe('CityChannelThreeRuntime gear transmission', () => {
       surface: 'front',
       teeth: 18,
       phase: 0,
-      rotationDirection: CITY_CHANNEL_GEAR_ROTATION_DIRECTIONS.PASSIVE
+      rotationDirection: CITY_CHANNEL_GEAR_ROTATION_DIRECTIONS.CLOCKWISE
     }];
     const rack = {
       id: 'rack_vertical_pickup',
@@ -4709,6 +4709,112 @@ describe('CityChannelThreeRuntime gear transmission', () => {
     expect(runtime.mechanismRuntimeSnapshot.racks[rack.id].start.z).toBeCloseTo(rack.start.z + expectedDistance, 6);
     expect(runtime.mechanismRuntimeSnapshot.racks[rack.id].end.z).toBeCloseTo(rack.end.z + expectedDistance, 6);
     expect(upperState).toBeUndefined();
+  });
+
+  it('lets an upper configured gear be passively driven when the moving rack reaches it', () => {
+    const sourceKey = createCellKey(1, 1, 0);
+    const upperKey = createCellKey(1, 1, 1);
+    const source = createTile({
+      x: 1,
+      y: 1,
+      z: 0,
+      isVertical: true,
+      rotation: 0,
+      panelType: CITY_CHANNEL_TILE_TYPES.GEAR_PRESSURE_PLATE
+    });
+    source.gearMounts = [{
+      id: 'gear_lower',
+      componentType: 'gear',
+      position: 'center',
+      socketKind: 'center',
+      surface: 'front',
+      teeth: 18,
+      phase: 0,
+      rotationDirection: CITY_CHANNEL_GEAR_ROTATION_DIRECTIONS.COUNTERCLOCKWISE
+    }];
+    const upper = createTile({
+      x: 1,
+      y: 1,
+      z: 1,
+      isVertical: true,
+      rotation: 0,
+      panelType: CITY_CHANNEL_TILE_TYPES.BASIC_PLATE
+    });
+    upper.gearMounts = [{
+      id: 'gear_upper',
+      componentType: 'gear',
+      position: 'center',
+      socketKind: 'center',
+      surface: 'front',
+      teeth: 18,
+      phase: 0,
+      rotationDirection: CITY_CHANNEL_GEAR_ROTATION_DIRECTIONS.CLOCKWISE
+    }];
+    const rack = {
+      id: 'rack_vertical_reaches_configured_passive',
+      componentType: DOUBLE_SIDED_RACK_COMPONENT_TYPE,
+      plane: 'vertical',
+      normalAxis: 'y',
+      direction: 'z',
+      start: { x: 1.5, y: 1, z: 0 },
+      end: { x: 1.5, y: 1, z: 1.5 }
+    };
+    const mapData = {
+      ...createBaseCityChannelMap({ width: 4, height: 4, layers: 3 }),
+      tiles: {
+        [sourceKey]: source,
+        [upperKey]: upper
+      },
+      walls: {},
+      racks: {
+        [rack.id]: rack
+      }
+    };
+    const runtime = {
+      ...createTransmissionRuntimeHarness(mapData),
+      config: {
+        mechanismParams: {},
+        onToast: jest.fn()
+      },
+      mechanismRuntimeSnapshot: null,
+      cancelMechanismRuntimePreview: jest.fn(),
+      setMechanismRuntimeSnapshot: jest.fn(function setMechanismRuntimeSnapshot(snapshot) {
+        this.mechanismRuntimeSnapshot = snapshot;
+      }),
+      playMechanismRuntimePreview: jest.fn(function playMechanismRuntimePreview(args) {
+        const basePhases = new Map(
+          [...args.rackContactGearNodes, ...args.gearNodes]
+            .map((node) => [node.id, Number(node.mount?.phase) || 0])
+        );
+        this.setMechanismRuntimeSnapshot(this.createRuntimeSnapshotForMechanism({
+          ...args,
+          sourceAngle: args.targetAngle,
+          basePhases
+        }));
+      }),
+      flashMechanismObstruction: jest.fn()
+    };
+
+    const played = CityChannelThreeRuntime.prototype.triggerMechanismAtCell.call(runtime, { x: 1, y: 1, z: 0 }, {
+      rotationAngle: 360,
+      rotationSpeedDegPerSec: 360,
+      triggerDelaySeconds: 0,
+      autoReturn: false
+    });
+    const upperState = runtime.mechanismRuntimeSnapshot?.gears?.[`${upperKey}:gear_upper`];
+
+    expect(played).toBe(true);
+    expect(runtime.flashMechanismObstruction).not.toHaveBeenCalled();
+    expect(runtime.playMechanismRuntimePreview).toHaveBeenCalledWith(expect.objectContaining({
+      obstruction: null,
+      targetAngle: 360
+    }));
+    expect(runtime.mechanismRuntimeSnapshot.racks[rack.id].runtimeLinearDistance).toBeGreaterThan(0);
+    expect(upperState).toMatchObject({
+      componentKey: upperKey,
+      mountId: 'gear_upper',
+      axisType: 'freeAxis'
+    });
   });
 
   it('lets a middle active gear continue driving a vertical rack after the lower gear disengages', () => {
@@ -6440,6 +6546,56 @@ describe('CityChannelThreeRuntime mechanism preview cancellation', () => {
     expect(runtime.mechanismObstructionFillMaterial.opacity).toBeGreaterThan(0);
   });
 
+  it('creates red flash overlays for both moving and blocking obstruction boards', () => {
+    const movingKey = createCellKey(1, 1, 0);
+    const obstacleKey = createCellKey(2, 1, 0);
+    const moving = createTile({
+      x: 1,
+      y: 1,
+      z: 0,
+      panelType: CITY_CHANNEL_TILE_TYPES.BASIC_PLATE
+    });
+    const obstacle = createTile({
+      x: 2,
+      y: 1,
+      z: 0,
+      panelType: CITY_CHANNEL_TILE_TYPES.BASIC_PLATE
+    });
+    const mapData = {
+      ...createBaseCityChannelMap({ width: 4, height: 4, layers: 2 }),
+      tiles: {
+        [movingKey]: moving,
+        [obstacleKey]: obstacle
+      },
+      walls: {}
+    };
+    const runtime = {
+      renderModel: buildCityChannelThreeRenderModel(mapData),
+      mechanismFlashGroup: new THREE.Group(),
+      mechanismObstructionFillMaterial: new THREE.MeshBasicMaterial({ transparent: true, opacity: 0 }),
+      mechanismObstructionOutlineMaterial: new THREE.LineBasicMaterial({ transparent: true, opacity: 0 }),
+      mechanismObstructionGlowMaterial: new THREE.LineBasicMaterial({ transparent: true, opacity: 0 }),
+      mechanismObstructionFlash: null,
+      requestRender: jest.fn(),
+      getObstructionPlacementTransform: CityChannelThreeRuntime.prototype.getObstructionPlacementTransform,
+      addObstructionFlashPlacement: CityChannelThreeRuntime.prototype.addObstructionFlashPlacement,
+      clearMechanismObstructionFlash: CityChannelThreeRuntime.prototype.clearMechanismObstructionFlash,
+      flashMechanismObstruction: CityChannelThreeRuntime.prototype.flashMechanismObstruction,
+      updateMechanismObstructionFlash: CityChannelThreeRuntime.prototype.updateMechanismObstructionFlash
+    };
+
+    const flashed = CityChannelThreeRuntime.prototype.flashMechanismObstruction.call(runtime, {
+      placement: moving,
+      obstacle
+    });
+    const roles = runtime.mechanismFlashGroup.children.map((child) => child.userData.cityChannelGearRole);
+
+    expect(flashed).toBe(true);
+    expect(roles.filter((role) => role === 'mechanism_obstruction_fill')).toHaveLength(2);
+    expect(roles.filter((role) => role === 'mechanism_obstruction_glow')).toHaveLength(2);
+    expect(roles.filter((role) => role === 'mechanism_obstruction_outline')).toHaveLength(2);
+  });
+
   it('creates a red flash overlay for mechanism obstruction racks', () => {
     const rack = {
       id: 'rack_flash_target',
@@ -6532,6 +6688,66 @@ describe('CityChannelThreeRuntime mechanism preview cancellation', () => {
     ]));
     expect(runtime.mechanismObstructionFillMaterial.opacity).toBeGreaterThan(0);
     expect(runtime.requestRender).toHaveBeenCalled();
+  });
+
+  it('flashes a mechanism obstruction when a preview reaches a runtime stall', () => {
+    const tile = createTile({
+      x: 1,
+      y: 1,
+      z: 0,
+      panelType: CITY_CHANNEL_TILE_TYPES.GEAR_PRESSURE_PLATE
+    });
+    const obstruction = {
+      blocked: true,
+      type: 'rackDriveConflict',
+      rackId: 'rack_runtime_stall',
+      gearTargets: [{ gearKey: `${createCellKey(1, 1, 1)}:gear_upper` }]
+    };
+    const callbacks = [];
+    const runtime = {
+      config: {
+        onMechanismPreviewProgress: jest.fn()
+      },
+      mechanismPreviewFrame: null,
+      mechanismPreviewTimer: null,
+      createRuntimeSnapshotForMechanism: jest.fn((args) => ({
+        sourceAngle: args.sourceAngle,
+        obstruction: args.obstruction
+      })),
+      setMechanismRuntimeSnapshot: jest.fn(),
+      flashMechanismObstruction: jest.fn(),
+      cancelMechanismRuntimePreview: jest.fn(),
+      requestMechanismFrame: jest.fn((callback) => {
+        callbacks.push(callback);
+        return callbacks.length;
+      })
+    };
+    const nowSpy = jest.spyOn(Date, 'now');
+    nowSpy.mockReturnValueOnce(0);
+
+    CityChannelThreeRuntime.prototype.playMechanismRuntimePreview.call(runtime, {
+      key: createCellKey(1, 1, 0),
+      tile,
+      params: {
+        rotationAngle: 90,
+        rotationSpeedDegPerSec: 360,
+        triggerDelaySeconds: 0,
+        autoReturn: true,
+        autoReturnDelaySeconds: 0
+      },
+      targetAngle: 45,
+      obstruction
+    });
+    nowSpy.mockReturnValueOnce(1000);
+    callbacks.shift()(1000);
+
+    expect(runtime.flashMechanismObstruction).toHaveBeenCalledWith(obstruction);
+    expect(runtime.cancelMechanismRuntimePreview).not.toHaveBeenCalled();
+    expect(runtime.setMechanismRuntimeSnapshot).toHaveBeenLastCalledWith(expect.objectContaining({
+      sourceAngle: 45,
+      obstruction
+    }));
+    nowSpy.mockRestore();
   });
 });
 

@@ -7,6 +7,7 @@ import {
 } from './cityChannelSchema';
 import {
   collisionPrismsIntersect,
+  getCollisionPrismPenetration,
   getCityChannelPlacementCollisionBoxes,
   getCityChannelPlacementCollisionPrisms,
   isFloorSupportPlacement,
@@ -41,6 +42,11 @@ export const FIXED_AXIS_SYNC_TOLERANCE_DEGREES = 0.5;
 export const ROTATION_COLLISION_STEP_DEGREES = 2;
 export const TRANSLATION_COLLISION_STEP_WORLD = 0.04;
 export const MIN_MEANINGFUL_ROTATION_DEGREES = 12;
+const MOTION_COLLISION_EPSILON = 0.001;
+const MOTION_VISUAL_STOP_PENETRATION_EPSILON = 0.006;
+const MOTION_BLOCKING_PENETRATION_EPSILON = 0.02;
+const MOTION_PENETRATION_TREND_EPSILON = 0.002;
+const MOTION_CONTACT_SOLVER_ITERATIONS = 10;
 export const DEFAULT_GEAR_TEETH = 18;
 export const CITY_CHANNEL_GEAR_TOOTH_COUNT = DEFAULT_GEAR_TEETH;
 export const RACK_TRANSLATION_MOTION_TYPE = 'rackTranslation';
@@ -186,10 +192,16 @@ const getRackContactDriveSign = (rackSegment = {}, sideSign = 1) => (
 
 const getRackContactDriveRatio = (rack = {}, contact = {}) => {
   const contactSideSign = Number(contact.sideSign) < 0 ? -1 : 1;
-  const configuredDriveSign = isPassiveGearRotationDirection(contact.node?.mount?.rotationDirection)
-    ? null
-    : getGearRotationDirectionSign(contact.node?.mount?.rotationDirection);
-  const gearDriveRatio = configuredDriveSign || Number(contact.node?.driveRatio) || 1;
+  const solvedDriveRatio = Number(contact.node?.driveRatio);
+  const configuredDriveSign = (
+    !Number.isFinite(solvedDriveRatio)
+    || Math.abs(solvedDriveRatio) <= RACK_CONTACT_TRAVEL_EPSILON
+    || contact.node?.isDriveRoot
+    || contact.node?.sourceAssemblyDriveActive
+  )
+    ? getGearRotationDirectionSign(contact.node?.mount?.rotationDirection)
+    : null;
+  const gearDriveRatio = configuredDriveSign || solvedDriveRatio || 1;
   return gearDriveRatio * getRackContactDriveSign(getRackCanonicalSegment(rack), contactSideSign);
 };
 
@@ -199,6 +211,14 @@ const getRackContactDriveCoefficient = (rack = {}, contact = {}) => {
     Number(contact.node?.pitchRadiusWorld ?? contact.node?.pitchRadius) || CITY_CHANNEL_GEAR_PITCH_RADIUS_WORLD
   );
   return getRackContactDriveRatio(rack, contact) * pitchRadiusWorld;
+};
+
+const getRackEntryDriveCoefficient = (entry = {}) => {
+  const pitchRadiusWorld = Math.max(
+    0.001,
+    Number(entry.pitchRadiusWorld ?? entry.rackPitchRadiusWorld) || CITY_CHANNEL_GEAR_PITCH_RADIUS_WORLD
+  );
+  return (Number(entry.driveRatio) || 0) * pitchRadiusWorld;
 };
 
 const createRackDriveConflict = (rack = {}, contacts = []) => {
@@ -1434,6 +1454,80 @@ const isRackDriveSourceContact = (rack = {}, contact = {}) => {
   return !isPassiveGearRotationDirection(node.mount?.rotationDirection);
 };
 
+const isActiveRackBlockingContact = (rack = {}, contact = {}) => {
+  const node = contact.node;
+  if (!node?.id) return false;
+  if (node.isDriveRoot || node.sourceAssemblyDriveActive) return true;
+  if (Math.abs(Number(node.driveRatio) || 0) > RACK_CONTACT_TRAVEL_EPSILON) {
+    return node.drivenViaRackId !== rack.id;
+  }
+  return false;
+};
+
+const getActiveRackContactTravelBlock = ({
+  entry = {},
+  rack = null,
+  contact = null,
+  sourceDistance = 0,
+  sourceAngle = 0,
+  driveCoefficient = 0
+} = {}) => {
+  if (!rack || !contact?.node) return null;
+  if (!isActiveRackBlockingContact(rack, contact)) return null;
+  const contactCoefficient = getRackContactDriveCoefficient(rack, contact);
+  if (Math.abs(contactCoefficient - driveCoefficient) <= RACK_CONTACT_TRAVEL_EPSILON) return null;
+  const limits = getRackContactTravelLimits(rack, contact.rackAxis);
+  const targetDistance = Number(sourceDistance) || 0;
+  if (!limits || Math.abs(targetDistance) <= RACK_CONTACT_TRAVEL_EPSILON) return null;
+  const entryDistanceSign = targetDistance < 0 ? -1 : 1;
+  const contactDistance = entryDistanceSign > 0
+    ? Math.max(0, Number(limits.min) || 0)
+    : Math.min(0, Number(limits.max) || 0);
+  if (Math.abs(contactDistance) <= RACK_CONTACT_TRAVEL_EPSILON) return null;
+  if (Math.sign(contactDistance) !== entryDistanceSign) return null;
+  if (Math.abs(contactDistance) - Math.abs(targetDistance) > RACK_CONTACT_TRAVEL_EPSILON) return null;
+  const distancePerSourceAngle = (Number(driveCoefficient) || 0) * Math.PI / 180;
+  if (Math.abs(distancePerSourceAngle) <= RACK_CONTACT_TRAVEL_EPSILON) return null;
+  const blockSourceAngle = contactDistance / distancePerSourceAngle;
+  return {
+    blocked: true,
+    type: 'rackDriveConflict',
+    rackId: rack.id || null,
+    linearDistance: roundRuntimeNumber(contactDistance),
+    distance: roundRuntimeNumber(contactDistance),
+    sourceAngle: roundRuntimeNumber(blockSourceAngle),
+    angle: roundRuntimeNumber(blockSourceAngle),
+    sources: [
+      {
+        rackId: rack.id || null,
+        driveCoefficient,
+        driveRatio: Number(entry.driveRatio) || 0,
+        sourceGearNodeId: entry.sourceGearNodeId || null,
+        sourceGearComponentKey: entry.sourceGearComponentKey || null,
+        sourceGearMountId: entry.sourceGearMountId || null
+      },
+      {
+        rackId: rack.id || null,
+        driveCoefficient: contactCoefficient,
+        driveRatio: getRackContactDriveRatio(rack, contact),
+        contactSideSign: Number(contact.sideSign) < 0 ? -1 : 1,
+        contactRackAxis: Number(contact.rackAxis) || 0,
+        sourceGearNodeId: contact.node.id,
+        sourceGearComponentKey: contact.node.componentKey,
+        sourceGearMountId: contact.node.mountId
+      }
+    ].filter((source) => source.sourceGearNodeId || Number.isFinite(Number(source.driveRatio))),
+    gearKeys: [contact.node.id].filter(Boolean),
+    gearTargets: [{
+      gearKey: contact.node.id,
+      componentKey: contact.node.componentKey,
+      mountId: contact.node.mountId,
+      role: 'target',
+      sourceGearNodeId: contact.node.id
+    }].filter((target) => target.componentKey && target.mountId)
+  };
+};
+
 export const createRackTranslationRuntimeEntries = ({
   mapData = {},
   assemblyGraph = null,
@@ -1496,14 +1590,21 @@ export const buildStaticCollisionBoxes = (mapData = {}, excludedComponentKeys = 
   return entries;
 };
 
+const getEntryMotionPenetration = (movingPrisms = [], staticEntry = null) => (
+  getPrismSetPenetration(movingPrisms, staticEntry?.prisms || [])
+);
+
 const findBoxCollisions = (movingPlacement = null, movingPrisms = [], staticEntries = []) => {
   const collisions = [];
   for (const movingPrism of movingPrisms) {
     for (const entry of staticEntries) {
       if (isSupportCollisionExempt(movingPlacement, entry.placement)) continue;
-      if ((entry.prisms || []).some((staticPrism) => collisionPrismsIntersect(movingPrism, staticPrism, 0.015))) {
+      if ((entry.prisms || []).some((staticPrism) => collisionPrismsIntersect(movingPrism, staticPrism, MOTION_COLLISION_EPSILON))) {
         if (!collisions.some((collision) => collision.componentKey === entry.componentKey)) {
-          collisions.push(entry);
+          collisions.push({
+            ...entry,
+            penetration: getEntryMotionPenetration(movingPrisms, entry)
+          });
         }
       }
     }
@@ -1511,10 +1612,88 @@ const findBoxCollisions = (movingPlacement = null, movingPrisms = [], staticEntr
   return collisions;
 };
 
-const findBoxCollision = (movingPlacement = null, movingPrisms = [], staticEntries = []) => {
-  const collisions = findBoxCollisions(movingPlacement, movingPrisms, staticEntries);
-  return collisions[0] || null;
+const getPrismSetPenetration = (leftPrisms = [], rightPrisms = []) => (
+  (Array.isArray(leftPrisms) ? leftPrisms : []).reduce((maxPenetration, leftPrism) => (
+    Math.max(
+      maxPenetration,
+      ...(Array.isArray(rightPrisms) ? rightPrisms : []).map((rightPrism) => (
+        getCollisionPrismPenetration(leftPrism, rightPrism, MOTION_COLLISION_EPSILON)
+      ))
+    )
+  ), 0)
+);
+
+const isBlockingMotionPenetration = (penetration = 0) => (
+  (Number(penetration) || 0) >= MOTION_BLOCKING_PENETRATION_EPSILON
+);
+
+const isMotionPenetrationBlocking = (currentPenetration = 0, previousPenetration = 0) => (
+  isBlockingMotionPenetration(currentPenetration)
+  && (Number(currentPenetration) || 0) > (Number(previousPenetration) || 0) + MOTION_PENETRATION_TREND_EPSILON
+);
+
+const hasVisualStopMotionContact = (movingPrisms = [], staticEntry = null) => (
+  getEntryMotionPenetration(movingPrisms, staticEntry) > MOTION_VISUAL_STOP_PENETRATION_EPSILON
+);
+
+const getMotionContactPairKey = (componentKey = '', obstacleKey = '') => (
+  `${componentKey || 'unknown'}::${obstacleKey || 'unknown'}`
+);
+
+const getBlockingMotionCollision = ({
+  movingPlacement = null,
+  movingPrisms = [],
+  previousMovingPrisms = [],
+  staticEntries = []
+} = {}) => (
+  (Array.isArray(staticEntries) ? staticEntries : []).find((entry) => {
+    if (isSupportCollisionExempt(movingPlacement, entry.placement)) return false;
+    return isMotionPenetrationBlocking(
+      getEntryMotionPenetration(movingPrisms, entry),
+      getEntryMotionPenetration(previousMovingPrisms, entry)
+    );
+  }) || null
+);
+
+const refineContactValue = ({
+  from = 0,
+  to = 0,
+  iterations = MOTION_CONTACT_SOLVER_ITERATIONS,
+  hasContact = () => false
+} = {}) => {
+  const start = Number(from) || 0;
+  const end = Number(to) || 0;
+  if (start === end) return end;
+  let clear = start;
+  let blocked = end;
+  for (let iteration = 0; iteration < iterations; iteration += 1) {
+    const midpoint = (clear + blocked) / 2;
+    if (hasContact(midpoint)) {
+      blocked = midpoint;
+    } else {
+      clear = midpoint;
+    }
+  }
+  return blocked;
 };
+
+const getBlockingRackBodyCollisions = ({
+  rack = null,
+  rackPrisms = [],
+  previousRackPrisms = [],
+  staticEntries = []
+} = {}) => (
+  findBoxCollisions(
+    { componentType: RACK_TRANSLATION_MOTION_TYPE, id: rack?.id },
+    rackPrisms,
+    staticEntries.filter((entry) => isFloorSupportPlacement(entry.placement))
+  ).filter((collision) => (
+    isMotionPenetrationBlocking(
+      Number(collision.penetration) || 0,
+      getEntryMotionPenetration(previousRackPrisms, collision)
+    )
+  ))
+);
 
 const getVerticalRackCollisionPrisms = (rack = null, offset = {}) => {
   if (!rack) return [];
@@ -1555,16 +1734,6 @@ const getVerticalRackCollisionPrisms = (rack = null, offset = {}) => {
   })];
 };
 
-const findRackBodyCollisions = (rack = null, offset = {}, staticEntries = []) => {
-  const rackPrisms = getVerticalRackCollisionPrisms(rack, offset);
-  if (rackPrisms.length <= 0) return [];
-  return findBoxCollisions(
-    { componentType: RACK_TRANSLATION_MOTION_TYPE, id: rack?.id },
-    rackPrisms,
-    staticEntries.filter((entry) => isFloorSupportPlacement(entry.placement))
-  );
-};
-
 const getCollisionResult = ({ distance = null, angle = null, collisions = [], rackId = null } = {}) => {
   const obstacle = collisions[0] || null;
   if (!obstacle) return null;
@@ -1578,6 +1747,243 @@ const getCollisionResult = ({ distance = null, angle = null, collisions = [], ra
     obstacleKeys: collisions.map((collision) => collision.componentKey),
     obstacles: collisions.map((collision) => collision.placement)
   };
+};
+
+const getMotionCollisionComponentKeys = (assemblyEntries = [], snapshot = null) => {
+  const keys = new Set();
+  (Array.isArray(assemblyEntries) ? assemblyEntries : []).forEach((entry) => {
+    (entry?.assembly?.componentKeys || []).forEach((componentKey) => keys.add(componentKey));
+  });
+  Object.keys(snapshot?.placements || {}).forEach((componentKey) => keys.add(componentKey));
+  return keys;
+};
+
+const getMotionCollisionGroupId = (componentKey = '', assemblyEntries = []) => {
+  const entry = (Array.isArray(assemblyEntries) ? assemblyEntries : []).find((item) => (
+    (item?.assembly?.componentKeys || []).includes(componentKey)
+  ));
+  if (!entry) return `runtime:${componentKey}`;
+  return entry.assembly?.id || entry.componentKey || entry.sourceRackId || entry.rackId || componentKey;
+};
+
+const createRuntimeCollisionEntries = ({ mapData = {}, assemblyEntries = [], snapshot = null } = {}) => {
+  const movingKeys = getMotionCollisionComponentKeys(assemblyEntries, snapshot);
+  if (movingKeys.size <= 0) return [];
+  return [...movingKeys]
+    .map((componentKey) => {
+      const placement = snapshot?.placements?.[componentKey] || getPlacementByComponentKey(mapData, componentKey);
+      if (!placement) return null;
+      const prisms = getCityChannelPlacementCollisionPrisms(placement);
+      if (prisms.length <= 0) return null;
+      return {
+        componentKey,
+        placement,
+        prisms,
+        groupId: getMotionCollisionGroupId(componentKey, assemblyEntries)
+      };
+    })
+    .filter(Boolean);
+};
+
+const getRuntimeMovingCollision = ({
+  mapData = {},
+  assemblyEntries = [],
+  snapshot = null,
+  previousSnapshot = null
+} = {}) => {
+  const movingEntries = createRuntimeCollisionEntries({ mapData, assemblyEntries, snapshot });
+  if (movingEntries.length <= 0) return null;
+  const previousEntries = createRuntimeCollisionEntries({ mapData, assemblyEntries, snapshot: previousSnapshot });
+  const previousEntryByKey = new Map(previousEntries.map((entry) => [entry.componentKey, entry]));
+  const movingKeys = new Set(movingEntries.map((entry) => entry.componentKey));
+  const staticEntries = buildStaticCollisionBoxes(mapData, movingKeys);
+
+  for (const movingEntry of movingEntries) {
+    const obstacle = staticEntries.find((entry) => {
+      if (isSupportCollisionExempt(movingEntry.placement, entry.placement)) return false;
+      const previousEntry = previousEntryByKey.get(movingEntry.componentKey);
+      return isMotionPenetrationBlocking(
+        getPrismSetPenetration(movingEntry.prisms, entry.prisms),
+        getPrismSetPenetration(previousEntry?.prisms || [], entry.prisms)
+      );
+    });
+    if (obstacle) {
+      return {
+        movingEntry,
+        collisions: [obstacle]
+      };
+    }
+  }
+
+  for (let leftIndex = 0; leftIndex < movingEntries.length; leftIndex += 1) {
+    for (let rightIndex = leftIndex + 1; rightIndex < movingEntries.length; rightIndex += 1) {
+      const left = movingEntries[leftIndex];
+      const right = movingEntries[rightIndex];
+      if (!left || !right || left.groupId === right.groupId) continue;
+      const previousLeft = previousEntryByKey.get(left.componentKey);
+      const previousRight = previousEntryByKey.get(right.componentKey);
+      if (isMotionPenetrationBlocking(
+        getPrismSetPenetration(left.prisms, right.prisms),
+        getPrismSetPenetration(previousLeft?.prisms || [], previousRight?.prisms || [])
+      )) {
+        return {
+          movingEntry: left,
+          collisions: [{
+            componentKey: right.componentKey,
+            placement: right.placement
+          }]
+        };
+      }
+    }
+  }
+
+  return null;
+};
+
+const findRuntimeSnapshotMotionObstruction = ({
+  mapData = {},
+  assemblyEntries = [],
+  gearNodes = [],
+  rackContactGearNodes = [],
+  targetAngle = 0,
+  stepDegrees = ROTATION_COLLISION_STEP_DEGREES
+} = {}) => {
+  const target = Number(targetAngle) || 0;
+  if (Math.abs(target) <= RACK_CONTACT_TRAVEL_EPSILON) return null;
+  const direction = target < 0 ? -1 : 1;
+  const maxAngle = Math.abs(target);
+  const step = Math.max(0.5, Math.abs(Number(stepDegrees) || ROTATION_COLLISION_STEP_DEGREES));
+  const steps = Math.max(1, Math.ceil(maxAngle / step));
+  let previousSnapshot = createMechanismRuntimeSnapshot({
+    mapData,
+    assemblyEntries,
+    gearNodes,
+    rackContactGearNodes,
+    sourceAngle: 0
+  });
+
+  const getSnapshot = (sourceAngle) => createMechanismRuntimeSnapshot({
+    mapData,
+    assemblyEntries,
+    gearNodes,
+    rackContactGearNodes,
+    sourceAngle
+  });
+  const getSnapshotCollisionPair = (candidateSnapshot = null, movingComponentKey = '', obstacleComponentKey = '') => {
+    if (!candidateSnapshot || !movingComponentKey || !obstacleComponentKey) return null;
+    const candidateMovingEntries = createRuntimeCollisionEntries({ mapData, assemblyEntries, snapshot: candidateSnapshot });
+    const candidateMovingEntry = candidateMovingEntries.find((entry) => entry.componentKey === movingComponentKey);
+    if (!candidateMovingEntry) return null;
+    const movingKeys = new Set(candidateMovingEntries.map((entry) => entry.componentKey));
+    const candidateStaticEntries = buildStaticCollisionBoxes(mapData, movingKeys);
+    const obstacleEntry = candidateStaticEntries.find((entry) => entry.componentKey === obstacleComponentKey)
+      || candidateMovingEntries.find((entry) => entry.componentKey === obstacleComponentKey);
+    if (!obstacleEntry) return null;
+    return {
+      movingEntry: candidateMovingEntry,
+      obstacleEntry,
+      hasContact: getPrismSetPenetration(candidateMovingEntry.prisms, obstacleEntry.prisms) > MOTION_VISUAL_STOP_PENETRATION_EPSILON
+    };
+  };
+  const contactClearAnglesByPair = new Map();
+  const seedSnapshotContactClearAngles = (candidateSnapshot = null, angle = 0) => {
+    const movingEntries = createRuntimeCollisionEntries({ mapData, assemblyEntries, snapshot: candidateSnapshot });
+    const movingKeys = new Set(movingEntries.map((entry) => entry.componentKey));
+    const staticEntries = buildStaticCollisionBoxes(mapData, movingKeys);
+    movingEntries.forEach((movingEntry) => {
+      staticEntries.forEach((obstacleEntry) => {
+        if (isSupportCollisionExempt(movingEntry.placement, obstacleEntry.placement)) return;
+        if (!hasVisualStopMotionContact(movingEntry.prisms, obstacleEntry)) {
+          contactClearAnglesByPair.set(getMotionContactPairKey(movingEntry.componentKey, obstacleEntry.componentKey), angle);
+        }
+      });
+      movingEntries.forEach((obstacleEntry) => {
+        if (movingEntry.componentKey === obstacleEntry.componentKey || movingEntry.groupId === obstacleEntry.groupId) return;
+        if (!hasVisualStopMotionContact(movingEntry.prisms, obstacleEntry)) {
+          contactClearAnglesByPair.set(getMotionContactPairKey(movingEntry.componentKey, obstacleEntry.componentKey), angle);
+        }
+      });
+    });
+  };
+  seedSnapshotContactClearAngles(previousSnapshot, 0);
+
+  for (let index = 1; index <= steps; index += 1) {
+    const sourceAngle = direction * Math.min(maxAngle, index * step);
+    const snapshot = getSnapshot(sourceAngle);
+    const collision = getRuntimeMovingCollision({
+      mapData,
+      assemblyEntries,
+      snapshot,
+      previousSnapshot
+    });
+    if (!collision) {
+      seedSnapshotContactClearAngles(snapshot, sourceAngle);
+      previousSnapshot = snapshot;
+      continue;
+    }
+    const collisions = collision.collisions || [];
+    const contactPairKeys = collisions.map((obstacle) => (
+      getMotionContactPairKey(collision.movingEntry?.componentKey || '', obstacle.componentKey || '')
+    ));
+    const fallbackPreviousSourceAngle = direction * Math.max(0, Math.min(maxAngle, (index - 1) * step));
+    const previousSourceAngle = contactPairKeys.reduce((bestAngle, pairKey) => {
+      if (!contactClearAnglesByPair.has(pairKey)) return bestAngle;
+      const clearAngle = contactClearAnglesByPair.get(pairKey);
+      return Math.abs(clearAngle) > Math.abs(bestAngle) ? clearAngle : bestAngle;
+    }, fallbackPreviousSourceAngle);
+    const contactSourceAngle = refineContactValue({
+      from: previousSourceAngle,
+      to: sourceAngle,
+      hasContact: (candidateAngle) => {
+        const candidateSnapshot = getSnapshot(candidateAngle);
+        return collisions.some((obstacle) => (
+          getSnapshotCollisionPair(
+            candidateSnapshot,
+            collision.movingEntry?.componentKey || '',
+            obstacle.componentKey || ''
+          )?.hasContact
+        ));
+      }
+    });
+    const contactSnapshot = getSnapshot(contactSourceAngle);
+    const contactCollision = getRuntimeMovingCollision({
+      mapData,
+      assemblyEntries,
+      snapshot: contactSnapshot,
+      previousSnapshot
+    }) || null;
+    const contactPair = collisions
+      .map((obstacle) => getSnapshotCollisionPair(
+        contactSnapshot,
+        collision.movingEntry?.componentKey || '',
+        obstacle.componentKey || ''
+      ))
+      .find((pair) => pair?.hasContact) || null;
+    const contactMovingEntry = contactCollision?.movingEntry || contactPair?.movingEntry || collision.movingEntry;
+    const contactPairCollisions = [contactPair?.obstacleEntry].filter(Boolean);
+    const contactCollisions = contactCollision?.collisions || (
+      contactPairCollisions.length > 0 ? contactPairCollisions : collisions
+    );
+    return {
+      blocked: true,
+      type: 'collisionBlock',
+      collisionMotionType: 'runtimeSnapshot',
+      sourceAngle: contactSourceAngle,
+      angle: contactSourceAngle,
+      blockingSourceAngle: sourceAngle,
+      blockingAngle: sourceAngle,
+      componentKey: contactMovingEntry?.componentKey || null,
+      placement: contactMovingEntry?.placement || null,
+      placementKeys: [contactMovingEntry?.componentKey].filter(Boolean),
+      placements: [contactMovingEntry?.placement].filter(Boolean),
+      obstacleKey: contactCollisions[0]?.componentKey || null,
+      obstacle: contactCollisions[0]?.placement || null,
+      obstacleKeys: contactCollisions.map((item) => item.componentKey).filter(Boolean),
+      obstacles: contactCollisions.map((item) => item.placement).filter(Boolean)
+    };
+  }
+
+  return null;
 };
 
 export const findRotationObstruction = ({
@@ -1612,31 +2018,86 @@ export const findRotationObstruction = ({
   const maxAngle = Math.abs(targetAngle);
   const step = Math.max(0.5, Math.abs(Number(stepDegrees) || ROTATION_COLLISION_STEP_DEGREES));
   const steps = Math.max(1, Math.ceil(maxAngle / step));
+  const previousPrismsByKey = new Map(
+    movingEntries.map(({ componentKey, placement }) => [
+      componentKey,
+      getCityChannelPlacementCollisionPrisms(placement)
+    ])
+  );
+  const contactClearAnglesByPair = new Map();
+  movingEntries.forEach(({ componentKey, placement }) => {
+    const initialPrisms = getCityChannelPlacementCollisionPrisms(placement);
+    staticEntries.forEach((entry) => {
+      if (isSupportCollisionExempt(placement, entry.placement)) return;
+      if (!hasVisualStopMotionContact(initialPrisms, entry)) {
+        contactClearAnglesByPair.set(getMotionContactPairKey(componentKey, entry.componentKey), 0);
+      }
+    });
+  });
 
-  for (let index = 1; index <= steps; index += 1) {
-    const angle = direction * Math.min(maxAngle, index * step);
+  const getRuntimePlacement = (componentKey, placement, angle) => {
     const fixedPlacement = fixedMount?.componentKey
       ? getPlacementByComponentKey(mapData, fixedMount.componentKey)
       : null;
+    return getRuntimePlacementForFixedAxisAssemblyMember({
+      placement,
+      componentKey,
+      fixedMount,
+      fixedPlacement,
+      pivotWorld: anchor,
+      degrees: angle
+    });
+  };
+
+  for (let index = 1; index <= steps; index += 1) {
+    const angle = direction * Math.min(maxAngle, index * step);
     for (const { componentKey, placement } of movingEntries) {
-      const runtimePlacement = getRuntimePlacementForFixedAxisAssemblyMember({
-        placement,
-        componentKey,
-        fixedMount,
-        fixedPlacement,
-        pivotWorld: anchor,
-        degrees: angle
-      });
+      const runtimePlacement = getRuntimePlacement(componentKey, placement, angle);
       const movingPrisms = getCityChannelPlacementCollisionPrisms(runtimePlacement);
-      const obstacle = findBoxCollision(runtimePlacement, movingPrisms, staticEntries);
+      const previousMovingPrisms = previousPrismsByKey.get(componentKey) || [];
+      const obstacle = getBlockingMotionCollision({
+        movingPlacement: runtimePlacement,
+        movingPrisms,
+        previousMovingPrisms,
+        staticEntries
+      });
       if (obstacle) {
+        const fallbackPreviousAngle = direction * Math.max(0, Math.min(maxAngle, (index - 1) * step));
+        const contactPairKey = getMotionContactPairKey(componentKey, obstacle.componentKey);
+        const previousAngle = contactClearAnglesByPair.has(contactPairKey)
+          ? contactClearAnglesByPair.get(contactPairKey)
+          : fallbackPreviousAngle;
+        const contactAngle = refineContactValue({
+          from: previousAngle,
+          to: angle,
+          hasContact: (candidateAngle) => {
+            const candidatePlacement = getRuntimePlacement(componentKey, placement, candidateAngle);
+            const candidatePrisms = getCityChannelPlacementCollisionPrisms(candidatePlacement);
+            return hasVisualStopMotionContact(candidatePrisms, obstacle);
+          }
+        });
+        const contactPlacement = getRuntimePlacement(componentKey, placement, contactAngle);
         return {
           blocked: true,
-          angle,
+          angle: contactAngle,
+          blockingAngle: angle,
+          componentKey,
+          placement: contactPlacement,
+          placementKeys: [componentKey],
+          placements: [contactPlacement],
           obstacleKey: obstacle.componentKey,
-          obstacle: obstacle.placement
+          obstacle: obstacle.placement,
+          obstacleKeys: [obstacle.componentKey],
+          obstacles: [obstacle.placement]
         };
       }
+      staticEntries.forEach((entry) => {
+        if (isSupportCollisionExempt(runtimePlacement, entry.placement)) return;
+        if (!hasVisualStopMotionContact(movingPrisms, entry)) {
+          contactClearAnglesByPair.set(getMotionContactPairKey(componentKey, entry.componentKey), angle);
+        }
+      });
+      previousPrismsByKey.set(componentKey, movingPrisms);
     }
   }
 
@@ -1677,6 +2138,40 @@ export const findRackTranslationObstruction = ({
   const maxDistance = Math.abs(target);
   const step = Math.max(0.01, Math.abs(Number(stepDistance) || TRANSLATION_COLLISION_STEP_WORLD));
   const steps = Math.max(1, Math.ceil(maxDistance / step));
+  const previousPrismsByKey = new Map(
+    movingEntries.map(({ componentKey, placement }) => [
+      componentKey,
+      getCityChannelPlacementCollisionPrisms(placement)
+    ])
+  );
+  const contactClearDistancesByPair = new Map();
+  movingEntries.forEach(({ componentKey, placement }) => {
+    const initialPrisms = getCityChannelPlacementCollisionPrisms(placement);
+    staticEntries.forEach((entry) => {
+      if (isSupportCollisionExempt(placement, entry.placement)) return;
+      if (!hasVisualStopMotionContact(initialPrisms, entry)) {
+        contactClearDistancesByPair.set(getMotionContactPairKey(componentKey, entry.componentKey), 0);
+      }
+    });
+  });
+  let previousRackPrisms = hasRackBody ? getVerticalRackCollisionPrisms(rack, {}) : [];
+
+  const getOffsetForDistance = (distance) => ({
+    x: (Number(translationAxis.x) || 0) * distance,
+    y: (Number(translationAxis.y) || 0) * distance,
+    z: (Number(translationAxis.z) || 0) * distance
+  });
+  const getRuntimePlacement = (placement, distance) => (
+    getRuntimePlacementForRackTranslationAssemblyMember({
+      placement,
+      offset: getOffsetForDistance(distance),
+      entry: {
+        motionType: RACK_TRANSLATION_MOTION_TYPE,
+        driveRatio: 1,
+        pitchRadiusWorld: 1
+      }
+    })
+  );
 
   for (let index = 1; index <= steps; index += 1) {
     const distance = direction * Math.min(maxDistance, index * step);
@@ -1685,28 +2180,61 @@ export const findRackTranslationObstruction = ({
       y: (Number(translationAxis.y) || 0) * distance,
       z: (Number(translationAxis.z) || 0) * distance
     };
-    for (const { placement } of movingEntries) {
-      const runtimePlacement = getRuntimePlacementForRackTranslationAssemblyMember({
-        placement,
-        offset,
-        entry: {
-          motionType: RACK_TRANSLATION_MOTION_TYPE,
-          driveRatio: 1,
-          pitchRadiusWorld: 1
-        }
-      });
+    for (const { componentKey, placement } of movingEntries) {
+      const runtimePlacement = getRuntimePlacement(placement, distance);
       const movingPrisms = getCityChannelPlacementCollisionPrisms(runtimePlacement);
-      const obstacle = findBoxCollision(runtimePlacement, movingPrisms, staticEntries);
+      const previousMovingPrisms = previousPrismsByKey.get(componentKey) || [];
+      const obstacle = getBlockingMotionCollision({
+        movingPlacement: runtimePlacement,
+        movingPrisms,
+        previousMovingPrisms,
+        staticEntries
+      });
       if (obstacle) {
+        const fallbackPreviousDistance = direction * Math.max(0, Math.min(maxDistance, (index - 1) * step));
+        const contactPairKey = getMotionContactPairKey(componentKey, obstacle.componentKey);
+        const previousDistance = contactClearDistancesByPair.has(contactPairKey)
+          ? contactClearDistancesByPair.get(contactPairKey)
+          : fallbackPreviousDistance;
+        const contactDistance = refineContactValue({
+          from: previousDistance,
+          to: distance,
+          hasContact: (candidateDistance) => {
+            const candidatePlacement = getRuntimePlacement(placement, candidateDistance);
+            const candidatePrisms = getCityChannelPlacementCollisionPrisms(candidatePlacement);
+            return hasVisualStopMotionContact(candidatePrisms, obstacle);
+          }
+        });
+        const contactPlacement = getRuntimePlacement(placement, contactDistance);
         return {
           blocked: true,
-          distance,
+          distance: contactDistance,
+          blockingDistance: distance,
+          componentKey,
+          placement: contactPlacement,
+          placementKeys: [componentKey],
+          placements: [contactPlacement],
           obstacleKey: obstacle.componentKey,
-          obstacle: obstacle.placement
+          obstacle: obstacle.placement,
+          obstacleKeys: [obstacle.componentKey],
+          obstacles: [obstacle.placement]
         };
       }
+      staticEntries.forEach((entry) => {
+        if (isSupportCollisionExempt(runtimePlacement, entry.placement)) return;
+        if (!hasVisualStopMotionContact(movingPrisms, entry)) {
+          contactClearDistancesByPair.set(getMotionContactPairKey(componentKey, entry.componentKey), distance);
+        }
+      });
+      previousPrismsByKey.set(componentKey, movingPrisms);
     }
-    const rackCollisions = findRackBodyCollisions(rack, offset, staticEntries);
+    const rackPrisms = getVerticalRackCollisionPrisms(rack, offset);
+    const rackCollisions = getBlockingRackBodyCollisions({
+      rack,
+      rackPrisms,
+      previousRackPrisms,
+      staticEntries
+    });
     if (rackCollisions.length > 0) {
       return getCollisionResult({
         distance,
@@ -1714,6 +2242,7 @@ export const findRackTranslationObstruction = ({
         rackId: rack.id
       });
     }
+    previousRackPrisms = rackPrisms;
   }
 
   return null;
@@ -2021,6 +2550,13 @@ export const createMechanismMotionIntentGraph = ({
     .map((block) => ({
       ...block,
       type: block.type || 'collisionBlock',
+      ...(block.type === 'rackDriveConflict'
+        ? {
+          conflictSources: block.conflictSources || block.sources || [],
+          ...createConflictPlacementTargets(mapData, block.conflictSources || block.sources || []),
+          ...createConflictGearTargets(block.conflictSources || block.sources || [])
+        }
+        : {}),
       ...createConflictRackTargets(mapData, block.rackIds || [block.rackId])
     }));
   return {
@@ -2039,11 +2575,51 @@ export const createMechanismMotionIntentGraph = ({
 export const findMechanismMotionObstructions = ({
   mapData = {},
   assemblyEntries = [],
+  gearNodes = [],
+  rackContactGearNodes = [],
   targetAngle = 0
 } = {}) => {
   const sourceTargetAngle = Number(targetAngle) || 0;
   if (Math.abs(sourceTargetAngle) <= 0.000001) return [];
-  return (Array.isArray(assemblyEntries) ? assemblyEntries : [])
+  const allRackContactGearNodes = Array.isArray(rackContactGearNodes) && rackContactGearNodes.length > 0
+    ? rackContactGearNodes
+    : gearNodes;
+  const dynamicBlocks = (Array.isArray(assemblyEntries) ? assemblyEntries : [])
+    .flatMap((entry) => {
+      if (!isRackTranslationRuntimeEntry(entry)) return [];
+      const rack = entry.rack || mapData.racks?.[entry.rackId || entry.sourceRackId] || null;
+      if (!rack || !Array.isArray(allRackContactGearNodes) || allRackContactGearNodes.length <= 0) return [];
+      const targetDistance = getRackContactLimitedTranslationDistance(entry, sourceTargetAngle);
+      if (Math.abs(targetDistance) <= RACK_CONTACT_TRAVEL_EPSILON) return [];
+      const sourceGearIds = new Set([
+        entry.sourceGearNodeId,
+        entry.sourceGearComponentKey && entry.sourceGearMountId
+          ? `${entry.sourceGearComponentKey}:${entry.sourceGearMountId}`
+          : null
+      ].filter(Boolean));
+      const sweptRack = getSweptRackForTranslation(rack, targetDistance);
+      const driveCoefficient = getRackEntryDriveCoefficient(entry);
+      return getRackGearContacts(sweptRack, allRackContactGearNodes)
+        .filter((contact) => !sourceGearIds.has(contact.node?.id))
+        .map((contact) => getActiveRackContactTravelBlock({
+          entry,
+          rack,
+          contact,
+          sourceDistance: targetDistance,
+          sourceAngle: sourceTargetAngle,
+          driveCoefficient
+        }))
+        .filter(Boolean)
+        .map((block) => ({
+          ...block,
+          assemblyId: entry.assembly?.id,
+          collisionMotionType: RACK_TRANSLATION_MOTION_TYPE,
+          rackId: entry.rackId || entry.sourceRackId,
+          sourceGearComponentKey: entry.sourceGearComponentKey || null,
+          sourceGearMountId: entry.sourceGearMountId || null
+        }));
+    });
+  const staticBlocks = (Array.isArray(assemblyEntries) ? assemblyEntries : [])
     .map((entry) => {
       if (isRackTranslationRuntimeEntry(entry)) {
         const targetDistance = getRackContactLimitedTranslationDistance(entry, sourceTargetAngle);
@@ -2095,6 +2671,19 @@ export const findMechanismMotionObstructions = ({
         angle: sourceAngle
       };
     })
+    .filter(Boolean);
+  const runtimeSnapshotBlock = findRuntimeSnapshotMotionObstruction({
+    mapData,
+    assemblyEntries,
+    gearNodes,
+    rackContactGearNodes: allRackContactGearNodes,
+    targetAngle: sourceTargetAngle
+  });
+  return [
+    ...dynamicBlocks,
+    ...staticBlocks,
+    runtimeSnapshotBlock
+  ]
     .filter(Boolean)
     .sort((a, b) => Math.abs(a.sourceAngle) - Math.abs(b.sourceAngle));
 };

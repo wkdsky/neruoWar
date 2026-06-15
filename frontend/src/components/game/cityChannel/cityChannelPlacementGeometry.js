@@ -11,8 +11,8 @@ export const EDGE_NEIGHBOR_OFFSETS = {
   east: { x: 1, y: 0 }
 };
 
-const PANEL_THICKNESS = 0.16;
-const WALL_THICKNESS = 0.12;
+const PANEL_THICKNESS = 0.08;
+const WALL_THICKNESS = 0.08;
 const BOX_EPSILON = 0.0001;
 
 export const isPortalMaterial = (panelType) => (
@@ -35,16 +35,44 @@ const rotatePoint = (point, degrees = 0) => {
   };
 };
 
-const getPointBounds = (points = []) => points.reduce((bounds, point) => ({
-  minX: Math.min(bounds.minX, point.x),
-  maxX: Math.max(bounds.maxX, point.x),
-  minY: Math.min(bounds.minY, point.y),
-  maxY: Math.max(bounds.maxY, point.y)
-}), {
-  minX: Infinity,
-  maxX: -Infinity,
-  minY: Infinity,
-  maxY: -Infinity
+const dotVector3 = (left = {}, right = {}) => (
+  ((Number(left.x) || 0) * (Number(right.x) || 0))
+  + ((Number(left.y) || 0) * (Number(right.y) || 0))
+  + ((Number(left.z) || 0) * (Number(right.z) || 0))
+);
+
+const subtractVector3 = (left = {}, right = {}) => ({
+  x: (Number(left.x) || 0) - (Number(right.x) || 0),
+  y: (Number(left.y) || 0) - (Number(right.y) || 0),
+  z: (Number(left.z) || 0) - (Number(right.z) || 0)
+});
+
+const crossVector3 = (left = {}, right = {}) => ({
+  x: ((Number(left.y) || 0) * (Number(right.z) || 0)) - ((Number(left.z) || 0) * (Number(right.y) || 0)),
+  y: ((Number(left.z) || 0) * (Number(right.x) || 0)) - ((Number(left.x) || 0) * (Number(right.z) || 0)),
+  z: ((Number(left.x) || 0) * (Number(right.y) || 0)) - ((Number(left.y) || 0) * (Number(right.x) || 0))
+});
+
+const getVector3Length = (vector = {}) => Math.hypot(
+  Number(vector.x) || 0,
+  Number(vector.y) || 0,
+  Number(vector.z) || 0
+);
+
+const normalizeVector3 = (vector = {}, fallback = { x: 1, y: 0, z: 0 }) => {
+  const length = getVector3Length(vector);
+  if (length <= BOX_EPSILON) return fallback;
+  return {
+    x: (Number(vector.x) || 0) / length,
+    y: (Number(vector.y) || 0) / length,
+    z: (Number(vector.z) || 0) / length
+  };
+};
+
+const addScaledVector3 = (point = {}, axis = {}, scale = 0) => ({
+  x: (Number(point.x) || 0) + ((Number(axis.x) || 0) * scale),
+  y: (Number(point.y) || 0) + ((Number(axis.y) || 0) * scale),
+  z: (Number(point.z) || 0) + ((Number(axis.z) || 0) * scale)
 });
 
 const createBox = ({ minX, maxX, minY, maxY, minZ, maxZ }) => ({
@@ -56,12 +84,66 @@ const createBox = ({ minX, maxX, minY, maxY, minZ, maxZ }) => ({
   maxZ
 });
 
-const createPrism = ({ points = [], minZ, maxZ }) => ({
-  ...getPointBounds(points),
-  points,
-  minZ,
-  maxZ
+const getVertexBounds = (vertices = []) => vertices.reduce((bounds, vertex) => ({
+  minX: Math.min(bounds.minX, vertex.x),
+  maxX: Math.max(bounds.maxX, vertex.x),
+  minY: Math.min(bounds.minY, vertex.y),
+  maxY: Math.max(bounds.maxY, vertex.y),
+  minZ: Math.min(bounds.minZ, vertex.z),
+  maxZ: Math.max(bounds.maxZ, vertex.z)
+}), {
+  minX: Infinity,
+  maxX: -Infinity,
+  minY: Infinity,
+  maxY: -Infinity,
+  minZ: Infinity,
+  maxZ: -Infinity
 });
+
+const createObb = ({ center = {}, axes = [], halfSizes = [] } = {}) => ({
+  center: {
+    x: Number(center.x) || 0,
+    y: Number(center.y) || 0,
+    z: Number(center.z) || 0
+  },
+  axes: [
+    normalizeVector3(axes[0], { x: 1, y: 0, z: 0 }),
+    normalizeVector3(axes[1], { x: 0, y: 1, z: 0 }),
+    normalizeVector3(axes[2], { x: 0, y: 0, z: 1 })
+  ],
+  halfSizes: [
+    Math.max(0, Number(halfSizes[0]) || 0),
+    Math.max(0, Number(halfSizes[1]) || 0),
+    Math.max(0, Number(halfSizes[2]) || 0)
+  ]
+});
+
+const getObbVertices = (obb = {}) => {
+  const vertices = [];
+  [-1, 1].forEach((xSign) => {
+    [-1, 1].forEach((ySign) => {
+      [-1, 1].forEach((zSign) => {
+        const withX = addScaledVector3(obb.center, obb.axes[0], xSign * (obb.halfSizes?.[0] || 0));
+        const withY = addScaledVector3(withX, obb.axes[1], ySign * (obb.halfSizes?.[1] || 0));
+        vertices.push(addScaledVector3(withY, obb.axes[2], zSign * (obb.halfSizes?.[2] || 0)));
+      });
+    });
+  });
+  return vertices;
+};
+
+const createObbPrism = (obbInput = {}) => {
+  const obb = createObb(obbInput);
+  const vertices = getObbVertices(obb);
+  const bounds = getVertexBounds(vertices);
+  return {
+    ...bounds,
+    points: getRectPoints(bounds),
+    minZ: bounds.minZ,
+    maxZ: bounds.maxZ,
+    obb
+  };
+};
 
 const getRectPoints = ({ minX, maxX, minY, maxY }) => [
   { x: minX, y: minY },
@@ -69,11 +151,6 @@ const getRectPoints = ({ minX, maxX, minY, maxY }) => [
   { x: maxX, y: maxY },
   { x: minX, y: maxY }
 ];
-
-const translatePoints = (points = [], placement = {}) => points.map((point) => ({
-  x: (Number(placement.x) || 0) + point.x,
-  y: (Number(placement.y) || 0) + point.y
-}));
 
 export const boxesIntersect = (a, b, epsilon = BOX_EPSILON) => !!a && !!b && !(
   a.maxX <= b.minX + epsilon
@@ -88,27 +165,91 @@ export const boxSetsIntersect = (boxesA = [], boxesB = []) => (
   boxesA.some((boxA) => boxesB.some((boxB) => boxesIntersect(boxA, boxB)))
 );
 
-const getRotatedTileFootprintPoints = (rotation = 0) => (
-  [
-    { x: -0.5, y: -0.5 },
-    { x: 0.5, y: -0.5 },
-    { x: 0.5, y: 0.5 },
-    { x: -0.5, y: 0.5 }
-  ].map((point) => rotatePoint(point, rotation))
-);
-
-const getCellVerticalFootprint = (rotation = 0) => {
-  const normalizedRotation = normalizeRotation(rotation) % 180;
-  return normalizedRotation === 90
-    ? { minX: -WALL_THICKNESS / 2, maxX: WALL_THICKNESS / 2, minY: -0.5, maxY: 0.5 }
-    : { minX: -0.5, maxX: 0.5, minY: -WALL_THICKNESS / 2, maxY: WALL_THICKNESS / 2 };
+const edgeAxes = {
+  north: {
+    axis: { x: 1, y: 0 },
+    normal: { x: 0, y: -1 },
+    originOffset: { x: 0, y: -0.5 }
+  },
+  south: {
+    axis: { x: 1, y: 0 },
+    normal: { x: 0, y: 1 },
+    originOffset: { x: 0, y: 0.5 }
+  },
+  west: {
+    axis: { x: 0, y: 1 },
+    normal: { x: -1, y: 0 },
+    originOffset: { x: -0.5, y: 0 }
+  },
+  east: {
+    axis: { x: 0, y: 1 },
+    normal: { x: 1, y: 0 },
+    originOffset: { x: 0.5, y: 0 }
+  }
 };
 
-const getEdgeWallFootprint = (edge = 'north') => {
-  if (edge === 'south') return { minX: -0.5, maxX: 0.5, minY: 0.5 - WALL_THICKNESS, maxY: 0.5 };
-  if (edge === 'west') return { minX: -0.5, maxX: -0.5 + WALL_THICKNESS, minY: -0.5, maxY: 0.5 };
-  if (edge === 'east') return { minX: 0.5 - WALL_THICKNESS, maxX: 0.5, minY: -0.5, maxY: 0.5 };
-  return { minX: -0.5, maxX: 0.5, minY: -0.5, maxY: -0.5 + WALL_THICKNESS };
+const getVerticalCollisionFrame = (placement = {}) => {
+  if (placement.edge) return edgeAxes[placement.edge] || edgeAxes.north;
+  const yaw = normalizeRotation(placement.rotation || 0);
+  return {
+    axis: rotatePoint({ x: 1, y: 0 }, yaw),
+    normal: rotatePoint({ x: 0, y: 1 }, yaw),
+    originOffset: { x: 0, y: 0 }
+  };
+};
+
+const getRuntimeSurfaceRotation = (placement = {}) => (
+  Number.isFinite(Number(placement.runtimeSurfaceRotation))
+    ? Number(placement.runtimeSurfaceRotation)
+    : 0
+);
+
+const createHorizontalPlacementPrism = (placement = {}, z = 0) => {
+  const rotation = normalizeRotation(placement.rotation || 0);
+  const radians = (rotation * Math.PI) / 180;
+  return createObbPrism({
+    center: {
+      x: Number(placement.x) || 0,
+      y: Number(placement.y) || 0,
+      z: z + (PANEL_THICKNESS / 2)
+    },
+    axes: [
+      { x: Math.cos(radians), y: Math.sin(radians), z: 0 },
+      { x: -Math.sin(radians), y: Math.cos(radians), z: 0 },
+      { x: 0, y: 0, z: 1 }
+    ],
+    halfSizes: [0.5, 0.5, PANEL_THICKNESS / 2]
+  });
+};
+
+const createVerticalPlacementPrism = (placement = {}, z = 0) => {
+  const frame = getVerticalCollisionFrame(placement);
+  const surfaceRotation = getRuntimeSurfaceRotation(placement);
+  const radians = (surfaceRotation * Math.PI) / 180;
+  const cos = Math.cos(radians);
+  const sin = Math.sin(radians);
+  const edgeNormalOffset = placement.edge ? -(WALL_THICKNESS / 2) : 0;
+  return createObbPrism({
+    center: {
+      x: (Number(placement.x) || 0)
+        + (frame.originOffset.x || 0)
+        + ((frame.normal.x || 0) * edgeNormalOffset),
+      y: (Number(placement.y) || 0)
+        + (frame.originOffset.y || 0)
+        + ((frame.normal.y || 0) * edgeNormalOffset),
+      z: z + 0.5
+    },
+    axes: [
+      { x: (frame.axis.x || 0) * cos, y: (frame.axis.y || 0) * cos, z: -sin },
+      { x: (frame.axis.x || 0) * sin, y: (frame.axis.y || 0) * sin, z: cos },
+      { x: frame.normal.x || 0, y: frame.normal.y || 0, z: 0 }
+    ],
+    halfSizes: [
+      0.5,
+      0.5,
+      WALL_THICKNESS / 2
+    ]
+  });
 };
 
 export const getCityChannelPlacementCollisionPrisms = (placement) => {
@@ -117,22 +258,11 @@ export const getCityChannelPlacementCollisionPrisms = (placement) => {
   const prisms = [];
 
   if (!placement.edge && !placement.isVertical) {
-    prisms.push(createPrism({
-      points: translatePoints(getRotatedTileFootprintPoints(placement.rotation || 0), placement),
-      minZ: z,
-      maxZ: z + PANEL_THICKNESS
-    }));
+    prisms.push(createHorizontalPlacementPrism(placement, z));
   }
 
   if (placement.edge || placement.isVertical) {
-    const wallFootprint = placement.edge
-      ? getEdgeWallFootprint(placement.edge)
-      : getCellVerticalFootprint(placement.rotation || 0);
-    prisms.push(createPrism({
-      points: translatePoints(getRectPoints(wallFootprint), placement),
-      minZ: z + PANEL_THICKNESS + BOX_EPSILON,
-      maxZ: z + 1
-    }));
+    prisms.push(createVerticalPlacementPrism(placement, z));
   }
 
   return prisms;
@@ -177,10 +307,73 @@ const polygonsIntersect = (pointsA = [], pointsB = [], epsilon = BOX_EPSILON) =>
   });
 };
 
+const getPolygonPenetration = (pointsA = [], pointsB = [], epsilon = BOX_EPSILON) => {
+  if (pointsA.length < 3 || pointsB.length < 3) return 0;
+  const axes = [...getPolygonAxes(pointsA), ...getPolygonAxes(pointsB)];
+  let minPenetration = Infinity;
+  for (const axis of axes) {
+    const rangeA = projectPolygon(pointsA, axis);
+    const rangeB = projectPolygon(pointsB, axis);
+    const overlap = Math.min(rangeA.max, rangeB.max) - Math.max(rangeA.min, rangeB.min);
+    if (overlap <= epsilon) return 0;
+    minPenetration = Math.min(minPenetration, overlap);
+  }
+  return Number.isFinite(minPenetration) ? minPenetration : 0;
+};
+
+const obbsIntersect = (a = {}, b = {}, epsilon = BOX_EPSILON) => {
+  if (!a?.obb || !b?.obb) return false;
+  const axes = [
+    ...(a.obb.axes || []),
+    ...(b.obb.axes || [])
+  ];
+  (a.obb.axes || []).forEach((leftAxis) => {
+    (b.obb.axes || []).forEach((rightAxis) => {
+      const crossAxis = crossVector3(leftAxis, rightAxis);
+      if (getVector3Length(crossAxis) > BOX_EPSILON) {
+        axes.push(normalizeVector3(crossAxis));
+      }
+    });
+  });
+  const centerDelta = subtractVector3(a.obb.center, b.obb.center);
+  let minPenetration = Infinity;
+  for (const axis of axes) {
+    const leftRadius = (a.obb.axes || []).reduce((sum, obbAxis, index) => (
+      sum + Math.abs(dotVector3(obbAxis, axis)) * (a.obb.halfSizes?.[index] || 0)
+    ), 0);
+    const rightRadius = (b.obb.axes || []).reduce((sum, obbAxis, index) => (
+      sum + Math.abs(dotVector3(obbAxis, axis)) * (b.obb.halfSizes?.[index] || 0)
+    ), 0);
+    const overlap = (leftRadius + rightRadius) - Math.abs(dotVector3(centerDelta, axis));
+    if (overlap <= epsilon) return false;
+    minPenetration = Math.min(minPenetration, overlap);
+  }
+  return {
+    intersecting: true,
+    penetration: Number.isFinite(minPenetration) ? minPenetration : 0
+  };
+};
+
 export const collisionPrismsIntersect = (a, b, epsilon = BOX_EPSILON) => (
-  boxesIntersect(a, b, epsilon)
-  && polygonsIntersect(a.points || [], b.points || [], epsilon)
+  !!boxesIntersect(a, b, epsilon) && (
+    a?.obb && b?.obb
+      ? !!obbsIntersect(a, b, epsilon)
+      : polygonsIntersect(a.points || [], b.points || [], epsilon)
+  )
 );
+
+export const getCollisionPrismPenetration = (a, b, epsilon = BOX_EPSILON) => {
+  if (!boxesIntersect(a, b, epsilon)) return 0;
+  if (a?.obb && b?.obb) {
+    const result = obbsIntersect(a, b, epsilon);
+    return result?.penetration || 0;
+  }
+  const zOverlap = Math.min(a.maxZ, b.maxZ) - Math.max(a.minZ, b.minZ);
+  if (zOverlap <= epsilon) return 0;
+  const xyOverlap = getPolygonPenetration(a.points || [], b.points || [], epsilon);
+  if (xyOverlap <= epsilon) return 0;
+  return Math.min(zOverlap, xyOverlap);
+};
 
 export const getCityChannelPlacementCollisionBox = (placement) => {
   const boxes = getCityChannelPlacementCollisionBoxes(placement);

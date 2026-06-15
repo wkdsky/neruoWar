@@ -74,6 +74,7 @@
 - `rackDriveConflict`：多个主动 pinion 要求同一齿条不同线运动趋势。
 - `placementMotionConflict`：同一板材被多个约束要求不同刚体运动。
 - `collisionBlock`：运动趋势本身一致，但路径被静态物体阻挡。
+- 这类阻挡现在采用“两阶段”处理：先用较严格的穿透阈值确认真实阻挡，再把最终停止角度/距离回退到首次可见接触点，避免浅表擦碰把运动提前卡死，也避免停得比视觉边界更深。
 
 ## 4. 当前实现状态
 
@@ -100,6 +101,7 @@
 - `createMechanismMotionIntentGraph` 现在可以接收 `collisionBlocks`，并把阻挡表达为 `collisionBlock` 冲突。
 - Three Runtime 的碰撞阻挡判断已改为通过模拟层 helper 产出，并回填到 motion intent graph 后再读取。
 - `rackDriveConflict` 和齿条相关 `collisionBlock` 会携带 `rackIds/racks`，用于直接提示齿条本体。
+- rotation / translation / runtime snapshot 的阻挡结果都会回填 `placement/placements`，用于让 Three Runtime 按实际停靠位置闪烁，而不是只闪深穿透采样点。
 - Three Runtime 的红闪提示现在支持齿条目标，齿条传动冲突不再只能闪宿主板材或主动齿轮所在板材。
 - `gearDriveConflict` 和 `rackDriveConflict` 会携带 `gearKeys/gearTargets`，用于直接提示导致冲突的具体齿轮。
 - Three Runtime 的红闪提示现在支持齿轮目标，可以按 `${componentKey}:${mountId}` 找到 gear mesh 并创建红色齿轮 overlay。
