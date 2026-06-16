@@ -110,6 +110,9 @@
 - 齿轮传播图现在会检查 `viaRackId` 齿条边上的闭环 ratio 矛盾；如果同一齿轮同时被齿轮网和齿条网要求不同转动趋势，会生成 `gearDriveConflict`。
 - 由齿条边导致的 `gearDriveConflict` 会携带 `viaRackId`，graph 会补充 `rackIds/racks` 供红闪提示使用。
 - 但同一齿条上多个显式主动轮方向矛盾时，`viaRackId` 不会抢先生成齿轮冲突，仍由更直接的 `rackDriveConflict` 负责提示。
+- runtime snapshot 中，已经属于主动传动链的齿轮会保持 source angle 计算出的相位；齿条扫过产生的临时 rack-driven 状态只补充主动链外的齿轮，不再覆盖中途接力的主动齿轮。
+- 主动压力板采用伺服式预览：总角度由“整圈数 + 0-360 度余角”组成，主动段按接近恒速的曲线运行，只在起止端主动加减速，结束时强制落在设置的目标角度。
+- 被齿条带动过的被动齿轮会在主动段结束后追加短惯性续行；该续行通过 `extraRackDistances` 回写到 runtime snapshot，因此齿条和后续被动齿轮会继续移动/转动，而不是只播放齿轮慢停。
 
 ### 4.2 主要文件
 
@@ -126,6 +129,8 @@
 
 - 单个主动轮驱动有限齿条，离开接触范围后停止。
 - 多个同向主动轮在同一齿条上接力驱动。
+- 多个同向主动轮接力驱动同一齿条时，下方主动轮离开接触范围后，上方主动轮不会被齿条拾取状态覆盖成半程动画。
+- 主动轮无论设置多少圈都会精确停在目标角；被动轮在未被锁死且无主动段阻挡时，会把惯性续行传回齿条。
 - 同侧主动轮反向驱动同一齿条时卡住。
 - 不同侧主动轮反向转动驱动同一齿条时允许。
 - 显式主动齿轮直接啮合且方向矛盾时卡住。
@@ -244,4 +249,9 @@ git diff --check
   - `collisionBlock`
 - 额外修复：交叉口根齿轮现在会使用安装时记录的源板材/源 socket 作为姿态参考，竖直板面上的交叉口齿轮不再被水平 fallback transform 固定为平放；传动节点的 `meshPlane` 也随源面计算。
 - 交叉口根齿轮选择不再要求 `placement`，`hostKind: 'intersection'` 会进入 component selection；Runtime 的齿轮移动预览和 Editor 的 Delete 删除路径都能识别 `mapData.gears` 中的根齿轮。
+- 本轮修复：同一根竖直齿条由多个同向主动轮接力驱动时，齿条移动后扫到的上方主动轮不再被 `rackDrivenGearStates` 覆盖；主动链齿轮继续按 source angle 播放完整相位，避免截图中主动轮半途停转。
+- `cityChannelMechanismSimulation.test.js` 已新增低层回归“keeps an active gear on its source phase when the same rack sweeps over it”；`CityChannelThreeRuntime.test.js` 已新增触发路径回归“lets a middle active gear continue driving a vertical rack after the lower gear disengages”。
 - 本轮验证通过：`npm test -- --watchAll=false src/components/game/cityChannel`，16 个 test suites、354 个 tests 全部通过；`git diff --check` 通过。补充覆盖空白点击不会在 `getPlacementSelectionFromData(null)` 报错。
+- 本轮继续修复：压力板转动参数改为“整圈按钮 + 0-360 度滑条”，速度改为固定挡位；旧的单值角度仍会拆成整圈和余角兼容。
+- `CityChannelThreeRuntime` 主动预览曲线改为接近恒速、末端主动制动；被动齿轮惯性会在主动段结束后转换成齿条额外位移，齿条和被动齿轮随惯性段继续更新。
+- 新增回归：`cityChannelMechanismRuntime.test.js` 覆盖角度拆分和速度挡位归一化；`cityChannelMechanismSimulation.test.js` 覆盖 `extraRackDistances` 推动齿条并重算被动齿轮；`CityChannelThreeRuntime.test.js` 覆盖整圈目标角和被动惯性续行。

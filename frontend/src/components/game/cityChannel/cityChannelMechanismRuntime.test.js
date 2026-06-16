@@ -3,7 +3,8 @@ import {
   getGearAxisBindingStatus,
   getGearMountLocalPosition,
   getGearSocketWorldPosition,
-  getWorldTransmissionPorts
+  getWorldTransmissionPorts,
+  normalizeMechanismParams
 } from './cityChannelMechanismRuntime';
 import {
   CITY_CHANNEL_TILE_TYPES,
@@ -16,6 +17,21 @@ import {
 } from './cityChannelSchema';
 
 describe('city channel mechanism runtime', () => {
+  it('normalizes pressure plate rotation into turns plus a dial angle', () => {
+    expect(normalizeMechanismParams({ rotationAngle: 725, rotationSpeedDegPerSec: 77 })).toMatchObject({
+      rotationTurns: 2,
+      rotationAngle: 5,
+      rotationTotalAngle: 725,
+      rotationSpeedDegPerSec: 90
+    });
+    expect(normalizeMechanismParams({ rotationTurns: 3, rotationAngle: 45, rotationSpeedDegPerSec: 540 })).toMatchObject({
+      rotationTurns: 3,
+      rotationAngle: 45,
+      rotationTotalAngle: 1125,
+      rotationSpeedDegPerSec: 540
+    });
+  });
+
   it('uses true board corners for gear mounts', () => {
     expect(getGearMountLocalPosition('corner_ne')).toEqual({ x: 0.5, y: -0.5, z: 0 });
     expect(getGearMountLocalPosition('corner_sw')).toEqual({ x: -0.5, y: 0.5, z: 0 });

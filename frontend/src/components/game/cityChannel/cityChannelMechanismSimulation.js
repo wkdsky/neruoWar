@@ -165,6 +165,7 @@ export const getGearRatioRadiusForMount = (mount = {}) => (
 
 const roundRuntimeNumber = (value = 0) => Number((Number(value) || 0).toFixed(6));
 const RACK_CONTACT_TRAVEL_EPSILON = 0.000001;
+const RACK_CONTACT_HANDOFF_BRIDGE_DISTANCE = 0.08;
 
 export const isRackTranslationRuntimeEntry = (entry = null) => (
   entry?.motionType === RACK_TRANSLATION_MOTION_TYPE
@@ -274,7 +275,7 @@ const mergeRackContactTravelLimits = (limits = []) => {
   const merged = [];
   sorted.forEach((limit) => {
     const previous = merged[merged.length - 1];
-    if (!previous || limit.min > previous.max + RACK_CONTACT_TRAVEL_EPSILON) {
+    if (!previous || limit.min > previous.max + RACK_CONTACT_HANDOFF_BRIDGE_DISTANCE) {
       merged.push({ ...limit });
       return;
     }
@@ -285,6 +286,8 @@ const mergeRackContactTravelLimits = (limits = []) => {
     && limit.max >= -RACK_CONTACT_TRAVEL_EPSILON
   )) || null;
 };
+
+export const getRackContactTravelHandoffBridgeDistance = () => RACK_CONTACT_HANDOFF_BRIDGE_DISTANCE;
 
 export const getRackTranslationTravelLimits = (entry = {}) => {
   if (!entry?.rack) return null;
@@ -346,6 +349,18 @@ export const getSweptRackForTranslation = (rack = {}, linearDistance = 0) => {
     ...rack,
     start: setRackPointAxisValue(segment.start, segment.direction, segment.min + minTravel),
     end: setRackPointAxisValue(segment.end, segment.direction, segment.max + maxTravel),
+    ...(Number.isFinite(Number(segment.z)) ? { z: segment.z } : {})
+  };
+};
+
+const getRackForHandoffContactSearch = (rack = {}) => {
+  const segment = getRackCanonicalSegment(rack);
+  if (segment.length < 1) return rack;
+  const extension = segment.length + RACK_CONTACT_HANDOFF_BRIDGE_DISTANCE;
+  return {
+    ...rack,
+    start: setRackPointAxisValue(segment.start, segment.direction, segment.min - extension),
+    end: setRackPointAxisValue(segment.end, segment.direction, segment.max + extension),
     ...(Number.isFinite(Number(segment.z)) ? { z: segment.z } : {})
   };
 };
@@ -1537,7 +1552,8 @@ export const createRackTranslationRuntimeEntries = ({
   const entries = [];
   const seen = new Set();
   Object.values(mapData.racks || {}).forEach((rack) => {
-    const contacts = getRackGearContacts(rack, nodes).filter((contact) => drivenNodeIds.has(contact.node.id));
+    const contacts = getRackGearContacts(getRackForHandoffContactSearch(rack), nodes)
+      .filter((contact) => drivenNodeIds.has(contact.node.id));
     const driveContacts = contacts.filter((contact) => isRackDriveSourceContact(rack, contact));
     if (driveContacts.length <= 0) return;
     const status = getRackAxisBindingStatus({ mapData, rack });
@@ -2909,6 +2925,7 @@ export const createMechanismRuntimeSnapshot = ({
   gearNodes = [],
   rackContactGearNodes = [],
   sourceAngle = 0,
+  extraRackDistances = new Map(),
   basePhases = new Map(),
   obstruction = null
 } = {}) => {
@@ -2959,7 +2976,9 @@ export const createMechanismRuntimeSnapshot = ({
 
   assemblyEntries.forEach((entry) => {
     if (isRackTranslationRuntimeEntry(entry)) {
-      const linearDistance = getRackContactLimitedTranslationDistance(entry, sourceAngle);
+      const rackId = entry.rackId || entry.sourceRackId || entry.rack?.id;
+      const extraRackDistance = Number(extraRackDistances?.get?.(rackId)) || 0;
+      const linearDistance = getRackContactLimitedTranslationDistance(entry, sourceAngle) + extraRackDistance;
       const translation = getRackTranslationOffset(entry, sourceAngle, { distance: linearDistance });
       (entry.assembly?.componentKeys || []).forEach((componentKey) => {
         const placement = entry.basePlacements?.[componentKey] || getPlacementByComponentKey(mapData, componentKey);
@@ -2973,9 +2992,9 @@ export const createMechanismRuntimeSnapshot = ({
         });
       });
       const rack = entry.rack || mapData.racks?.[entry.rackId || entry.sourceRackId];
-      const rackId = entry.rackId || entry.sourceRackId || rack?.id;
-      if (rack && rackId) {
-        racks[rackId] = getRuntimeRackForTranslation({
+      const resolvedRackId = rackId || rack?.id;
+      if (rack && resolvedRackId) {
+        racks[resolvedRackId] = getRuntimeRackForTranslation({
           rack,
           entry,
           sourceAngle,
@@ -2986,6 +3005,7 @@ export const createMechanismRuntimeSnapshot = ({
         getRackGearContacts(sweptRack, contactGearNodes).forEach((contact) => {
           const nodeId = getGearNodeRuntimeId(contact.node);
           if (!nodeId) return;
+          if (gearNodeById.has(nodeId)) return;
           const state = createRackDrivenGearRuntimeState({
             entry,
             contact,
@@ -3002,7 +3022,7 @@ export const createMechanismRuntimeSnapshot = ({
       sync.push({
         assemblyId: entry.assembly?.id,
         motionType: RACK_TRANSLATION_MOTION_TYPE,
-        rackId,
+        rackId: resolvedRackId,
         componentKey: entry.componentKey || null,
         sourceGearComponentKey: entry.sourceGearComponentKey || null,
         sourceGearMountId: entry.sourceGearMountId || null,

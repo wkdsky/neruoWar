@@ -17,9 +17,10 @@ export const CITY_CHANNEL_TRIGGER_MECHANISM_TYPES = new Set([
 ]);
 
 export const DEFAULT_CITY_CHANNEL_MECHANISM_PARAMS = {
-  rotationAngle: 90,
+  rotationAngle: 180,
+  rotationTurns: 0,
   rotationDirection: 'right',
-  rotationSpeedDegPerSec: 20,
+  rotationSpeedDegPerSec: 90,
   triggerDelaySeconds: 0,
   autoReturn: false,
   autoReturnDelaySeconds: 0,
@@ -30,13 +31,27 @@ export const DEFAULT_CITY_CHANNEL_MECHANISM_PARAMS = {
 
 export const CITY_CHANNEL_MECHANISM_LIMITS = {
   rotationAngle: { min: 0, max: 360, step: 5 },
-  rotationSpeedDegPerSec: { min: 1, max: 360, step: 1 },
+  rotationTurns: { min: 0, max: 30, step: 1 },
+  rotationSpeedDegPerSec: { min: 15, max: 720, step: 15 },
   triggerDelaySeconds: { min: 0, max: 30, step: 0.5 },
   autoReturnDelaySeconds: { min: 0, max: 30, step: 0.5 },
   durationSeconds: { min: 0.5, max: 8, step: 0.5 },
   verticalExtensionLength: { min: 30, max: 140, step: 5 },
   horizontalExtensionLength: { min: 30, max: 160, step: 5 }
 };
+
+export const CITY_CHANNEL_MECHANISM_SPEED_STEPS = [
+  15,
+  30,
+  60,
+  90,
+  120,
+  180,
+  240,
+  360,
+  540,
+  720
+];
 
 export const CITY_CHANNEL_MECHANISM_KINDS = {
   GEAR_PRESSURE_PLATE: 'gearPressurePlate',
@@ -93,38 +108,92 @@ const clampToStep = (value, { min, max, step }) => {
   return Number((Math.round(clamped / step) * step).toFixed(2));
 };
 
-export const normalizeMechanismParams = (params = {}) => ({
-  rotationAngle: clampToStep(
-    params.rotationAngle ?? params.angle ?? DEFAULT_CITY_CHANNEL_MECHANISM_PARAMS.rotationAngle,
-    CITY_CHANNEL_MECHANISM_LIMITS.rotationAngle
-  ),
-  rotationDirection: params.rotationDirection === 'left' ? 'left' : 'right',
-  rotationSpeedDegPerSec: clampToStep(
-    params.rotationSpeedDegPerSec ?? DEFAULT_CITY_CHANNEL_MECHANISM_PARAMS.rotationSpeedDegPerSec,
-    CITY_CHANNEL_MECHANISM_LIMITS.rotationSpeedDegPerSec
-  ),
-  triggerDelaySeconds: clampToStep(
-    params.triggerDelaySeconds ?? DEFAULT_CITY_CHANNEL_MECHANISM_PARAMS.triggerDelaySeconds,
-    CITY_CHANNEL_MECHANISM_LIMITS.triggerDelaySeconds
-  ),
-  autoReturn: !!params.autoReturn,
-  autoReturnDelaySeconds: clampToStep(
-    params.autoReturnDelaySeconds ?? DEFAULT_CITY_CHANNEL_MECHANISM_PARAMS.autoReturnDelaySeconds,
-    CITY_CHANNEL_MECHANISM_LIMITS.autoReturnDelaySeconds
-  ),
-  durationSeconds: clampToStep(
-    params.durationSeconds ?? DEFAULT_CITY_CHANNEL_MECHANISM_PARAMS.durationSeconds,
-    CITY_CHANNEL_MECHANISM_LIMITS.durationSeconds
-  ),
-  verticalExtensionLength: clampToStep(
-    params.verticalExtensionLength ?? DEFAULT_CITY_CHANNEL_MECHANISM_PARAMS.verticalExtensionLength,
-    CITY_CHANNEL_MECHANISM_LIMITS.verticalExtensionLength
-  ),
-  horizontalExtensionLength: clampToStep(
-    params.horizontalExtensionLength ?? DEFAULT_CITY_CHANNEL_MECHANISM_PARAMS.horizontalExtensionLength,
-    CITY_CHANNEL_MECHANISM_LIMITS.horizontalExtensionLength
-  )
-});
+const clampMechanismSpeed = (value) => {
+  const parsed = Number(value);
+  const fallback = DEFAULT_CITY_CHANNEL_MECHANISM_PARAMS.rotationSpeedDegPerSec;
+  if (!Number.isFinite(parsed)) return fallback;
+  const clamped = Math.max(
+    CITY_CHANNEL_MECHANISM_LIMITS.rotationSpeedDegPerSec.min,
+    Math.min(CITY_CHANNEL_MECHANISM_LIMITS.rotationSpeedDegPerSec.max, parsed)
+  );
+  return CITY_CHANNEL_MECHANISM_SPEED_STEPS.reduce((best, step) => (
+    Math.abs(step - clamped) < Math.abs(best - clamped) ? step : best
+  ), CITY_CHANNEL_MECHANISM_SPEED_STEPS[0]);
+};
+
+const getNormalizedRotationAngleParts = (params = {}) => {
+  const hasTurnParts = params.rotationTurns !== undefined || params.rotationAngleRemainder !== undefined;
+  if (hasTurnParts) {
+    return {
+      rotationTurns: clampToStep(
+        params.rotationTurns ?? DEFAULT_CITY_CHANNEL_MECHANISM_PARAMS.rotationTurns,
+        CITY_CHANNEL_MECHANISM_LIMITS.rotationTurns
+      ),
+      rotationAngle: clampToStep(
+        params.rotationAngleRemainder ?? params.rotationAngle ?? DEFAULT_CITY_CHANNEL_MECHANISM_PARAMS.rotationAngle,
+        CITY_CHANNEL_MECHANISM_LIMITS.rotationAngle
+      )
+    };
+  }
+  const legacyTotal = Math.max(
+    0,
+    Number(params.rotationAngle ?? params.angle ?? DEFAULT_CITY_CHANNEL_MECHANISM_PARAMS.rotationAngle) || 0
+  );
+  const turns = Math.floor(legacyTotal / 360);
+  const remainder = legacyTotal - (turns * 360);
+  return {
+    rotationTurns: clampToStep(turns, CITY_CHANNEL_MECHANISM_LIMITS.rotationTurns),
+    rotationAngle: clampToStep(remainder, CITY_CHANNEL_MECHANISM_LIMITS.rotationAngle)
+  };
+};
+
+export const getMechanismTotalRotationAngle = (params = {}) => (
+  ((Number(params.rotationTurns) || 0) * 360) + (Number(params.rotationAngle) || 0)
+);
+
+export const formatMechanismRotationAngle = (params = {}) => {
+  const turns = Math.max(0, Math.trunc(Number(params.rotationTurns) || 0));
+  const angle = Math.max(0, Number(params.rotationAngle) || 0);
+  if (turns <= 0) return `${angle}°`;
+  return `${turns}圈${angle > 0 ? `${angle}°` : ''}`;
+};
+
+export const normalizeMechanismParams = (params = {}) => {
+  const angleParts = getNormalizedRotationAngleParts(params);
+  const normalized = {
+    rotationAngle: angleParts.rotationAngle,
+    rotationTurns: angleParts.rotationTurns,
+    rotationDirection: params.rotationDirection === 'left' ? 'left' : 'right',
+    rotationSpeedDegPerSec: clampMechanismSpeed(
+      params.rotationSpeedDegPerSec ?? DEFAULT_CITY_CHANNEL_MECHANISM_PARAMS.rotationSpeedDegPerSec
+    ),
+    triggerDelaySeconds: clampToStep(
+      params.triggerDelaySeconds ?? DEFAULT_CITY_CHANNEL_MECHANISM_PARAMS.triggerDelaySeconds,
+      CITY_CHANNEL_MECHANISM_LIMITS.triggerDelaySeconds
+    ),
+    autoReturn: !!params.autoReturn,
+    autoReturnDelaySeconds: clampToStep(
+      params.autoReturnDelaySeconds ?? DEFAULT_CITY_CHANNEL_MECHANISM_PARAMS.autoReturnDelaySeconds,
+      CITY_CHANNEL_MECHANISM_LIMITS.autoReturnDelaySeconds
+    ),
+    durationSeconds: clampToStep(
+      params.durationSeconds ?? DEFAULT_CITY_CHANNEL_MECHANISM_PARAMS.durationSeconds,
+      CITY_CHANNEL_MECHANISM_LIMITS.durationSeconds
+    ),
+    verticalExtensionLength: clampToStep(
+      params.verticalExtensionLength ?? DEFAULT_CITY_CHANNEL_MECHANISM_PARAMS.verticalExtensionLength,
+      CITY_CHANNEL_MECHANISM_LIMITS.verticalExtensionLength
+    ),
+    horizontalExtensionLength: clampToStep(
+      params.horizontalExtensionLength ?? DEFAULT_CITY_CHANNEL_MECHANISM_PARAMS.horizontalExtensionLength,
+      CITY_CHANNEL_MECHANISM_LIMITS.horizontalExtensionLength
+    )
+  };
+  return {
+    ...normalized,
+    rotationTotalAngle: getMechanismTotalRotationAngle(normalized)
+  };
+};
 
 export const normalizeGearRotationDirection = (direction = DEFAULT_CITY_CHANNEL_GEAR_ROTATION_DIRECTION) => {
   if (

@@ -206,8 +206,9 @@ const applyPose = (model, progress, params) => {
   const refs = model.userData.refs;
   const p = clamp(Number(progress) || 0, 0, 1);
   const normalized = normalizeMechanismParams(params);
+  const rotationAngle = normalized.rotationTotalAngle ?? normalized.rotationAngle;
   if (!refs.plate || !refs.gear) {
-    model.rotation.z = THREE.MathUtils.degToRad(normalized.rotationAngle * p);
+    model.rotation.z = THREE.MathUtils.degToRad(rotationAngle * p);
     return;
   }
   const press = 0.18 * p;
@@ -217,7 +218,7 @@ const applyPose = (model, progress, params) => {
   refs.springs.forEach((spring) => {
     spring.scale.y = 1 - (p * 0.38);
   });
-  const angle = THREE.MathUtils.degToRad(normalized.rotationAngle * p);
+  const angle = THREE.MathUtils.degToRad(rotationAngle * p);
   refs.gear.rotation.z = -angle;
 
   const travel = (normalized.verticalExtensionLength / 140) * 1.08 * p;

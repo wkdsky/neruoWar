@@ -18,6 +18,25 @@ describe('cityChannelEditorVisibility', () => {
     expect(expandVisibleLayerCutoffForTargetLayer(null, maxLayer)).toBeNull();
   });
 
+  it('expands a finite visible layer cutoff to include vertical rack targets', () => {
+    const maxLayer = getMaxTargetLayerFromPlacementOperations([
+      {
+        kind: 'rack',
+        action: 'place',
+        rack: {
+          plane: 'vertical',
+          direction: 'z',
+          z: 1,
+          start: { x: 1.5, y: 1, z: 1 },
+          end: { x: 1.5, y: 1, z: 3 }
+        }
+      }
+    ]);
+
+    expect(maxLayer).toBe(3);
+    expect(expandVisibleLayerCutoffForTargetLayer(0, maxLayer)).toBe(3);
+  });
+
   it('expands a finite visible layer cutoff to include move targets', () => {
     const maxLayer = getMaxTargetLayerFromMoves([
       { from: { x: 1, y: 1, z: 0 }, to: { x: 1, y: 1, z: 2, edge: 'east' } }

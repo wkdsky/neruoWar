@@ -249,6 +249,74 @@
   font-style: normal;
 }
 
+.city-channel-mechanism-param__label {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.45rem;
+  min-width: 0;
+}
+
+.city-channel-mechanism-param__label strong {
+  min-width: 0;
+  color: #fef3c7;
+  font-size: 0.68rem;
+  font-weight: 900;
+  text-align: right;
+}
+
+.city-channel-mechanism-angle,
+.city-channel-mechanism-speed {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 0.34rem;
+}
+
+.city-channel-mechanism-turns {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr)) auto;
+  align-items: center;
+  gap: 0.24rem;
+}
+
+.city-channel-mechanism-turns button,
+.city-channel-mechanism-speed__buttons button {
+  min-width: 0;
+  min-height: 25px;
+  border: 1px solid rgba(148, 163, 184, 0.28);
+  border-radius: 6px;
+  background: rgba(15, 23, 42, 0.76);
+  color: #dbeafe;
+  font-size: 0.62rem;
+  font-weight: 900;
+  line-height: 1;
+}
+
+.city-channel-mechanism-turns button:hover,
+.city-channel-mechanism-speed__buttons button:hover {
+  border-color: rgba(34, 211, 238, 0.52);
+  color: #ecfeff;
+}
+
+.city-channel-mechanism-turns span {
+  color: #a5f3fc;
+  font-size: 0.62rem;
+  font-weight: 900;
+  white-space: nowrap;
+}
+
+.city-channel-mechanism-speed__buttons {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 0.24rem;
+}
+
+.city-channel-mechanism-speed__buttons button.is-active {
+  border-color: rgba(34, 211, 238, 0.78);
+  background: rgba(14, 116, 144, 0.42);
+  color: #ecfeff;
+}
+
 .city-channel-gear-config {
   display: grid;
   gap: 0.38rem;

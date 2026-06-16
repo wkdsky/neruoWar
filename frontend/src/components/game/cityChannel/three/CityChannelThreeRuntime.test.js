@@ -6,7 +6,8 @@ import {
   createCellKey,
   createTile,
   createWall,
-  createWallKey
+  createWallKey,
+  normalizeRotation
 } from '../cityChannelSchema';
 import {
   getTileThreeTransform,
@@ -24,6 +25,8 @@ import {
 } from '../cityChannelMechanismRuntime';
 import {
   buildGearContactGraph,
+  CITY_CHANNEL_GEAR_PITCH_RADIUS_WORLD,
+  createRackTranslationRuntimeEntries,
   getRackContactLimitedTranslationDistance
 } from '../cityChannelMechanismSimulation';
 import {
@@ -904,6 +907,39 @@ describe('CityChannelThreeRuntime pointer release flow', () => {
     const bodyAxis = new THREE.Vector3(1, 0, 0).applyQuaternion(body.quaternion);
 
     expect(Math.abs(bodyAxis.y)).toBeGreaterThan(0.99);
+  });
+
+  it('renders an installed elevated vertical rack outside the host board plane', () => {
+    const runtime = createRuntimeObject({
+      renderModel: {
+        mapData: createBaseCityChannelMap({ width: 6, height: 6, layers: 4 })
+      },
+      rackMaterial: new THREE.MeshBasicMaterial(),
+      rackToothMaterial: new THREE.MeshBasicMaterial(),
+      rackEdgeMaterial: new THREE.LineBasicMaterial(),
+      pickables: [],
+      rackMeshes: new Map(),
+      rackGroups: new Map()
+    });
+    const rack = {
+      componentType: DOUBLE_SIDED_RACK_COMPONENT_TYPE,
+      plane: 'vertical',
+      direction: 'z',
+      normalAxis: 'x',
+      normalSign: 1,
+      start: { x: 1.5, y: 0.5, z: 1 },
+      end: { x: 1.5, y: 0.5, z: 2 }
+    };
+
+    const group = CityChannelThreeRuntime.prototype.createRackRenderGroup.call(runtime, rack, {
+      ghost: false,
+      showTeeth: false
+    });
+    const body = group.children[0];
+
+    expect(body.position.x).toBeGreaterThan(
+      CityChannelThreeRuntime.prototype.rackPointToThree.call(runtime, rack.start, 0, rack).x
+    );
   });
 
   it('renders a vertical rack tangent ghost horizontally within the wall plane', () => {
@@ -4001,6 +4037,43 @@ describe('CityChannelThreeRuntime gear transmission', () => {
     expect(runtime.config.onToast).toHaveBeenLastCalledWith(expect.stringContaining('齿轮传动预览'), 'success');
   });
 
+  it('uses turn buttons plus dial angle as the pressure plate target angle', () => {
+    const {
+      sourceKey,
+      mapData
+    } = createMeshedGearMap();
+    const runtime = {
+      ...createTransmissionRuntimeHarness(mapData),
+      config: {
+        mechanismParams: {},
+        onToast: jest.fn()
+      },
+      cancelMechanismRuntimePreview: jest.fn(),
+      setMechanismRuntimeSnapshot: jest.fn(),
+      playMechanismRuntimePreview: jest.fn(),
+      flashMechanismObstruction: jest.fn()
+    };
+
+    const played = CityChannelThreeRuntime.prototype.triggerMechanismAtCell.call(runtime, { x: 1, y: 1, z: 0 }, {
+      rotationTurns: 1,
+      rotationAngle: 90,
+      rotationSpeedDegPerSec: 360,
+      triggerDelaySeconds: 0,
+      autoReturn: false
+    });
+
+    expect(played).toBe(true);
+    expect(runtime.playMechanismRuntimePreview).toHaveBeenCalledWith(expect.objectContaining({
+      key: sourceKey,
+      targetAngle: 450,
+      params: expect.objectContaining({
+        rotationTurns: 1,
+        rotationAngle: 90,
+        rotationTotalAngle: 450
+      })
+    }));
+  });
+
   it('does not drive gears above a vertical transmission chain split by a turned middle board', () => {
     const createVerticalTransmission = (z, panelType, patch = {}) => ({
       ...createTile({
@@ -4757,7 +4830,7 @@ describe('CityChannelThreeRuntime gear transmission', () => {
       normalAxis: 'y',
       direction: 'z',
       start: { x: 1.5, y: 1, z: 0 },
-      end: { x: 1.5, y: 1, z: 1.5 }
+      end: { x: 1.5, y: 1, z: 2 }
     };
     const mapData = {
       ...createBaseCityChannelMap({ width: 4, height: 4, layers: 3 }),
@@ -4925,8 +4998,11 @@ describe('CityChannelThreeRuntime gear transmission', () => {
     expect(runtime.mechanismRuntimeSnapshot.racks[rack.id].runtimeLinearDistance).toBeGreaterThan(lowerLimit.max);
     expect(middleState).toMatchObject({
       componentKey: middleKey,
-      mountId: 'gear_middle'
+      mountId: 'gear_middle',
+      speedRatio: expect.any(Number)
     });
+    expect(Math.abs(middleState.speedRatio)).toBeGreaterThan(0);
+    expect(middleState.phase).toBe(normalizeRotation(720 * middleState.speedRatio));
   });
 
   it('blocks conflicting same-side active gears that drive one vertical rack in opposite directions', () => {
@@ -6747,6 +6823,121 @@ describe('CityChannelThreeRuntime mechanism preview cancellation', () => {
       sourceAngle: 45,
       obstruction
     }));
+    nowSpy.mockRestore();
+  });
+
+  it('continues rack translation during passive gear inertia after active motion ends', () => {
+    const rack = {
+      id: 'rack_inertia_preview',
+      componentType: DOUBLE_SIDED_RACK_COMPONENT_TYPE,
+      plane: 'vertical',
+      normalAxis: 'y',
+      direction: 'z',
+      start: { x: 1.5, y: 1, z: 0 },
+      end: { x: 1.5, y: 1, z: 1.5 }
+    };
+    const driver = {
+      id: 'driver:gear_lower',
+      componentKey: 'driver',
+      mountId: 'gear_lower',
+      worldPoint: { x: 1, y: 1, z: 0.5 },
+      point: { x: 1, y: 1, z: 0.5 },
+      placement: { x: 1, y: 1, z: 0, isVertical: true },
+      pitchRadiusWorld: CITY_CHANNEL_GEAR_PITCH_RADIUS_WORLD,
+      gearRatioRadius: 18,
+      driveRatio: -1,
+      isDriveRoot: true,
+      sourceAssemblyDriveActive: true,
+      surfaceKey: 'vertical:1:front',
+      mount: {
+        id: 'gear_lower',
+        position: 'center',
+        rotationDirection: CITY_CHANNEL_GEAR_ROTATION_DIRECTIONS.COUNTERCLOCKWISE
+      }
+    };
+    const passive = {
+      id: 'passive:gear_upper',
+      componentKey: 'passive',
+      mountId: 'gear_upper',
+      worldPoint: { x: 1, y: 1, z: 1.25 },
+      point: { x: 1, y: 1, z: 1.25 },
+      placement: { x: 1, y: 1, z: 1, isVertical: true },
+      pitchRadiusWorld: CITY_CHANNEL_GEAR_PITCH_RADIUS_WORLD,
+      gearRatioRadius: 18,
+      driveRatio: -0.3,
+      isDriveRoot: false,
+      sourceAssemblyDriveActive: false,
+      drivenViaRackId: rack.id,
+      drivenByGearId: driver.id,
+      surfaceKey: 'vertical:1:front',
+      mount: {
+        id: 'gear_upper',
+        position: 'center',
+        rotationDirection: CITY_CHANNEL_GEAR_ROTATION_DIRECTIONS.PASSIVE
+      }
+    };
+    const [entry] = createRackTranslationRuntimeEntries({
+      mapData: {
+        tiles: {},
+        walls: {},
+        racks: { [rack.id]: rack }
+      },
+      nodes: [driver]
+    });
+    const callbacks = [];
+    const runtime = {
+      config: {
+        onMechanismPreviewProgress: jest.fn()
+      },
+      mechanismPreviewFrame: null,
+      mechanismPreviewTimer: null,
+      createRuntimeSnapshotForMechanism: jest.fn((args) => ({
+        sourceAngle: args.sourceAngle,
+        extraRackDistance: args.extraRackDistances?.get?.(rack.id) || 0,
+        gears: args.extraRackDistances?.get?.(rack.id) > 0 ? {
+          [passive.id]: { speedRatio: 0.2, phase: 25 }
+        } : {}
+      })),
+      setMechanismRuntimeSnapshot: jest.fn(),
+      flashMechanismObstruction: jest.fn(),
+      cancelMechanismRuntimePreview: jest.fn(),
+      requestMechanismFrame: jest.fn((callback) => {
+        callbacks.push(callback);
+        return callbacks.length;
+      })
+    };
+    const nowSpy = jest.spyOn(Date, 'now');
+    nowSpy.mockReturnValueOnce(0);
+
+    CityChannelThreeRuntime.prototype.playMechanismRuntimePreview.call(runtime, {
+      key: createCellKey(1, 1, 0),
+      tile: createTile({
+        x: 1,
+        y: 1,
+        z: 0,
+        panelType: CITY_CHANNEL_TILE_TYPES.GEAR_PRESSURE_PLATE
+      }),
+      params: {
+        rotationAngle: 60,
+        rotationSpeedDegPerSec: 360,
+        triggerDelaySeconds: 0,
+        autoReturn: false
+      },
+      assemblyEntries: [entry],
+      gearNodes: [driver],
+      rackContactGearNodes: [driver, passive],
+      targetAngle: 60
+    });
+    nowSpy.mockReturnValue(250);
+    callbacks.shift()();
+    nowSpy.mockReturnValue(510);
+    callbacks.shift()();
+
+    expect(runtime.setMechanismRuntimeSnapshot.mock.calls.at(-1)[0]).toEqual(expect.objectContaining({
+      sourceAngle: 60,
+      extraRackDistance: expect.any(Number)
+    }));
+    expect(runtime.setMechanismRuntimeSnapshot.mock.calls.at(-1)[0].extraRackDistance).toBeGreaterThan(0);
     nowSpy.mockRestore();
   });
 });

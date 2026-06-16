@@ -4,6 +4,8 @@ import { getCityChannelMaterial } from './cityChannelCatalog';
 import {
   CITY_CHANNEL_GEAR_ROTATION_DIRECTIONS,
   CITY_CHANNEL_MECHANISM_LIMITS,
+  CITY_CHANNEL_MECHANISM_SPEED_STEPS,
+  formatMechanismRotationAngle,
   isCornerGearSocket,
   normalizeGearRotationDirection
 } from './cityChannelMechanismRuntime';
@@ -103,6 +105,84 @@ const CityChannelMechanismNumberParam = ({
       <em>{unit}</em>
     </div>
   </label>
+);
+
+const CityChannelMechanismAngleParam = ({
+  params,
+  onChange
+}) => {
+  const limits = CITY_CHANNEL_MECHANISM_LIMITS.rotationAngle;
+  const turns = Number(params.rotationTurns) || 0;
+  const updateTurns = (delta) => {
+    const turnLimits = CITY_CHANNEL_MECHANISM_LIMITS.rotationTurns;
+    const nextTurns = Math.max(turnLimits.min, Math.min(turnLimits.max, turns + delta));
+    onChange?.('rotationTurns', nextTurns);
+  };
+  return (
+    <div className="city-channel-mechanism-param city-channel-mechanism-angle">
+      <div className="city-channel-mechanism-param__label">
+        <span>转动角度</span>
+        <strong>{formatMechanismRotationAngle(params)}</strong>
+      </div>
+      <div className="city-channel-mechanism-param__row">
+        <input
+          type="range"
+          min={limits.min}
+          max={limits.max}
+          step={limits.step}
+          value={params.rotationAngle}
+          onChange={(event) => onChange?.('rotationAngle', event.target.value)}
+        />
+        <input
+          type="number"
+          min={limits.min}
+          max={limits.max}
+          step={limits.step}
+          value={params.rotationAngle}
+          onChange={(event) => onChange?.('rotationAngle', event.target.value)}
+          aria-label="转动角度"
+        />
+        <em>度</em>
+      </div>
+      <div className="city-channel-mechanism-turns" role="group" aria-label="整圈数">
+        {[-10, -1, 1, 10].map((delta) => (
+          <button
+            key={delta}
+            type="button"
+            onClick={() => updateTurns(delta)}
+          >
+            {`${delta > 0 ? '+' : ''}${delta}圈`}
+          </button>
+        ))}
+        <span>{`${turns}圈`}</span>
+      </div>
+    </div>
+  );
+};
+
+const CityChannelMechanismSpeedParam = ({
+  value,
+  onChange
+}) => (
+  <div className="city-channel-mechanism-param city-channel-mechanism-speed">
+    <div className="city-channel-mechanism-param__label">
+      <span>转动速度</span>
+      <strong>{`${value}°/秒`}</strong>
+    </div>
+    <div className="city-channel-mechanism-speed__buttons" role="group" aria-label="转动速度">
+      {CITY_CHANNEL_MECHANISM_SPEED_STEPS.map((speed) => (
+        <button
+          key={speed}
+          type="button"
+          className={speed === value ? 'is-active' : ''}
+          aria-pressed={speed === value}
+          onClick={() => onChange?.('rotationSpeedDegPerSec', speed)}
+        >
+          {speed}
+        </button>
+      ))}
+    </div>
+  </div>
 );
 
 const CityChannelGearRotationControl = ({
@@ -273,19 +353,11 @@ const CityChannelMechanismPanel = ({
       ) : null}
       {canRunActivePanel ? (
         <>
-          <CityChannelMechanismRangeParam
-            label="转动角度"
-            field="rotationAngle"
-            unit="度"
-            limits={CITY_CHANNEL_MECHANISM_LIMITS.rotationAngle}
-            value={mechanismPanelParams.rotationAngle}
+          <CityChannelMechanismAngleParam
+            params={mechanismPanelParams}
             onChange={onUpdateMechanismParam}
           />
-          <CityChannelMechanismRangeParam
-            label="转动速度"
-            field="rotationSpeedDegPerSec"
-            unit="度/秒"
-            limits={CITY_CHANNEL_MECHANISM_LIMITS.rotationSpeedDegPerSec}
+          <CityChannelMechanismSpeedParam
             value={mechanismPanelParams.rotationSpeedDegPerSec}
             onChange={onUpdateMechanismParam}
           />

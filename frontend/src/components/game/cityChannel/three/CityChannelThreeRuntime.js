@@ -19,6 +19,7 @@ import {
   getGearMountLocalPosition,
   getGearSocketWorldPosition,
   getGearSocketKind,
+  isPassiveGearRotationDirection,
   isGearSocketAboveGround,
   isCornerGearSocket,
   normalizeGearMount,
@@ -45,6 +46,8 @@ import {
   getAllowedRotationAngle,
   getAxisBindingForMount,
   getFixedAxisWorldAnchor,
+  getRackTranslationTravelLimits,
+  getSweptRackForTranslation,
   getGearMeshPlane,
   getGearRatioRadiusForMount,
   getGearSurfaceKey,
@@ -90,6 +93,7 @@ import {
   getRackAxisBindingStatus,
   getRackBindingCandidateKey,
   getRackCanonicalSegment,
+  getRackGearContacts,
   getRackPlacementRuleStatus,
   getRackSideCandidates,
   clipRackToCornerGearBlocker,
@@ -142,6 +146,39 @@ const GEAR_DIRECTION_ICON_RADIUS = CITY_CHANNEL_GEAR_OUTER_RADIUS_WORLD * 1.12;
 const MECHANICAL_PASSTHROUGH_GHOST_COLOR = 0xa5f3fc;
 const MECHANICAL_PASSTHROUGH_MESH_OPACITY = 0.1;
 const MECHANICAL_PASSTHROUGH_LINE_OPACITY = 0.78;
+const PASSIVE_INERTIA_RACK_DISTANCE_FACTOR = 0.18;
+const PASSIVE_INERTIA_MAX_RACK_DISTANCE = 0.42;
+const PASSIVE_INERTIA_DURATION_MS = 520;
+
+const getMechanismControlledProgress = (progress = 0) => {
+  const p = Math.max(0, Math.min(1, Number(progress) || 0));
+  if (p <= 0) return 0;
+  if (p >= 1) return 1;
+  const ramp = 0.12;
+  if (p < ramp) {
+    return (ramp * (1 - Math.cos((p / ramp) * Math.PI))) / 2;
+  }
+  if (p > 1 - ramp) {
+    const local = (p - (1 - ramp)) / ramp;
+    return 1 - ((ramp * (1 - Math.cos((1 - local) * Math.PI))) / 2);
+  }
+  return p;
+};
+
+const getMechanismInertiaProgress = (progress = 0) => {
+  const p = Math.max(0, Math.min(1, Number(progress) || 0));
+  return 1 - Math.pow(1 - p, 3);
+};
+
+const getRackExtraDistanceMap = (inertiaPlan = null, progress = 0) => {
+  if (!inertiaPlan?.rackDistances?.size) return new Map();
+  const eased = getMechanismInertiaProgress(progress);
+  return new Map([...inertiaPlan.rackDistances.entries()].map(([rackId, distance]) => [
+    rackId,
+    (Number(distance) || 0) * eased
+  ]));
+};
+
 const getGearTargetBlockMessage = (reason = '') => {
   if (reason === 'rack_overlap') return '目标齿轮位与齿条重叠。';
   if (reason === 'below_ground') return '目标齿轮会低于地面。';
@@ -1908,7 +1945,10 @@ export default class CityChannelThreeRuntime {
       key: rackKey
     };
     const thicknessVector = this.getRackSurfaceNormalVector(normalizedRack).normalize();
-    const bodyLift = ghost ? DOUBLE_SIDED_RACK_HEIGHT_WORLD * 0.5 + 0.014 : 0;
+    const isVerticalRack = segment.plane === RACK_PLANES.VERTICAL;
+    const bodyLift = ghost
+      ? DOUBLE_SIDED_RACK_HEIGHT_WORLD * 0.5 + 0.014
+      : (isVerticalRack ? DOUBLE_SIDED_RACK_HEIGHT_WORLD * 0.5 + 0.012 : 0);
     const startPoint = this.rackPointToThree(segment.start, bodyLift, normalizedRack);
     const endPoint = this.rackPointToThree(segment.end, bodyLift, normalizedRack);
     const startVector = new THREE.Vector3(startPoint.x, startPoint.y, startPoint.z);
@@ -7246,6 +7286,7 @@ export default class CityChannelThreeRuntime {
     gearNodes = [],
     rackContactGearNodes = [],
     sourceAngle = 0,
+    extraRackDistances = new Map(),
     basePhases = new Map(),
     obstruction = null
   } = {}) {
@@ -7257,6 +7298,7 @@ export default class CityChannelThreeRuntime {
         gearNodes,
         rackContactGearNodes,
         sourceAngle,
+        extraRackDistances,
         basePhases,
         obstruction
       });
@@ -7273,6 +7315,68 @@ export default class CityChannelThreeRuntime {
       sync: [],
       obstruction
     };
+  }
+
+  createPassiveRackInertiaPlan({
+    assemblyEntries = [],
+    gearNodes = [],
+    rackContactGearNodes = [],
+    targetAngle = 0,
+    basePhases = new Map(),
+    obstruction = null
+  } = {}) {
+    if (obstruction?.blocked) return null;
+    const contactNodes = Array.isArray(rackContactGearNodes) ? rackContactGearNodes : [];
+    const passiveNodeIds = new Set(contactNodes
+      .filter((node) => (
+        node?.id
+        && !node.isDriveRoot
+        && isPassiveGearRotationDirection(node.mount?.rotationDirection)
+      ))
+      .map((node) => node.id));
+    if (passiveNodeIds.size <= 0) return null;
+    const mapData = this.renderModel?.mapData || {};
+    const terminalSnapshot = createMechanismRuntimeSnapshot({
+      mapData,
+      assemblyEntries,
+      gearNodes,
+      rackContactGearNodes: contactNodes,
+      sourceAngle: targetAngle,
+      basePhases,
+      obstruction
+    });
+    const drivenPassiveNodeIds = new Set([...passiveNodeIds].filter((nodeId) => {
+      const state = terminalSnapshot.gears?.[nodeId];
+      return state && Math.abs(Number(state.speedRatio) || 0) > 0.000001;
+    }));
+    if (drivenPassiveNodeIds.size <= 0) return null;
+    const rackDistances = new Map();
+    (Array.isArray(assemblyEntries) ? assemblyEntries : []).forEach((entry) => {
+      const rackId = entry.rackId || entry.sourceRackId || entry.rack?.id;
+      if (!rackId || !entry.rack) return;
+      const limitedDistance = Number(terminalSnapshot.racks?.[rackId]?.runtimeLinearDistance);
+      if (!Number.isFinite(limitedDistance)) return;
+      if (Math.abs(limitedDistance) <= 0.000001) return;
+      const sweptRack = getSweptRackForTranslation(entry.rack, limitedDistance);
+      const hasPassiveContact = getRackGearContacts(sweptRack, contactNodes)
+        .some((contact) => drivenPassiveNodeIds.has(contact.node?.id));
+      if (!hasPassiveContact) return;
+      const sign = limitedDistance < 0 ? -1 : 1;
+      const contactLimits = getRackTranslationTravelLimits(entry);
+      const remainingDistance = sign > 0
+        ? Math.max(0, Number(contactLimits?.max) - limitedDistance)
+        : Math.max(0, limitedDistance - Number(contactLimits?.min));
+      const distance = sign * Math.min(
+        PASSIVE_INERTIA_MAX_RACK_DISTANCE,
+        Math.abs(limitedDistance) * PASSIVE_INERTIA_RACK_DISTANCE_FACTOR,
+        Number.isFinite(remainingDistance) ? remainingDistance : PASSIVE_INERTIA_MAX_RACK_DISTANCE
+      );
+      if (Math.abs(distance) <= 0.000001) return;
+      rackDistances.set(rackId, distance);
+    });
+    return rackDistances.size > 0
+      ? { rackDistances, durationMs: PASSIVE_INERTIA_DURATION_MS }
+      : null;
   }
 
   playMechanismRuntimePreview({
@@ -7294,8 +7398,19 @@ export default class CityChannelThreeRuntime {
       if (node?.id && !phaseNodeById.has(node.id)) phaseNodeById.set(node.id, node);
     });
     const basePhases = new Map([...phaseNodeById.values()].map((node) => [node.id, Number(node.mount?.phase) || 0]));
+    const createPassiveRackInertiaPlan = typeof this.createPassiveRackInertiaPlan === 'function'
+      ? this.createPassiveRackInertiaPlan
+      : CityChannelThreeRuntime.prototype.createPassiveRackInertiaPlan;
+    const inertiaPlan = createPassiveRackInertiaPlan.call(this, {
+      assemblyEntries,
+      gearNodes,
+      rackContactGearNodes,
+      targetAngle,
+      basePhases,
+      obstruction
+    });
     const startedAt = Date.now() + delay;
-    const applyAngle = (angle) => {
+    const applyAngle = (angle, extraRackDistances = new Map(), progressOverride = null) => {
       const snapshot = this.createRuntimeSnapshotForMechanism({
         key,
         tile,
@@ -7303,6 +7418,7 @@ export default class CityChannelThreeRuntime {
         gearNodes,
         rackContactGearNodes,
         sourceAngle: angle,
+        extraRackDistances,
         basePhases,
         obstruction
       });
@@ -7311,7 +7427,7 @@ export default class CityChannelThreeRuntime {
         active: true,
         key,
         panelType: tile?.panelType,
-        progress: Math.min(1, Math.abs(angle) / Math.max(1, Math.abs(targetAngle))),
+        progress: progressOverride ?? Math.min(1, Math.abs(angle) / Math.max(1, Math.abs(targetAngle))),
         params: normalized,
         assemblyId: sourceAssembly?.id || assemblyEntries[0]?.assembly?.id || null
       });
@@ -7326,13 +7442,34 @@ export default class CityChannelThreeRuntime {
         }
         const elapsed = now - (fromAngle === 0 ? startedAt : runStartedAt);
         const progress = Math.max(0, Math.min(1, elapsed / duration));
-        const eased = 0.5 - (Math.cos(progress * Math.PI) * 0.5);
+        const eased = getMechanismControlledProgress(progress);
         applyAngle(fromAngle + ((toAngle - fromAngle) * eased));
         if (progress < 1) {
           this.mechanismPreviewFrame = this.requestMechanismFrame(runFrame);
           return;
         }
         this.mechanismPreviewFrame = null;
+        done?.();
+      };
+      this.mechanismPreviewFrame = this.requestMechanismFrame(runFrame);
+    };
+    const animateInertia = (done = null) => {
+      if (!inertiaPlan?.rackDistances?.size) {
+        done?.();
+        return;
+      }
+      const runStartedAt = Date.now();
+      const runFrame = () => {
+        const now = Date.now();
+        const elapsed = now - runStartedAt;
+        const progress = Math.max(0, Math.min(1, elapsed / Math.max(1, inertiaPlan.durationMs || PASSIVE_INERTIA_DURATION_MS)));
+        applyAngle(targetAngle, getRackExtraDistanceMap(inertiaPlan, progress), 1);
+        if (progress < 1) {
+          this.mechanismPreviewFrame = this.requestMechanismFrame(runFrame);
+          return;
+        }
+        this.mechanismPreviewFrame = null;
+        applyAngle(targetAngle, getRackExtraDistanceMap(inertiaPlan, 1), 1);
         done?.();
       };
       this.mechanismPreviewFrame = this.requestMechanismFrame(runFrame);
@@ -7345,13 +7482,16 @@ export default class CityChannelThreeRuntime {
         this.flashMechanismObstruction(obstruction);
         return;
       }
-      if (!normalized.autoReturn) return;
-      this.mechanismPreviewTimer = setTimeout(() => {
-        animateTo(targetAngle, 0, () => {
-          applyAngle(0);
-          this.cancelMechanismRuntimePreview();
-        });
-      }, Math.round(normalized.autoReturnDelaySeconds * 1000));
+      const scheduleAutoReturn = () => {
+        if (!normalized.autoReturn) return;
+        this.mechanismPreviewTimer = setTimeout(() => {
+          animateTo(targetAngle, 0, () => {
+            applyAngle(0);
+            this.cancelMechanismRuntimePreview();
+          });
+        }, Math.round(normalized.autoReturnDelaySeconds * 1000));
+      };
+      animateInertia(scheduleAutoReturn);
     });
   }
 
@@ -7363,7 +7503,7 @@ export default class CityChannelThreeRuntime {
     this.cancelMechanismRuntimePreview();
     const mapData = this.renderModel?.mapData || {};
     const normalized = normalizeMechanismParams(paramsOverride || this.config.mechanismParams?.[key]);
-    const targetAngle = normalized.rotationAngle;
+    const targetAngle = normalized.rotationTotalAngle;
     const assemblyGraph = buildMechanicalAssemblies(mapData);
     const sourceAssembly = getAssemblyForCell(assemblyGraph, key);
     const allGearNodes = sourceAssembly?.gearMounts?.length > 0
