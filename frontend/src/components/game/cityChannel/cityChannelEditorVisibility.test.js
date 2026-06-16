@@ -5,6 +5,7 @@ import {
   getRuntimeVisibleLayerCutoff
 } from './cityChannelEditorVisibility';
 import { CITY_CHANNEL_TOOLS } from './cityChannelSchema';
+import { DOUBLE_SIDED_RACK_COMPONENT_TYPE } from './cityChannelRackModel';
 
 describe('cityChannelEditorVisibility', () => {
   it('expands a finite visible layer cutoff to include placement targets', () => {
@@ -55,6 +56,12 @@ describe('cityChannelEditorVisibility', () => {
     expect(getRuntimeVisibleLayerCutoff({
       visibleLayerCutoff: 0,
       activeTool: CITY_CHANNEL_TOOLS.PLACE_TILE,
+      carryActive: false
+    })).toBeNull();
+    expect(getRuntimeVisibleLayerCutoff({
+      visibleLayerCutoff: 0,
+      activeTool: CITY_CHANNEL_TOOLS.PLACE_COMPONENT,
+      activeComponentType: DOUBLE_SIDED_RACK_COMPONENT_TYPE,
       carryActive: false
     })).toBeNull();
     expect(getRuntimeVisibleLayerCutoff({

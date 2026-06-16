@@ -92,7 +92,11 @@ const getRequiredLayerCount = (input = {}) => {
   const sourceRacks = Array.isArray(input?.racks)
     ? input.racks
     : Object.values(input?.racks && typeof input.racks === 'object' ? input.racks : {});
-  sourceRacks.forEach((rack) => visitLayer(rack?.z ?? rack?.start?.z ?? rack?.end?.z));
+  sourceRacks.forEach((rack) => {
+    visitLayer(rack?.z);
+    visitLayer(rack?.start?.z);
+    visitLayer(rack?.end?.z);
+  });
 
   (Array.isArray(input?.entrances) ? input.entrances : []).forEach((point) => visitLayer(point?.z));
   (Array.isArray(input?.exits) ? input.exits : []).forEach((point) => visitLayer(point?.z));

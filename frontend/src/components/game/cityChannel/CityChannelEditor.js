@@ -689,6 +689,7 @@ const CityChannelEditor = ({
     visibleLayerCutoff: getRuntimeVisibleLayerCutoff({
       visibleLayerCutoff,
       activeTool,
+      activeComponentType,
       carryActive
     }),
     selection: {

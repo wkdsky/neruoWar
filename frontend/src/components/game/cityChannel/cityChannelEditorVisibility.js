@@ -44,9 +44,12 @@ export const expandVisibleLayerCutoffForTargetLayer = (currentCutoff, targetLaye
 export const getRuntimeVisibleLayerCutoff = ({
   visibleLayerCutoff = null,
   activeTool = CITY_CHANNEL_TOOLS.BROWSE,
+  activeComponentType = null,
   carryActive = false
 } = {}) => (
-  activeTool === CITY_CHANNEL_TOOLS.PLACE_TILE || carryActive
+  activeTool === CITY_CHANNEL_TOOLS.PLACE_TILE
+    || (activeTool === CITY_CHANNEL_TOOLS.PLACE_COMPONENT && !!activeComponentType)
+    || carryActive
     ? null
     : visibleLayerCutoff
 );

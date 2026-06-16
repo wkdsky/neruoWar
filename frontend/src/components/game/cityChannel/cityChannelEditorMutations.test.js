@@ -75,6 +75,30 @@ describe('cityChannelEditorMutations', () => {
     });
   });
 
+  it('normalizes map layers from both ends of a vertical rack', () => {
+    const normalized = normalizeCityChannelMap({
+      ...createBaseCityChannelMap({ name: 'vertical rack layers', layers: 2 }),
+      racks: {
+        rack_upper: {
+          id: 'rack_upper',
+          componentType: DOUBLE_SIDED_RACK_COMPONENT_TYPE,
+          plane: 'vertical',
+          direction: 'z',
+          normalAxis: 'x',
+          z: 1,
+          start: { x: 1.5, y: 1, z: 1 },
+          end: { x: 1.5, y: 1, z: 6 }
+        }
+      }
+    });
+
+    expect(normalized.layers).toBe(7);
+    expect(normalized.racks.rack_upper).toMatchObject({
+      start: { z: 1 },
+      end: { z: 6 }
+    });
+  });
+
   it('skips gear mounts that overlap a rack', () => {
     const hostKey = createCellKey(1, 1, 0);
     const mapData = {

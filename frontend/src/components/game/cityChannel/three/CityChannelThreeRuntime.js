@@ -179,6 +179,12 @@ const getRackExtraDistanceMap = (inertiaPlan = null, progress = 0) => {
   ]));
 };
 
+const normalizeRuntimeVisibleLayerCutoff = (value = null) => {
+  if (value === null || value === undefined) return null;
+  const numeric = Number(value);
+  return Number.isFinite(numeric) ? numeric : null;
+};
+
 const getGearTargetBlockMessage = (reason = '') => {
   if (reason === 'rack_overlap') return '目标齿轮位与齿条重叠。';
   if (reason === 'below_ground') return '目标齿轮会低于地面。';
@@ -1443,9 +1449,7 @@ export default class CityChannelThreeRuntime {
     this.ghostMesh = null;
     this.ghostGroup = null;
     this.carryGhostGroup = null;
-    const visibleLayerCutoff = Number.isFinite(Number(this.config.visibleLayerCutoff))
-      ? Number(this.config.visibleLayerCutoff)
-      : null;
+    const visibleLayerCutoff = normalizeRuntimeVisibleLayerCutoff(this.config.visibleLayerCutoff);
     const transforms = [
       ...(this.renderModel?.tiles || []),
       ...(this.renderModel?.walls || [])
@@ -2070,10 +2074,11 @@ export default class CityChannelThreeRuntime {
 
   addRacks(visibleLayerCutoff = null) {
     const mapData = this.renderModel?.mapData || {};
+    const cutoff = normalizeRuntimeVisibleLayerCutoff(visibleLayerCutoff);
     Object.values(mapData.racks || {}).forEach((rack) => {
       if (
-        Number.isFinite(Number(visibleLayerCutoff))
-        && (Number(rack.z) || 0) > Number(visibleLayerCutoff)
+        cutoff !== null
+        && (Number(rack.z) || 0) > cutoff
       ) {
         return;
       }

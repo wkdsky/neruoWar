@@ -10,6 +10,7 @@ import {
   getCityChannelMapPlaneLevels,
   getThumbnailYawForThreeCamera
 } from './CityChannelThumbnail';
+import { DOUBLE_SIDED_RACK_COMPONENT_TYPE } from './cityChannelRackModel';
 
 describe('CityChannelThumbnail layer levels', () => {
   it('includes wall-only and vertical-tile-only upper layers', () => {
@@ -47,5 +48,27 @@ describe('CityChannelThumbnail layer levels', () => {
     expect(getThumbnailYawForThreeCamera(45)).toBe(0);
     expect(getThumbnailYawForThreeCamera(90)).toBe(45);
     expect(getThumbnailYawForThreeCamera(0)).toBe(315);
+  });
+
+  it('includes upper layers used only by vertical racks', () => {
+    const mapData = {
+      ...createBaseCityChannelMap({ layers: 4 }),
+      tiles: {},
+      walls: {},
+      racks: {
+        rack_upper: {
+          id: 'rack_upper',
+          componentType: DOUBLE_SIDED_RACK_COMPONENT_TYPE,
+          plane: 'vertical',
+          direction: 'z',
+          normalAxis: 'x',
+          z: 1,
+          start: { x: 1.5, y: 1, z: 1 },
+          end: { x: 1.5, y: 1, z: 3 }
+        }
+      }
+    };
+
+    expect(getCityChannelMapPlaneLevels(mapData)).toEqual([0, 1, 3]);
   });
 });

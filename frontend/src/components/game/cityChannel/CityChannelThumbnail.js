@@ -93,6 +93,11 @@ export const getCityChannelMapPlaneLevels = (mapData = {}) => {
   Object.values(mapData.walls || {}).forEach((wall) => {
     levels.add(Number(wall.z) || 0);
   });
+  Object.values(mapData.racks || {}).forEach((rack) => {
+    levels.add(Number(rack.z) || 0);
+    levels.add(Number(rack.start?.z) || 0);
+    levels.add(Number(rack.end?.z) || 0);
+  });
   return Array.from(levels).sort((a, b) => a - b);
 };
 

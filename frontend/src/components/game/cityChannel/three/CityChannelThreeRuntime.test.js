@@ -942,6 +942,45 @@ describe('CityChannelThreeRuntime pointer release flow', () => {
     );
   });
 
+  it('builds elevated rack meshes when runtime layer cutoff is disabled', () => {
+    const rack = {
+      id: 'rack_upper',
+      componentType: DOUBLE_SIDED_RACK_COMPONENT_TYPE,
+      plane: 'vertical',
+      direction: 'y',
+      normalAxis: 'x',
+      z: 1,
+      start: { x: 1.5, y: 0.5, z: 1 },
+      end: { x: 1.5, y: 2.5, z: 1 }
+    };
+    const createRuntime = () => {
+      const group = new THREE.Group();
+      return createRuntimeObject({
+        renderModel: {
+          mapData: {
+            ...createBaseCityChannelMap({ width: 6, height: 6, layers: 4 }),
+            racks: { [rack.id]: rack }
+          }
+        },
+        worldGroup: new THREE.Group(),
+        createRackRenderGroup: jest.fn(() => group)
+      });
+    };
+    const hiddenRuntime = createRuntime();
+    const visibleRuntime = createRuntime();
+
+    CityChannelThreeRuntime.prototype.addRacks.call(hiddenRuntime, 0);
+    CityChannelThreeRuntime.prototype.addRacks.call(visibleRuntime, null);
+
+    expect(hiddenRuntime.createRackRenderGroup).not.toHaveBeenCalled();
+    expect(hiddenRuntime.worldGroup.children).toHaveLength(0);
+    expect(visibleRuntime.createRackRenderGroup).toHaveBeenCalledWith(
+      rack,
+      expect.objectContaining({ renderOrder: expect.any(Number) })
+    );
+    expect(visibleRuntime.worldGroup.children).toHaveLength(1);
+  });
+
   it('renders a vertical rack tangent ghost horizontally within the wall plane', () => {
     const runtime = createRuntimeObject({
       renderModel: {
