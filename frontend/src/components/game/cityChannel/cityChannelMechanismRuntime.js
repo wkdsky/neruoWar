@@ -696,37 +696,6 @@ const arePortsAligned = (fromPort, toPort) => {
   return Math.abs((fromPos.y || 0) - (toPos.y || 0)) <= 0.08;
 };
 
-const getTransmissionSurfaceNormal = (component = {}) => {
-  if (component.edge) {
-    const normal = directionVector[component.edge] || directionVector.north;
-    return { x: normal.x || 0, y: normal.y || 0, z: 0 };
-  }
-  if (component.isVertical) {
-    const normal = rotateGearLocalPosition({ x: 0, y: 1 }, component.rotation || 0);
-    return { x: normal.x || 0, y: normal.y || 0, z: 0 };
-  }
-  return { x: 0, y: 0, z: 1 };
-};
-
-const areTransmissionSurfacesParallel = (a = {}, b = {}, epsilon = 0.001) => {
-  const normalA = getTransmissionSurfaceNormal(a);
-  const normalB = getTransmissionSurfaceNormal(b);
-  const dot = (normalA.x * normalB.x) + (normalA.y * normalB.y) + (normalA.z * normalB.z);
-  return Math.abs(Math.abs(dot) - 1) <= epsilon;
-};
-
-const isHorizontalTransmissionSurface = (component = {}) => (
-  Math.abs(getTransmissionSurfaceNormal(component).z) > 0.98
-);
-
-const areSocketPortsConnectable = (fromComponent, fromPort, toComponent, toPort) => {
-  if (!fromPort || !toPort) return false;
-  if (areTransmissionSurfacesParallel(fromComponent, toComponent)) {
-    return toPort.worldDirection === oppositeDirection[fromPort.worldDirection];
-  }
-  return isHorizontalTransmissionSurface(fromComponent) !== isHorizontalTransmissionSurface(toComponent);
-};
-
 const getCellVerticalEndpoints = (rotation = 0) => {
   const normalized = ((Number.parseInt(rotation, 10) || 0) % 180 + 180) % 180;
   return normalized === 90
@@ -917,12 +886,6 @@ export const buildMechanicalAssemblies = (mapData = {}) => {
         const toEntry = entries[toIndex];
         if (fromEntry.componentKey === toEntry.componentKey) continue;
         if (hasGraphEdge(graph, fromEntry.componentKey, toEntry.componentKey)) continue;
-        if (!areSocketPortsConnectable(
-          components[fromEntry.componentKey],
-          fromEntry.port,
-          components[toEntry.componentKey],
-          toEntry.port
-        )) continue;
         addEdge(graph, fromEntry.componentKey, toEntry.componentKey, {
           from: { componentKey: fromEntry.componentKey, portId: fromEntry.port.id },
           to: { componentKey: toEntry.componentKey, portId: toEntry.port.id },

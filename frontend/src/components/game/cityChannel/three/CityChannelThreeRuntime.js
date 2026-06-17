@@ -1264,6 +1264,35 @@ export default class CityChannelThreeRuntime {
     );
   }
 
+  getThreePointFromRuntimeWorldPoint(point = null, lift = 0) {
+    if (!point) return null;
+    const mapData = this.renderModel?.mapData || {};
+    const position = cellToThreePosition({
+      x: Number(point.x) || 0,
+      y: Number(point.y) || 0,
+      z: Number(point.z) || 0
+    }, mapData);
+    return {
+      x: position.x,
+      y: ((Number(point.z) || 0) * CITY_CHANNEL_THREE_DIMENSIONS.layerHeight)
+        + (CITY_CHANNEL_THREE_DIMENSIONS.tileThickness * 0.5)
+        + lift,
+      z: position.z
+    };
+  }
+
+  getRuntimeThreeGearWorldPoint(runtimeGear = null, baseThreePoint = null) {
+    const baseWorldPoint = runtimeGear?.worldPoint || null;
+    const runtimeWorldPoint = runtimeGear?.runtimeWorldPoint || null;
+    if (!baseWorldPoint || !runtimeWorldPoint || !baseThreePoint) return baseThreePoint;
+    return {
+      x: (Number(baseThreePoint.x) || 0) + ((Number(runtimeWorldPoint.x) || 0) - (Number(baseWorldPoint.x) || 0)),
+      y: (Number(baseThreePoint.y) || 0)
+        + (((Number(runtimeWorldPoint.z) || 0) - (Number(baseWorldPoint.z) || 0)) * CITY_CHANNEL_THREE_DIMENSIONS.layerHeight),
+      z: (Number(baseThreePoint.z) || 0) + ((Number(runtimeWorldPoint.y) || 0) - (Number(baseWorldPoint.y) || 0))
+    };
+  }
+
   getRuntimePlacementMatrix(transform = null, runtimePlacement = null) {
     if (!transform?.placement || !runtimePlacement) return null;
     const translation = this.getThreeTranslationFromRuntimeOffset(runtimePlacement.runtimeTranslation);
@@ -1282,21 +1311,29 @@ export default class CityChannelThreeRuntime {
         position: runtimePlacement.runtimeAxisSocket,
         surface
       } : null);
-    const pivot = mount
+    const basePivot = mount
       ? getThreeGearSurfacePoint(fixedTransform, mount)
       : (runtimePlacement.runtimeAnchorLocal ? getThreeSurfacePoint(fixedTransform, runtimePlacement.runtimeAnchorLocal, {
         lift: (CITY_CHANNEL_GEAR_THICKNESS_WORLD * 0.5) + 0.012,
         rotate: fixedTransform.kind === 'tile',
         surface
       }) : null);
+    const runtimeAnchorPoint = runtimePlacement.runtimeAxisAnchor || runtimePlacement.runtimePivotWorld || null;
+    const pivot = runtimeAnchorPoint
+      ? this.getThreePointFromRuntimeWorldPoint(runtimeAnchorPoint)
+      : basePivot;
     const normal = getThreeSurfaceNormal(fixedTransform, mount?.surface || surface);
-    if (!pivot || !normal) return null;
+    if (!pivot || !basePivot || !normal) return null;
     const axis = new THREE.Vector3(normal.x || 0, normal.y || 0, normal.z || 0);
     if (axis.lengthSq() <= 0.000001) return null;
     axis.normalize();
     const pivotMatrix = new THREE.Matrix4().makeTranslation(pivot.x || 0, pivot.y || 0, pivot.z || 0);
     const rotationMatrix = new THREE.Matrix4().makeRotationAxis(axis, -(angle * Math.PI / 180));
-    const unpivotMatrix = new THREE.Matrix4().makeTranslation(-(pivot.x || 0), -(pivot.y || 0), -(pivot.z || 0));
+    const unpivotMatrix = new THREE.Matrix4().makeTranslation(
+      -(basePivot.x || 0),
+      -(basePivot.y || 0),
+      -(basePivot.z || 0)
+    );
     return pivotMatrix.multiply(rotationMatrix).multiply(unpivotMatrix);
   }
 
@@ -1327,6 +1364,7 @@ export default class CityChannelThreeRuntime {
     (this.gearMeshes || new Map()).forEach((gear, gearKey) => {
       this.syncGearMeshRuntimeTransform(gear, gearKey, placements, snapshot);
     });
+    this.syncMechanismObstructionFlashTargets?.();
     this.syncSelectionFromConfig?.();
     this.requestRender?.();
     this.emitStatus?.();
@@ -2396,7 +2434,12 @@ export default class CityChannelThreeRuntime {
       suppressAxisBinding
     });
     const attachmentHasRuntimePlacement = !!placements?.[attachment.componentKey];
-    const basePhase = runtimeGear && suppressAxisBinding
+    const hasRuntimeGearSpin = !!(
+      runtimeGear
+      && Number.isFinite(Number(runtimeGear.speedRatio))
+      && Math.abs(Number(runtimeGear.speedRatio)) > 0.000001
+    );
+    const basePhase = runtimeGear && (suppressAxisBinding || hasRuntimeGearSpin)
       ? (runtimeGear.phase ?? data.mount.phase ?? 0)
       : attachmentHasRuntimePlacement
       ? (Number(data.mount.phase) || 0)
@@ -2404,7 +2447,11 @@ export default class CityChannelThreeRuntime {
     const phase = typeof this.getGearVisualPhase === 'function'
       ? this.getGearVisualPhase(data.hostKey || data.transform.key, data.mount.id, basePhase)
       : basePhase;
-    const worldPoint = this.getGearAttachmentWorldPoint(attachment, placements);
+    const attachmentWorldPoint = this.getGearAttachmentWorldPoint(attachment, placements);
+    const baseAttachmentPoint = runtimeGear?.runtimeWorldPoint
+      ? getThreeGearSurfacePoint(attachment.transform, attachment.mount)
+      : attachmentWorldPoint;
+    const worldPoint = this.getRuntimeThreeGearWorldPoint(runtimeGear, baseAttachmentPoint) || attachmentWorldPoint;
     if (worldPoint) {
       const position = new THREE.Vector3(worldPoint.x || 0, worldPoint.y || 0, worldPoint.z || 0);
       const parent = gear.parent || null;
@@ -2992,8 +3039,12 @@ export default class CityChannelThreeRuntime {
         mount: node.attachmentMount || node.mount
       }
       : this.getGearAttachmentContext(node.transform, node.mount);
-    const transform = this.getRuntimeTransform(attachment.transform);
-    return getThreeGearSurfacePoint(transform, attachment.mount);
+    const runtimeGear = this.mechanismRuntimeSnapshot?.gears?.[node.id] || null;
+    const transform = runtimeGear?.runtimeWorldPoint
+      ? attachment.transform
+      : this.getRuntimeTransform(attachment.transform);
+    const point = getThreeGearSurfacePoint(transform, attachment.mount);
+    return this.getRuntimeThreeGearWorldPoint(runtimeGear, point);
   }
 
   createGearContactMarkerGroup({
@@ -6821,7 +6872,160 @@ export default class CityChannelThreeRuntime {
       : getTileThreeTransform(placement, mapData);
   }
 
-  addObstructionFlashPlacement(placement = null) {
+  getObstructionPlacementIdentity(placement = null) {
+    if (!placement) return null;
+    if (placement.edge) {
+      const componentKey = createWallKey(placement.x, placement.y, placement.z, placement.edge);
+      return {
+        type: 'placement',
+        componentKey,
+        hostKind: 'wall',
+        dedupeKey: `wall:${componentKey}`
+      };
+    }
+    const componentKey = createCellKey(placement.x, placement.y, placement.z);
+    return {
+      type: 'placement',
+      componentKey,
+      hostKind: 'tile',
+      dedupeKey: `tile:${componentKey}`
+    };
+  }
+
+  isRuntimeObstructionPlacement(placement = null) {
+    if (!placement) return false;
+    return !!(
+      placement.runtimeMotionType
+      || placement.runtimeTranslation
+      || placement.runtimePivotWorld
+      || placement.runtimeAxisAnchor
+      || Number.isFinite(Number(placement.runtimeAngle))
+    );
+  }
+
+  getObstructionPlacementTarget(input = null, explicitComponentKey = null) {
+    const isTarget = !!input?.placement && (
+      Object.prototype.hasOwnProperty.call(input, 'componentKey')
+      || Object.prototype.hasOwnProperty.call(input, 'hostKind')
+    );
+    const placement = isTarget ? input.placement : input;
+    if (!placement) return null;
+    const getPlacementIdentity = typeof this.getObstructionPlacementIdentity === 'function'
+      ? this.getObstructionPlacementIdentity
+      : CityChannelThreeRuntime.prototype.getObstructionPlacementIdentity;
+    const isRuntimePlacement = typeof this.isRuntimeObstructionPlacement === 'function'
+      ? this.isRuntimeObstructionPlacement
+      : CityChannelThreeRuntime.prototype.isRuntimeObstructionPlacement;
+    const fallbackIdentity = getPlacementIdentity.call(this, placement);
+    const componentKey = explicitComponentKey || input?.componentKey || fallbackIdentity?.componentKey || '';
+    const hostKind = input?.hostKind || fallbackIdentity?.hostKind || (placement.edge ? 'wall' : 'tile');
+    const runtimePlacement = isRuntimePlacement.call(this, placement);
+    const dedupeKey = componentKey
+      ? `${runtimePlacement ? 'runtime' : 'live'}:${hostKind}:${componentKey}`
+      : fallbackIdentity?.dedupeKey;
+    return {
+      type: 'placement',
+      placement,
+      componentKey,
+      hostKind,
+      runtimePlacement,
+      dedupeKey
+    };
+  }
+
+  syncMechanismObstructionPlacementFlash(group = null) {
+    const target = group?.userData?.mechanismObstructionFlashTarget || null;
+    if (!target?.componentKey || typeof this.getPlacementMeshForComponent !== 'function') return false;
+    const mesh = this.getPlacementMeshForComponent(target.componentKey, target.hostKind);
+    if (!mesh || typeof this.syncBoardOverlayGroup !== 'function') return false;
+    this.syncBoardOverlayGroup(group, mesh, {
+      fillScale: 1.046,
+      outlineScale: 1.069,
+      glowScale: 1.105,
+      renderOrder: MECHANISM_OBSTRUCTION_FLASH_RENDER_ORDER
+    });
+    return true;
+  }
+
+  syncMechanismObstructionRackFlash(group = null) {
+    const target = group?.userData?.mechanismObstructionFlashTarget || null;
+    if (!target?.rackKey) return false;
+    const baseGroup = this.rackGroups?.get(target.rackKey);
+    if (!baseGroup) return false;
+    baseGroup.updateMatrixWorld?.(true);
+    group.matrixAutoUpdate = false;
+    group.matrix.copy(baseGroup.matrix || new THREE.Matrix4());
+    group.matrixWorldNeedsUpdate = true;
+    group.updateMatrixWorld?.(true);
+    return true;
+  }
+
+  syncMechanismObstructionGearFlash(group = null) {
+    const target = group?.userData?.mechanismObstructionFlashTarget || null;
+    if (!target?.gearKey) return false;
+    const gear = this.gearMeshes?.get?.(target.gearKey);
+    if (!gear) return false;
+    gear.updateWorldMatrix?.(true, false);
+    const position = new THREE.Vector3();
+    const quaternion = new THREE.Quaternion();
+    const scale = new THREE.Vector3();
+    gear.matrixWorld.decompose(position, quaternion, scale);
+    group.position.copy(position);
+    group.quaternion.copy(quaternion);
+    group.scale.copy(scale).multiplyScalar(1.075);
+    group.updateMatrixWorld?.(true);
+    return true;
+  }
+
+  syncMechanismObstructionFlashTargets() {
+    if (!this.mechanismFlashGroup) return false;
+    let synced = false;
+    this.mechanismFlashGroup.children.forEach((child) => {
+      const target = child?.userData?.mechanismObstructionFlashTarget || null;
+      if (!target?.type) return;
+      if (target.type === 'placement') {
+        synced = this.syncMechanismObstructionPlacementFlash(child) || synced;
+      } else if (target.type === 'rack') {
+        synced = this.syncMechanismObstructionRackFlash(child) || synced;
+      } else if (target.type === 'gear') {
+        synced = this.syncMechanismObstructionGearFlash(child) || synced;
+      }
+    });
+    return synced;
+  }
+
+  addObstructionFlashPlacement(input = null) {
+    const getPlacementTarget = typeof this.getObstructionPlacementTarget === 'function'
+      ? this.getObstructionPlacementTarget
+      : CityChannelThreeRuntime.prototype.getObstructionPlacementTarget;
+    const target = getPlacementTarget.call(this, input);
+    const placement = target?.placement || null;
+    const mesh = target?.componentKey && typeof this.getPlacementMeshForComponent === 'function'
+      ? this.getPlacementMeshForComponent(target.componentKey, target.hostKind)
+      : null;
+    if (
+      mesh
+      && typeof this.createBoardOverlayGroup === 'function'
+      && typeof this.syncBoardOverlayGroup === 'function'
+    ) {
+      const group = this.createBoardOverlayGroup({
+        fillMaterial: this.mechanismObstructionFillMaterial,
+        outlineMaterial: this.mechanismObstructionOutlineMaterial,
+        glowMaterial: this.mechanismObstructionGlowMaterial,
+        renderOrder: MECHANISM_OBSTRUCTION_FLASH_RENDER_ORDER
+      });
+      group.userData.cityChannelGearRole = 'mechanism_obstruction_board';
+      group.userData.mechanismObstructionFlashTarget = target;
+      if (group.userData.fill) group.userData.fill.userData.cityChannelGearRole = 'mechanism_obstruction_fill';
+      if (group.userData.glow) group.userData.glow.userData.cityChannelGearRole = 'mechanism_obstruction_glow';
+      if (group.userData.outline) group.userData.outline.userData.cityChannelGearRole = 'mechanism_obstruction_outline';
+      const syncPlacementFlash = typeof this.syncMechanismObstructionPlacementFlash === 'function'
+        ? this.syncMechanismObstructionPlacementFlash
+        : CityChannelThreeRuntime.prototype.syncMechanismObstructionPlacementFlash;
+      syncPlacementFlash.call(this, group);
+      this.mechanismFlashGroup.add(group);
+      return true;
+    }
     const transform = this.getObstructionPlacementTransform(placement);
     if (!transform?.size || !transform?.position) return false;
     const geometry = new THREE.BoxGeometry(transform.size.x, transform.size.y, transform.size.z);
@@ -6857,6 +7061,7 @@ export default class CityChannelThreeRuntime {
   addObstructionFlashRack(rack = null) {
     const normalizedRack = normalizeRack(rack, this.renderModel?.mapData || {});
     if (!normalizedRack) return false;
+    const rackKey = createRackKey(normalizedRack);
     const rackGroup = this.createRackRenderGroup(normalizedRack, {
       ghost: true,
       valid: true,
@@ -6877,7 +7082,11 @@ export default class CityChannelThreeRuntime {
         child.renderOrder = MECHANISM_OBSTRUCTION_FLASH_RENDER_ORDER + 1;
       }
     });
-    const baseGroup = this.rackGroups?.get(createRackKey(normalizedRack));
+    rackGroup.userData.mechanismObstructionFlashTarget = {
+      type: 'rack',
+      rackKey
+    };
+    const baseGroup = this.rackGroups?.get(rackKey);
     if (baseGroup) {
       rackGroup.matrixAutoUpdate = false;
       rackGroup.matrix.copy(baseGroup.matrix || new THREE.Matrix4());
@@ -6901,6 +7110,10 @@ export default class CityChannelThreeRuntime {
     gear.matrixWorld.decompose(position, quaternion, scale);
 
     const group = new THREE.Group();
+    group.userData.mechanismObstructionFlashTarget = {
+      type: 'gear',
+      gearKey
+    };
     group.position.copy(position);
     group.quaternion.copy(quaternion);
     group.scale.copy(scale).multiplyScalar(1.075);
@@ -6937,17 +7150,31 @@ export default class CityChannelThreeRuntime {
   }
 
   flashMechanismObstruction(obstruction = null) {
-    const obstructionPlacements = [
-      ...(Array.isArray(obstruction?.placements) ? obstruction.placements : []),
-      obstruction?.placement,
-      ...(Array.isArray(obstruction?.obstacles) ? obstruction.obstacles : []),
-      obstruction?.obstacle
-    ].filter(Boolean);
-    const placements = [...new Map(obstructionPlacements.map((placement) => [
-      placement.edge
-        ? `${placement.x}:${placement.y}:${placement.z}:${placement.edge}`
-        : `${placement.x}:${placement.y}:${placement.z}:${placement.isVertical ? 'vertical' : 'horizontal'}:${placement.runtimeSurfaceRotation ?? placement.rotation ?? 0}`,
-      placement
+    const getPlacementTarget = typeof this.getObstructionPlacementTarget === 'function'
+      ? this.getObstructionPlacementTarget
+      : CityChannelThreeRuntime.prototype.getObstructionPlacementTarget;
+    const placementTargets = [];
+    const addPlacementTarget = (placement = null, componentKey = null) => {
+      const target = getPlacementTarget.call(this, placement, componentKey);
+      if (target?.placement) placementTargets.push(target);
+    };
+    const placementKeys = Array.isArray(obstruction?.placementKeys) ? obstruction.placementKeys : [];
+    (Array.isArray(obstruction?.placements) ? obstruction.placements : []).forEach((placement, index) => {
+      addPlacementTarget(placement, placementKeys[index] || obstruction?.componentKey || null);
+    });
+    addPlacementTarget(obstruction?.placement, obstruction?.componentKey || placementKeys[0] || null);
+    const obstacleKeys = Array.isArray(obstruction?.obstacleKeys) ? obstruction.obstacleKeys : [];
+    (Array.isArray(obstruction?.obstacles) ? obstruction.obstacles : []).forEach((placement, index) => {
+      addPlacementTarget(placement, obstacleKeys[index] || null);
+    });
+    addPlacementTarget(obstruction?.obstacle, obstruction?.obstacleKey || obstacleKeys[0] || null);
+    const placements = [...new Map(placementTargets.map((target) => [
+      target.dedupeKey || (
+        target.placement.edge
+          ? `${target.placement.x}:${target.placement.y}:${target.placement.z}:${target.placement.edge}`
+          : `${target.placement.x}:${target.placement.y}:${target.placement.z}:${target.placement.isVertical ? 'vertical' : 'horizontal'}:${target.placement.runtimeSurfaceRotation ?? target.placement.rotation ?? 0}`
+      ),
+      target
     ])).values()];
     const mapData = this.renderModel?.mapData || {};
     const rackIds = [
@@ -6980,8 +7207,8 @@ export default class CityChannelThreeRuntime {
       || !this.mechanismFlashGroup
     ) return false;
     this.clearMechanismObstructionFlash();
-    const added = placements.reduce((count, placement) => (
-      this.addObstructionFlashPlacement(placement) ? count + 1 : count
+    const added = placements.reduce((count, target) => (
+      this.addObstructionFlashPlacement(target) ? count + 1 : count
     ), 0);
     const addedRacks = rackTargets.reduce((count, rack) => (
       this.addObstructionFlashRack(rack) ? count + 1 : count
@@ -7008,6 +7235,7 @@ export default class CityChannelThreeRuntime {
       this.clearMechanismObstructionFlash();
       return false;
     }
+    this.syncMechanismObstructionFlashTargets?.();
     const pulse = Math.abs(Math.sin(progress * Math.PI * 4));
     const envelope = Math.sin(progress * Math.PI);
     const alpha = Math.max(0, Math.min(1, (0.28 + (pulse * 0.72)) * envelope));

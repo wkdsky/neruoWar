@@ -439,6 +439,100 @@ export const getRuntimeRackForTranslation = ({
   };
 };
 
+const getRuntimePlacementTranslation = (basePlacement = null, runtimePlacement = null) => {
+  if (!basePlacement || !runtimePlacement) return null;
+  const explicit = runtimePlacement.runtimeTranslation;
+  if (
+    explicit
+    && (
+      Number.isFinite(Number(explicit.x))
+      || Number.isFinite(Number(explicit.y))
+      || Number.isFinite(Number(explicit.z))
+    )
+  ) {
+    return {
+      x: roundRuntimeNumber(explicit.x),
+      y: roundRuntimeNumber(explicit.y),
+      z: roundRuntimeNumber(explicit.z)
+    };
+  }
+  const translation = {
+    x: roundRuntimeNumber((Number(runtimePlacement.x) || 0) - (Number(basePlacement.x) || 0)),
+    y: roundRuntimeNumber((Number(runtimePlacement.y) || 0) - (Number(basePlacement.y) || 0)),
+    z: roundRuntimeNumber((Number(runtimePlacement.z) || 0) - (Number(basePlacement.z) || 0))
+  };
+  return Math.hypot(translation.x, translation.y, translation.z) > RACK_CONTACT_TRAVEL_EPSILON
+    ? translation
+    : null;
+};
+
+const getRackTranslationLinearDistance = (rack = {}, translation = {}) => {
+  const axis = getRackAxisUnitVector(rack);
+  return roundRuntimeNumber(
+    ((Number(axis.x) || 0) * (Number(translation.x) || 0))
+    + ((Number(axis.y) || 0) * (Number(translation.y) || 0))
+    + ((Number(axis.z) || 0) * (Number(translation.z) || 0))
+  );
+};
+
+const getRuntimeRackForBoundPlacementTranslation = ({
+  rack = {},
+  rackId = '',
+  basePlacement = null,
+  runtimePlacement = null,
+  binding = null
+} = {}) => {
+  const translation = getRuntimePlacementTranslation(basePlacement, runtimePlacement);
+  if (!translation) return null;
+  const linearDistance = getRackTranslationLinearDistance(rack, translation);
+  return {
+    ...rack,
+    start: translateRuntimePoint(rack.start || {}, translation),
+    end: translateRuntimePoint(rack.end || {}, translation),
+    z: roundRuntimeNumber((Number(rack.z) || 0) + (Number(translation.z) || 0)),
+    runtimeMotionType: RACK_TRANSLATION_MOTION_TYPE,
+    runtimeRackId: rackId || rack.id || null,
+    runtimeTranslation: translation,
+    runtimeLinearDistance: linearDistance,
+    runtimeCarryDistance: roundRuntimeNumber(Math.hypot(translation.x, translation.y, translation.z)),
+    runtimeBoundComponentKey: binding?.componentKey || null
+  };
+};
+
+const applyBoundRackRuntimeTranslations = ({
+  mapData = {},
+  placements = {},
+  racks = {},
+  skipRackIds = new Set()
+} = {}) => {
+  const applied = [];
+  Object.entries(mapData.racks || {}).forEach(([rackKey, rack]) => {
+    const rackId = rack?.id || rackKey;
+    if (!rackId || skipRackIds.has(rackId)) return;
+    const status = getRackAxisBindingStatus({ mapData, rack });
+    const binding = status.valid ? status.binding : null;
+    if (!binding?.componentKey) return;
+    const basePlacement = getPlacementByComponentKey(mapData, binding.componentKey);
+    const runtimePlacement = placements[binding.componentKey];
+    const runtimeRack = getRuntimeRackForBoundPlacementTranslation({
+      rack,
+      rackId,
+      basePlacement,
+      runtimePlacement,
+      binding
+    });
+    if (!runtimeRack) return;
+    racks[rackId] = runtimeRack;
+    applied.push({
+      rackId,
+      rack,
+      runtimeRack,
+      linearDistance: Number(runtimeRack.runtimeLinearDistance) || 0
+    });
+  });
+  return applied;
+};
+
 const getVerticalSurfaceFrame = (placement = {}, mount = {}) => {
   const edge = placement.edge || null;
   const yaw = edge ? wallEdgeToRotation(edge) : normalizeRotation(placement.rotation || 0);
@@ -1376,6 +1470,7 @@ export const createAxisBindingRuntimeEntryFromGearNode = ({
     baseRotation: boundPlacement?.edge ? 0 : (Number(boundPlacement?.rotation) || 0),
     driveRatio: Number(driveRatio) || 1,
     phase: Number(gearNode.mount?.phase) || 0,
+    sourceGearNodeId: gearNode.id || getGearNodeRuntimeId(gearNode),
     sourceGearComponentKey: gearNode.componentKey,
     sourceGearMountId: gearNode.mountId
   };
@@ -1552,21 +1647,24 @@ export const createRackTranslationRuntimeEntries = ({
   const entries = [];
   const seen = new Set();
   Object.values(mapData.racks || {}).forEach((rack) => {
-    const contacts = getRackGearContacts(getRackForHandoffContactSearch(rack), nodes)
+    const currentContacts = getRackGearContacts(rack, nodes)
       .filter((contact) => drivenNodeIds.has(contact.node.id));
-    const driveContacts = contacts.filter((contact) => isRackDriveSourceContact(rack, contact));
-    if (driveContacts.length <= 0) return;
+    const currentDriveContacts = currentContacts.filter((contact) => isRackDriveSourceContact(rack, contact));
+    if (currentDriveContacts.length <= 0) return;
+    const handoffContacts = getRackGearContacts(getRackForHandoffContactSearch(rack), nodes)
+      .filter((contact) => drivenNodeIds.has(contact.node.id));
+    const handoffDriveContacts = handoffContacts.filter((contact) => isRackDriveSourceContact(rack, contact));
     const status = getRackAxisBindingStatus({ mapData, rack });
     const preferredAxis = status.candidate?.point
       ? getRackAxisValueForPoint(rack, status.candidate.point)
       : null;
-    const contact = driveContacts.reduce((best, item) => {
+    const contact = currentDriveContacts.reduce((best, item) => {
       const distance = Number.isFinite(preferredAxis) ? Math.abs((item.rackAxis || 0) - preferredAxis) : 0;
       return !best || distance < best.distance ? { item, distance } : best;
     }, null)?.item;
-    const driveConflict = createRackDriveConflict(rack, driveContacts);
+    const driveConflict = createRackDriveConflict(rack, currentDriveContacts);
     const driveCoefficient = getRackContactDriveCoefficient(rack, contact);
-    const sourceContacts = driveContacts.filter((item) => (
+    const sourceContacts = handoffDriveContacts.filter((item) => (
       Math.abs(getRackContactDriveCoefficient(rack, item) - driveCoefficient) <= RACK_CONTACT_TRAVEL_EPSILON
     ));
     const entry = createRackTranslationRuntimeEntryFromContact({
@@ -2324,6 +2422,13 @@ const MECHANISM_CONFLICT_PRIORITY = {
   collisionBlock: 40
 };
 
+const getMechanismConflictMotionMagnitude = (conflict = {}) => {
+  const values = [conflict.sourceAngle, conflict.angle, conflict.distance, conflict.linearDistance]
+    .map((value) => Math.abs(Number(value)))
+    .filter((value) => Number.isFinite(value));
+  return values.length > 0 ? Math.min(...values) : Infinity;
+};
+
 const sortMechanismConflicts = (conflicts = []) => (
   (Array.isArray(conflicts) ? conflicts : [])
     .map((conflict, index) => ({ conflict, index }))
@@ -2331,7 +2436,8 @@ const sortMechanismConflicts = (conflicts = []) => (
       const leftPriority = MECHANISM_CONFLICT_PRIORITY[a.conflict?.type] ?? 1000;
       const rightPriority = MECHANISM_CONFLICT_PRIORITY[b.conflict?.type] ?? 1000;
       return leftPriority === rightPriority
-        ? a.index - b.index
+        ? getMechanismConflictMotionMagnitude(a.conflict) - getMechanismConflictMotionMagnitude(b.conflict)
+          || a.index - b.index
         : leftPriority - rightPriority;
     })
     .map(({ conflict }) => conflict)
@@ -2751,6 +2857,64 @@ const getGearNodeRuntimeId = (node = {}) => (
   node.id || (node.componentKey && node.mountId ? `${node.componentKey}:${node.mountId}` : null)
 );
 
+const cloneRuntimePoint = (point = null) => {
+  if (!point) return null;
+  return {
+    x: roundRuntimeNumber(point.x),
+    y: roundRuntimeNumber(point.y),
+    z: roundRuntimeNumber(point.z)
+  };
+};
+
+const getRuntimePointDelta = (from = null, to = null) => {
+  if (!from || !to) return null;
+  return {
+    x: roundRuntimeNumber((Number(to.x) || 0) - (Number(from.x) || 0)),
+    y: roundRuntimeNumber((Number(to.y) || 0) - (Number(from.y) || 0)),
+    z: roundRuntimeNumber((Number(to.z) || 0) - (Number(from.z) || 0))
+  };
+};
+
+const getRuntimePointDeltaMagnitude = (from = null, to = null) => {
+  const delta = getRuntimePointDelta(from, to);
+  if (!delta) return 0;
+  return Math.hypot(delta.x, delta.y, delta.z);
+};
+
+const areRuntimePointsClose = (left = null, right = null) => {
+  if (!left || !right) return false;
+  return getRuntimePointDeltaMagnitude(left, right) <= RACK_CONTACT_TRAVEL_EPSILON;
+};
+
+const getGearNodeBaseWorldPoint = (node = {}) => (
+  cloneRuntimePoint(
+    node.worldPoint
+    || getGearWorldPosition(node.attachmentPlacement || node.placement, node.attachmentMount || node.mount)
+  )
+);
+
+const getGearNodeRuntimePlacement = (node = {}, placements = {}) => {
+  const attachmentKey = node.attachmentComponentKey || node.componentKey;
+  return (attachmentKey ? placements[attachmentKey] : null)
+    || (node.componentKey ? placements[node.componentKey] : null)
+    || null;
+};
+
+const getGearNodeRuntimeWorldPointFromPlacements = (node = {}, placements = {}) => {
+  const runtimePlacement = getGearNodeRuntimePlacement(node, placements);
+  if (!runtimePlacement) return null;
+  return cloneRuntimePoint(getGearWorldPosition(runtimePlacement, node.attachmentMount || node.mount));
+};
+
+const getRuntimeEntrySourceGearNodeId = (entry = {}) => (
+  entry.sourceGearNodeId
+  || (
+    entry.sourceGearComponentKey && entry.sourceGearMountId
+      ? `${entry.sourceGearComponentKey}:${entry.sourceGearMountId}`
+      : null
+  )
+);
+
 const isRackSourceGearNode = (entry = {}, node = {}) => (
   !!node
   && (
@@ -2919,6 +3083,88 @@ const createRackDrivenAxisBindingRuntimeEntries = ({
   return entries;
 };
 
+const resolveRuntimeGearWorldPoints = ({
+  nodes = [],
+  placements = {}
+} = {}) => {
+  const nodeById = new Map(
+    (Array.isArray(nodes) ? nodes : [])
+      .map((node) => [getGearNodeRuntimeId(node), node])
+      .filter(([id, node]) => !!id && !!node)
+  );
+  const basePointById = new Map();
+  nodeById.forEach((node, nodeId) => {
+    const point = getGearNodeBaseWorldPoint(node);
+    if (point) basePointById.set(nodeId, point);
+  });
+  const runtimePointById = new Map();
+  const sourceById = new Map();
+  const queue = [];
+
+  const setRuntimePoint = (nodeId = '', point = null, { strong = false } = {}) => {
+    const basePoint = basePointById.get(nodeId);
+    if (!nodeId || !point || !basePoint || areRuntimePointsClose(basePoint, point)) return false;
+    const magnitude = getRuntimePointDeltaMagnitude(basePoint, point);
+    const existing = sourceById.get(nodeId);
+    if (existing?.strong) return false;
+    if (existing && magnitude <= existing.magnitude + RACK_CONTACT_TRAVEL_EPSILON) return false;
+    runtimePointById.set(nodeId, cloneRuntimePoint(point));
+    sourceById.set(nodeId, { strong, magnitude });
+    queue.push(nodeId);
+    return true;
+  };
+
+  nodeById.forEach((node, nodeId) => {
+    setRuntimePoint(nodeId, getGearNodeRuntimeWorldPointFromPlacements(node, placements), { strong: true });
+  });
+
+  queue.sort((leftId, rightId) => (
+    (sourceById.get(rightId)?.magnitude || 0) - (sourceById.get(leftId)?.magnitude || 0)
+  ));
+
+  const graph = buildGearContactGraph([...nodeById.values()], undefined, []);
+  const maxSteps = Math.max(1, nodeById.size * nodeById.size);
+  let steps = 0;
+  while (queue.length > 0 && steps < maxSteps) {
+    steps += 1;
+    const currentId = queue.shift();
+    const currentBase = basePointById.get(currentId);
+    const currentPoint = runtimePointById.get(currentId);
+    const delta = getRuntimePointDelta(currentBase, currentPoint);
+    if (!delta || Math.hypot(delta.x, delta.y, delta.z) <= RACK_CONTACT_TRAVEL_EPSILON) continue;
+    (graph.get(currentId) || []).forEach((edge) => {
+      const next = nodeById.get(edge.id);
+      if (!next || next.hostKind !== 'intersection') return;
+      const nextBase = basePointById.get(edge.id);
+      if (!nextBase) return;
+      setRuntimePoint(edge.id, translateRuntimePoint(nextBase, delta), { strong: false });
+    });
+  }
+
+  nodeById.forEach((node, nodeId) => {
+    if (!runtimePointById.has(nodeId) && basePointById.has(nodeId)) {
+      runtimePointById.set(nodeId, basePointById.get(nodeId));
+    }
+  });
+  return runtimePointById;
+};
+
+const attachRuntimeGearWorldPoint = (state = null, node = null, runtimeWorldPoints = new Map()) => {
+  if (!state || !node) return state;
+  const nodeId = getGearNodeRuntimeId(node);
+  const baseWorldPoint = getGearNodeBaseWorldPoint(node);
+  if (!nodeId || !baseWorldPoint) return state;
+  const runtimeWorldPoint = runtimeWorldPoints.get(nodeId) || baseWorldPoint;
+  const nextState = {
+    ...state,
+    worldPoint: baseWorldPoint
+  };
+  if (!areRuntimePointsClose(baseWorldPoint, runtimeWorldPoint)) {
+    nextState.runtimeWorldPoint = cloneRuntimePoint(runtimeWorldPoint);
+  }
+  return nextState;
+};
+
 export const createMechanismRuntimeSnapshot = ({
   mapData = {},
   assemblyEntries = [],
@@ -2944,10 +3190,14 @@ export const createMechanismRuntimeSnapshot = ({
   const contactGearNodes = Array.isArray(rackContactGearNodes) && rackContactGearNodes.length > 0
     ? rackContactGearNodes
     : gearNodes;
-  const applyAxisBindingRuntimeEntry = (entry) => {
+  const contactGearNodeById = new Map((Array.isArray(contactGearNodes) ? contactGearNodes : []).map((node) => [node.id, node]));
+  const gearStateNodeById = new Map();
+  const axisBindingRuntimeEntries = [];
+  const directRuntimeRackIds = new Set();
+  const applyAxisBindingRuntimeEntry = (entry, pivotOverride = null, { recordSync = true } = {}) => {
     const angle = (Number(entry.driveRatio) || 1) * sourceAngle;
     const fixedMount = entry.fixedMount || entry.fixedAxis;
-    const anchor = entry.pivotWorld || entry.anchor || getFixedAxisWorldAnchor(mapData, fixedMount);
+    const anchor = pivotOverride || entry.pivotWorld || entry.anchor || getFixedAxisWorldAnchor(mapData, fixedMount);
     const fixedPlacement = fixedMount?.componentKey
       ? (entry.basePlacements?.[fixedMount.componentKey] || getPlacementByComponentKey(mapData, fixedMount.componentKey))
       : null;
@@ -2963,6 +3213,7 @@ export const createMechanismRuntimeSnapshot = ({
         degrees: angle
       });
     });
+    if (!recordSync) return;
     sync.push({
       assemblyId: entry.assembly?.id,
       fixedAxisId: fixedMount?.id,
@@ -2994,6 +3245,7 @@ export const createMechanismRuntimeSnapshot = ({
       const rack = entry.rack || mapData.racks?.[entry.rackId || entry.sourceRackId];
       const resolvedRackId = rackId || rack?.id;
       if (rack && resolvedRackId) {
+        directRuntimeRackIds.add(resolvedRackId);
         racks[resolvedRackId] = getRuntimeRackForTranslation({
           rack,
           entry,
@@ -3035,6 +3287,38 @@ export const createMechanismRuntimeSnapshot = ({
       return;
     }
     applyAxisBindingRuntimeEntry(entry);
+    axisBindingRuntimeEntries.push(entry);
+  });
+
+  applyBoundRackRuntimeTranslations({
+    mapData,
+    placements,
+    racks,
+    skipRackIds: directRuntimeRackIds
+  }).forEach(({ rackId, rack, linearDistance }) => {
+    if (Math.abs(linearDistance) <= RACK_CONTACT_TRAVEL_EPSILON) return;
+    const sweptRack = getSweptRackForTranslation(rack, linearDistance);
+    const virtualEntry = {
+      rack,
+      rackId,
+      sourceRackId: rackId
+    };
+    getRackGearContacts(sweptRack, contactGearNodes).forEach((contact) => {
+      const nodeId = getGearNodeRuntimeId(contact.node);
+      if (!nodeId) return;
+      if (gearNodeById.has(nodeId)) return;
+      const state = createRackDrivenGearRuntimeState({
+        entry: virtualEntry,
+        contact,
+        linearDistance,
+        sourceAngle,
+        basePhases
+      });
+      if (!state) return;
+      const existing = rackDrivenGearStates.get(nodeId);
+      if (existing && Math.abs(existing.speedRatio || 0) >= Math.abs(state.speedRatio || 0)) return;
+      rackDrivenGearStates.set(nodeId, state);
+    });
   });
 
   gearNodes.forEach((node) => {
@@ -3045,6 +3329,7 @@ export const createMechanismRuntimeSnapshot = ({
       phase,
       speedRatio: Number(node.driveRatio) || 1
     });
+    gearStateNodeById.set(node.id, node);
   });
   propagateRackDrivenGearMeshStates({
     rackDrivenGearStates,
@@ -3053,16 +3338,48 @@ export const createMechanismRuntimeSnapshot = ({
     basePhases,
     blockedRootIds: blockedRackDrivenRootIds
   });
-  createRackDrivenAxisBindingRuntimeEntries({
+  const rackDrivenAxisBindingRuntimeEntries = createRackDrivenAxisBindingRuntimeEntries({
     mapData,
     rackDrivenGearStates,
     nodes: contactGearNodes,
     gearNodeById
-  }).forEach(applyAxisBindingRuntimeEntry);
+  });
+  rackDrivenAxisBindingRuntimeEntries.forEach((entry) => {
+    applyAxisBindingRuntimeEntry(entry);
+    axisBindingRuntimeEntries.push(entry);
+  });
+  const runtimeGearWorldPoints = resolveRuntimeGearWorldPoints({
+    nodes: contactGearNodes,
+    placements
+  });
+  axisBindingRuntimeEntries.forEach((entry) => {
+    const sourceGearNodeId = getRuntimeEntrySourceGearNodeId(entry);
+    if (!sourceGearNodeId) return;
+    const runtimePivot = runtimeGearWorldPoints.get(sourceGearNodeId);
+    const basePivot = entry.pivotWorld || entry.anchor;
+    if (!runtimePivot || !basePivot || areRuntimePointsClose(runtimePivot, basePivot)) return;
+    applyAxisBindingRuntimeEntry(entry, runtimePivot, { recordSync: false });
+  });
+  const finalRuntimeGearWorldPoints = resolveRuntimeGearWorldPoints({
+    nodes: contactGearNodes,
+    placements
+  });
   rackDrivenGearStates.forEach((state, nodeId) => {
     const drivenNode = gearNodeById.get(nodeId);
     if (drivenNode?.isDriveRoot) return;
     gears[nodeId] = state;
+    const stateNode = drivenNode || contactGearNodeById.get(nodeId);
+    if (stateNode) gearStateNodeById.set(nodeId, stateNode);
+  });
+  Object.keys(gears).forEach((nodeId) => {
+    const node = gearStateNodeById.get(nodeId) || gearNodeById.get(nodeId) || contactGearNodeById.get(nodeId);
+    gears[nodeId] = attachRuntimeGearWorldPoint(gears[nodeId], node, finalRuntimeGearWorldPoints);
+  });
+  applyBoundRackRuntimeTranslations({
+    mapData,
+    placements,
+    racks,
+    skipRackIds: directRuntimeRackIds
   });
 
   return {

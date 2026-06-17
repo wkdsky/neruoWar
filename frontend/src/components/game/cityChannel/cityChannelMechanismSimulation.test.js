@@ -37,6 +37,7 @@ import {
   getRackTranslationDistance,
   getRackTranslationTravelLimits,
   isDrivenGearAxisBindingActive,
+  RACK_TRANSLATION_MOTION_TYPE,
   resolveDrivenGearNodes,
   getRuntimePlacementAroundFixedGear,
   getRuntimePlacementForFixedAxisAssemblyMember,
@@ -493,6 +494,106 @@ describe('cityChannelMechanismSimulation', () => {
       runtimeMotionType: 'rackTranslation',
       runtimeRackId: rack.id
     });
+  });
+
+  it('carries other racks bound to a board translated by one driven rack and drives their contacts', () => {
+    const boundKey = createCellKey(2, 1, 0);
+    const bound = createTile({
+      x: 2,
+      y: 1,
+      z: 0,
+      panelType: CITY_CHANNEL_TILE_TYPES.TRANSMISSION_L_PLATE
+    });
+    const driveRack = {
+      id: 'rack_left_drive_bound_board',
+      componentType: DOUBLE_SIDED_RACK_COMPONENT_TYPE,
+      direction: 'x',
+      z: 0,
+      start: { x: 1.5, y: 0.5, z: 0 },
+      end: { x: 3.5, y: 0.5, z: 0 },
+      axisBinding: {
+        hostKind: 'tile',
+        componentKey: boundKey
+      }
+    };
+    const carriedRack = {
+      id: 'rack_right_carried_bound_board',
+      componentType: DOUBLE_SIDED_RACK_COMPONENT_TYPE,
+      direction: 'x',
+      z: 0,
+      start: { x: 1.5, y: 1.5, z: 0 },
+      end: { x: 3.5, y: 1.5, z: 0 },
+      axisBinding: {
+        hostKind: 'tile',
+        componentKey: boundKey
+      }
+    };
+    const node = {
+      id: 'driver:gear_corner',
+      componentKey: 'driver',
+      mountId: 'gear_corner',
+      worldPoint: { x: 2.5, y: 0.5, z: 0 },
+      point: { x: 2.5, y: 0.5, z: 0 },
+      placement: { x: 2, y: 0, z: 0 },
+      pitchRadiusWorld: CITY_CHANNEL_GEAR_PITCH_RADIUS_WORLD,
+      gearRatioRadius: 18,
+      driveRatio: 1,
+      mount: { id: 'gear_corner', position: 'corner_ne' }
+    };
+    const passiveNode = {
+      id: 'passive:gear_side',
+      componentKey: 'passive',
+      mountId: 'gear_side',
+      worldPoint: { x: 2.5, y: 1.5, z: 0 },
+      point: { x: 2.5, y: 1.5, z: 0 },
+      placement: { x: 2, y: 2, z: 0 },
+      pitchRadiusWorld: CITY_CHANNEL_GEAR_PITCH_RADIUS_WORLD,
+      gearRatioRadius: 18,
+      driveRatio: 0,
+      mount: {
+        id: 'gear_side',
+        position: 'corner_se',
+        rotationDirection: CITY_CHANNEL_GEAR_ROTATION_DIRECTIONS.PASSIVE
+      }
+    };
+    const mapData = {
+      ...createBaseCityChannelMap({ name: 'rack-bound rack carry' }),
+      tiles: {
+        [boundKey]: bound
+      },
+      walls: {},
+      racks: {
+        [driveRack.id]: driveRack,
+        [carriedRack.id]: carriedRack
+      }
+    };
+
+    const entries = createRackTranslationRuntimeEntries({ mapData, nodes: [node] });
+    const snapshot = createMechanismRuntimeSnapshot({
+      mapData,
+      assemblyEntries: entries,
+      gearNodes: [node],
+      rackContactGearNodes: [node, passiveNode],
+      sourceAngle: 90
+    });
+    const translation = snapshot.placements[boundKey].runtimeTranslation;
+
+    expect(entries.map((entry) => entry.rackId)).toEqual([driveRack.id]);
+    expect(snapshot.racks[driveRack.id].runtimeTranslation).toEqual(translation);
+    expect(snapshot.racks[carriedRack.id]).toMatchObject({
+      runtimeRackId: carriedRack.id,
+      runtimeMotionType: 'rackTranslation',
+      runtimeTranslation: translation,
+      runtimeBoundComponentKey: boundKey
+    });
+    expect(snapshot.racks[carriedRack.id].start.x).toBeCloseTo(carriedRack.start.x + translation.x, 6);
+    expect(snapshot.racks[carriedRack.id].end.x).toBeCloseTo(carriedRack.end.x + translation.x, 6);
+    expect(snapshot.gears[passiveNode.id]).toMatchObject({
+      componentKey: passiveNode.componentKey,
+      mountId: passiveNode.mountId,
+      axisType: 'freeAxis'
+    });
+    expect(Math.abs(snapshot.gears[passiveNode.id].speedRatio)).toBeGreaterThan(0);
   });
 
   it('finds vertical side boards along a wall-surface rack', () => {
@@ -966,6 +1067,63 @@ describe('cityChannelMechanismSimulation', () => {
     });
   });
 
+  it('does not block rack startup for an opposing active gear outside current contact', () => {
+    const rack = {
+      id: 'vertical_rack_future_opposing_drive',
+      componentType: DOUBLE_SIDED_RACK_COMPONENT_TYPE,
+      plane: 'vertical',
+      normalAxis: 'y',
+      direction: 'z',
+      start: { x: 1.5, y: 1, z: 0 },
+      end: { x: 1.5, y: 1, z: 1 }
+    };
+    const lowerGear = {
+      id: 'lower:gear_active',
+      componentKey: 'lower',
+      mountId: 'gear_active',
+      worldPoint: { x: 1, y: 1, z: 0.5 },
+      point: { x: 1, y: 1, z: 0.5 },
+      placement: { x: 1, y: 1, z: 0, isVertical: true },
+      pitchRadiusWorld: CITY_CHANNEL_GEAR_PITCH_RADIUS_WORLD,
+      gearRatioRadius: 18,
+      driveRatio: 1,
+      surfaceKey: 'vertical:1:front',
+      mount: {
+        id: 'gear_active',
+        position: 'center',
+        rotationDirection: CITY_CHANNEL_GEAR_ROTATION_DIRECTIONS.COUNTERCLOCKWISE
+      },
+      isDriveRoot: true
+    };
+    const futureGear = {
+      ...lowerGear,
+      id: 'future:gear_active',
+      componentKey: 'future',
+      worldPoint: { x: 1, y: 1, z: 1.5 },
+      point: { x: 1, y: 1, z: 1.5 },
+      placement: { x: 1, y: 1, z: 1, isVertical: true },
+      mount: {
+        ...lowerGear.mount,
+        rotationDirection: CITY_CHANNEL_GEAR_ROTATION_DIRECTIONS.CLOCKWISE
+      }
+    };
+    const mapData = {
+      ...createBaseCityChannelMap({ name: 'vertical future opposing rack drive' }),
+      tiles: {},
+      walls: {},
+      racks: { [rack.id]: rack }
+    };
+
+    const [entry] = createRackTranslationRuntimeEntries({ mapData, nodes: [lowerGear, futureGear] });
+
+    expect(entry.driveConflict).toBeNull();
+    expect(entry.sourceContactTravelLimits).toHaveLength(1);
+    expect(entry.sourceContactTravelLimits[0]).toMatchObject({
+      sourceGearNodeId: lowerGear.id
+    });
+    expect(getRackContactLimitedTranslationDistance(entry, -720)).toBeCloseTo(0.5, 6);
+  });
+
   it('allows opposite-side active gears with opposite rotation to drive one rack consistently', () => {
     const rack = {
       id: 'vertical_rack_opposite_side_drive',
@@ -1167,6 +1325,63 @@ describe('cityChannelMechanismSimulation', () => {
     ]);
   });
 
+  it('orders collision blocks by the earliest blocking motion', () => {
+    const earlyKey = createCellKey(1, 1, 0);
+    const lateKey = createCellKey(2, 1, 0);
+    const early = createTile({
+      x: 1,
+      y: 1,
+      z: 0,
+      panelType: CITY_CHANNEL_TILE_TYPES.BASIC_PLATE
+    });
+    const late = createTile({
+      x: 2,
+      y: 1,
+      z: 0,
+      panelType: CITY_CHANNEL_TILE_TYPES.BASIC_PLATE
+    });
+    const mapData = {
+      ...createBaseCityChannelMap({ name: 'collision block ordering' }),
+      tiles: {
+        [earlyKey]: early,
+        [lateKey]: late
+      },
+      walls: {}
+    };
+
+    const graph = createMechanismMotionIntentGraph({
+      mapData,
+      collisionBlocks: [
+        {
+          blocked: true,
+          type: 'collisionBlock',
+          componentKey: lateKey,
+          obstacleKey: lateKey,
+          angle: 40,
+          obstacle: late,
+          obstacleKeys: [lateKey],
+          obstacles: [late]
+        },
+        {
+          blocked: true,
+          type: 'collisionBlock',
+          componentKey: earlyKey,
+          obstacleKey: earlyKey,
+          angle: 12,
+          obstacle: early,
+          obstacleKeys: [earlyKey],
+          obstacles: [early]
+        }
+      ]
+    });
+
+    expect(graph.conflicts[0]).toMatchObject({
+      type: 'collisionBlock',
+      componentKey: earlyKey,
+      angle: 12
+    });
+  });
+
   it('allows equivalent placement translation trends with opposite axes and drive signs', () => {
     const componentKey = createCellKey(2, 2, 0);
     const placement = createTile({
@@ -1218,6 +1433,79 @@ describe('cityChannelMechanismSimulation', () => {
       })
     ]));
     expect(graph.conflicts).toEqual([]);
+  });
+
+  it('translates every board in a rack-bound transmission assembly', () => {
+    const boundKey = createCellKey(2, 2, 0);
+    const linkedKey = createCellKey(2, 2, 1);
+    const boundBoard = {
+      ...createTile({
+        x: 2,
+        y: 2,
+        z: 0,
+        panelType: CITY_CHANNEL_TILE_TYPES.TRANSMISSION_STRAIGHT_PLATE,
+        rotation: 0,
+        transmissionRotation: 0
+      }),
+      isVertical: true
+    };
+    const linkedBoard = {
+      ...createTile({
+        x: 2,
+        y: 2,
+        z: 1,
+        panelType: CITY_CHANNEL_TILE_TYPES.TRANSMISSION_STRAIGHT_PLATE,
+        rotation: 90,
+        transmissionRotation: 0
+      }),
+      isVertical: true
+    };
+    const mapData = {
+      ...createBaseCityChannelMap({ name: 'rack bound connected assembly translation' }),
+      tiles: {
+        [boundKey]: boundBoard,
+        [linkedKey]: linkedBoard
+      },
+      walls: {}
+    };
+    const assemblyGraph = buildMechanicalAssemblies(mapData);
+    const assemblyId = assemblyGraph.assemblyByComponentKey[boundKey];
+    const assembly = assemblyGraph.assemblies.find((item) => item.id === assemblyId);
+
+    const snapshot = createMechanismRuntimeSnapshot({
+      mapData,
+      assemblyEntries: [{
+        motionType: 'rackTranslation',
+        assembly,
+        componentKey: boundKey,
+        rackId: 'rack_bound_assembly',
+        sourceRackId: 'rack_bound_assembly',
+        translationAxis: { x: 1, y: 0, z: 0 },
+        driveRatio: 1,
+        pitchRadiusWorld: 1,
+        sourceGearNodeId: 'rack_driver'
+      }],
+      gearNodes: [],
+      sourceAngle: 90
+    });
+
+    expect(assembly.componentKeys).toEqual(expect.arrayContaining([boundKey, linkedKey]));
+    expect(snapshot.placements[boundKey]).toMatchObject({
+      runtimeMotionType: 'rackTranslation',
+      x: expect.any(Number)
+    });
+    expect(snapshot.placements[linkedKey]).toMatchObject({
+      runtimeMotionType: 'rackTranslation',
+      x: expect.any(Number)
+    });
+    expect(snapshot.placements[linkedKey].x - snapshot.placements[boundKey].x).toBeCloseTo(
+      linkedBoard.x - boundBoard.x,
+      6
+    );
+    expect(snapshot.placements[linkedKey].z - snapshot.placements[boundKey].z).toBeCloseTo(
+      linkedBoard.z - boundBoard.z,
+      6
+    );
   });
 
   it('records a placement motion conflict when multiple racks pull one board in different directions', () => {
@@ -1456,6 +1744,139 @@ describe('cityChannelMechanismSimulation', () => {
     });
     expect(snapshot.gears[upperGear.id].phase).toBe(expectedUpperPhase);
     expect(snapshot.gears[upperGear.id].speedRatio).toBeCloseTo(expectedUpperAngle / -180, 6);
+  });
+
+  it('pushes an intersection gear center from a translated meshed gear and reanchors bound boards', () => {
+    const rack = {
+      id: 'rack_pushes_intersection_axis',
+      componentType: DOUBLE_SIDED_RACK_COMPONENT_TYPE,
+      direction: 'y',
+      z: 0,
+      start: { x: 1, y: 0, z: 0 },
+      end: { x: 1, y: 2, z: 0 }
+    };
+    const carriedKey = createCellKey(1, 1, 0);
+    const boundKey = createCellKey(0, 0, 0);
+    const carried = createTile({
+      x: 1,
+      y: 1,
+      z: 0,
+      panelType: CITY_CHANNEL_TILE_TYPES.TRANSMISSION_CROSS_PLATE
+    });
+    carried.gearMounts = [{
+      id: 'gear_center',
+      componentType: 'gear',
+      position: 'center',
+      socketKind: 'center',
+      surface: 'front',
+      phase: 0
+    }];
+    const bound = createTile({
+      x: 0,
+      y: 0,
+      z: 0,
+      panelType: CITY_CHANNEL_TILE_TYPES.BASIC_PLATE
+    });
+    const carriedGear = {
+      id: `${carriedKey}:gear_center`,
+      componentKey: carriedKey,
+      mountId: 'gear_center',
+      hostKind: 'tile',
+      placement: carried,
+      attachmentPlacement: carried,
+      worldPoint: { x: 1, y: 1, z: 0 },
+      point: { x: 1, y: 1, z: 0 },
+      pitchRadiusWorld: CITY_CHANNEL_GEAR_PITCH_RADIUS_WORLD,
+      gearRatioRadius: 18,
+      surfaceKey: 'floor:0:front',
+      mount: carried.gearMounts[0],
+      driveRatio: 1,
+      isDriveRoot: true
+    };
+    const intersectionGear = {
+      id: 'intersection_axis:gear_root',
+      componentKey: 'intersection_axis',
+      mountId: 'gear_root',
+      hostKind: 'intersection',
+      attachmentComponentKey: boundKey,
+      attachmentPlacement: bound,
+      worldPoint: { x: 0.5, y: 0.5, z: 0 },
+      point: { x: 0.5, y: 0.5, z: 0 },
+      pitchRadiusWorld: CITY_CHANNEL_GEAR_PITCH_RADIUS_WORLD,
+      gearRatioRadius: 18,
+      surfaceKey: 'floor:0:front',
+      mount: {
+        id: 'gear_root',
+        position: 'corner_se',
+        socketKind: 'intersection',
+        surface: 'front',
+        phase: 0,
+        axisBinding: {
+          hostKind: 'tile',
+          componentKey: boundKey,
+          socket: 'corner_se',
+          surface: 'front'
+        }
+      },
+      driveRatio: -1
+    };
+    const mapData = {
+      ...createBaseCityChannelMap({ name: 'intersection gear positional push' }),
+      tiles: {
+        [carriedKey]: carried,
+        [boundKey]: bound
+      },
+      walls: {},
+      racks: { [rack.id]: rack }
+    };
+    const sourceAngle = 90;
+    const rackDriveRatio = (0.5 * 180) / (sourceAngle * Math.PI * CITY_CHANNEL_GEAR_PITCH_RADIUS_WORLD);
+    const translationEntry = {
+      motionType: RACK_TRANSLATION_MOTION_TYPE,
+      assembly: { id: 'carried_assembly', componentKeys: [carriedKey] },
+      componentKey: carriedKey,
+      rack,
+      rackId: rack.id,
+      sourceRackId: rack.id,
+      translationAxis: { x: 0, y: 1, z: 0 },
+      basePlacements: { [carriedKey]: carried },
+      basePlacement: carried,
+      driveRatio: rackDriveRatio,
+      pitchRadiusWorld: CITY_CHANNEL_GEAR_PITCH_RADIUS_WORLD,
+      sourceGearNodeId: carriedGear.id,
+      sourceGearComponentKey: carriedKey,
+      sourceGearMountId: 'gear_center',
+      sourceContactTravelLimits: []
+    };
+    const rotationEntry = createAxisBindingRuntimeEntryFromGearNode({
+      mapData,
+      gearNode: intersectionGear,
+      axisBinding: intersectionGear.mount.axisBinding,
+      pivotWorld: intersectionGear.worldPoint,
+      driveRatio: -1
+    });
+    const snapshot = createMechanismRuntimeSnapshot({
+      mapData,
+      assemblyEntries: [translationEntry, rotationEntry],
+      gearNodes: [carriedGear, intersectionGear],
+      rackContactGearNodes: [carriedGear, intersectionGear],
+      sourceAngle,
+      basePhases: new Map([
+        [carriedGear.id, 0],
+        [intersectionGear.id, 0]
+      ])
+    });
+
+    expect(snapshot.placements[carriedKey]).toMatchObject({
+      runtimeMotionType: 'rackTranslation',
+      runtimeTranslation: { x: 0, y: -0.5, z: 0 }
+    });
+    expect(snapshot.gears[intersectionGear.id]).toMatchObject({
+      worldPoint: intersectionGear.worldPoint,
+      runtimeWorldPoint: { x: 0.5, y: 0, z: 0 }
+    });
+    expect(snapshot.placements[boundKey].runtimeAxisAnchor).toEqual({ x: 0.5, y: 0, z: 0 });
+    expect(snapshot.placements[boundKey].y).not.toBe(bound.y);
   });
 
   it('applies passive inertia as extra rack travel in runtime snapshots', () => {
@@ -3574,6 +3995,60 @@ describe('cityChannelMechanismSimulation', () => {
     expect(blockingPenetration).toBeGreaterThan(0.02);
   });
 
+  it('blocks vertical fixed-axis rotations that slowly press into a lower board', () => {
+    const upperKey = createCellKey(2, 2, 1);
+    const lowerKey = createCellKey(2, 2, 0);
+    const upper = createTile({
+      x: 2,
+      y: 2,
+      z: 1,
+      isVertical: true,
+      rotation: 0,
+      panelType: CITY_CHANNEL_TILE_TYPES.TRANSMISSION_STRAIGHT_PLATE
+    });
+    const lower = createTile({
+      x: 2,
+      y: 2,
+      z: 0,
+      isVertical: true,
+      rotation: 0,
+      panelType: CITY_CHANNEL_TILE_TYPES.TRANSMISSION_STRAIGHT_PLATE
+    });
+    const fixedMount = {
+      id: 'gear_center',
+      position: 'center',
+      surface: 'front',
+      axisType: 'fixedAxis',
+      componentKey: upperKey
+    };
+    upper.gearMounts = [fixedMount];
+    const mapData = {
+      ...createBaseCityChannelMap({ name: 'slow vertical collision' }),
+      tiles: {
+        [upperKey]: upper,
+        [lowerKey]: lower
+      },
+      walls: {}
+    };
+    const pivotWorld = getGearWorldPosition(upper, fixedMount);
+
+    const obstruction = findRotationObstruction({
+      mapData,
+      assembly: { id: 'assembly_upper', componentKeys: [upperKey] },
+      anchor: pivotWorld,
+      fixedMount,
+      targetAngle: -90,
+      stepDegrees: 0.5
+    });
+
+    expect(obstruction).toMatchObject({
+      blocked: true,
+      componentKey: upperKey,
+      obstacleKey: lowerKey
+    });
+    expect(Math.abs(obstruction.angle)).toBeLessThan(90);
+  });
+
   it('blocks board overlap from a rack-driven passive gear axis binding', () => {
     const rack = {
       id: 'vertical_rack_indirect_axis_collision',
@@ -3692,6 +4167,116 @@ describe('cityChannelMechanismSimulation', () => {
     expect(Math.abs(blocks[0].sourceAngle)).toBeLessThan(180);
     expect(allowed.angle).toBe(blocks[0].sourceAngle);
     expect(Math.abs(allowed.angle)).toBeLessThan(180);
+  });
+
+  it('blocks rack-driven bound boards that rotate into static boards', () => {
+    const rack = {
+      id: 'vertical_rack_bound_axis_collision',
+      componentType: DOUBLE_SIDED_RACK_COMPONENT_TYPE,
+      plane: 'vertical',
+      normalAxis: 'y',
+      direction: 'z',
+      start: { x: 1.5, y: 1, z: 0 },
+      end: { x: 1.5, y: 1, z: 2 }
+    };
+    const driverPlacement = {
+      x: 1,
+      y: 1,
+      z: 0,
+      isVertical: true,
+      rotation: 0,
+      panelType: CITY_CHANNEL_TILE_TYPES.GEAR_PRESSURE_PLATE
+    };
+    const upperGearPlacement = {
+      x: 1,
+      y: 1,
+      z: 1,
+      isVertical: true,
+      rotation: 0,
+      panelType: CITY_CHANNEL_TILE_TYPES.BASIC_PLATE
+    };
+    const boundKey = createCellKey(1, 1, 1);
+    const obstacleKey = createCellKey(1, 1, 0);
+    const boundBoard = createTile({
+      x: 1,
+      y: 1,
+      z: 1,
+      isVertical: true,
+      rotation: 0,
+      panelType: CITY_CHANNEL_TILE_TYPES.BASIC_PLATE
+    });
+    const obstacle = createTile({
+      x: 1,
+      y: 1,
+      z: 0,
+      isVertical: true,
+      rotation: 0,
+      panelType: CITY_CHANNEL_TILE_TYPES.TRANSMISSION_STRAIGHT_PLATE
+    });
+    const createNode = (id, componentKey, placement, mount) => {
+      const worldPoint = getGearWorldPosition(placement, mount);
+      return {
+        id,
+        componentKey,
+        mountId: mount.id,
+        worldPoint,
+        point: worldPoint,
+        placement,
+        pitchRadiusWorld: CITY_CHANNEL_GEAR_PITCH_RADIUS_WORLD,
+        gearRatioRadius: 18,
+        surfaceKey: getGearSurfaceKey(placement, mount),
+        meshPlane: getGearMeshPlane(placement, mount, worldPoint),
+        mount
+      };
+    };
+    const lowerGear = {
+      ...createNode('driver:gear_lower', 'driver', driverPlacement, {
+        id: 'gear_lower',
+        position: 'center',
+        rotationDirection: CITY_CHANNEL_GEAR_ROTATION_DIRECTIONS.COUNTERCLOCKWISE
+      }),
+      driveRatio: -1,
+      isDriveRoot: true,
+      sourceAssemblyDriveActive: true
+    };
+    const upperGear = createNode('bound:gear_upper', boundKey, upperGearPlacement, {
+      id: 'gear_upper',
+      position: 'corner_se',
+      rotationDirection: CITY_CHANNEL_GEAR_ROTATION_DIRECTIONS.PASSIVE,
+      axisBinding: {
+        componentKey: boundKey,
+        hostKind: 'tile',
+        socket: 'corner_se',
+        surface: 'front'
+      }
+    });
+    const mapData = {
+      ...createBaseCityChannelMap({ name: 'rack-driven bound axis collision' }),
+      tiles: {
+        [boundKey]: boundBoard,
+        [obstacleKey]: obstacle
+      },
+      walls: {},
+      racks: { [rack.id]: rack }
+    };
+    const entries = createRackTranslationRuntimeEntries({ mapData, nodes: [lowerGear] });
+
+    const blocks = findMechanismMotionObstructions({
+      mapData,
+      assemblyEntries: entries,
+      gearNodes: [lowerGear],
+      rackContactGearNodes: [lowerGear, upperGear],
+      targetAngle: 180
+    });
+
+    expect(blocks[0]).toMatchObject({
+      blocked: true,
+      type: 'collisionBlock',
+      collisionMotionType: 'runtimeSnapshot',
+      componentKey: boundKey,
+      obstacleKey
+    });
+    expect(Math.abs(blocks[0].sourceAngle)).toBeLessThan(180);
   });
 
   it('does not report vertical board collision for AABB-only overlap with visible clearance', () => {

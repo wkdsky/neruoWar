@@ -2167,6 +2167,8 @@ describe('CityChannelThreeRuntime placement rendering', () => {
       getRuntimeWorldPointForPlacement: CityChannelThreeRuntime.prototype.getRuntimeWorldPointForPlacement,
       getRuntimeSurfacePointForPlacement: CityChannelThreeRuntime.prototype.getRuntimeSurfacePointForPlacement,
       getRuntimeGearSurfacePointForPlacement: CityChannelThreeRuntime.prototype.getRuntimeGearSurfacePointForPlacement,
+      getThreePointFromRuntimeWorldPoint: CityChannelThreeRuntime.prototype.getThreePointFromRuntimeWorldPoint,
+      getRuntimeThreeGearWorldPoint: CityChannelThreeRuntime.prototype.getRuntimeThreeGearWorldPoint,
       getBasePlacementTransform: CityChannelThreeRuntime.prototype.getBasePlacementTransform,
       getThreeTranslationFromRuntimeOffset: CityChannelThreeRuntime.prototype.getThreeTranslationFromRuntimeOffset,
       getRuntimePlacementMatrix: CityChannelThreeRuntime.prototype.getRuntimePlacementMatrix,
@@ -2462,6 +2464,104 @@ describe('CityChannelThreeRuntime placement rendering', () => {
     expect(gear.quaternion.angleTo(gearQuaternionBefore)).toBeCloseTo(0, 6);
     expect(gearWorldAfter.distanceTo(gearWorldBefore)).toBeCloseTo(0, 5);
     expect(bodyWorldAfter.distanceTo(bodyWorldBefore)).toBeGreaterThan(0.4);
+  });
+
+  it('draws a gear at its pushed runtime center instead of only its host placement socket', () => {
+    const runtime = createDetailRuntimeHarness();
+    const key = createCellKey(1, 1, 0);
+    const tile = createTile({
+      x: 1,
+      y: 1,
+      z: 0,
+      panelType: CITY_CHANNEL_TILE_TYPES.TRANSMISSION_CROSS_PLATE
+    });
+    tile.gearMounts = [{
+      id: 'gear_center',
+      componentType: 'gear',
+      position: 'center',
+      surface: 'front',
+      phase: 0
+    }];
+    const mapData = {
+      ...createBaseCityChannelMap({ width: 4, height: 4, layers: 2 }),
+      tiles: {
+        [key]: tile
+      },
+      walls: {}
+    };
+    runtime.renderModel = { mapData };
+    const transform = getTileThreeTransform(tile, mapData);
+    const group = CityChannelThreeRuntime.prototype.createPlacementRenderGroup.call(runtime, transform);
+    runtime.placementGroups.set(key, group);
+    group.updateMatrixWorld(true);
+    const gear = runtime.gearMeshes.get(`${key}:gear_center`);
+    const gearWorldBefore = gear.getWorldPosition(new THREE.Vector3());
+
+    runtime.mechanismRuntimeSnapshot = {
+      placements: {},
+      gears: {
+        [`${key}:gear_center`]: {
+          phase: 0,
+          worldPoint: { x: 1, y: 1, z: 0 },
+          runtimeWorldPoint: { x: 1, y: 0.5, z: 0 }
+        }
+      }
+    };
+    CityChannelThreeRuntime.prototype.syncMechanismRuntimeTransforms.call(runtime);
+    const gearWorldAfter = gear.getWorldPosition(new THREE.Vector3());
+
+    expect(gearWorldAfter.x).toBeCloseTo(gearWorldBefore.x, 6);
+    expect(gearWorldAfter.z).toBeCloseTo(gearWorldBefore.z - 0.5, 6);
+  });
+
+  it('keeps runtime gear spin visible while its host board is moving', () => {
+    const runtime = createDetailRuntimeHarness();
+    const key = createCellKey(1, 1, 0);
+    const tile = createTile({
+      x: 1,
+      y: 1,
+      z: 0,
+      panelType: CITY_CHANNEL_TILE_TYPES.TRANSMISSION_CROSS_PLATE
+    });
+    tile.gearMounts = [{
+      id: 'gear_center',
+      componentType: 'gear',
+      position: 'center',
+      surface: 'front',
+      phase: 0
+    }];
+    const mapData = {
+      ...createBaseCityChannelMap({ width: 4, height: 4, layers: 2 }),
+      tiles: {
+        [key]: tile
+      },
+      walls: {}
+    };
+    runtime.renderModel = { mapData };
+    const transform = getTileThreeTransform(tile, mapData);
+    const group = CityChannelThreeRuntime.prototype.createPlacementRenderGroup.call(runtime, transform);
+    runtime.placementGroups.set(key, group);
+    group.updateMatrixWorld(true);
+    const gear = runtime.gearMeshes.get(`${key}:gear_center`);
+    const gearQuaternionBefore = gear.quaternion.clone();
+
+    runtime.mechanismRuntimeSnapshot = {
+      placements: {
+        [key]: {
+          runtimeMotionType: 'rackTranslation',
+          runtimeTranslation: { x: 0.5, y: 0, z: 0 }
+        }
+      },
+      gears: {
+        [`${key}:gear_center`]: {
+          phase: 90,
+          speedRatio: 1
+        }
+      }
+    };
+    CityChannelThreeRuntime.prototype.syncMechanismRuntimeTransforms.call(runtime);
+
+    expect(gear.quaternion.angleTo(gearQuaternionBefore)).toBeGreaterThan(0.1);
   });
 
   it('uses rack-driven free-axis runtime phase even when the stored gear has an axis binding', () => {
@@ -2784,6 +2884,58 @@ describe('CityChannelThreeRuntime placement rendering', () => {
     expect(group.matrix.equals(new THREE.Matrix4())).toBe(false);
   });
 
+  it('uses the pushed runtime axis anchor for bound board group rotation', () => {
+    const runtime = createDetailRuntimeHarness();
+    const key = createCellKey(1, 1, 0);
+    const tile = createTile({
+      x: 1,
+      y: 1,
+      z: 0,
+      panelType: CITY_CHANNEL_TILE_TYPES.BASIC_PLATE
+    });
+    const mapData = {
+      ...createBaseCityChannelMap({ width: 4, height: 4, layers: 2 }),
+      tiles: {
+        [key]: tile
+      },
+      walls: {}
+    };
+    runtime.renderModel = {
+      mapData,
+      tiles: [getTileThreeTransform(tile, mapData)],
+      walls: []
+    };
+    const transform = runtime.renderModel.tiles[0];
+    const group = CityChannelThreeRuntime.prototype.createPlacementRenderGroup.call(runtime, transform);
+    runtime.placementGroups.set(key, group);
+    const socket = getThreeGearSurfacePoint(transform, {
+      position: 'corner_ne',
+      surface: 'front'
+    });
+    const socketBefore = new THREE.Vector3(socket.x, socket.y, socket.z);
+    const pushedAnchor = { x: 1.5, y: 0, z: 0 };
+    const pushedAnchorThree = CityChannelThreeRuntime.prototype.getThreePointFromRuntimeWorldPoint.call(runtime, pushedAnchor);
+
+    runtime.mechanismRuntimeSnapshot = {
+      placements: {
+        [key]: {
+          runtimeAngle: 90,
+          runtimeFixedComponentKey: key,
+          runtimeAxisSocket: 'corner_ne',
+          runtimeAxisSurface: 'front',
+          runtimeAxisAnchor: pushedAnchor
+        }
+      },
+      gears: {}
+    };
+    CityChannelThreeRuntime.prototype.syncMechanismRuntimeTransforms.call(runtime);
+    const socketAfter = socketBefore.clone().applyMatrix4(group.matrix);
+
+    expect(socketAfter.x).toBeCloseTo(pushedAnchorThree.x, 5);
+    expect(socketAfter.z).toBeCloseTo(pushedAnchorThree.z, 5);
+    expect(socketAfter.distanceTo(socketBefore)).toBeGreaterThan(0.4);
+  });
+
   it('updates mechanism runtime frames without rebuilding the map', () => {
     const runtime = {
       mechanismRuntimeSnapshot: null,
@@ -2925,6 +3077,7 @@ describe('CityChannelThreeRuntime placement rendering', () => {
         gears: {}
       },
       getThreeTranslationFromRuntimeOffset: CityChannelThreeRuntime.prototype.getThreeTranslationFromRuntimeOffset,
+      getThreePointFromRuntimeWorldPoint: CityChannelThreeRuntime.prototype.getThreePointFromRuntimeWorldPoint,
       applyPlacementGroupMatrix: CityChannelThreeRuntime.prototype.applyPlacementGroupMatrix,
       syncMechanismRuntimeTransforms: CityChannelThreeRuntime.prototype.syncMechanismRuntimeTransforms,
       syncSelectionFromConfig: jest.fn(),
@@ -4113,7 +4266,7 @@ describe('CityChannelThreeRuntime gear transmission', () => {
     }));
   });
 
-  it('does not drive gears above a vertical transmission chain split by a turned middle board', () => {
+  it('keeps driving gears above a turned vertical board when visible sockets still touch', () => {
     const createVerticalTransmission = (z, panelType, patch = {}) => ({
       ...createTile({
         x: 2,
@@ -4170,9 +4323,11 @@ describe('CityChannelThreeRuntime gear transmission', () => {
     const nodes = CityChannelThreeRuntime.prototype.resolveDrivenGearNodes.call(runtime, assembly, sourceKey);
 
     expect(assembly.componentKeys).toEqual(expect.arrayContaining([sourceKey, lowerBridgeKey]));
-    expect(assembly.componentKeys).not.toContain(middleKey);
-    expect(assembly.componentKeys).not.toContain(upperKey);
-    expect(nodes.map((node) => node.id)).toEqual([`${sourceKey}:gear_center`]);
+    expect(assembly.componentKeys).toEqual(expect.arrayContaining([middleKey, upperKey]));
+    expect(nodes.map((node) => node.id).sort()).toEqual([
+      `${sourceKey}:gear_center`,
+      `${upperKey}:gear_upper`
+    ].sort());
   });
 
   it('adds a half-tooth visual phase offset to directly meshed gears', () => {
@@ -5142,6 +5297,117 @@ describe('CityChannelThreeRuntime gear transmission', () => {
     );
   });
 
+  it('starts a rack when the opposing active gear is outside the initial rack contact', () => {
+    const sourceKey = createCellKey(1, 1, 0);
+    const futureKey = createCellKey(1, 1, 1);
+    const source = createTile({
+      x: 1,
+      y: 1,
+      z: 0,
+      isVertical: true,
+      rotation: 0,
+      panelType: CITY_CHANNEL_TILE_TYPES.GEAR_PRESSURE_PLATE
+    });
+    source.gearMounts = [{
+      id: 'gear_lower',
+      componentType: 'gear',
+      position: 'center',
+      socketKind: 'center',
+      surface: 'front',
+      teeth: 18,
+      phase: 0,
+      rotationDirection: CITY_CHANNEL_GEAR_ROTATION_DIRECTIONS.COUNTERCLOCKWISE
+    }];
+    const future = createTile({
+      x: 1,
+      y: 1,
+      z: 1,
+      isVertical: true,
+      rotation: 0,
+      panelType: CITY_CHANNEL_TILE_TYPES.TRANSMISSION_STRAIGHT_PLATE
+    });
+    future.gearMounts = [{
+      id: 'gear_future',
+      componentType: 'gear',
+      position: 'center',
+      socketKind: 'center',
+      surface: 'front',
+      teeth: 18,
+      phase: 0,
+      rotationDirection: CITY_CHANNEL_GEAR_ROTATION_DIRECTIONS.CLOCKWISE
+    }];
+    const rack = {
+      id: 'rack_vertical_future_opposing_active',
+      componentType: DOUBLE_SIDED_RACK_COMPONENT_TYPE,
+      plane: 'vertical',
+      normalAxis: 'y',
+      direction: 'z',
+      start: { x: 1.5, y: 1, z: 0 },
+      end: { x: 1.5, y: 1, z: 1 }
+    };
+    const mapData = {
+      ...createBaseCityChannelMap({ width: 4, height: 4, layers: 4 }),
+      tiles: {
+        [sourceKey]: source,
+        [futureKey]: future
+      },
+      walls: {},
+      racks: {
+        [rack.id]: rack
+      }
+    };
+    const runtime = {
+      ...createTransmissionRuntimeHarness(mapData),
+      config: {
+        mechanismParams: {},
+        onToast: jest.fn()
+      },
+      mechanismRuntimeSnapshot: null,
+      cancelMechanismRuntimePreview: jest.fn(),
+      setMechanismRuntimeSnapshot: jest.fn(function setMechanismRuntimeSnapshot(snapshot) {
+        this.mechanismRuntimeSnapshot = snapshot;
+      }),
+      playMechanismRuntimePreview: jest.fn(function playMechanismRuntimePreview(args) {
+        const basePhases = new Map(
+          [...args.rackContactGearNodes, ...args.gearNodes]
+            .map((node) => [node.id, Number(node.mount?.phase) || 0])
+        );
+        this.setMechanismRuntimeSnapshot(this.createRuntimeSnapshotForMechanism({
+          ...args,
+          sourceAngle: args.targetAngle,
+          basePhases
+        }));
+      }),
+      flashMechanismObstruction: jest.fn()
+    };
+    const assemblyGraph = buildMechanicalAssemblies(mapData);
+    const sourceAssembly = getAssemblyForCell(assemblyGraph, sourceKey);
+    const gearNodes = runtime.resolveDrivenGearNodes(sourceAssembly, sourceKey);
+    const [rackEntry] = runtime.createRackAxisBindingRuntimeEntries(gearNodes, assemblyGraph);
+
+    const played = CityChannelThreeRuntime.prototype.triggerMechanismAtCell.call(runtime, { x: 1, y: 1, z: 0 }, {
+      rotationAngle: 720,
+      rotationSpeedDegPerSec: 360,
+      triggerDelaySeconds: 0,
+      autoReturn: false
+    });
+
+    expect(rackEntry.driveConflict).toBeNull();
+    expect(rackEntry.sourceContactTravelLimits).toHaveLength(1);
+    expect(rackEntry.sourceContactTravelLimits[0]).toMatchObject({
+      sourceGearComponentKey: sourceKey
+    });
+    expect(played).toBe(true);
+    expect(runtime.flashMechanismObstruction).not.toHaveBeenCalledWith(expect.objectContaining({
+      type: 'rackDriveConflict'
+    }));
+    expect(runtime.config.onToast).not.toHaveBeenCalledWith(
+      '主动齿轮正在把同一齿条推向相反方向，齿条被卡住。',
+      'error'
+    );
+    expect(runtime.mechanismRuntimeSnapshot.racks[rack.id].runtimeLinearDistance).toBeGreaterThan(0);
+  });
+
   it('does not let a disconnected configured gear keep driving the rack after the assembly splits', () => {
     const sourceKey = createCellKey(1, 1, 0);
     const middleKey = createCellKey(1, 1, 1);
@@ -5522,6 +5788,7 @@ describe('CityChannelThreeRuntime gear transmission', () => {
     gearContactMaterial: new THREE.MeshBasicMaterial(),
     gearContactActiveMaterial: new THREE.MeshBasicMaterial(),
     getRuntimeTransform: CityChannelThreeRuntime.prototype.getRuntimeTransform,
+    getRuntimeThreeGearWorldPoint: CityChannelThreeRuntime.prototype.getRuntimeThreeGearWorldPoint,
     getGearAttachmentContext: CityChannelThreeRuntime.prototype.getGearAttachmentContext,
     getRuntimeGearState: CityChannelThreeRuntime.prototype.getRuntimeGearState,
     getRuntimeGearSurfacePointForNode: CityChannelThreeRuntime.prototype.getRuntimeGearSurfacePointForNode,
@@ -6609,6 +6876,190 @@ describe('CityChannelThreeRuntime mechanism preview cancellation', () => {
       ]));
     expect(runtime.mechanismObstructionFillMaterial.opacity).toBeGreaterThan(0);
     expect(runtime.requestRender).toHaveBeenCalled();
+  });
+
+  it('renders mechanism obstruction board flashes at runtime placement positions', () => {
+    const obstacleKey = createCellKey(2, 2, 0);
+    const obstacle = createTile({
+      x: 2,
+      y: 2,
+      z: 0,
+      panelType: CITY_CHANNEL_TILE_TYPES.BASIC_PLATE
+    });
+    const mapData = {
+      ...createBaseCityChannelMap({ width: 4, height: 4, layers: 2 }),
+      tiles: {
+        [obstacleKey]: obstacle
+      },
+      walls: {}
+    };
+    const renderModel = buildCityChannelThreeRenderModel(mapData);
+    const transform = renderModel.tiles.find((item) => item.key === obstacleKey);
+    const placementGroup = new THREE.Group();
+    placementGroup.matrixAutoUpdate = false;
+    placementGroup.userData.cityChannelPlacement = {
+      key: transform.key,
+      baseTransform: transform
+    };
+    const mesh = new THREE.Mesh(
+      new THREE.BoxGeometry(transform.size.x, transform.size.y, transform.size.z),
+      new THREE.MeshBasicMaterial()
+    );
+    mesh.position.set(transform.position.x, transform.position.y, transform.position.z);
+    mesh.rotation.y = transform.rotationY || 0;
+    mesh.renderOrder = 10;
+    mesh.userData.cityChannel = {
+      kind: transform.kind,
+      key: transform.key,
+      placement: obstacle,
+      transform
+    };
+    placementGroup.add(mesh);
+    placementGroup.matrix.copy(new THREE.Matrix4().makeTranslation(1.5, 0, 0.75));
+    placementGroup.updateMatrixWorld(true);
+    const runtime = {
+      renderModel,
+      placementGroups: new Map([[obstacleKey, placementGroup]]),
+      pickables: [mesh],
+      ghostGeometry: new THREE.BoxGeometry(1, 1, 1),
+      mechanismFlashGroup: new THREE.Group(),
+      mechanismObstructionFillMaterial: new THREE.MeshBasicMaterial({ transparent: true, opacity: 0 }),
+      mechanismObstructionOutlineMaterial: new THREE.LineBasicMaterial({ transparent: true, opacity: 0 }),
+      mechanismObstructionGlowMaterial: new THREE.LineBasicMaterial({ transparent: true, opacity: 0 }),
+      mechanismObstructionFlash: null,
+      requestRender: jest.fn(),
+      clearRackOverlayGroup: CityChannelThreeRuntime.prototype.clearRackOverlayGroup,
+      createBoardOverlayGroup: CityChannelThreeRuntime.prototype.createBoardOverlayGroup,
+      syncOverlayEdgeGeometry: CityChannelThreeRuntime.prototype.syncOverlayEdgeGeometry,
+      syncBoardOverlayGroup: CityChannelThreeRuntime.prototype.syncBoardOverlayGroup,
+      getPlacementMeshForComponent: CityChannelThreeRuntime.prototype.getPlacementMeshForComponent,
+      getObstructionPlacementIdentity: CityChannelThreeRuntime.prototype.getObstructionPlacementIdentity,
+      getObstructionPlacementTransform: CityChannelThreeRuntime.prototype.getObstructionPlacementTransform,
+      syncMechanismObstructionPlacementFlash: CityChannelThreeRuntime.prototype.syncMechanismObstructionPlacementFlash,
+      syncMechanismObstructionFlashTargets: CityChannelThreeRuntime.prototype.syncMechanismObstructionFlashTargets,
+      addObstructionFlashPlacement: CityChannelThreeRuntime.prototype.addObstructionFlashPlacement,
+      clearMechanismObstructionFlash: CityChannelThreeRuntime.prototype.clearMechanismObstructionFlash,
+      flashMechanismObstruction: CityChannelThreeRuntime.prototype.flashMechanismObstruction,
+      updateMechanismObstructionFlash: CityChannelThreeRuntime.prototype.updateMechanismObstructionFlash
+    };
+
+    const flashed = CityChannelThreeRuntime.prototype.flashMechanismObstruction.call(runtime, {
+      obstacle
+    });
+    const overlay = runtime.mechanismFlashGroup.children[0];
+    const fill = overlay.userData.fill;
+    const expected = new THREE.Vector3();
+    const expectedQuaternion = new THREE.Quaternion();
+    const expectedScale = new THREE.Vector3();
+    mesh.updateWorldMatrix(true, false);
+    mesh.matrixWorld.decompose(expected, expectedQuaternion, expectedScale);
+
+    expect(flashed).toBe(true);
+    expect(fill.position.x).toBeCloseTo(expected.x);
+    expect(fill.position.z).toBeCloseTo(expected.z);
+    expect(fill.position.x).not.toBeCloseTo(transform.position.x);
+    expect(fill.position.z).not.toBeCloseTo(transform.position.z);
+
+    placementGroup.matrix.copy(new THREE.Matrix4().makeTranslation(-0.5, 0, 1.25));
+    placementGroup.updateMatrixWorld(true);
+    CityChannelThreeRuntime.prototype.updateMechanismObstructionFlash.call(runtime);
+    mesh.updateWorldMatrix(true, false);
+    mesh.matrixWorld.decompose(expected, expectedQuaternion, expectedScale);
+
+    expect(fill.position.x).toBeCloseTo(expected.x);
+    expect(fill.position.z).toBeCloseTo(expected.z);
+  });
+
+  it('binds mechanism obstruction flashes to the current rendered board mesh when available', () => {
+    const obstacleKey = createCellKey(2, 2, 0);
+    const obstacle = createTile({
+      x: 2,
+      y: 2,
+      z: 0,
+      panelType: CITY_CHANNEL_TILE_TYPES.BASIC_PLATE
+    });
+    const staleRuntimePlacement = {
+      ...obstacle,
+      x: 2,
+      y: 1,
+      runtimeMotionType: 'rackTranslation',
+      runtimeTranslation: { x: 0, y: -1, z: 0 }
+    };
+    const mapData = {
+      ...createBaseCityChannelMap({ width: 4, height: 4, layers: 2 }),
+      tiles: {
+        [obstacleKey]: obstacle
+      },
+      walls: {}
+    };
+    const renderModel = buildCityChannelThreeRenderModel(mapData);
+    const transform = renderModel.tiles.find((item) => item.key === obstacleKey);
+    const placementGroup = new THREE.Group();
+    placementGroup.matrixAutoUpdate = false;
+    placementGroup.userData.cityChannelPlacement = {
+      key: transform.key,
+      baseTransform: transform
+    };
+    const mesh = new THREE.Mesh(
+      new THREE.BoxGeometry(transform.size.x, transform.size.y, transform.size.z),
+      new THREE.MeshBasicMaterial()
+    );
+    mesh.position.set(transform.position.x, transform.position.y, transform.position.z);
+    mesh.userData.cityChannel = {
+      kind: transform.kind,
+      key: transform.key,
+      placement: obstacle,
+      transform
+    };
+    placementGroup.add(mesh);
+    placementGroup.matrix.copy(new THREE.Matrix4().makeTranslation(0, 0, 1.25));
+    placementGroup.updateMatrixWorld(true);
+    const runtime = {
+      renderModel,
+      placementGroups: new Map([[obstacleKey, placementGroup]]),
+      pickables: [mesh],
+      ghostGeometry: new THREE.BoxGeometry(1, 1, 1),
+      mechanismFlashGroup: new THREE.Group(),
+      mechanismObstructionFillMaterial: new THREE.MeshBasicMaterial({ transparent: true, opacity: 0 }),
+      mechanismObstructionOutlineMaterial: new THREE.LineBasicMaterial({ transparent: true, opacity: 0 }),
+      mechanismObstructionGlowMaterial: new THREE.LineBasicMaterial({ transparent: true, opacity: 0 }),
+      mechanismObstructionFlash: null,
+      requestRender: jest.fn(),
+      clearRackOverlayGroup: CityChannelThreeRuntime.prototype.clearRackOverlayGroup,
+      createBoardOverlayGroup: CityChannelThreeRuntime.prototype.createBoardOverlayGroup,
+      syncOverlayEdgeGeometry: CityChannelThreeRuntime.prototype.syncOverlayEdgeGeometry,
+      syncBoardOverlayGroup: CityChannelThreeRuntime.prototype.syncBoardOverlayGroup,
+      syncMechanismObstructionPlacementFlash: CityChannelThreeRuntime.prototype.syncMechanismObstructionPlacementFlash,
+      getPlacementMeshForComponent: CityChannelThreeRuntime.prototype.getPlacementMeshForComponent,
+      getObstructionPlacementIdentity: CityChannelThreeRuntime.prototype.getObstructionPlacementIdentity,
+      getObstructionPlacementTarget: CityChannelThreeRuntime.prototype.getObstructionPlacementTarget,
+      isRuntimeObstructionPlacement: CityChannelThreeRuntime.prototype.isRuntimeObstructionPlacement,
+      getObstructionPlacementTransform: CityChannelThreeRuntime.prototype.getObstructionPlacementTransform,
+      addObstructionFlashPlacement: CityChannelThreeRuntime.prototype.addObstructionFlashPlacement,
+      clearMechanismObstructionFlash: CityChannelThreeRuntime.prototype.clearMechanismObstructionFlash,
+      flashMechanismObstruction: CityChannelThreeRuntime.prototype.flashMechanismObstruction,
+      updateMechanismObstructionFlash: CityChannelThreeRuntime.prototype.updateMechanismObstructionFlash,
+      syncMechanismObstructionFlashTargets: CityChannelThreeRuntime.prototype.syncMechanismObstructionFlashTargets
+    };
+
+    const flashed = CityChannelThreeRuntime.prototype.flashMechanismObstruction.call(runtime, {
+      componentKey: obstacleKey,
+      placement: staleRuntimePlacement,
+      placementKeys: [obstacleKey]
+    });
+    const overlay = runtime.mechanismFlashGroup.children[0];
+    const fill = overlay.userData.fill;
+    const expected = new THREE.Vector3();
+    const expectedQuaternion = new THREE.Quaternion();
+    const expectedScale = new THREE.Vector3();
+    mesh.updateWorldMatrix(true, false);
+    mesh.matrixWorld.decompose(expected, expectedQuaternion, expectedScale);
+    const staleTransform = getTileThreeTransform(staleRuntimePlacement, mapData);
+
+    expect(flashed).toBe(true);
+    expect(fill.position.x).toBeCloseTo(expected.x);
+    expect(fill.position.z).toBeCloseTo(expected.z);
+    expect(fill.position.z).not.toBeCloseTo(staleTransform.position.z);
   });
 
   it('creates red flash overlays for multiple mechanism obstruction boards', () => {

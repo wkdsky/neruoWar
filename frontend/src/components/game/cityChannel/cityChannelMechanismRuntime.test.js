@@ -242,7 +242,7 @@ describe('city channel mechanism runtime', () => {
     expect(graph.assemblyByComponentKey[verticalKey]).not.toBe(graph.assemblyByComponentKey[southKey]);
   });
 
-  it('splits a stacked vertical transmission chain when a middle board turns to another plane', () => {
+  it('keeps a stacked vertical transmission chain connected when visible sockets touch across planes', () => {
     const createVerticalTransmission = (z, patch = {}) => ({
       ...createTile({
         x: 2,
@@ -275,9 +275,14 @@ describe('city channel mechanism runtime', () => {
     });
 
     expect(graph.assemblyByComponentKey[lowerKey]).toBe(graph.assemblyByComponentKey[lowerBridgeKey]);
-    expect(graph.assemblyByComponentKey[lowerKey]).not.toBe(graph.assemblyByComponentKey[middleKey]);
-    expect(graph.assemblyByComponentKey[lowerKey]).not.toBe(graph.assemblyByComponentKey[upperKey]);
-    expect(graph.assemblyByComponentKey[middleKey]).not.toBe(graph.assemblyByComponentKey[upperKey]);
+    expect(graph.assemblyByComponentKey[lowerKey]).toBe(graph.assemblyByComponentKey[middleKey]);
+    expect(graph.assemblyByComponentKey[lowerKey]).toBe(graph.assemblyByComponentKey[upperKey]);
+    expect(graph.assemblies[0].componentKeys).toEqual(expect.arrayContaining([
+      lowerKey,
+      lowerBridgeKey,
+      middleKey,
+      upperKey
+    ]));
   });
 
   it('splits a stacked vertical transmission chain when a middle board is replaced by a basic plate', () => {
@@ -459,6 +464,44 @@ describe('city channel mechanism runtime', () => {
 
     expect(connected.assemblyByComponentKey[leftKey]).toBe(connected.assemblyByComponentKey[rightKey]);
     expect(disconnected.assemblyByComponentKey[leftKey]).not.toBe(disconnected.assemblyByComponentKey[rightKey]);
+  });
+
+  it('connects boards whenever visible transmission socket positions touch', () => {
+    const vertical = {
+      ...createTile({
+        x: 2,
+        y: 2,
+        z: 0,
+        panelType: CITY_CHANNEL_TILE_TYPES.TRANSMISSION_STRAIGHT_PLATE,
+        rotation: 0,
+        transmissionRotation: 0
+      }),
+      isVertical: true
+    };
+    const upperVertical = {
+      ...createTile({
+        x: 2,
+        y: 2,
+        z: 1,
+        panelType: CITY_CHANNEL_TILE_TYPES.TRANSMISSION_STRAIGHT_PLATE,
+        rotation: 90,
+        transmissionRotation: 0
+      }),
+      isVertical: true
+    };
+    const verticalKey = createCellKey(vertical.x, vertical.y, vertical.z);
+    const upperVerticalKey = createCellKey(upperVertical.x, upperVertical.y, upperVertical.z);
+
+    const graph = buildMechanicalAssemblies({
+      tiles: {
+        [verticalKey]: vertical,
+        [upperVerticalKey]: upperVertical
+      },
+      walls: {}
+    });
+
+    expect(graph.assemblyByComponentKey[verticalKey]).toBe(graph.assemblyByComponentKey[upperVerticalKey]);
+    expect(graph.assemblies).toHaveLength(1);
   });
 
   it('ignores stale transmission skeleton data on basic plates when building assemblies', () => {

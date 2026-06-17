@@ -198,6 +198,11 @@ git diff --check
 - rack-driven gear mesh / passive axis binding targeted 测试已通过：`npm test -- --watchAll=false --runTestsByPath src/components/game/cityChannel/cityChannelMechanismSimulation.test.js`，67 个 tests 全部通过。
 - 机械装配和连轴状态 targeted 测试已通过：`npm test -- --watchAll=false --runTestsByPath src/components/game/cityChannel/cityChannelMechanismRuntime.test.js`，22 个 tests 全部通过。
 - Three Runtime targeted 测试已通过：`npm test -- --watchAll=false --runTestsByPath src/components/game/cityChannel/three/CityChannelThreeRuntime.test.js`，140 个 tests 全部通过。
+- 额外需求：修复“多条齿条/齿轮绑定到同一板材时，一侧齿条拖动板材后，另一侧绑定齿条没有跟随移动”的问题。结论是 runtime snapshot 只写入被当前齿轮直接驱动的 rack，没有从已移动的 `placements` 反向同步其他绑定 rack。
+- `createMechanismRuntimeSnapshot` 已扫描全部 rack：如果 rack 的 `axisBinding.componentKey` 已进入 runtime `placements`，且该 rack 本身没有直接驱动 runtime entry，就按该板材的 `runtimeTranslation` 生成 `snapshot.racks[rackId]`。这样同一板材可作为刚体/约束节点，把平移传给多个绑定齿条。
+- 被板材携带的齿条如果沿自身轴线产生位移，也会参与齿轮接触扫描并生成 rack-driven gear runtime state；这样另一侧绑定齿条不只是视觉跟随，还能继续带动被动齿轮。
+- `cityChannelMechanismSimulation.test.js` 已新增“左侧齿条驱动板材，右侧齿条只绑定同一板材也跟随移动，并继续驱动接触齿轮”的回归用例；targeted 测试已通过：`npm test -- --watchAll=false --runTestsByPath src/components/game/cityChannel/cityChannelMechanismSimulation.test.js`，85 个 tests 全部通过。
+- Three Runtime targeted 测试已通过：`npm test -- --watchAll=false --runTestsByPath src/components/game/cityChannel/three/CityChannelThreeRuntime.test.js`，168 个 tests 全部通过。
 - 完整 cityChannel 测试已通过：`npm test -- --watchAll=false src/components/game/cityChannel`，16 个 test suites、339 个 tests 全部通过。
 - 生产编译已通过：`npm run build` 输出 `Compiled successfully.`。
 - 3001 dev server 已确认包含本轮代码：`CityChannelEditor` chunk 可搜到 `createRackDrivenAxisBindingRuntimeEntries`，`CityWorkshopPage` chunk 可搜到 `findAssemblyAxisBindingPivotCandidate` / `resolvedFromBinding`。
