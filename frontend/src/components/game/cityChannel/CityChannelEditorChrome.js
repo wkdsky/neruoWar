@@ -281,6 +281,22 @@ export const CityChannelHotbar = ({
   );
 };
 
+export const CityChannelMechanismMotionControls = ({
+  active = false,
+  onCancel,
+  onPointerDown
+}) => {
+  if (!active) return null;
+  return (
+    <div className="city-channel-mechanism-motion-controls" onPointerDown={onPointerDown}>
+      <button type="button" className="city-channel-mechanism-motion-cancel" onClick={onCancel} title="撤销机关运动">
+        <Undo2 size={16} />
+        <span>撤销运动</span>
+      </button>
+    </div>
+  );
+};
+
 export const CityChannelInteractionHints = ({
   activeTool,
   selectedCount

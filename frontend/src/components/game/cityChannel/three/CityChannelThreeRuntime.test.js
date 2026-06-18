@@ -209,6 +209,189 @@ describe('CityChannelThreeRuntime pointer release flow', () => {
     expect(runtime.selectHovered).not.toHaveBeenCalled();
   });
 
+  it('runs a pressure plate on double click while browsing even when it is not selected', () => {
+    const tile = createTile({
+      x: 2,
+      y: 3,
+      z: 0,
+      panelType: CITY_CHANNEL_TILE_TYPES.GEAR_PRESSURE_PLATE
+    });
+    const runtime = createRuntimeHarness({
+      config: {
+        activeTool: CITY_CHANNEL_TOOLS.BROWSE
+      },
+      mechanismRuntimeSnapshot: { placements: {}, gears: {} },
+      hoverHit: {
+        object: {
+          userData: {
+            cityChannel: {
+              kind: 'tile',
+              key: createCellKey(2, 3, 0),
+              placement: tile
+            }
+          }
+        }
+      },
+      triggerMechanismAtCell: jest.fn(() => true)
+    });
+
+    CityChannelThreeRuntime.prototype.handlePointerUp.call(runtime, {
+      ...pointerUpEvent,
+      detail: 2,
+      clientX: 120,
+      clientY: 80
+    });
+
+    expect(runtime.triggerMechanismAtCell).toHaveBeenCalledWith({ x: 2, y: 3, z: 0 });
+    expect(runtime.cancelMechanismRuntimePreview).not.toHaveBeenCalled();
+    expect(runtime.selectHovered).not.toHaveBeenCalled();
+  });
+
+  it('runs a pressure plate on double click while selecting even through its gear mesh', () => {
+    const key = createCellKey(4, 5, 0);
+    const tile = createTile({
+      x: 4,
+      y: 5,
+      z: 0,
+      panelType: CITY_CHANNEL_TILE_TYPES.GEAR_PRESSURE_PLATE
+    });
+    const runtime = createRuntimeHarness({
+      config: {
+        activeTool: CITY_CHANNEL_TOOLS.SELECT
+      },
+      renderModel: {
+        mapData: {
+          tiles: { [key]: tile },
+          walls: {}
+        }
+      },
+      hoverHit: {
+        object: {
+          userData: {
+            cityChannel: {
+              kind: 'gear',
+              hostKind: 'tile',
+              hostKey: key,
+              cell: { x: 4, y: 5, z: 0 },
+              placement: tile,
+              mount: { id: 'gear_center' }
+            }
+          }
+        }
+      },
+      triggerMechanismAtCell: jest.fn(() => true)
+    });
+
+    CityChannelThreeRuntime.prototype.handlePointerUp.call(runtime, {
+      ...pointerUpEvent,
+      detail: 2,
+      clientX: 140,
+      clientY: 96
+    });
+
+    expect(runtime.triggerMechanismAtCell).toHaveBeenCalledWith({ x: 4, y: 5, z: 0 });
+    expect(runtime.selectHovered).not.toHaveBeenCalled();
+  });
+
+  it('does not run pressure plates from double click while placing or moving', () => {
+    const tile = createTile({
+      x: 1,
+      y: 1,
+      z: 0,
+      panelType: CITY_CHANNEL_TILE_TYPES.GEAR_PRESSURE_PLATE
+    });
+    const createPressureRuntime = (overrides = {}) => createRuntimeHarness({
+      hoverHit: {
+        object: {
+          userData: {
+            cityChannel: {
+              kind: 'tile',
+              key: createCellKey(1, 1, 0),
+              placement: tile
+            }
+          }
+        }
+      },
+      triggerMechanismAtCell: jest.fn(() => true),
+      ...overrides
+    });
+    const placeRuntime = createPressureRuntime({
+      config: {
+        activeTool: CITY_CHANNEL_TOOLS.PLACE_TILE,
+        activeTileType: CITY_CHANNEL_TILE_TYPES.BASIC_PLATE
+      }
+    });
+    const moveRuntime = createPressureRuntime({
+      carryState: { mode: 'move' },
+      config: {
+        activeTool: CITY_CHANNEL_TOOLS.SELECT
+      }
+    });
+    const event = {
+      ...pointerUpEvent,
+      detail: 2,
+      clientX: 110,
+      clientY: 70
+    };
+
+    CityChannelThreeRuntime.prototype.handlePointerUp.call(placeRuntime, event);
+    CityChannelThreeRuntime.prototype.handlePointerUp.call(moveRuntime, event);
+
+    expect(placeRuntime.triggerMechanismAtCell).not.toHaveBeenCalled();
+    expect(moveRuntime.triggerMechanismAtCell).not.toHaveBeenCalled();
+  });
+
+  it('cancels active mechanism motion on non-pressure double click while browsing', () => {
+    const runtime = createRuntimeHarness({
+      config: {
+        activeTool: CITY_CHANNEL_TOOLS.BROWSE
+      },
+      mechanismRuntimeSnapshot: { placements: {}, gears: {} },
+      hoverHit: null,
+      hoverMesh: null,
+      triggerMechanismAtCell: jest.fn(() => true)
+    });
+
+    CityChannelThreeRuntime.prototype.handlePointerUp.call(runtime, {
+      ...pointerUpEvent,
+      detail: 2,
+      clientX: 180,
+      clientY: 140
+    });
+
+    expect(runtime.cancelMechanismRuntimePreview).toHaveBeenCalledTimes(1);
+    expect(runtime.triggerMechanismAtCell).not.toHaveBeenCalled();
+    expect(runtime.selectHovered).not.toHaveBeenCalled();
+  });
+
+  it('does not cancel active mechanism motion on browse or select pointer down', () => {
+    const createPointerRuntime = (activeTool) => createRuntimeHarness({
+      pointerState: null,
+      config: { activeTool },
+      updateActiveGhost: jest.fn(),
+      isHoverSelectionSelected: jest.fn(() => false),
+      hasBoardSelection: jest.fn(() => false),
+      scheduleLongPressCarry: jest.fn(),
+      renderer: {
+        domElement: {
+          setPointerCapture: jest.fn(),
+          releasePointerCapture: jest.fn()
+        }
+      }
+    });
+    const browseRuntime = createPointerRuntime(CITY_CHANNEL_TOOLS.BROWSE);
+    const selectRuntime = createPointerRuntime(CITY_CHANNEL_TOOLS.SELECT);
+    const placeRuntime = createPointerRuntime(CITY_CHANNEL_TOOLS.PLACE_TILE);
+
+    CityChannelThreeRuntime.prototype.handlePointerDown.call(browseRuntime, pointerDownEvent);
+    CityChannelThreeRuntime.prototype.handlePointerDown.call(selectRuntime, pointerDownEvent);
+    CityChannelThreeRuntime.prototype.handlePointerDown.call(placeRuntime, pointerDownEvent);
+
+    expect(browseRuntime.cancelMechanismRuntimePreview).not.toHaveBeenCalled();
+    expect(selectRuntime.cancelMechanismRuntimePreview).not.toHaveBeenCalled();
+    expect(placeRuntime.cancelMechanismRuntimePreview).toHaveBeenCalledTimes(1);
+  });
+
   it('exits tile placement on first right click even when a board is selected', () => {
     const onExitPlaceMode = jest.fn();
     const emitSelection = jest.fn();
@@ -3254,7 +3437,11 @@ describe('CityChannelThreeRuntime gear transmission', () => {
     renderModel: buildCityChannelThreeRenderModel(mapData),
     getBasePlacementTransform: CityChannelThreeRuntime.prototype.getBasePlacementTransform,
     getBasePlacementForTransform: CityChannelThreeRuntime.prototype.getBasePlacementForTransform,
+    getMechanismRuntimeContactMapData: CityChannelThreeRuntime.prototype.getMechanismRuntimeContactMapData,
     getGearHostKindAndPlacement: CityChannelThreeRuntime.prototype.getGearHostKindAndPlacement,
+    getGearHostKindAndPlacementFromMap: CityChannelThreeRuntime.prototype.getGearHostKindAndPlacementFromMap,
+    getRuntimeGearSurfacePointForPlacement: CityChannelThreeRuntime.prototype.getRuntimeGearSurfacePointForPlacement,
+    hasRuntimePlacementGroupMatrix: CityChannelThreeRuntime.prototype.hasRuntimePlacementGroupMatrix,
     getGearBindingStatusForMount: CityChannelThreeRuntime.prototype.getGearBindingStatusForMount,
     getGearAttachmentContext: CityChannelThreeRuntime.prototype.getGearAttachmentContext,
     getGearNodesForMounts: CityChannelThreeRuntime.prototype.getGearNodesForMounts,
@@ -4264,6 +4451,62 @@ describe('CityChannelThreeRuntime gear transmission', () => {
         rotationTotalAngle: 450
       })
     }));
+  });
+
+  it('uses runtime rack positions when creating a new rack drive entry', () => {
+    const rack = {
+      id: 'runtime_contact_rack',
+      componentType: DOUBLE_SIDED_RACK_COMPONENT_TYPE,
+      plane: 'vertical',
+      normalAxis: 'y',
+      direction: 'z',
+      start: { x: 1.5, y: 4, z: 0 },
+      end: { x: 1.5, y: 4, z: 1 }
+    };
+    const runtimeRack = {
+      ...rack,
+      start: { x: 1.5, y: 1, z: 0 },
+      end: { x: 1.5, y: 1, z: 1 },
+      runtimeTranslation: { x: 0, y: -3, z: 0 },
+      runtimeLinearDistance: -3
+    };
+    const node = {
+      id: 'driver:gear_center',
+      componentKey: 'driver',
+      mountId: 'gear_center',
+      worldPoint: { x: 1, y: 1, z: 0.5 },
+      point: { x: 1, y: 1, z: 0.5 },
+      placement: { x: 1, y: 1, z: 0, isVertical: true },
+      pitchRadiusWorld: CITY_CHANNEL_GEAR_PITCH_RADIUS_WORLD,
+      gearRatioRadius: 18,
+      driveRatio: 1,
+      isDriveRoot: true,
+      surfaceKey: 'vertical:1:front',
+      mount: { id: 'gear_center', position: 'center' }
+    };
+    const mapData = {
+      ...createBaseCityChannelMap({ name: 'runtime rack contact' }),
+      tiles: {},
+      walls: {},
+      racks: { [rack.id]: rack }
+    };
+    const runtime = {
+      ...createTransmissionRuntimeHarness(mapData),
+      mechanismRuntimeSnapshot: {
+        racks: { [rack.id]: runtimeRack },
+        placements: {},
+        gears: {}
+      }
+    };
+
+    const entries = CityChannelThreeRuntime.prototype.createRackAxisBindingRuntimeEntries.call(runtime, [node], null);
+
+    expect(entries).toHaveLength(1);
+    expect(entries[0]).toMatchObject({
+      rackId: rack.id,
+      contactRackAxis: 0.5
+    });
+    expect(entries[0].rack.start.y).toBe(1);
   });
 
   it('keeps driving gears above a turned vertical board when visible sockets still touch', () => {
@@ -6775,6 +7018,39 @@ describe('CityChannelThreeRuntime gear transmission', () => {
 });
 
 describe('CityChannelThreeRuntime mechanism preview cancellation', () => {
+  const withMechanismMotionWorld = (runtime) => ({
+    ensureMechanismActiveMotions: CityChannelThreeRuntime.prototype.ensureMechanismActiveMotions,
+    getMechanismLockedMotionForKey: CityChannelThreeRuntime.prototype.getMechanismLockedMotionForKey,
+    getMechanismMotionBasePhases: CityChannelThreeRuntime.prototype.getMechanismMotionBasePhases,
+    rebaseMechanismAssemblyEntriesToRuntime: CityChannelThreeRuntime.prototype.rebaseMechanismAssemblyEntriesToRuntime,
+    createMechanismPreviewMotion: CityChannelThreeRuntime.prototype.createMechanismPreviewMotion,
+    createPassiveRackInertiaPlan: CityChannelThreeRuntime.prototype.createPassiveRackInertiaPlan,
+    getMechanismMotionSnapshot: CityChannelThreeRuntime.prototype.getMechanismMotionSnapshot,
+    updateMechanismMotionState: CityChannelThreeRuntime.prototype.updateMechanismMotionState,
+    areMechanismRuntimeNumbersClose: CityChannelThreeRuntime.prototype.areMechanismRuntimeNumbersClose,
+    areMechanismRuntimeVectorsClose: CityChannelThreeRuntime.prototype.areMechanismRuntimeVectorsClose,
+    getMechanismRuntimeVectorMagnitude: CityChannelThreeRuntime.prototype.getMechanismRuntimeVectorMagnitude,
+    areMechanismRuntimeVectorsSameTrend: CityChannelThreeRuntime.prototype.areMechanismRuntimeVectorsSameTrend,
+    areMechanismRuntimeAnglesSameTrend: CityChannelThreeRuntime.prototype.areMechanismRuntimeAnglesSameTrend,
+    pickMechanismFurtherRuntimeState: CityChannelThreeRuntime.prototype.pickMechanismFurtherRuntimeState,
+    getMechanismMotionSourceSpeed: CityChannelThreeRuntime.prototype.getMechanismMotionSourceSpeed,
+    getMechanismRuntimeStateMagnitude: CityChannelThreeRuntime.prototype.getMechanismRuntimeStateMagnitude,
+    getMechanismRuntimeStateSpeed: CityChannelThreeRuntime.prototype.getMechanismRuntimeStateSpeed,
+    isMechanismMotionSettled: CityChannelThreeRuntime.prototype.isMechanismMotionSettled,
+    chooseMechanismRuntimeMergeState: CityChannelThreeRuntime.prototype.chooseMechanismRuntimeMergeState,
+    areMechanismPlacementStatesCompatible: CityChannelThreeRuntime.prototype.areMechanismPlacementStatesCompatible,
+    areMechanismRackStatesCompatible: CityChannelThreeRuntime.prototype.areMechanismRackStatesCompatible,
+    areMechanismGearStatesCompatible: CityChannelThreeRuntime.prototype.areMechanismGearStatesCompatible,
+    createConcurrentMechanismConflict: CityChannelThreeRuntime.prototype.createConcurrentMechanismConflict,
+    composeMechanismRuntimeSnapshots: CityChannelThreeRuntime.prototype.composeMechanismRuntimeSnapshots,
+    removeMechanismMotionForConflict: CityChannelThreeRuntime.prototype.removeMechanismMotionForConflict,
+    rebaseMechanismMotionToCurrentRuntime: CityChannelThreeRuntime.prototype.rebaseMechanismMotionToCurrentRuntime,
+    applyMechanismSuppressedMotionState: CityChannelThreeRuntime.prototype.applyMechanismSuppressedMotionState,
+    stepMechanismMotionWorld: CityChannelThreeRuntime.prototype.stepMechanismMotionWorld,
+    scheduleMechanismMotionFrame: CityChannelThreeRuntime.prototype.scheduleMechanismMotionFrame,
+    ...runtime
+  });
+
   it('cancels a mechanism preview when interaction config changes', () => {
     const runtime = {
       config: {
@@ -7270,7 +7546,7 @@ describe('CityChannelThreeRuntime mechanism preview cancellation', () => {
       gearTargets: [{ gearKey: `${createCellKey(1, 1, 1)}:gear_upper` }]
     };
     const callbacks = [];
-    const runtime = {
+    const runtime = withMechanismMotionWorld({
       config: {
         onMechanismPreviewProgress: jest.fn()
       },
@@ -7287,9 +7563,9 @@ describe('CityChannelThreeRuntime mechanism preview cancellation', () => {
         callbacks.push(callback);
         return callbacks.length;
       })
-    };
+    });
     const nowSpy = jest.spyOn(Date, 'now');
-    nowSpy.mockReturnValueOnce(0);
+    nowSpy.mockReturnValue(0);
 
     CityChannelThreeRuntime.prototype.playMechanismRuntimePreview.call(runtime, {
       key: createCellKey(1, 1, 0),
@@ -7314,6 +7590,433 @@ describe('CityChannelThreeRuntime mechanism preview cancellation', () => {
       obstruction
     }));
     nowSpy.mockRestore();
+  });
+
+  it('advances pressure plate source angle linearly at the configured speed', () => {
+    const callbacks = [];
+    const runtime = withMechanismMotionWorld({
+      config: {
+        onMechanismPreviewProgress: jest.fn()
+      },
+      mechanismPreviewFrame: null,
+      mechanismPreviewTimer: null,
+      mechanismRuntimeSnapshot: null,
+      mechanismActiveMotions: [],
+      createRuntimeSnapshotForMechanism: jest.fn((args) => ({
+        sourceAngle: args.sourceAngle,
+        placements: {},
+        gears: {
+          'source:gear': {
+            speedRatio: 1,
+            phase: args.sourceAngle
+          }
+        },
+        sync: []
+      })),
+      setMechanismRuntimeSnapshot: jest.fn(function setMechanismRuntimeSnapshot(snapshot) {
+        this.mechanismRuntimeSnapshot = snapshot;
+      }),
+      flashMechanismObstruction: jest.fn(),
+      requestMechanismFrame: jest.fn((callback) => {
+        callbacks.push(callback);
+        return callbacks.length;
+      })
+    });
+    const nowSpy = jest.spyOn(Date, 'now');
+    nowSpy.mockReturnValue(0);
+
+    CityChannelThreeRuntime.prototype.playMechanismRuntimePreview.call(runtime, {
+      key: createCellKey(1, 1, 0),
+      tile: createTile({
+        x: 1,
+        y: 1,
+        z: 0,
+        panelType: CITY_CHANNEL_TILE_TYPES.GEAR_PRESSURE_PLATE
+      }),
+      params: {
+        rotationTurns: 1,
+        rotationAngle: 0,
+        rotationSpeedDegPerSec: 360,
+        triggerDelaySeconds: 0,
+        autoReturn: false
+      },
+      targetAngle: 360
+    });
+
+    expect(runtime.mechanismActiveMotions[0].durationMs).toBe(1000);
+    expect(runtime.mechanismRuntimeSnapshot.sourceAngle).toBe(0);
+
+    nowSpy.mockReturnValue(500);
+    callbacks.shift()();
+    expect(runtime.mechanismRuntimeSnapshot.sourceAngle).toBeCloseTo(180, 6);
+    expect(runtime.mechanismRuntimeSnapshot.gears['source:gear'].phase).toBeCloseTo(180, 6);
+
+    nowSpy.mockReturnValue(750);
+    callbacks.shift()();
+    expect(runtime.mechanismRuntimeSnapshot.sourceAngle).toBeCloseTo(270, 6);
+    expect(runtime.mechanismRuntimeSnapshot.gears['source:gear'].phase).toBeCloseTo(270, 6);
+
+    nowSpy.mockReturnValue(1000);
+    callbacks.shift()();
+    expect(runtime.mechanismRuntimeSnapshot.sourceAngle).toBe(360);
+    expect(runtime.mechanismActiveMotions[0].phase).toBe('finished');
+    expect(Math.max(
+      ...runtime.createRuntimeSnapshotForMechanism.mock.calls.map(([args]) => Number(args.sourceAngle) || 0)
+    )).toBe(360);
+    nowSpy.mockRestore();
+  });
+
+  it('adds countdown overlays for active drive root gears', () => {
+    const gearKey = `${createCellKey(1, 1, 0)}:gear_center`;
+    const gearMesh = new THREE.Mesh(new THREE.BoxGeometry(1, 1, 1), new THREE.MeshBasicMaterial());
+    gearMesh.position.set(1, 2, 3);
+    gearMesh.updateMatrixWorld(true);
+    const runtime = {
+      overlayGroup: new THREE.Group(),
+      gearMeshes: new Map([[gearKey, gearMesh]]),
+      mechanismActiveMotions: [{
+        id: 'motion_countdown',
+        phase: 'forward',
+        angle: 370,
+        targetAngle: 720,
+        pausedByFasterDrive: true,
+        gearNodes: [{
+          id: gearKey,
+          componentKey: createCellKey(1, 1, 0),
+          mountId: 'gear_center',
+          isDriveRoot: true
+        }]
+      }],
+      mechanismRuntimeSnapshot: {
+        gears: {
+          [gearKey]: { speedRatio: -1 }
+        }
+      },
+      isMechanismMotionSettled: CityChannelThreeRuntime.prototype.isMechanismMotionSettled,
+      getMechanismDriveCountdownRotationSign: CityChannelThreeRuntime.prototype.getMechanismDriveCountdownRotationSign,
+      getMechanismDriveCountdownStates: CityChannelThreeRuntime.prototype.getMechanismDriveCountdownStates,
+      createMechanismDriveCountdownSprite: jest.fn((state) => {
+        const sprite = new THREE.Sprite(new THREE.SpriteMaterial());
+        sprite.userData.cityChannelGearRole = 'mechanism_drive_countdown';
+        sprite.userData.cityChannelMechanismDriveCountdown = state;
+        return sprite;
+      }),
+      addMechanismDriveCountdownOverlays: CityChannelThreeRuntime.prototype.addMechanismDriveCountdownOverlays
+    };
+
+    CityChannelThreeRuntime.prototype.addMechanismDriveCountdownOverlays.call(runtime);
+    const overlay = runtime.overlayGroup.children[0];
+
+    expect(overlay).toBeInstanceOf(THREE.Sprite);
+    expect(overlay.userData.cityChannelGearRole).toBe('mechanism_drive_countdown');
+    expect(overlay.userData.cityChannelMechanismDriveCountdown).toMatchObject({
+      gearKey,
+      paused: true,
+      remainingTurns: 1,
+      rotationDirectionSign: -1
+    });
+    expect(overlay.position.toArray()).toEqual([1, 2, 3]);
+  });
+
+  it('draws the drive countdown wipe in the active gear rotation direction', () => {
+    const originalCreateElement = document.createElement.bind(document);
+    const canvas = originalCreateElement('canvas');
+    const arcCalls = [];
+    const context = {
+      clearRect: jest.fn(),
+      beginPath: jest.fn(),
+      arc: jest.fn((...args) => arcCalls.push(args)),
+      fill: jest.fn(),
+      save: jest.fn(),
+      restore: jest.fn(),
+      moveTo: jest.fn(),
+      closePath: jest.fn(),
+      stroke: jest.fn(),
+      fillText: jest.fn()
+    };
+    jest.spyOn(canvas, 'getContext').mockReturnValue(context);
+    const createElementSpy = jest.spyOn(document, 'createElement').mockImplementation((tagName, options) => (
+      tagName === 'canvas' ? canvas : originalCreateElement(tagName, options)
+    ));
+
+    const sprite = CityChannelThreeRuntime.prototype.createMechanismDriveCountdownSprite.call({}, {
+      paused: false,
+      cycleProgress: 0.25,
+      remainingTurns: 1,
+      rotationDirectionSign: -1
+    });
+
+    const wipeArc = arcCalls.find(([, , radius]) => radius === 51);
+    expect(sprite).toBeInstanceOf(THREE.Sprite);
+    expect(wipeArc[3]).toBeCloseTo(-Math.PI / 2, 6);
+    expect(wipeArc[4]).toBeCloseTo(-Math.PI, 6);
+    expect(wipeArc[5]).toBe(true);
+
+    createElementSpy.mockRestore();
+  });
+
+  it('highlights the pressure plate transmission path for hovered standby drive gears', () => {
+    const sourceKey = createCellKey(1, 1, 0);
+    const linkKey = createCellKey(2, 1, 0);
+    const mount = {
+      id: 'gear_center',
+      position: 'center',
+      surface: 'front'
+    };
+    const sourceTile = createTile({
+      x: 1,
+      y: 1,
+      z: 0,
+      panelType: CITY_CHANNEL_TILE_TYPES.GEAR_PRESSURE_PLATE
+    });
+    const linkTile = createTile({
+      x: 2,
+      y: 1,
+      z: 0,
+      panelType: CITY_CHANNEL_TILE_TYPES.TRANSMISSION_CROSS_PLATE
+    });
+    linkTile.gearMounts = [mount];
+    const mapData = {
+      ...createBaseCityChannelMap({ width: 4, height: 4, layers: 1 }),
+      tiles: {
+        [sourceKey]: sourceTile,
+        [linkKey]: linkTile
+      },
+      walls: {}
+    };
+    const renderModel = buildCityChannelThreeRenderModel(mapData);
+    const sourceAssembly = getAssemblyForCell(buildMechanicalAssemblies(mapData), sourceKey);
+    const gearKey = `${linkKey}:gear_center`;
+    const gearMesh = new THREE.Mesh(new THREE.BoxGeometry(0.2, 0.2, 0.2), new THREE.MeshBasicMaterial());
+    gearMesh.userData.cityChannel = {
+      kind: 'gear',
+      hostKind: 'tile',
+      hostKey: linkKey,
+      mount
+    };
+    gearMesh.position.set(1, 2, 3);
+    gearMesh.updateMatrixWorld(true);
+    const runtime = createRuntimeObject({
+      renderModel,
+      overlayGroup: new THREE.Group(),
+      placementGroups: new Map(),
+      gearMeshes: new Map([[gearKey, gearMesh]]),
+      hoverMesh: gearMesh,
+      config: {
+        selection: { gears: [] }
+      },
+      mechanismActiveMotions: [{
+        id: 'motion_path',
+        key: sourceKey,
+        phase: 'forward',
+        pausedByFasterDrive: true,
+        sourceAssembly,
+        gearNodes: [{
+          id: gearKey,
+          componentKey: linkKey,
+          mountId: 'gear_center',
+          isDriveRoot: true
+        }]
+      }],
+      mechanismRuntimeSnapshot: null,
+      gearBindingMarkerGeometry: new THREE.SphereGeometry(0.055, 8, 6),
+      transmissionNodeGeometry: new THREE.SphereGeometry(0.052, 8, 6),
+      gearHaloGeometry: new THREE.RingGeometry(0.12, 0.16, 12),
+      gearBindingActiveMaterial: new THREE.MeshBasicMaterial(),
+      gearBindingActiveGlowMaterial: new THREE.MeshBasicMaterial(),
+      gearBindingActiveCurveMaterial: new THREE.MeshBasicMaterial()
+    });
+
+    CityChannelThreeRuntime.prototype.addMechanismDrivePathOverlays.call(runtime);
+    const roles = runtime.overlayGroup.children.map((child) => child.userData.cityChannelGearRole);
+    const context = CityChannelThreeRuntime.prototype.getMechanismDrivePathContexts.call(runtime)[0];
+
+    expect(context.path.componentKeys).toEqual([sourceKey, linkKey]);
+    expect(roles).toEqual(expect.arrayContaining([
+      'mechanism_drive_path_segment',
+      'mechanism_drive_path_gear'
+    ]));
+    expect(roles).not.toContain('mechanism_drive_path_node');
+  });
+
+  it('highlights the pressure plate transmission path for selected active gears before motion starts', () => {
+    const sourceKey = createCellKey(1, 1, 0);
+    const linkKey = createCellKey(2, 1, 0);
+    const mount = {
+      id: 'gear_center',
+      position: 'center',
+      surface: 'front',
+      rotationDirection: CITY_CHANNEL_GEAR_ROTATION_DIRECTIONS.CLOCKWISE
+    };
+    const sourceTile = createTile({
+      x: 1,
+      y: 1,
+      z: 0,
+      panelType: CITY_CHANNEL_TILE_TYPES.GEAR_PRESSURE_PLATE
+    });
+    const linkTile = createTile({
+      x: 2,
+      y: 1,
+      z: 0,
+      panelType: CITY_CHANNEL_TILE_TYPES.TRANSMISSION_CROSS_PLATE
+    });
+    linkTile.gearMounts = [mount];
+    const mapData = {
+      ...createBaseCityChannelMap({ width: 4, height: 4, layers: 1 }),
+      tiles: {
+        [sourceKey]: sourceTile,
+        [linkKey]: linkTile
+      },
+      walls: {}
+    };
+    const renderModel = buildCityChannelThreeRenderModel(mapData);
+    const gearKey = `${linkKey}:gear_center`;
+    const sourceMesh = new THREE.Mesh(new THREE.BoxGeometry(1, 0.08, 1), new THREE.MeshBasicMaterial());
+    sourceMesh.updateMatrixWorld(true);
+    const gearMesh = new THREE.Mesh(new THREE.BoxGeometry(0.2, 0.2, 0.2), new THREE.MeshBasicMaterial());
+    gearMesh.position.set(1, 2, 3);
+    gearMesh.updateMatrixWorld(true);
+    const coreMaterial = new THREE.MeshBasicMaterial();
+    const runtime = createRuntimeObject({
+      renderModel,
+      overlayGroup: new THREE.Group(),
+      placementGroups: new Map(),
+      gearMeshes: new Map([[gearKey, gearMesh]]),
+      ghostGeometry: new THREE.BoxGeometry(1, 1, 1),
+      getPlacementMeshForComponent: jest.fn((componentKey) => (
+        componentKey === sourceKey ? sourceMesh : null
+      )),
+      hoverMesh: null,
+      config: {
+        selection: {
+          gears: [{
+            hostKind: 'tile',
+            hostKey: linkKey,
+            mountId: 'gear_center'
+          }]
+        }
+      },
+      mechanismActiveMotions: [],
+      mechanismRuntimeSnapshot: null,
+      gearBindingMarkerGeometry: new THREE.SphereGeometry(0.055, 8, 6),
+      transmissionNodeGeometry: new THREE.SphereGeometry(0.052, 8, 6),
+      gearHaloGeometry: new THREE.RingGeometry(0.12, 0.16, 12),
+      mechanismDrivePathCoreMaterial: coreMaterial,
+      mechanismDrivePathGlowMaterial: new THREE.MeshBasicMaterial(),
+      mechanismDrivePathNodeMaterial: new THREE.MeshBasicMaterial(),
+      mechanismDriveSourceFillMaterial: new THREE.MeshBasicMaterial(),
+      mechanismDriveSourceOutlineMaterial: new THREE.LineBasicMaterial(),
+      mechanismDriveSourceGlowMaterial: new THREE.LineBasicMaterial()
+    });
+
+    CityChannelThreeRuntime.prototype.addMechanismDrivePathOverlays.call(runtime);
+    const roles = runtime.overlayGroup.children.map((child) => child.userData.cityChannelGearRole);
+    const context = CityChannelThreeRuntime.prototype.getMechanismDrivePathContexts.call(runtime)[0];
+    const coreSegment = runtime.overlayGroup.children.find((child) => (
+      child.userData.cityChannelGearRole === 'mechanism_drive_path_segment'
+    ));
+
+    expect(context).toMatchObject({
+      gearKey,
+      sourceKey,
+      targetKey: linkKey,
+      staticPath: true
+    });
+    expect(context.path.componentKeys).toEqual([sourceKey, linkKey]);
+    expect(roles).toEqual(expect.arrayContaining([
+      'mechanism_drive_path_segment',
+      'mechanism_drive_source_glow',
+      'mechanism_drive_source_beam',
+      'mechanism_drive_path_gear'
+    ]));
+    expect(roles).not.toContain('mechanism_drive_path_node');
+    expect(roles).not.toContain('mechanism_drive_source_ray');
+    expect(roles).not.toContain('mechanism_drive_source_particle');
+    expect(coreSegment.material).toBe(coreMaterial);
+  });
+
+  it('draws default transmission skeleton on the same embedded layer as drive highlights', () => {
+    const sourceKey = createCellKey(1, 1, 0);
+    const sourceTile = createTile({
+      x: 1,
+      y: 1,
+      z: 0,
+      panelType: CITY_CHANNEL_TILE_TYPES.GEAR_PRESSURE_PLATE
+    });
+    const mapData = {
+      ...createBaseCityChannelMap({ width: 3, height: 3, layers: 1 }),
+      tiles: { [sourceKey]: sourceTile },
+      walls: {}
+    };
+    const renderModel = buildCityChannelThreeRenderModel(mapData);
+    const transform = renderModel.tiles.find((item) => item.key === sourceKey);
+    const group = new THREE.Group();
+    const runtime = createRuntimeObject({
+      transmissionGlowMaterial: new THREE.MeshBasicMaterial(),
+      transmissionCoreMaterial: new THREE.MeshBasicMaterial(),
+      transmissionMaterial: new THREE.LineBasicMaterial(),
+      transmissionNodeGeometry: new THREE.SphereGeometry(0.052, 8, 6),
+      transmissionNodeMaterial: new THREE.MeshBasicMaterial()
+    });
+
+    CityChannelThreeRuntime.prototype.addTransmissionLines.call(runtime, transform, 0, group);
+    const defaultLines = group.children.find((child) => child.type === 'LineSegments');
+    expect(defaultLines).toBeTruthy();
+    const defaultPositions = Array.from(defaultLines.geometry.getAttribute('position').array);
+    const highlightSegments = CityChannelThreeRuntime.prototype.getMechanismDrivePathTransmissionSegments.call(
+      runtime,
+      sourceKey,
+      transform
+    );
+
+    for (let index = 1; index < defaultPositions.length; index += 3) {
+      expect(defaultPositions[index]).toBeCloseTo(transform.position.y, 5);
+    }
+    expect(highlightSegments.length).toBeGreaterThan(0);
+    highlightSegments.forEach(({ start, end }) => {
+      expect(start.y).toBeCloseTo(transform.position.y, 5);
+      expect(end.y).toBeCloseTo(transform.position.y, 5);
+    });
+  });
+
+  it('adds embedded transmission connectors across horizontal to vertical corners', () => {
+    const floorKey = createCellKey(1, 1, 0);
+    const wallKey = createWallKey(1, 1, 0, 'east');
+    const floor = createTile({
+      x: 1,
+      y: 1,
+      z: 0,
+      panelType: CITY_CHANNEL_TILE_TYPES.GEAR_PRESSURE_PLATE
+    });
+    const wall = createWall({
+      x: 1,
+      y: 1,
+      z: 0,
+      edge: 'east',
+      panelType: CITY_CHANNEL_TILE_TYPES.TRANSMISSION_CROSS_PLATE
+    });
+    const mapData = {
+      ...createBaseCityChannelMap({ width: 4, height: 4, layers: 1 }),
+      tiles: { [floorKey]: floor },
+      walls: { [wallKey]: wall }
+    };
+    const renderModel = buildCityChannelThreeRenderModel(mapData);
+    const runtime = createRuntimeObject({
+      renderModel,
+      worldGroup: new THREE.Group(),
+      transmissionGlowMaterial: new THREE.MeshBasicMaterial(),
+      transmissionCoreMaterial: new THREE.MeshBasicMaterial()
+    });
+    const assembly = getAssemblyForCell(buildMechanicalAssemblies(mapData), floorKey);
+
+    CityChannelThreeRuntime.prototype.addTransmissionAssemblyConnectors.call(runtime, new Set([floorKey, wallKey]));
+    const roles = runtime.worldGroup.children.map((child) => child.userData.cityChannelGearRole);
+
+    expect(assembly.componentKeys).toEqual(expect.arrayContaining([floorKey, wallKey]));
+    expect(roles).toEqual(expect.arrayContaining([
+      'transmission_assembly_connector_glow',
+      'transmission_assembly_connector_core'
+    ]));
   });
 
   it('continues rack translation during passive gear inertia after active motion ends', () => {
@@ -7375,15 +8078,25 @@ describe('CityChannelThreeRuntime mechanism preview cancellation', () => {
       nodes: [driver]
     });
     const callbacks = [];
-    const runtime = {
+    const runtime = withMechanismMotionWorld({
       config: {
         onMechanismPreviewProgress: jest.fn()
       },
       mechanismPreviewFrame: null,
       mechanismPreviewTimer: null,
+      createPassiveRackInertiaPlan: jest.fn(() => ({
+        rackDistances: new Map([[rack.id, 0.5]]),
+        durationMs: 200
+      })),
       createRuntimeSnapshotForMechanism: jest.fn((args) => ({
         sourceAngle: args.sourceAngle,
         extraRackDistance: args.extraRackDistances?.get?.(rack.id) || 0,
+        racks: {
+          [rack.id]: {
+            runtimeMotionType: 'rackTranslation',
+            runtimeLinearDistance: args.extraRackDistances?.get?.(rack.id) || 0
+          }
+        },
         gears: args.extraRackDistances?.get?.(rack.id) > 0 ? {
           [passive.id]: { speedRatio: 0.2, phase: 25 }
         } : {}
@@ -7395,9 +8108,9 @@ describe('CityChannelThreeRuntime mechanism preview cancellation', () => {
         callbacks.push(callback);
         return callbacks.length;
       })
-    };
+    });
     const nowSpy = jest.spyOn(Date, 'now');
-    nowSpy.mockReturnValueOnce(0);
+    nowSpy.mockReturnValue(0);
 
     CityChannelThreeRuntime.prototype.playMechanismRuntimePreview.call(runtime, {
       key: createCellKey(1, 1, 0),
@@ -7425,9 +8138,585 @@ describe('CityChannelThreeRuntime mechanism preview cancellation', () => {
 
     expect(runtime.setMechanismRuntimeSnapshot.mock.calls.at(-1)[0]).toEqual(expect.objectContaining({
       sourceAngle: 60,
-      extraRackDistance: expect.any(Number)
+      racks: expect.objectContaining({
+        [rack.id]: expect.objectContaining({
+          runtimeLinearDistance: expect.any(Number)
+        })
+      })
     }));
-    expect(runtime.setMechanismRuntimeSnapshot.mock.calls.at(-1)[0].extraRackDistance).toBeGreaterThan(0);
+    expect(runtime.setMechanismRuntimeSnapshot.mock.calls.at(-1)[0].racks[rack.id].runtimeLinearDistance).toBeGreaterThan(0);
+    nowSpy.mockRestore();
+  });
+
+  it('composes concurrent pressure plate motions into one runtime snapshot', () => {
+    const callbacks = [];
+    const leftKey = createCellKey(1, 1, 0);
+    const rightKey = createCellKey(3, 1, 0);
+    const runtime = withMechanismMotionWorld({
+      config: {
+        onMechanismPreviewProgress: jest.fn(),
+        onToast: jest.fn()
+      },
+      mechanismPreviewFrame: null,
+      mechanismPreviewTimer: null,
+      mechanismRuntimeSnapshot: null,
+      mechanismActiveMotions: [],
+      createRuntimeSnapshotForMechanism: jest.fn((args) => ({
+        sourceAngle: args.sourceAngle,
+        placements: {
+          [args.key]: {
+            runtimeMotionType: 'testTranslation',
+            runtimeTranslation: { x: args.sourceAngle, y: 0, z: 0 }
+          }
+        },
+        gears: {},
+        sync: []
+      })),
+      setMechanismRuntimeSnapshot: jest.fn(function setMechanismRuntimeSnapshot(snapshot) {
+        this.mechanismRuntimeSnapshot = snapshot;
+      }),
+      flashMechanismObstruction: jest.fn(),
+      cancelMechanismRuntimePreview: jest.fn(),
+      requestMechanismFrame: jest.fn((callback) => {
+        callbacks.push(callback);
+        return callbacks.length;
+      })
+    });
+    const nowSpy = jest.spyOn(Date, 'now').mockReturnValue(0);
+    const tile = createTile({
+      x: 1,
+      y: 1,
+      z: 0,
+      panelType: CITY_CHANNEL_TILE_TYPES.GEAR_PRESSURE_PLATE
+    });
+    const params = {
+      rotationAngle: 90,
+      rotationSpeedDegPerSec: 360,
+      triggerDelaySeconds: 0,
+      autoReturn: false
+    };
+
+    const firstStarted = CityChannelThreeRuntime.prototype.playMechanismRuntimePreview.call(runtime, {
+      key: leftKey,
+      tile,
+      params,
+      targetAngle: 90
+    });
+    const secondStarted = CityChannelThreeRuntime.prototype.playMechanismRuntimePreview.call(runtime, {
+      key: rightKey,
+      tile: { ...tile, x: 3 },
+      params,
+      targetAngle: 90
+    });
+
+    expect(firstStarted).toBe(true);
+    expect(secondStarted).toBe(true);
+    expect(runtime.cancelMechanismRuntimePreview).not.toHaveBeenCalled();
+    expect(runtime.flashMechanismObstruction).not.toHaveBeenCalled();
+    expect(runtime.mechanismActiveMotions).toHaveLength(2);
+    expect(runtime.setMechanismRuntimeSnapshot.mock.calls.at(-1)[0]).toEqual(expect.objectContaining({
+      placements: expect.objectContaining({
+        [leftKey]: expect.objectContaining({ runtimeMotionType: 'testTranslation' }),
+        [rightKey]: expect.objectContaining({ runtimeMotionType: 'testTranslation' })
+      }),
+      motions: expect.arrayContaining([
+        expect.objectContaining({ key: leftKey }),
+        expect.objectContaining({ key: rightKey })
+      ])
+    }));
+    expect(runtime.config.onMechanismPreviewProgress).toHaveBeenLastCalledWith(expect.objectContaining({
+      activeMotionCount: 2,
+      key: rightKey
+    }));
+    expect(callbacks).toHaveLength(1);
+    nowSpy.mockRestore();
+  });
+
+  it('ignores repeated pressure plate presses before the mechanism resets', () => {
+    const callbacks = [];
+    const key = createCellKey(1, 1, 0);
+    const gearId = `${key}:gear_center`;
+    const gearNode = {
+      id: gearId,
+      mount: { phase: 0 }
+    };
+    const runtime = withMechanismMotionWorld({
+      config: {
+        onMechanismPreviewProgress: jest.fn(),
+        onToast: jest.fn()
+      },
+      mechanismPreviewFrame: null,
+      mechanismPreviewTimer: null,
+      mechanismRuntimeSnapshot: null,
+      mechanismActiveMotions: [],
+      createRuntimeSnapshotForMechanism: jest.fn((args) => ({
+        sourceAngle: args.sourceAngle,
+        placements: {},
+        gears: {
+          [gearId]: {
+            speedRatio: 1,
+            phase: (args.basePhases?.get?.(gearId) || 0) + args.sourceAngle
+          }
+        },
+        sync: []
+      })),
+      setMechanismRuntimeSnapshot: jest.fn(function setMechanismRuntimeSnapshot(snapshot) {
+        this.mechanismRuntimeSnapshot = snapshot;
+      }),
+      flashMechanismObstruction: jest.fn(),
+      requestMechanismFrame: jest.fn((callback) => {
+        callbacks.push(callback);
+        return callbacks.length;
+      })
+    });
+    const nowSpy = jest.spyOn(Date, 'now').mockReturnValue(0);
+    const params = {
+      rotationAngle: 90,
+      rotationSpeedDegPerSec: 360,
+      triggerDelaySeconds: 0,
+      autoReturn: false
+    };
+    const tile = createTile({
+      x: 1,
+      y: 1,
+      z: 0,
+      panelType: CITY_CHANNEL_TILE_TYPES.GEAR_PRESSURE_PLATE
+    });
+
+    CityChannelThreeRuntime.prototype.playMechanismRuntimePreview.call(runtime, {
+      key,
+      tile,
+      params,
+      gearNodes: [gearNode],
+      targetAngle: 90
+    });
+    nowSpy.mockReturnValue(300);
+    callbacks.shift()();
+    expect(runtime.mechanismRuntimeSnapshot.gears[gearId].phase).toBe(90);
+
+    const repeated = CityChannelThreeRuntime.prototype.playMechanismRuntimePreview.call(runtime, {
+      key,
+      tile,
+      params,
+      gearNodes: [gearNode],
+      targetAngle: 90
+    });
+
+    expect(repeated).toBe(false);
+    expect(runtime.mechanismActiveMotions).toHaveLength(1);
+    expect(runtime.flashMechanismObstruction).not.toHaveBeenCalled();
+    expect(runtime.mechanismRuntimeSnapshot.gears[gearId].phase).toBe(90);
+    expect(runtime.createRuntimeSnapshotForMechanism.mock.calls.at(-1)[0].sourceAngle).toBe(90);
+    nowSpy.mockRestore();
+  });
+
+  it('allows a pressure plate to run again after auto return reaches rest', () => {
+    const callbacks = [];
+    const key = createCellKey(1, 1, 0);
+    const runtime = withMechanismMotionWorld({
+      config: {
+        onMechanismPreviewProgress: jest.fn(),
+        onToast: jest.fn()
+      },
+      mechanismPreviewFrame: null,
+      mechanismPreviewTimer: null,
+      mechanismRuntimeSnapshot: null,
+      mechanismActiveMotions: [],
+      createRuntimeSnapshotForMechanism: jest.fn((args) => ({
+        sourceAngle: args.sourceAngle,
+        placements: {},
+        gears: {},
+        sync: []
+      })),
+      setMechanismRuntimeSnapshot: jest.fn(function setMechanismRuntimeSnapshot(snapshot) {
+        this.mechanismRuntimeSnapshot = snapshot;
+      }),
+      flashMechanismObstruction: jest.fn(),
+      requestMechanismFrame: jest.fn((callback) => {
+        callbacks.push(callback);
+        return callbacks.length;
+      })
+    });
+    const nowSpy = jest.spyOn(Date, 'now').mockReturnValue(0);
+    const tile = createTile({
+      x: 1,
+      y: 1,
+      z: 0,
+      panelType: CITY_CHANNEL_TILE_TYPES.GEAR_PRESSURE_PLATE
+    });
+    const params = {
+      rotationAngle: 90,
+      rotationSpeedDegPerSec: 360,
+      triggerDelaySeconds: 0,
+      autoReturn: true,
+      autoReturnDelaySeconds: 0
+    };
+
+    expect(CityChannelThreeRuntime.prototype.playMechanismRuntimePreview.call(runtime, {
+      key,
+      tile,
+      params,
+      targetAngle: 90
+    })).toBe(true);
+    CityChannelThreeRuntime.prototype.stepMechanismMotionWorld.call(runtime, 250);
+    CityChannelThreeRuntime.prototype.stepMechanismMotionWorld.call(runtime, 500);
+    CityChannelThreeRuntime.prototype.stepMechanismMotionWorld.call(runtime, 750);
+    expect(runtime.mechanismActiveMotions).toHaveLength(0);
+
+    nowSpy.mockReturnValue(600);
+    expect(CityChannelThreeRuntime.prototype.playMechanismRuntimePreview.call(runtime, {
+      key,
+      tile,
+      params,
+      targetAngle: 90
+    })).toBe(true);
+    expect(runtime.mechanismActiveMotions).toHaveLength(1);
+    nowSpy.mockRestore();
+  });
+
+  it('does not treat a settled pressure plate motion as an active conflicting gear drive', () => {
+    const callbacks = [];
+    const leftKey = createCellKey(1, 1, 0);
+    const rightKey = createCellKey(3, 1, 0);
+    const runtime = withMechanismMotionWorld({
+      config: {
+        onMechanismPreviewProgress: jest.fn(),
+        onToast: jest.fn()
+      },
+      renderModel: {
+        mapData: { tiles: {}, walls: {}, racks: {} }
+      },
+      mechanismPreviewFrame: null,
+      mechanismPreviewTimer: null,
+      mechanismRuntimeSnapshot: null,
+      mechanismActiveMotions: [],
+      createRuntimeSnapshotForMechanism: jest.fn((args) => ({
+        sourceAngle: args.sourceAngle,
+        placements: {},
+        gears: {
+          'shared:gear': {
+            speedRatio: args.key === rightKey ? 1 : -1,
+            phase: args.sourceAngle
+          }
+        },
+        sync: []
+      })),
+      setMechanismRuntimeSnapshot: jest.fn(function setMechanismRuntimeSnapshot(snapshot) {
+        this.mechanismRuntimeSnapshot = snapshot;
+      }),
+      flashMechanismObstruction: jest.fn(),
+      requestMechanismFrame: jest.fn((callback) => {
+        callbacks.push(callback);
+        return callbacks.length;
+      })
+    });
+    const nowSpy = jest.spyOn(Date, 'now');
+    nowSpy.mockReturnValue(0);
+    const params = {
+      rotationAngle: 90,
+      rotationSpeedDegPerSec: 360,
+      triggerDelaySeconds: 0,
+      autoReturn: false
+    };
+    const tile = createTile({
+      x: 1,
+      y: 1,
+      z: 0,
+      panelType: CITY_CHANNEL_TILE_TYPES.GEAR_PRESSURE_PLATE
+    });
+
+    const firstStarted = CityChannelThreeRuntime.prototype.playMechanismRuntimePreview.call(runtime, {
+      key: leftKey,
+      tile,
+      params,
+      targetAngle: 90
+    });
+    nowSpy.mockReturnValue(300);
+    callbacks.shift()();
+    expect(runtime.mechanismActiveMotions[0].phase).toBe('finished');
+
+    nowSpy.mockReturnValue(320);
+    const secondStarted = CityChannelThreeRuntime.prototype.playMechanismRuntimePreview.call(runtime, {
+      key: rightKey,
+      tile: { ...tile, x: 3 },
+      params,
+      targetAngle: 90
+    });
+
+    expect(firstStarted).toBe(true);
+    expect(secondStarted).toBe(true);
+    expect(runtime.mechanismActiveMotions).toHaveLength(2);
+    expect(runtime.flashMechanismObstruction).not.toHaveBeenCalled();
+    expect(runtime.config.onToast).not.toHaveBeenCalled();
+    expect(runtime.mechanismRuntimeSnapshot.gears['shared:gear']).toMatchObject({ speedRatio: 1 });
+    nowSpy.mockRestore();
+  });
+
+  it('allows asynchronous same-direction rack and placement drive trends to overlap', () => {
+    const callbacks = [];
+    const leftKey = createCellKey(1, 1, 0);
+    const rightKey = createCellKey(3, 1, 0);
+    const runtime = withMechanismMotionWorld({
+      config: {
+        onMechanismPreviewProgress: jest.fn(),
+        onToast: jest.fn()
+      },
+      renderModel: {
+        mapData: { tiles: {}, walls: {}, racks: {} }
+      },
+      mechanismPreviewFrame: null,
+      mechanismPreviewTimer: null,
+      mechanismRuntimeSnapshot: null,
+      mechanismActiveMotions: [],
+      createRuntimeSnapshotForMechanism: jest.fn((args) => {
+        const distance = -(Number(args.sourceAngle) || 0);
+        return {
+          sourceAngle: args.sourceAngle,
+          placements: {
+            'shared:plate': {
+              runtimeMotionType: 'testTranslation',
+              runtimeTranslation: { x: 0, y: distance, z: 0 },
+              runtimeLinearDistance: distance
+            }
+          },
+          racks: {
+            'shared:rack': {
+              runtimeMotionType: 'rackTranslation',
+              runtimeTranslation: { x: 0, y: distance, z: 0 },
+              runtimeLinearDistance: distance
+            }
+          },
+          gears: {},
+          sync: []
+        };
+      }),
+      setMechanismRuntimeSnapshot: jest.fn(function setMechanismRuntimeSnapshot(snapshot) {
+        this.mechanismRuntimeSnapshot = snapshot;
+      }),
+      flashMechanismObstruction: jest.fn(),
+      requestMechanismFrame: jest.fn((callback) => {
+        callbacks.push(callback);
+        return callbacks.length;
+      })
+    });
+    const nowSpy = jest.spyOn(Date, 'now');
+    nowSpy.mockReturnValue(0);
+    const params = {
+      rotationAngle: 90,
+      rotationSpeedDegPerSec: 360,
+      triggerDelaySeconds: 0,
+      autoReturn: false
+    };
+    const tile = createTile({
+      x: 1,
+      y: 1,
+      z: 0,
+      panelType: CITY_CHANNEL_TILE_TYPES.GEAR_PRESSURE_PLATE
+    });
+
+    CityChannelThreeRuntime.prototype.playMechanismRuntimePreview.call(runtime, {
+      key: leftKey,
+      tile,
+      params,
+      targetAngle: 90
+    });
+    nowSpy.mockReturnValue(100);
+    callbacks.shift()();
+    const carriedDistance = runtime.mechanismRuntimeSnapshot.racks['shared:rack'].runtimeLinearDistance;
+    expect(carriedDistance).toBeLessThan(0);
+
+    nowSpy.mockReturnValue(120);
+    const secondStarted = CityChannelThreeRuntime.prototype.playMechanismRuntimePreview.call(runtime, {
+      key: rightKey,
+      tile: { ...tile, x: 3 },
+      params,
+      targetAngle: 90
+    });
+
+    expect(secondStarted).toBe(true);
+    expect(runtime.mechanismActiveMotions).toHaveLength(2);
+    expect(runtime.flashMechanismObstruction).not.toHaveBeenCalled();
+    expect(runtime.config.onToast).not.toHaveBeenCalled();
+    expect(runtime.mechanismRuntimeSnapshot.racks['shared:rack'].runtimeLinearDistance).toBeLessThanOrEqual(carriedDistance);
+
+    nowSpy.mockReturnValue(180);
+    callbacks.shift()();
+    expect(runtime.flashMechanismObstruction).not.toHaveBeenCalled();
+    expect(runtime.config.onToast).not.toHaveBeenCalled();
+    nowSpy.mockRestore();
+  });
+
+  it('pauses a slower same-direction active motion until the faster drive stops covering it', () => {
+    const slowKey = createCellKey(1, 1, 0);
+    const fastKey = createCellKey(3, 1, 0);
+    const runtime = withMechanismMotionWorld({
+      config: {
+        onMechanismPreviewProgress: jest.fn(),
+        onToast: jest.fn()
+      },
+      renderModel: {
+        mapData: { tiles: {}, walls: {}, racks: {} }
+      },
+      mechanismPreviewFrame: null,
+      mechanismPreviewTimer: null,
+      mechanismRuntimeSnapshot: null,
+      mechanismActiveMotions: [],
+      createRuntimeSnapshotForMechanism: jest.fn((args) => {
+        const distance = -(Number(args.sourceAngle) || 0);
+        return {
+          sourceAngle: args.sourceAngle,
+          placements: {},
+          racks: {
+            'shared:rack': {
+              runtimeMotionType: 'rackTranslation',
+              runtimeTranslation: { x: 0, y: distance, z: 0 },
+              runtimeLinearDistance: distance
+            }
+          },
+          gears: {},
+          sync: []
+        };
+      }),
+      setMechanismRuntimeSnapshot: jest.fn(function setMechanismRuntimeSnapshot(snapshot) {
+        this.mechanismRuntimeSnapshot = snapshot;
+      }),
+      flashMechanismObstruction: jest.fn(),
+      requestMechanismFrame: jest.fn(() => 1)
+    });
+    const nowSpy = jest.spyOn(Date, 'now').mockReturnValue(0);
+    const tile = createTile({
+      x: 1,
+      y: 1,
+      z: 0,
+      panelType: CITY_CHANNEL_TILE_TYPES.GEAR_PRESSURE_PLATE
+    });
+
+    CityChannelThreeRuntime.prototype.playMechanismRuntimePreview.call(runtime, {
+      key: slowKey,
+      tile,
+      params: {
+        rotationAngle: 180,
+        rotationSpeedDegPerSec: 180,
+        triggerDelaySeconds: 0,
+        autoReturn: false
+      },
+      targetAngle: 180
+    });
+    CityChannelThreeRuntime.prototype.playMechanismRuntimePreview.call(runtime, {
+      key: fastKey,
+      tile: { ...tile, x: 3 },
+      params: {
+        rotationAngle: 180,
+        rotationSpeedDegPerSec: 360,
+        triggerDelaySeconds: 0,
+        autoReturn: false
+      },
+      targetAngle: 180
+    });
+    const slowMotion = runtime.mechanismActiveMotions.find((motion) => motion.key === slowKey);
+    const fastMotion = runtime.mechanismActiveMotions.find((motion) => motion.key === fastKey);
+
+    expect(slowMotion.pausedByFasterDrive).toBe(true);
+    expect(fastMotion.pausedByFasterDrive).toBe(false);
+    expect(runtime.flashMechanismObstruction).not.toHaveBeenCalled();
+
+    CityChannelThreeRuntime.prototype.stepMechanismMotionWorld.call(runtime, 250);
+    expect(slowMotion.angle).toBe(0);
+    expect(fastMotion.angle).toBe(90);
+
+    CityChannelThreeRuntime.prototype.stepMechanismMotionWorld.call(runtime, 600);
+    expect(fastMotion.phase).toBe('finished');
+    expect(slowMotion.pausedByFasterDrive).toBe(false);
+
+    CityChannelThreeRuntime.prototype.stepMechanismMotionWorld.call(runtime, 700);
+    expect(slowMotion.angle).toBeGreaterThan(0);
+    expect(slowMotion.angle).toBeLessThan(40);
+    expect(runtime.config.onToast).not.toHaveBeenCalled();
+    nowSpy.mockRestore();
+  });
+
+  it('stops the newer pressure plate motion when concurrent gear drive trends conflict', () => {
+    const callbacks = [];
+    const leftKey = createCellKey(1, 1, 0);
+    const rightKey = createCellKey(3, 1, 0);
+    const runtime = withMechanismMotionWorld({
+      config: {
+        onMechanismPreviewProgress: jest.fn(),
+        onToast: jest.fn()
+      },
+      renderModel: {
+        mapData: { tiles: {}, walls: {}, racks: {} }
+      },
+      mechanismPreviewFrame: null,
+      mechanismPreviewTimer: null,
+      mechanismRuntimeSnapshot: null,
+      mechanismActiveMotions: [],
+      createRuntimeSnapshotForMechanism: jest.fn((args) => ({
+        sourceAngle: args.sourceAngle,
+        placements: {},
+        gears: {
+          'shared:gear': {
+            speedRatio: args.key === rightKey ? -1 : 1,
+            phase: 0
+          }
+        },
+        sync: []
+      })),
+      setMechanismRuntimeSnapshot: jest.fn(function setMechanismRuntimeSnapshot(snapshot) {
+        this.mechanismRuntimeSnapshot = snapshot;
+      }),
+      flashMechanismObstruction: jest.fn(),
+      requestMechanismFrame: jest.fn((callback) => {
+        callbacks.push(callback);
+        return callbacks.length;
+      })
+    });
+    const nowSpy = jest.spyOn(Date, 'now');
+    nowSpy
+      .mockReturnValueOnce(0)
+      .mockReturnValueOnce(0)
+      .mockReturnValueOnce(20)
+      .mockReturnValueOnce(20)
+      .mockReturnValue(20);
+    const params = {
+      rotationAngle: 90,
+      rotationSpeedDegPerSec: 360,
+      triggerDelaySeconds: 0,
+      autoReturn: false
+    };
+    const tile = createTile({
+      x: 1,
+      y: 1,
+      z: 0,
+      panelType: CITY_CHANNEL_TILE_TYPES.GEAR_PRESSURE_PLATE
+    });
+
+    const firstStarted = CityChannelThreeRuntime.prototype.playMechanismRuntimePreview.call(runtime, {
+      key: leftKey,
+      tile,
+      params,
+      targetAngle: 90
+    });
+    const secondStarted = CityChannelThreeRuntime.prototype.playMechanismRuntimePreview.call(runtime, {
+      key: rightKey,
+      tile: { ...tile, x: 3 },
+      params,
+      targetAngle: 90
+    });
+
+    expect(firstStarted).toBe(true);
+    expect(secondStarted).toBe(false);
+    expect(runtime.mechanismActiveMotions).toHaveLength(1);
+    expect(runtime.mechanismActiveMotions[0].key).toBe(leftKey);
+    expect(runtime.flashMechanismObstruction).toHaveBeenCalledWith(expect.objectContaining({
+      type: 'gearDriveConflict',
+      gearKeys: ['shared:gear']
+    }));
+    expect(runtime.config.onToast).toHaveBeenCalledWith(
+      '多个压力板同时驱动的传动趋势发生冲突，后触发的压力板已停止。',
+      'error'
+    );
+    expect(runtime.mechanismRuntimeSnapshot.gears['shared:gear']).toMatchObject({ speedRatio: 1 });
     nowSpy.mockRestore();
   });
 });

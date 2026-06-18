@@ -17,6 +17,7 @@ import {
   getAssemblyForCell,
   getGearAxisBindingStatus,
   getGearMountLocalPosition,
+  getGearRotationDirectionSign,
   getGearSocketWorldPosition,
   getGearSocketKind,
   isPassiveGearRotationDirection,
@@ -71,7 +72,6 @@ import {
   getThreeSurfaceNormal,
   getThreeSurfacePoint,
   getTileThreeTransform,
-  getThreeTransmissionLineSegments,
   getThreeVerticalTopPlacementTarget,
   isThreePlacementVisible,
   isThreeVerticalSupportPlacement,
@@ -140,6 +140,7 @@ const GEAR_DETAIL_RENDER_ORDER = HOVER_OVERLAY_RENDER_ORDER - 34;
 const GEAR_CONTACT_RENDER_ORDER = HOVER_OVERLAY_RENDER_ORDER - 22;
 const GEAR_BINDING_AMBIENT_RENDER_ORDER = HOVER_OVERLAY_RENDER_ORDER - 10;
 const GEAR_BINDING_ACTIVE_RENDER_ORDER = SELECTION_OVERLAY_RENDER_ORDER + 8;
+const MECHANISM_DRIVE_PATH_RENDER_ORDER = GEAR_BINDING_ACTIVE_RENDER_ORDER + 4;
 const MECHANISM_OBSTRUCTION_FLASH_RENDER_ORDER = SELECTION_OVERLAY_RENDER_ORDER + 18;
 const GEAR_DIRECTION_ICON_RENDER_ORDER = SELECTION_OVERLAY_RENDER_ORDER + 26;
 const GEAR_DIRECTION_ICON_RADIUS = CITY_CHANNEL_GEAR_OUTER_RADIUS_WORLD * 1.12;
@@ -150,20 +151,9 @@ const PASSIVE_INERTIA_RACK_DISTANCE_FACTOR = 0.18;
 const PASSIVE_INERTIA_MAX_RACK_DISTANCE = 0.42;
 const PASSIVE_INERTIA_DURATION_MS = 520;
 
-const getMechanismControlledProgress = (progress = 0) => {
-  const p = Math.max(0, Math.min(1, Number(progress) || 0));
-  if (p <= 0) return 0;
-  if (p >= 1) return 1;
-  const ramp = 0.12;
-  if (p < ramp) {
-    return (ramp * (1 - Math.cos((p / ramp) * Math.PI))) / 2;
-  }
-  if (p > 1 - ramp) {
-    const local = (p - (1 - ramp)) / ramp;
-    return 1 - ((ramp * (1 - Math.cos((1 - local) * Math.PI))) / 2);
-  }
-  return p;
-};
+const getMechanismControlledProgress = (progress = 0) => (
+  Math.max(0, Math.min(1, Number(progress) || 0))
+);
 
 const getMechanismInertiaProgress = (progress = 0) => {
   const p = Math.max(0, Math.min(1, Number(progress) || 0));
@@ -575,8 +565,11 @@ export default class CityChannelThreeRuntime {
     this.mapDataSource = null;
     this.mechanismPreviewTimer = null;
     this.mechanismPreviewFrame = null;
+    this.mechanismActiveMotions = [];
     this.mechanismRuntimeSnapshot = null;
     this.mechanismObstructionFlash = null;
+    this.lastPressurePlateClick = null;
+    this.lastMechanismResetClick = null;
     this.zoom = 1;
     this.cameraYaw = 45;
     this.cameraTarget = new THREE.Vector3(0, 0, 0);
@@ -647,9 +640,9 @@ export default class CityChannelThreeRuntime {
       depthWrite: false
     });
     this.transmissionNodeMaterial = new THREE.MeshBasicMaterial({
-      color: 0x38bdf8,
+      color: 0x7dd3fc,
       transparent: true,
-      opacity: 0.94,
+      opacity: 0.34,
       depthTest: false,
       depthWrite: false
     });
@@ -961,6 +954,52 @@ export default class CityChannelThreeRuntime {
       depthTest: false,
       depthWrite: false
     });
+    this.mechanismDrivePathCoreMaterial = new THREE.MeshBasicMaterial({
+      color: 0x67e8f9,
+      transparent: true,
+      opacity: 0.82,
+      depthTest: false,
+      depthWrite: false,
+      blending: THREE.AdditiveBlending
+    });
+    this.mechanismDrivePathGlowMaterial = new THREE.MeshBasicMaterial({
+      color: 0x22d3ee,
+      transparent: true,
+      opacity: 0.28,
+      depthTest: false,
+      depthWrite: false,
+      blending: THREE.AdditiveBlending
+    });
+    this.mechanismDrivePathNodeMaterial = new THREE.MeshBasicMaterial({
+      color: 0xbfdbfe,
+      transparent: true,
+      opacity: 0.34,
+      depthTest: false,
+      depthWrite: false
+    });
+    this.mechanismDriveSourceFillMaterial = new THREE.MeshBasicMaterial({
+      color: 0xfbbf24,
+      transparent: true,
+      opacity: 0.045,
+      depthTest: false,
+      depthWrite: false,
+      blending: THREE.AdditiveBlending
+    });
+    this.mechanismDriveSourceOutlineMaterial = new THREE.LineBasicMaterial({
+      color: 0xfff2a6,
+      transparent: true,
+      opacity: 0.44,
+      depthTest: false,
+      depthWrite: false
+    });
+    this.mechanismDriveSourceGlowMaterial = new THREE.LineBasicMaterial({
+      color: 0xfef08a,
+      transparent: true,
+      opacity: 0.62,
+      depthTest: false,
+      depthWrite: false,
+      blending: THREE.AdditiveBlending
+    });
     this.gearBindingInvalidMaterial = new THREE.MeshBasicMaterial({
       color: 0xdc2626,
       transparent: true,
@@ -1168,7 +1207,7 @@ export default class CityChannelThreeRuntime {
     this.gearBindingInvalidBadgeFillGeometry = createGearPlaneCircleGeometry(0.052, 28);
     this.gearBindingInvalidStemGeometry = new THREE.BoxGeometry(0.018, 0.012, 0.056);
     this.gearBindingInvalidDotGeometry = new THREE.SphereGeometry(0.012, 8, 6);
-    this.transmissionNodeGeometry = new THREE.SphereGeometry(0.052, 14, 8);
+    this.transmissionNodeGeometry = new THREE.SphereGeometry(0.038, 12, 6);
 
     this.scene.add(new THREE.HemisphereLight(0xf8fafc, 0x172033, 1.35));
     const keyLight = new THREE.DirectionalLight(0xffffff, 1.12);
@@ -1378,7 +1417,10 @@ export default class CityChannelThreeRuntime {
   }
 
   hasMechanismRuntimePreview() {
-    return !!this.mechanismRuntimeSnapshot || !!this.mechanismPreviewFrame || !!this.mechanismPreviewTimer;
+    return !!this.mechanismRuntimeSnapshot
+      || !!this.mechanismPreviewFrame
+      || !!this.mechanismPreviewTimer
+      || (Array.isArray(this.mechanismActiveMotions) && this.mechanismActiveMotions.length > 0);
   }
 
   shouldCancelMechanismRuntimePreviewForConfig(next = {}) {
@@ -1506,6 +1548,10 @@ export default class CityChannelThreeRuntime {
       this.placementGroups.set(transform.key, group);
     });
 
+    const addTransmissionAssemblyConnectors = typeof this.addTransmissionAssemblyConnectors === 'function'
+      ? this.addTransmissionAssemblyConnectors
+      : CityChannelThreeRuntime.prototype.addTransmissionAssemblyConnectors;
+    addTransmissionAssemblyConnectors.call(this, visibleComponentKeys);
     if (typeof this.addRootGears === 'function') this.addRootGears();
     this.addRacks(visibleLayerCutoff);
     this.addGearContactVisuals(visibleComponentKeys);
@@ -1846,8 +1892,43 @@ export default class CityChannelThreeRuntime {
     this.addPortalAttachment(transform, renderOrder, targetGroup);
   }
 
+  getTransmissionLineSegmentsForTransform(componentKey = '', transform = null, options = {}) {
+    if (!transform) return [];
+    const ports = getCityChannelMaterial(transform.panelType || transform.placement?.panelType)?.transmissionSkeleton?.ports || [];
+    if (!Array.isArray(ports) || ports.length <= 0) return [];
+    const getTransmissionLocalPointPosition = typeof this.getTransmissionLocalPointPosition === 'function'
+      ? this.getTransmissionLocalPointPosition
+      : CityChannelThreeRuntime.prototype.getTransmissionLocalPointPosition;
+    const pointOptions = {
+      lift: 0,
+      embedded: true,
+      ...options
+    };
+    const center = getTransmissionLocalPointPosition.call(
+      this,
+      componentKey || transform.key || '',
+      transform,
+      { x: 0, y: 0 },
+      pointOptions
+    );
+    if (!center) return [];
+    return ports.map((port) => {
+      const end = getTransmissionLocalPointPosition.call(
+        this,
+        componentKey || transform.key || '',
+        transform,
+        port.localPosition || {},
+        pointOptions
+      );
+      return end ? { start: center, end, port } : null;
+    }).filter(Boolean);
+  }
+
   addTransmissionLines(transform, renderOrder = 0, targetGroup = this.worldGroup) {
-    const segments = getThreeTransmissionLineSegments(transform);
+    const getTransmissionLineSegmentsForTransform = typeof this.getTransmissionLineSegmentsForTransform === 'function'
+      ? this.getTransmissionLineSegmentsForTransform
+      : CityChannelThreeRuntime.prototype.getTransmissionLineSegmentsForTransform;
+    const segments = getTransmissionLineSegmentsForTransform.call(this, transform?.key || '', transform);
     if (segments.length <= 0) return;
     const points = [];
     const nodeKeys = new Set();
@@ -1868,8 +1949,8 @@ export default class CityChannelThreeRuntime {
       points.push(new THREE.Vector3(end.x, end.y, end.z));
       this.addTransmissionTube(start, end, 0.052, this.transmissionGlowMaterial, renderOrder, targetGroup);
       this.addTransmissionTube(start, end, 0.018, this.transmissionCoreMaterial, renderOrder + 1, targetGroup);
-      appendNode(start, 1.18);
-      appendNode(end, 0.92);
+      appendNode(start, 0.78);
+      appendNode(end, 0.58);
     });
     const lines = new THREE.LineSegments(
       new THREE.BufferGeometry().setFromPoints(points),
@@ -1878,6 +1959,84 @@ export default class CityChannelThreeRuntime {
     lines.userData.sharedMaterial = true;
     lines.renderOrder = renderOrder + 1;
     targetGroup.add(lines);
+  }
+
+  getTransmissionLocalPointPosition(componentKey = '', transform = null, localPoint = null, {
+    runtime = false,
+    lift = 0,
+    embedded = true,
+    surface = 'front'
+  } = {}) {
+    if (!transform || !localPoint) return null;
+    if (runtime && typeof this.getRuntimeSurfacePointForPlacement === 'function') {
+      return this.getRuntimeSurfacePointForPlacement(componentKey, transform, localPoint, {
+        lift,
+        embedded,
+        surface
+      });
+    }
+    return getThreeSurfacePoint(transform, localPoint, {
+      lift,
+      embedded,
+      surface
+    });
+  }
+
+  getTransmissionPortPosition(componentKey = '', transform = null, portId = '', options = {}) {
+    if (!componentKey || !transform || !portId) return null;
+    const ports = getCityChannelMaterial(transform.panelType || transform.placement?.panelType)?.transmissionSkeleton?.ports || [];
+    const port = ports.find((item) => item?.id === portId);
+    if (!port) return null;
+    const getTransmissionLocalPointPosition = typeof this.getTransmissionLocalPointPosition === 'function'
+      ? this.getTransmissionLocalPointPosition
+      : CityChannelThreeRuntime.prototype.getTransmissionLocalPointPosition;
+    return getTransmissionLocalPointPosition.call(this, componentKey, transform, port.localPosition || {}, options);
+  }
+
+  addTransmissionAssemblyConnectors(visibleComponentKeys = new Set()) {
+    const mapData = this.renderModel?.mapData || {};
+    const assemblyGraph = buildMechanicalAssemblies(mapData);
+    const seen = new Set();
+    (assemblyGraph.assemblies || []).forEach((assembly) => {
+      (assembly.edges || []).forEach((edge) => {
+        if (!edge?.componentKey || !edge.key || !edge.from?.portId || !edge.to?.portId) return;
+        if (visibleComponentKeys.size > 0 && (!visibleComponentKeys.has(edge.componentKey) || !visibleComponentKeys.has(edge.key))) return;
+        const pairKey = [
+          `${edge.componentKey}:${edge.from.portId}`,
+          `${edge.key}:${edge.to.portId}`
+        ].sort().join('|');
+        if (seen.has(pairKey)) return;
+        seen.add(pairKey);
+        const fromTransform = this.getBasePlacementTransform(edge.componentKey);
+        const toTransform = this.getBasePlacementTransform(edge.key);
+        if (!fromTransform || !toTransform) return;
+        const fromPoint = this.getTransmissionPortPosition(edge.componentKey, fromTransform, edge.from.portId, {
+          lift: 0,
+          embedded: true
+        });
+        const toPoint = this.getTransmissionPortPosition(edge.key, toTransform, edge.to.portId, {
+          lift: 0,
+          embedded: true
+        });
+        if (!fromPoint || !toPoint) return;
+        const renderOrder = Math.max(
+          this.getPlacementRenderOrder(fromTransform, PLACEMENT_DETAIL_RENDER_ORDER_OFFSET),
+          this.getPlacementRenderOrder(toTransform, PLACEMENT_DETAIL_RENDER_ORDER_OFFSET)
+        ) + 1;
+        const glow = this.createTransmissionTubeMesh(fromPoint, toPoint, 0.038, this.transmissionGlowMaterial);
+        if (glow) {
+          glow.userData.cityChannelGearRole = 'transmission_assembly_connector_glow';
+          glow.renderOrder = renderOrder;
+          this.worldGroup.add(glow);
+        }
+        const core = this.createTransmissionTubeMesh(fromPoint, toPoint, 0.014, this.transmissionCoreMaterial);
+        if (core) {
+          core.userData.cityChannelGearRole = 'transmission_assembly_connector_core';
+          core.renderOrder = renderOrder + 1;
+          this.worldGroup.add(core);
+        }
+      });
+    });
   }
 
   addTransmissionTube(start = null, end = null, radius = 0.02, material = this.transmissionCoreMaterial, renderOrder = 0, targetGroup = this.worldGroup) {
@@ -2167,7 +2326,10 @@ export default class CityChannelThreeRuntime {
     edges.renderOrder = renderOrder + 1;
     group.add(edges);
 
-    const segments = getThreeTransmissionLineSegments(detailTransform);
+    const getTransmissionLineSegmentsForTransform = typeof this.getTransmissionLineSegmentsForTransform === 'function'
+      ? this.getTransmissionLineSegmentsForTransform
+      : CityChannelThreeRuntime.prototype.getTransmissionLineSegmentsForTransform;
+    const segments = getTransmissionLineSegmentsForTransform.call(this, detailTransform.key || '', detailTransform);
     const nodeKeys = new Set();
     const addNode = (point, scale = 1) => {
       const key = `${point.x.toFixed(3)}:${point.y.toFixed(3)}:${point.z.toFixed(3)}`;
@@ -2192,8 +2354,8 @@ export default class CityChannelThreeRuntime {
         core.renderOrder = renderOrder + 3;
         group.add(core);
       }
-      addNode(start, 1.18);
-      addNode(end, 0.92);
+      addNode(start, 0.78);
+      addNode(end, 0.58);
     });
 
     if (showGearSockets) {
@@ -3313,7 +3475,12 @@ export default class CityChannelThreeRuntime {
       this.handleContextAction();
       return;
     }
-    this.cancelMechanismRuntimePreview();
+    if (
+      this.config.activeTool !== CITY_CHANNEL_TOOLS.BROWSE
+      && this.config.activeTool !== CITY_CHANNEL_TOOLS.SELECT
+    ) {
+      this.cancelMechanismRuntimePreview();
+    }
     if (
       this.config.activeTool === CITY_CHANNEL_TOOLS.PLACE_COMPONENT
       && this.config.activeComponentType === DOUBLE_SIDED_RACK_COMPONENT_TYPE
@@ -3479,11 +3646,118 @@ export default class CityChannelThreeRuntime {
 
     this.updateHover(event);
     this.updatePlacementGhost();
+    const tryRunPressurePlateDoubleClick = typeof this.tryRunPressurePlateDoubleClick === 'function'
+      ? this.tryRunPressurePlateDoubleClick
+      : CityChannelThreeRuntime.prototype.tryRunPressurePlateDoubleClick;
+    if (tryRunPressurePlateDoubleClick.call(this, event, { wasDrag, pointerMode })) return;
+    const tryCancelMechanismRuntimePreviewDoubleClick = typeof this.tryCancelMechanismRuntimePreviewDoubleClick === 'function'
+      ? this.tryCancelMechanismRuntimePreviewDoubleClick
+      : CityChannelThreeRuntime.prototype.tryCancelMechanismRuntimePreviewDoubleClick;
+    if (tryCancelMechanismRuntimePreviewDoubleClick.call(this, event, { wasDrag, pointerMode })) return;
     if (this.config.activeTool === CITY_CHANNEL_TOOLS.PLACE_COMPONENT && this.commitGearInstallTarget()) return;
     if (this.config.activeTool === CITY_CHANNEL_TOOLS.ERASE && this.eraseHovered()) return;
     if (this.commitRackBindingCandidate()) return;
     if (this.commitGearBindingCandidate()) return;
     this.selectHovered(!!event.shiftKey);
+  }
+
+  isPressurePlateDoubleClickToolActive() {
+    return this.config.activeTool === CITY_CHANNEL_TOOLS.BROWSE
+      || this.config.activeTool === CITY_CHANNEL_TOOLS.SELECT;
+  }
+
+  getPressurePlateCellFromPickData(data = null) {
+    if (!data) return null;
+    const mapData = this.renderModel?.mapData || {};
+    if (data.kind === 'gear') {
+      if ((data.hostKind || 'tile') !== 'tile' || !data.hostKey) return null;
+      const host = mapData.tiles?.[data.hostKey] || data.placement || null;
+      if (host?.panelType !== CITY_CHANNEL_TILE_TYPES.GEAR_PRESSURE_PLATE) return null;
+      return {
+        x: Number(host.x),
+        y: Number(host.y),
+        z: Number(host.z) || 0
+      };
+    }
+    const placement = data.placement || null;
+    if (!placement || placement.edge) return null;
+    if (placement.panelType !== CITY_CHANNEL_TILE_TYPES.GEAR_PRESSURE_PLATE) return null;
+    return {
+      x: Number(placement.x),
+      y: Number(placement.y),
+      z: Number(placement.z) || 0
+    };
+  }
+
+  tryRunPressurePlateDoubleClick(event, { wasDrag = false } = {}) {
+    if (event?.button !== 0) return false;
+    if (wasDrag || this.carryState) return false;
+    const isPressurePlateDoubleClickToolActive = typeof this.isPressurePlateDoubleClickToolActive === 'function'
+      ? this.isPressurePlateDoubleClickToolActive
+      : CityChannelThreeRuntime.prototype.isPressurePlateDoubleClickToolActive;
+    if (!isPressurePlateDoubleClickToolActive.call(this)) {
+      this.lastPressurePlateClick = null;
+      return false;
+    }
+    const data = this.hoverHit?.object?.userData?.cityChannel || this.hoverMesh?.userData?.cityChannel || null;
+    const getPressurePlateCellFromPickData = typeof this.getPressurePlateCellFromPickData === 'function'
+      ? this.getPressurePlateCellFromPickData
+      : CityChannelThreeRuntime.prototype.getPressurePlateCellFromPickData;
+    const cell = getPressurePlateCellFromPickData.call(this, data);
+    if (!cell) {
+      this.lastPressurePlateClick = null;
+      return false;
+    }
+    const key = createCellKey(cell.x, cell.y, cell.z);
+    const now = Date.now();
+    const detailDoubleClick = Number(event.detail) >= 2;
+    const previous = this.lastPressurePlateClick;
+    const repeatedClick = !!previous
+      && previous.key === key
+      && now - previous.at <= 360
+      && Math.hypot(
+        Number(event.clientX) - previous.x,
+        Number(event.clientY) - previous.y
+      ) <= 24;
+    this.lastPressurePlateClick = {
+      key,
+      at: now,
+      x: Number(event.clientX) || 0,
+      y: Number(event.clientY) || 0
+    };
+    if (!detailDoubleClick && !repeatedClick) return false;
+    this.lastPressurePlateClick = null;
+    this.triggerMechanismAtCell(cell);
+    return true;
+  }
+
+  tryCancelMechanismRuntimePreviewDoubleClick(event, { wasDrag = false } = {}) {
+    if (event?.button !== 0 || wasDrag) return false;
+    const hasMechanismRuntimePreview = typeof this.hasMechanismRuntimePreview === 'function'
+      ? this.hasMechanismRuntimePreview
+      : CityChannelThreeRuntime.prototype.hasMechanismRuntimePreview;
+    if (!hasMechanismRuntimePreview.call(this)) {
+      this.lastMechanismResetClick = null;
+      return false;
+    }
+    const data = this.hoverHit?.object?.userData?.cityChannel || this.hoverMesh?.userData?.cityChannel || null;
+    const getPressurePlateCellFromPickData = typeof this.getPressurePlateCellFromPickData === 'function'
+      ? this.getPressurePlateCellFromPickData
+      : CityChannelThreeRuntime.prototype.getPressurePlateCellFromPickData;
+    if (getPressurePlateCellFromPickData.call(this, data)) return false;
+    const now = Date.now();
+    const x = Number(event.clientX) || 0;
+    const y = Number(event.clientY) || 0;
+    const detailDoubleClick = Number(event.detail) >= 2;
+    const previous = this.lastMechanismResetClick;
+    const repeatedClick = !!previous
+      && now - previous.at <= 360
+      && Math.hypot(x - previous.x, y - previous.y) <= 24;
+    this.lastMechanismResetClick = { at: now, x, y };
+    if (!detailDoubleClick && !repeatedClick) return false;
+    this.lastMechanismResetClick = null;
+    this.cancelMechanismRuntimePreview();
+    return true;
   }
 
   handleContextMenu(event) {
@@ -6450,6 +6724,648 @@ export default class CityChannelThreeRuntime {
     }
   }
 
+  getFocusedMechanismDriveGearTargets() {
+    const targets = new Map();
+    const addTarget = (target = null) => {
+      if (!target?.gearKey) return;
+      targets.set(target.gearKey, {
+        ...(targets.get(target.gearKey) || {}),
+        ...target
+      });
+    };
+    const appendGearData = (data = null) => {
+      if (data?.kind !== 'gear' || !data.hostKey) return;
+      const mountId = data.mount?.id || data.mountId || data.rootGear?.id || '';
+      if (!mountId) return;
+      addTarget({
+        gearKey: `${data.hostKey}:${mountId}`,
+        hostKind: data.hostKind || 'tile',
+        hostKey: data.hostKey,
+        mountId,
+        mount: data.mount || null,
+        data
+      });
+    };
+    appendGearData(this.hoverHit?.object?.userData?.cityChannel || null);
+    appendGearData(this.hoverMesh?.userData?.cityChannel || null);
+    (this.config?.selection?.gears || []).forEach((gear) => {
+      if (!gear?.hostKey || !gear.mountId) return;
+      addTarget({
+        gearKey: `${gear.hostKey}:${gear.mountId}`,
+        hostKind: gear.hostKind || 'tile',
+        hostKey: gear.hostKey,
+        mountId: gear.mountId,
+        mount: null,
+        data: gear
+      });
+    });
+    return [...targets.values()];
+  }
+
+  getFocusedMechanismDriveGearKeys() {
+    const getFocusedMechanismDriveGearTargets = typeof this.getFocusedMechanismDriveGearTargets === 'function'
+      ? this.getFocusedMechanismDriveGearTargets
+      : CityChannelThreeRuntime.prototype.getFocusedMechanismDriveGearTargets;
+    const keys = new Set();
+    getFocusedMechanismDriveGearTargets.call(this).forEach((target) => {
+      if (target.gearKey) keys.add(target.gearKey);
+    });
+    return keys;
+  }
+
+  findMechanismDriveComponentPath(assembly = null, sourceKey = '', targetKey = '') {
+    if (!sourceKey || !targetKey) return null;
+    if (sourceKey === targetKey) {
+      return {
+        componentKeys: [sourceKey],
+        edges: []
+      };
+    }
+    const assemblyKeys = new Set(assembly?.componentKeys || []);
+    if (assemblyKeys.size > 0 && (!assemblyKeys.has(sourceKey) || !assemblyKeys.has(targetKey))) return null;
+    const adjacency = new Map();
+    (assembly?.componentKeys || [sourceKey, targetKey]).forEach((componentKey) => {
+      adjacency.set(componentKey, adjacency.get(componentKey) || []);
+    });
+    (assembly?.edges || []).forEach((edge) => {
+      const fromKey = edge?.componentKey;
+      const toKey = edge?.key;
+      if (!fromKey || !toKey) return;
+      adjacency.set(fromKey, adjacency.get(fromKey) || []);
+      adjacency.get(fromKey).push(edge);
+    });
+    const queue = [sourceKey];
+    const visited = new Set([sourceKey]);
+    const previous = new Map();
+    while (queue.length > 0) {
+      const current = queue.shift();
+      if (current === targetKey) break;
+      (adjacency.get(current) || []).forEach((edge) => {
+        const nextKey = edge?.key;
+        if (!nextKey || visited.has(nextKey)) return;
+        visited.add(nextKey);
+        previous.set(nextKey, { componentKey: current, edge });
+        queue.push(nextKey);
+      });
+    }
+    if (!visited.has(targetKey)) return null;
+    const componentKeys = [targetKey];
+    const edges = [];
+    let cursor = targetKey;
+    while (cursor !== sourceKey) {
+      const step = previous.get(cursor);
+      if (!step) return null;
+      edges.unshift(step.edge);
+      componentKeys.unshift(step.componentKey);
+      cursor = step.componentKey;
+    }
+    return { componentKeys, edges };
+  }
+
+  getMechanismDrivePathAssemblyForComponent(assemblyGraph = null, componentKey = '') {
+    if (!assemblyGraph || !componentKey) return null;
+    const assemblyId = assemblyGraph.assemblyByComponentKey?.[componentKey];
+    return (assemblyGraph.assemblies || []).find((assembly) => assembly.id === assemblyId) || null;
+  }
+
+  getMechanismDrivePathStaticContexts(existingKeys = new Set()) {
+    const getFocusedMechanismDriveGearTargets = typeof this.getFocusedMechanismDriveGearTargets === 'function'
+      ? this.getFocusedMechanismDriveGearTargets
+      : CityChannelThreeRuntime.prototype.getFocusedMechanismDriveGearTargets;
+    const findMechanismDriveComponentPath = typeof this.findMechanismDriveComponentPath === 'function'
+      ? this.findMechanismDriveComponentPath
+      : CityChannelThreeRuntime.prototype.findMechanismDriveComponentPath;
+    const getMechanismDrivePathAssemblyForComponent = typeof this.getMechanismDrivePathAssemblyForComponent === 'function'
+      ? this.getMechanismDrivePathAssemblyForComponent
+      : CityChannelThreeRuntime.prototype.getMechanismDrivePathAssemblyForComponent;
+    const focusedTargets = getFocusedMechanismDriveGearTargets.call(this);
+    if (focusedTargets.length <= 0) return [];
+    const mapData = this.renderModel?.mapData || {};
+    const assemblyGraph = buildMechanicalAssemblies(mapData);
+    const contexts = [];
+    focusedTargets.forEach((target) => {
+      if (!target?.gearKey || !target.hostKey || !target.mountId) return;
+      const placement = target.hostKind === 'wall'
+        ? mapData.walls?.[target.hostKey]
+        : mapData.tiles?.[target.hostKey];
+      if (!placement) return;
+      const mount = target.mount || (placement.gearMounts || []).find((item) => item.id === target.mountId) || null;
+      if (!mount || isPassiveGearRotationDirection(mount.rotationDirection)) return;
+      const assembly = getMechanismDrivePathAssemblyForComponent.call(this, assemblyGraph, target.hostKey);
+      if (!assembly) return;
+      (assembly.componentKeys || []).forEach((sourceKey) => {
+        const sourcePlacement = mapData.tiles?.[sourceKey] || mapData.walls?.[sourceKey];
+        if (sourcePlacement?.panelType !== CITY_CHANNEL_TILE_TYPES.GEAR_PRESSURE_PLATE) return;
+        const contextKey = `static:${sourceKey}:${target.gearKey}`;
+        if (existingKeys.has(contextKey)) return;
+        const path = findMechanismDriveComponentPath.call(this, assembly, sourceKey, target.hostKey);
+        if (!path?.componentKeys?.length) return;
+        existingKeys.add(contextKey);
+        contexts.push({
+          motion: null,
+          node: {
+            id: target.gearKey,
+            componentKey: target.hostKey,
+            mountId: target.mountId,
+            mount,
+            isDriveRoot: true
+          },
+          gearKey: target.gearKey,
+          sourceKey,
+          targetKey: target.hostKey,
+          path,
+          staticPath: true
+        });
+      });
+    });
+    return contexts;
+  }
+
+  getMechanismDrivePathContexts() {
+    const getFocusedMechanismDriveGearKeys = typeof this.getFocusedMechanismDriveGearKeys === 'function'
+      ? this.getFocusedMechanismDriveGearKeys
+      : CityChannelThreeRuntime.prototype.getFocusedMechanismDriveGearKeys;
+    const findMechanismDriveComponentPath = typeof this.findMechanismDriveComponentPath === 'function'
+      ? this.findMechanismDriveComponentPath
+      : CityChannelThreeRuntime.prototype.findMechanismDriveComponentPath;
+    const getMechanismDrivePathStaticContexts = typeof this.getMechanismDrivePathStaticContexts === 'function'
+      ? this.getMechanismDrivePathStaticContexts
+      : CityChannelThreeRuntime.prototype.getMechanismDrivePathStaticContexts;
+    const focusedGearKeys = getFocusedMechanismDriveGearKeys.call(this);
+    if (focusedGearKeys.size <= 0) return [];
+    const contexts = [];
+    const seen = new Set();
+    const isMechanismMotionSettled = typeof this.isMechanismMotionSettled === 'function'
+      ? this.isMechanismMotionSettled
+      : CityChannelThreeRuntime.prototype.isMechanismMotionSettled;
+    (Array.isArray(this.mechanismActiveMotions) ? this.mechanismActiveMotions : []).forEach((motion) => {
+      if (!motion || motion.phase === 'done' || isMechanismMotionSettled.call(this, motion)) return;
+      const sourceKey = motion.key || motion.sourceKey || motion.triggerKey || '';
+      if (!sourceKey) return;
+      const assemblyKeys = new Set(motion.sourceAssembly?.componentKeys || []);
+      (motion.gearNodes || []).forEach((node) => {
+        if (!node?.id || !node.isDriveRoot || !focusedGearKeys.has(node.id)) return;
+        const targetKey = assemblyKeys.has(node.componentKey)
+          ? node.componentKey
+          : (assemblyKeys.has(node.attachmentComponentKey) ? node.attachmentComponentKey : node.componentKey);
+        if (!targetKey) return;
+        const path = findMechanismDriveComponentPath.call(this, motion.sourceAssembly, sourceKey, targetKey)
+          || (sourceKey === targetKey ? { componentKeys: [sourceKey], edges: [] } : null);
+        if (!path?.componentKeys?.length) return;
+        const contextKey = `${motion.id || sourceKey}:${node.id}`;
+        if (seen.has(contextKey)) return;
+        seen.add(contextKey);
+        seen.add(`static:${sourceKey}:${node.id}`);
+        contexts.push({
+          motion,
+          node,
+          gearKey: node.id,
+          sourceKey,
+          targetKey,
+          path
+        });
+      });
+    });
+    return [
+      ...contexts,
+      ...getMechanismDrivePathStaticContexts.call(this, seen)
+    ];
+  }
+
+  getMechanismDrivePathTransmissionSegments(componentKey = '', transform = null) {
+    if (!componentKey || !transform) return [];
+    const getTransmissionLineSegmentsForTransform = typeof this.getTransmissionLineSegmentsForTransform === 'function'
+      ? this.getTransmissionLineSegmentsForTransform
+      : CityChannelThreeRuntime.prototype.getTransmissionLineSegmentsForTransform;
+    return getTransmissionLineSegmentsForTransform.call(this, componentKey, transform, {
+      runtime: true,
+      lift: 0,
+      embedded: true
+    });
+  }
+
+  getMechanismDrivePathPortPoint(componentKey = '', transform = null, portId = '') {
+    const getTransmissionPortPosition = typeof this.getTransmissionPortPosition === 'function'
+      ? this.getTransmissionPortPosition
+      : CityChannelThreeRuntime.prototype.getTransmissionPortPosition;
+    return getTransmissionPortPosition.call(this, componentKey, transform, portId, {
+      runtime: true,
+      lift: 0,
+      embedded: true
+    });
+  }
+
+  getMechanismDrivePathTransform(componentKey = '') {
+    if (!componentKey) return null;
+    const getBasePlacementTransform = typeof this.getBasePlacementTransform === 'function'
+      ? this.getBasePlacementTransform
+      : CityChannelThreeRuntime.prototype.getBasePlacementTransform;
+    return getBasePlacementTransform.call(this, componentKey);
+  }
+
+  addMechanismDrivePathSegment(start = null, end = null, {
+    glowRadius = 0.038,
+    coreRadius = 0.011,
+    renderOrder = MECHANISM_DRIVE_PATH_RENDER_ORDER
+  } = {}) {
+    if (!start || !end) return;
+    const createTransmissionTubeMesh = typeof this.createTransmissionTubeMesh === 'function'
+      ? this.createTransmissionTubeMesh
+      : CityChannelThreeRuntime.prototype.createTransmissionTubeMesh;
+    const glow = createTransmissionTubeMesh.call(
+      this,
+      start,
+      end,
+      glowRadius,
+      this.mechanismDrivePathGlowMaterial || this.gearBindingActiveGlowMaterial || this.transmissionGlowMaterial
+    );
+    const core = createTransmissionTubeMesh.call(
+      this,
+      start,
+      end,
+      coreRadius,
+      this.mechanismDrivePathCoreMaterial || this.gearBindingActiveCurveMaterial || this.transmissionCoreMaterial
+    );
+    if (glow) {
+      glow.userData.cityChannelGearRole = 'mechanism_drive_path_glow';
+      glow.renderOrder = renderOrder;
+      this.overlayGroup.add(glow);
+    }
+    if (core) {
+      core.userData.cityChannelGearRole = 'mechanism_drive_path_segment';
+      core.renderOrder = renderOrder + 1;
+      this.overlayGroup.add(core);
+    }
+  }
+
+  addMechanismDrivePathComponentOverlay(componentKey = '', renderOrder = MECHANISM_DRIVE_PATH_RENDER_ORDER) {
+    const getMechanismDrivePathTransform = typeof this.getMechanismDrivePathTransform === 'function'
+      ? this.getMechanismDrivePathTransform
+      : CityChannelThreeRuntime.prototype.getMechanismDrivePathTransform;
+    const getMechanismDrivePathTransmissionSegments = typeof this.getMechanismDrivePathTransmissionSegments === 'function'
+      ? this.getMechanismDrivePathTransmissionSegments
+      : CityChannelThreeRuntime.prototype.getMechanismDrivePathTransmissionSegments;
+    const addMechanismDrivePathSegment = typeof this.addMechanismDrivePathSegment === 'function'
+      ? this.addMechanismDrivePathSegment
+      : CityChannelThreeRuntime.prototype.addMechanismDrivePathSegment;
+    const transform = getMechanismDrivePathTransform.call(this, componentKey);
+    if (!transform) return;
+    const segments = getMechanismDrivePathTransmissionSegments.call(this, componentKey, transform);
+    segments.forEach(({ start, end }) => {
+      addMechanismDrivePathSegment.call(this, start, end, { renderOrder });
+    });
+  }
+
+  addMechanismDrivePathEdgeOverlay(edge = null, renderOrder = MECHANISM_DRIVE_PATH_RENDER_ORDER) {
+    if (!edge?.componentKey || !edge.key) return;
+    const getMechanismDrivePathTransform = typeof this.getMechanismDrivePathTransform === 'function'
+      ? this.getMechanismDrivePathTransform
+      : CityChannelThreeRuntime.prototype.getMechanismDrivePathTransform;
+    const getMechanismDrivePathPortPoint = typeof this.getMechanismDrivePathPortPoint === 'function'
+      ? this.getMechanismDrivePathPortPoint
+      : CityChannelThreeRuntime.prototype.getMechanismDrivePathPortPoint;
+    const addMechanismDrivePathSegment = typeof this.addMechanismDrivePathSegment === 'function'
+      ? this.addMechanismDrivePathSegment
+      : CityChannelThreeRuntime.prototype.addMechanismDrivePathSegment;
+    const fromTransform = getMechanismDrivePathTransform.call(this, edge.componentKey);
+    const toTransform = getMechanismDrivePathTransform.call(this, edge.key);
+    if (!fromTransform || !toTransform) return;
+    const fromPoint = getMechanismDrivePathPortPoint.call(this, edge.componentKey, fromTransform, edge.from?.portId);
+    const toPoint = getMechanismDrivePathPortPoint.call(this, edge.key, toTransform, edge.to?.portId);
+    if (!fromPoint || !toPoint) return;
+    addMechanismDrivePathSegment.call(this, fromPoint, toPoint, {
+      glowRadius: 0.03,
+      coreRadius: 0.009,
+      renderOrder
+    });
+  }
+
+  addMechanismDrivePathSourceGlow(context = null, renderOrder = MECHANISM_DRIVE_PATH_RENDER_ORDER) {
+    const sourceKey = context?.sourceKey || '';
+    if (!sourceKey) return;
+    const mapData = this.renderModel?.mapData || {};
+    const hostKind = mapData.walls?.[sourceKey] ? 'wall' : 'tile';
+    const getPlacementMeshForComponent = typeof this.getPlacementMeshForComponent === 'function'
+      ? this.getPlacementMeshForComponent
+      : CityChannelThreeRuntime.prototype.getPlacementMeshForComponent;
+    const mesh = getPlacementMeshForComponent.call(this, sourceKey, hostKind);
+    if (!mesh || typeof this.createBoardOverlayGroup !== 'function' || typeof this.syncBoardOverlayGroup !== 'function') return;
+    const overlay = this.createBoardOverlayGroup({
+      fillMaterial: this.mechanismDriveSourceFillMaterial || this.gearBindingActiveBoardMaterial,
+      outlineMaterial: this.mechanismDriveSourceOutlineMaterial || this.gearBindingActiveOutlineMaterial,
+      glowMaterial: this.mechanismDriveSourceGlowMaterial || this.gearBindingActiveOutlineMaterial,
+      renderOrder: renderOrder - 2
+    });
+    overlay.userData.cityChannelGearRole = 'mechanism_drive_source_glow';
+    Object.values(overlay.userData || {}).forEach((child) => {
+      if (child?.userData) child.userData.cityChannelGearRole = 'mechanism_drive_source_glow';
+    });
+    this.syncBoardOverlayGroup(overlay, mesh, {
+      fillScale: 1.014,
+      outlineScale: 1.026,
+      glowScale: 1.052,
+      renderOrder: renderOrder - 2
+    });
+    this.overlayGroup.add(overlay);
+    this.addMechanismDriveSourceEdgeBeams(context, {
+      renderOrder: renderOrder + 3
+    });
+  }
+
+  createMechanismDriveSourceBeamMaterial({
+    color = 0xbffcff,
+    opacity = 0.28
+  } = {}) {
+    return new THREE.ShaderMaterial({
+      uniforms: {
+        beamColor: { value: new THREE.Color(color) },
+        beamOpacity: { value: opacity }
+      },
+      vertexShader: `
+        varying vec2 vUv;
+        void main() {
+          vUv = uv;
+          gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+        }
+      `,
+      fragmentShader: `
+        uniform vec3 beamColor;
+        uniform float beamOpacity;
+        varying vec2 vUv;
+        void main() {
+          float sideFade = smoothstep(0.0, 0.18, vUv.x) * smoothstep(1.0, 0.82, vUv.x);
+          float verticalFade = pow(1.0 - clamp(vUv.y, 0.0, 1.0), 1.45);
+          float baseGlow = smoothstep(0.28, 0.0, vUv.y);
+          float centerStreak = exp(-pow((vUv.x - 0.5) * 4.2, 2.0));
+          float alpha = beamOpacity * sideFade * verticalFade * (0.46 + baseGlow * 0.34 + centerStreak * 0.2);
+          gl_FragColor = vec4(beamColor, alpha);
+        }
+      `,
+      transparent: true,
+      depthTest: false,
+      depthWrite: false,
+      blending: THREE.AdditiveBlending,
+      side: THREE.DoubleSide,
+      toneMapped: false
+    });
+  }
+
+  getMechanismDriveSourceBeamPoint(sourceKey = '', transform = null, localPoint = null) {
+    const getTransmissionLocalPointPosition = typeof this.getTransmissionLocalPointPosition === 'function'
+      ? this.getTransmissionLocalPointPosition
+      : CityChannelThreeRuntime.prototype.getTransmissionLocalPointPosition;
+    return getTransmissionLocalPointPosition.call(this, sourceKey, transform, localPoint, {
+      runtime: true,
+      lift: 0.044,
+      embedded: false
+    });
+  }
+
+  createMechanismDriveSourceBeamMesh(start = null, end = null, {
+    height = 0.54,
+    opacity = 0.28,
+    renderOrder = MECHANISM_DRIVE_PATH_RENDER_ORDER
+  } = {}) {
+    if (!start || !end) return null;
+    const from = new THREE.Vector3(start.x, start.y, start.z);
+    const to = new THREE.Vector3(end.x, end.y, end.z);
+    if (from.distanceTo(to) <= 0.001) return null;
+    const up = new THREE.Vector3(0, height, 0);
+    const geometry = new THREE.BufferGeometry();
+    geometry.setAttribute('position', new THREE.Float32BufferAttribute([
+      from.x, from.y, from.z,
+      to.x, to.y, to.z,
+      from.x + up.x, from.y + up.y, from.z + up.z,
+      to.x + up.x, to.y + up.y, to.z + up.z
+    ], 3));
+    geometry.setAttribute('uv', new THREE.Float32BufferAttribute([
+      0, 0,
+      1, 0,
+      0, 1,
+      1, 1
+    ], 2));
+    geometry.setIndex([0, 1, 2, 2, 1, 3]);
+    geometry.computeVertexNormals();
+    const mesh = new THREE.Mesh(geometry, this.createMechanismDriveSourceBeamMaterial({ opacity }));
+    mesh.userData.cityChannelGearRole = 'mechanism_drive_source_beam';
+    mesh.renderOrder = renderOrder;
+    return mesh;
+  }
+
+  addMechanismDriveSourceEdgeBeams(context = null, {
+    renderOrder = MECHANISM_DRIVE_PATH_RENDER_ORDER
+  } = {}) {
+    const sourceKey = context?.sourceKey || '';
+    const transform = sourceKey ? this.getMechanismDrivePathTransform(sourceKey) : null;
+    if (!transform) return;
+    const edges = [
+      [{ x: -0.53, y: -0.53 }, { x: 0.53, y: -0.53 }],
+      [{ x: 0.53, y: -0.53 }, { x: 0.53, y: 0.53 }],
+      [{ x: 0.53, y: 0.53 }, { x: -0.53, y: 0.53 }],
+      [{ x: -0.53, y: 0.53 }, { x: -0.53, y: -0.53 }]
+    ];
+    edges.forEach(([fromLocal, toLocal]) => {
+      const from = this.getMechanismDriveSourceBeamPoint(sourceKey, transform, fromLocal);
+      const to = this.getMechanismDriveSourceBeamPoint(sourceKey, transform, toLocal);
+      const beam = this.createMechanismDriveSourceBeamMesh(from, to, {
+        height: 0.54,
+        opacity: 0.3,
+        renderOrder
+      });
+      if (beam) this.overlayGroup.add(beam);
+    });
+  }
+
+  addMechanismDrivePathGearMarker(context = null, renderOrder = MECHANISM_DRIVE_PATH_RENDER_ORDER) {
+    const gear = context?.gearKey ? this.gearMeshes?.get?.(context.gearKey) : null;
+    if (!gear || !this.gearHaloGeometry) return;
+    gear.updateWorldMatrix?.(true, false);
+    const marker = new THREE.Mesh(this.gearHaloGeometry, this.mechanismDrivePathGlowMaterial || this.gearBindingActiveMaterial || this.gearBindingActiveGlowMaterial);
+    marker.userData.sharedGeometry = true;
+    marker.userData.sharedMaterial = true;
+    marker.userData.cityChannelGearRole = 'mechanism_drive_path_gear';
+    marker.position.copy(gear.getWorldPosition(new THREE.Vector3()));
+    marker.quaternion.copy(gear.getWorldQuaternion(new THREE.Quaternion()));
+    marker.scale.setScalar(1.18);
+    marker.renderOrder = renderOrder + 4;
+    this.overlayGroup.add(marker);
+  }
+
+  addMechanismDrivePathOverlays() {
+    const getMechanismDrivePathContexts = typeof this.getMechanismDrivePathContexts === 'function'
+      ? this.getMechanismDrivePathContexts
+      : CityChannelThreeRuntime.prototype.getMechanismDrivePathContexts;
+    const addMechanismDrivePathComponentOverlay = typeof this.addMechanismDrivePathComponentOverlay === 'function'
+      ? this.addMechanismDrivePathComponentOverlay
+      : CityChannelThreeRuntime.prototype.addMechanismDrivePathComponentOverlay;
+    const addMechanismDrivePathEdgeOverlay = typeof this.addMechanismDrivePathEdgeOverlay === 'function'
+      ? this.addMechanismDrivePathEdgeOverlay
+      : CityChannelThreeRuntime.prototype.addMechanismDrivePathEdgeOverlay;
+    const addMechanismDrivePathSourceGlow = typeof this.addMechanismDrivePathSourceGlow === 'function'
+      ? this.addMechanismDrivePathSourceGlow
+      : CityChannelThreeRuntime.prototype.addMechanismDrivePathSourceGlow;
+    const addMechanismDrivePathGearMarker = typeof this.addMechanismDrivePathGearMarker === 'function'
+      ? this.addMechanismDrivePathGearMarker
+      : CityChannelThreeRuntime.prototype.addMechanismDrivePathGearMarker;
+    const contexts = getMechanismDrivePathContexts.call(this);
+    if (contexts.length <= 0) return;
+    const highlightedComponents = new Set();
+    const highlightedEdges = new Set();
+    const highlightedSources = new Set();
+    contexts.forEach((context) => {
+      if (context.sourceKey && !highlightedSources.has(context.sourceKey)) {
+        highlightedSources.add(context.sourceKey);
+        addMechanismDrivePathSourceGlow.call(this, context);
+      }
+      (context.path.componentKeys || []).forEach((componentKey) => {
+        if (!componentKey || highlightedComponents.has(componentKey)) return;
+        highlightedComponents.add(componentKey);
+        addMechanismDrivePathComponentOverlay.call(this, componentKey);
+      });
+      (context.path.edges || []).forEach((edge) => {
+        const key = `${edge?.componentKey || ''}:${edge?.key || ''}:${edge?.from?.portId || ''}:${edge?.to?.portId || ''}`;
+        if (highlightedEdges.has(key)) return;
+        highlightedEdges.add(key);
+        addMechanismDrivePathEdgeOverlay.call(this, edge);
+      });
+      addMechanismDrivePathGearMarker.call(this, context);
+    });
+  }
+
+  getMechanismDriveCountdownRotationSign(node = null) {
+    const runtimeSpeedRatio = Number(this.mechanismRuntimeSnapshot?.gears?.[node?.id]?.speedRatio);
+    if (Number.isFinite(runtimeSpeedRatio) && Math.abs(runtimeSpeedRatio) > 0.000001) {
+      return runtimeSpeedRatio < 0 ? -1 : 1;
+    }
+    const nodeDriveRatio = Number(node?.driveRatio);
+    if (Number.isFinite(nodeDriveRatio) && Math.abs(nodeDriveRatio) > 0.000001) {
+      return nodeDriveRatio < 0 ? -1 : 1;
+    }
+    const configuredSign = getGearRotationDirectionSign(node?.mount?.rotationDirection);
+    return configuredSign < 0 ? -1 : 1;
+  }
+
+  getMechanismDriveCountdownStates() {
+    const states = [];
+    const isMechanismMotionSettled = typeof this.isMechanismMotionSettled === 'function'
+      ? this.isMechanismMotionSettled
+      : CityChannelThreeRuntime.prototype.isMechanismMotionSettled;
+    const getMechanismDriveCountdownRotationSign = typeof this.getMechanismDriveCountdownRotationSign === 'function'
+      ? this.getMechanismDriveCountdownRotationSign
+      : CityChannelThreeRuntime.prototype.getMechanismDriveCountdownRotationSign;
+    (Array.isArray(this.mechanismActiveMotions) ? this.mechanismActiveMotions : []).forEach((motion) => {
+      if (!motion || motion.phase === 'done' || isMechanismMotionSettled.call(this, motion)) return;
+      (motion.gearNodes || []).forEach((node) => {
+        if (!node?.id || !node.isDriveRoot) return;
+        const target = Math.abs(Number(motion.targetAngle) || 0);
+        const angle = Math.min(target, Math.abs(Number(motion.angle) || 0));
+        const remainingAngle = Math.max(0, target - angle);
+        states.push({
+          gearKey: node.id,
+          componentKey: node.componentKey,
+          mountId: node.mountId,
+          motionId: motion.id,
+          paused: !!motion.pausedByFasterDrive,
+          remainingAngle,
+          remainingTurns: Math.ceil(remainingAngle / 360),
+          cycleProgress: target > 0 ? ((angle % 360) / 360) : 1,
+          rotationDirectionSign: getMechanismDriveCountdownRotationSign.call(this, node)
+        });
+      });
+    });
+    return states;
+  }
+
+  createMechanismDriveCountdownSprite(state = {}) {
+    if (typeof document === 'undefined') return null;
+    const canvas = document.createElement('canvas');
+    canvas.width = 128;
+    canvas.height = 128;
+    const context = canvas.getContext('2d');
+    if (!context) {
+      const sprite = new THREE.Sprite(new THREE.SpriteMaterial({
+        color: state.paused ? 0x94a3b8 : 0x22d3ee,
+        transparent: true,
+        opacity: 0.72,
+        depthTest: false,
+        depthWrite: false
+      }));
+      sprite.userData.cityChannelGearRole = 'mechanism_drive_countdown';
+      sprite.userData.cityChannelMechanismDriveCountdown = state;
+      const size = CITY_CHANNEL_GEAR_OUTER_RADIUS_WORLD * 1.48;
+      sprite.scale.set(size, size, 1);
+      sprite.renderOrder = GEAR_DIRECTION_ICON_RENDER_ORDER + 18;
+      return sprite;
+    }
+    const center = 64;
+    const radius = 49;
+    const progress = Math.max(0, Math.min(1, Number(state.cycleProgress) || 0));
+    const fill = state.paused ? 'rgba(148, 163, 184, 0.58)' : 'rgba(34, 211, 238, 0.62)';
+    context.clearRect(0, 0, 128, 128);
+    context.beginPath();
+    context.arc(center, center, radius, 0, Math.PI * 2);
+    context.fillStyle = fill;
+    context.fill();
+    if (progress > 0.0001) {
+      context.save();
+      context.globalCompositeOperation = 'destination-out';
+      context.beginPath();
+      context.moveTo(center, center);
+      const directionSign = Number(state.rotationDirectionSign) < 0 ? -1 : 1;
+      const sweep = Math.PI * 2 * progress * directionSign;
+      context.arc(center, center, radius + 2, -Math.PI / 2, -Math.PI / 2 + sweep, directionSign < 0);
+      context.closePath();
+      context.fill();
+      context.restore();
+    }
+    context.beginPath();
+    context.arc(center, center, 24, 0, Math.PI * 2);
+    context.fillStyle = 'rgba(2, 6, 23, 0.78)';
+    context.fill();
+    context.lineWidth = 5;
+    context.strokeStyle = state.paused ? 'rgba(226, 232, 240, 0.9)' : 'rgba(224, 242, 254, 0.95)';
+    context.stroke();
+    context.fillStyle = '#f8fafc';
+    context.font = '700 28px system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif';
+    context.textAlign = 'center';
+    context.textBaseline = 'middle';
+    context.fillText(String(Math.max(0, Number(state.remainingTurns) || 0)), center, center + 1);
+    const texture = new THREE.CanvasTexture(canvas);
+    texture.colorSpace = THREE.SRGBColorSpace;
+    const material = new THREE.SpriteMaterial({
+      map: texture,
+      transparent: true,
+      depthTest: false,
+      depthWrite: false
+    });
+    const sprite = new THREE.Sprite(material);
+    sprite.userData.cityChannelGearRole = 'mechanism_drive_countdown';
+    sprite.userData.cityChannelMechanismDriveCountdown = state;
+    const size = CITY_CHANNEL_GEAR_OUTER_RADIUS_WORLD * 1.48;
+    sprite.scale.set(size, size, 1);
+    sprite.renderOrder = GEAR_DIRECTION_ICON_RENDER_ORDER + 18;
+    return sprite;
+  }
+
+  addMechanismDriveCountdownOverlays() {
+    const getMechanismDriveCountdownStates = typeof this.getMechanismDriveCountdownStates === 'function'
+      ? this.getMechanismDriveCountdownStates
+      : CityChannelThreeRuntime.prototype.getMechanismDriveCountdownStates;
+    const createMechanismDriveCountdownSprite = typeof this.createMechanismDriveCountdownSprite === 'function'
+      ? this.createMechanismDriveCountdownSprite
+      : CityChannelThreeRuntime.prototype.createMechanismDriveCountdownSprite;
+    const states = getMechanismDriveCountdownStates.call(this);
+    states.forEach((state) => {
+      const gear = this.gearMeshes?.get?.(state.gearKey);
+      if (!gear) return;
+      const sprite = createMechanismDriveCountdownSprite.call(this, state);
+      if (!sprite) return;
+      gear.updateWorldMatrix?.(true, false);
+      sprite.position.copy(gear.getWorldPosition(new THREE.Vector3()));
+      this.overlayGroup.add(sprite);
+    });
+  }
+
   addGearBindingVisual(context = null, candidate = null, {
     active = false,
     hovered = false,
@@ -6617,6 +7533,14 @@ export default class CityChannelThreeRuntime {
 
   updateGearBindingOverlay() {
     clearGroup(this.overlayGroup);
+    const addMechanismDriveCountdownOverlays = typeof this.addMechanismDriveCountdownOverlays === 'function'
+      ? this.addMechanismDriveCountdownOverlays
+      : CityChannelThreeRuntime.prototype.addMechanismDriveCountdownOverlays;
+    addMechanismDriveCountdownOverlays.call(this);
+    const addMechanismDrivePathOverlays = typeof this.addMechanismDrivePathOverlays === 'function'
+      ? this.addMechanismDrivePathOverlays
+      : CityChannelThreeRuntime.prototype.addMechanismDrivePathOverlays;
+    addMechanismDrivePathOverlays.call(this);
     if (
       this.config.activeTool === CITY_CHANNEL_TOOLS.PLACE_COMPONENT
       && this.config.activeComponentType === GEAR_COMPONENT_TYPE
@@ -6859,9 +7783,16 @@ export default class CityChannelThreeRuntime {
       clearTimeout(this.mechanismPreviewTimer);
       this.mechanismPreviewTimer = null;
     }
+    this.mechanismActiveMotions = [];
     this.config.onMechanismPreviewProgress?.(null);
     this.setMechanismRuntimeSnapshot(null);
     return hadPreview;
+  }
+
+  clearMechanismRuntimeSnapshotIfIdle() {
+    const hasActiveMotions = Array.isArray(this.mechanismActiveMotions)
+      && this.mechanismActiveMotions.length > 0;
+    if (!hasActiveMotions) this.setMechanismRuntimeSnapshot(null);
   }
 
   getObstructionPlacementTransform(placement = null) {
@@ -7269,6 +8200,35 @@ export default class CityChannelThreeRuntime {
     return { hostKind: null, placement: null };
   }
 
+  getMechanismRuntimeContactMapData() {
+    const mapData = this.renderModel?.mapData || {};
+    const snapshot = this.mechanismRuntimeSnapshot || null;
+    if (!snapshot) return mapData;
+    const tiles = { ...(mapData.tiles || {}) };
+    const walls = { ...(mapData.walls || {}) };
+    Object.entries(snapshot.placements || {}).forEach(([key, placement]) => {
+      if (tiles[key]) tiles[key] = { ...tiles[key], ...placement };
+      else if (walls[key]) walls[key] = { ...walls[key], ...placement };
+    });
+    return {
+      ...mapData,
+      tiles,
+      walls,
+      racks: {
+        ...(mapData.racks || {}),
+        ...(snapshot.racks || {})
+      }
+    };
+  }
+
+  getGearHostKindAndPlacementFromMap(componentKey = '', mapData = this.renderModel?.mapData || {}) {
+    const tile = mapData.tiles?.[componentKey];
+    if (tile) return { hostKind: 'tile', placement: tile };
+    const wall = mapData.walls?.[componentKey];
+    if (wall) return { hostKind: 'wall', placement: wall };
+    return { hostKind: null, placement: null };
+  }
+
   getBasePlacementsForAssembly(assembly = null) {
     const mapData = this.renderModel?.mapData || {};
     return (assembly?.componentKeys || []).reduce((placements, componentKey) => {
@@ -7304,10 +8264,17 @@ export default class CityChannelThreeRuntime {
 
   getGearNodesForMounts(mounts = []) {
     if (!Array.isArray(mounts) || mounts.length <= 0) return [];
-    const mapData = this.renderModel?.mapData || {};
+    const baseMapData = this.renderModel?.mapData || {};
+    const getMechanismRuntimeContactMapData = typeof this.getMechanismRuntimeContactMapData === 'function'
+      ? this.getMechanismRuntimeContactMapData
+      : CityChannelThreeRuntime.prototype.getMechanismRuntimeContactMapData;
+    const getGearHostKindAndPlacementFromMap = typeof this.getGearHostKindAndPlacementFromMap === 'function'
+      ? this.getGearHostKindAndPlacementFromMap
+      : CityChannelThreeRuntime.prototype.getGearHostKindAndPlacementFromMap;
+    const mapData = getMechanismRuntimeContactMapData.call(this) || baseMapData;
     return mounts.map((mount) => {
       if (!mount?.componentKey || !mount?.id) return null;
-      const { hostKind, placement } = this.getGearHostKindAndPlacement(mount.componentKey);
+      const { hostKind, placement } = getGearHostKindAndPlacementFromMap.call(this, mount.componentKey, mapData);
       const transform = this.getBasePlacementTransform(mount.componentKey);
       if (!hostKind || !placement || !transform) return null;
       const liveMount = (placement.gearMounts || []).find((item) => item.id === mount.id) || mount;
@@ -7324,8 +8291,13 @@ export default class CityChannelThreeRuntime {
       };
       const bindingStatus = this.getGearBindingStatusForMount(transform, nodeMount);
       const attachment = this.getGearAttachmentContext(transform, nodeMount, bindingStatus);
-      const point = getThreeGearSurfacePoint(attachment.transform, attachment.mount);
-      const worldPoint = getGearWorldPosition(attachment.placement, attachment.mount);
+      const attachmentPlacement = mapData.tiles?.[attachment.componentKey] || mapData.walls?.[attachment.componentKey] || attachment.placement;
+      const canUseRuntimeSurfacePoint = typeof this.getRuntimeGearSurfacePointForPlacement === 'function'
+        && typeof this.getRuntimeWorldPointForPlacement === 'function';
+      const point = canUseRuntimeSurfacePoint
+        ? this.getRuntimeGearSurfacePointForPlacement(attachment.componentKey, attachment.transform, attachment.mount)
+        : getThreeGearSurfacePoint(attachment.transform, attachment.mount);
+      const worldPoint = getGearWorldPosition(attachmentPlacement, attachment.mount);
       if (!point || !worldPoint) return null;
       return {
         id: `${mount.componentKey}:${liveMount.id}`,
@@ -7335,7 +8307,7 @@ export default class CityChannelThreeRuntime {
         transform,
         attachmentComponentKey: attachment.componentKey,
         attachmentHostKind: attachment.hostKind,
-        attachmentPlacement: attachment.placement,
+        attachmentPlacement,
         attachmentTransform: attachment.transform,
         attachmentMount: attachment.mount,
         followsAxisBinding: attachment.followsAxisBinding,
@@ -7344,11 +8316,11 @@ export default class CityChannelThreeRuntime {
         rotationDirectionConfigured,
         point,
         worldPoint,
-        meshPlane: getGearMeshPlane(attachment.placement, attachment.mount, worldPoint),
+        meshPlane: getGearMeshPlane(attachmentPlacement, attachment.mount, worldPoint),
         pitchRadius: CITY_CHANNEL_GEAR_PITCH_RADIUS_WORLD,
         pitchRadiusWorld: CITY_CHANNEL_GEAR_PITCH_RADIUS_WORLD,
         gearRatioRadius: getGearRatioRadiusForMount(nodeMount),
-        surfaceKey: getGearSurfaceKey(attachment.placement, attachment.mount),
+        surfaceKey: getGearSurfaceKey(attachmentPlacement, attachment.mount),
         driveRatio: 0,
         direction: 0
       };
@@ -7356,6 +8328,11 @@ export default class CityChannelThreeRuntime {
   }
 
   getRootGearNodes() {
+    const baseMapData = this.renderModel?.mapData || {};
+    const getMechanismRuntimeContactMapData = typeof this.getMechanismRuntimeContactMapData === 'function'
+      ? this.getMechanismRuntimeContactMapData
+      : CityChannelThreeRuntime.prototype.getMechanismRuntimeContactMapData;
+    const mapData = getMechanismRuntimeContactMapData.call(this) || baseMapData;
     return Object.entries(this.renderModel?.mapData?.gears || {}).map(([gearId, gear]) => {
       if (!gear?.id) return null;
       const getRootGearAttachmentContext = typeof this.getRootGearAttachmentContext === 'function'
@@ -7369,6 +8346,9 @@ export default class CityChannelThreeRuntime {
         z: Number(gear.z) || 0
       };
       const point = getThreeGearSurfacePoint(context.transform, context.mount);
+      const attachmentPlacement = mapData.tiles?.[context.attachmentComponentKey]
+        || mapData.walls?.[context.attachmentComponentKey]
+        || context.attachmentPlacement;
       return {
         id: `${gearId}:${gear.id}`,
         componentKey: gearId,
@@ -7377,7 +8357,7 @@ export default class CityChannelThreeRuntime {
         transform: context.transform,
         attachmentComponentKey: context.attachmentComponentKey,
         attachmentHostKind: context.attachmentHostKind,
-        attachmentPlacement: context.attachmentPlacement,
+        attachmentPlacement,
         attachmentTransform: context.attachmentTransform,
         attachmentMount: context.attachmentMount,
         followsAxisBinding: false,
@@ -7386,11 +8366,11 @@ export default class CityChannelThreeRuntime {
         rotationDirectionConfigured: Object.prototype.hasOwnProperty.call(gear, 'rotationDirection'),
         point,
         worldPoint,
-        meshPlane: getGearMeshPlane(context.attachmentPlacement, context.attachmentMount, worldPoint),
+        meshPlane: getGearMeshPlane(attachmentPlacement, context.attachmentMount, worldPoint),
         pitchRadius: CITY_CHANNEL_GEAR_PITCH_RADIUS_WORLD,
         pitchRadiusWorld: CITY_CHANNEL_GEAR_PITCH_RADIUS_WORLD,
         gearRatioRadius: getGearRatioRadiusForMount(context.mount),
-        surfaceKey: getGearSurfaceKey(context.attachmentPlacement, context.attachmentMount),
+        surfaceKey: getGearSurfaceKey(attachmentPlacement, context.attachmentMount),
         driveRatio: 0,
         direction: 0
       };
@@ -7433,10 +8413,14 @@ export default class CityChannelThreeRuntime {
     const assemblyNodes = this.getAssemblyGearNodes(assembly);
     if (assemblyNodes.length <= 0) return [];
     const allNodes = this.getAllGearNodes();
+    const getMechanismRuntimeContactMapData = typeof this.getMechanismRuntimeContactMapData === 'function'
+      ? this.getMechanismRuntimeContactMapData
+      : CityChannelThreeRuntime.prototype.getMechanismRuntimeContactMapData;
+    const mapData = getMechanismRuntimeContactMapData.call(this) || this.renderModel?.mapData || {};
     const contactGraph = buildGearContactGraphModel(
       allNodes,
       undefined,
-      Object.values(this.renderModel?.mapData?.racks || {})
+      Object.values(mapData.racks || {})
     );
     return resolveDrivenGearNodesModel({
       assembly,
@@ -7504,7 +8488,10 @@ export default class CityChannelThreeRuntime {
   }
 
   createRackAxisBindingRuntimeEntries(nodes = [], assemblyGraph = null) {
-    const mapData = this.renderModel?.mapData || {};
+    const getMechanismRuntimeContactMapData = typeof this.getMechanismRuntimeContactMapData === 'function'
+      ? this.getMechanismRuntimeContactMapData
+      : CityChannelThreeRuntime.prototype.getMechanismRuntimeContactMapData;
+    const mapData = getMechanismRuntimeContactMapData.call(this) || this.renderModel?.mapData || {};
     return createRackTranslationRuntimeEntries({
       mapData,
       assemblyGraph,
@@ -7612,7 +8599,52 @@ export default class CityChannelThreeRuntime {
       : null;
   }
 
-  playMechanismRuntimePreview({
+  ensureMechanismActiveMotions() {
+    if (!Array.isArray(this.mechanismActiveMotions)) this.mechanismActiveMotions = [];
+    return this.mechanismActiveMotions;
+  }
+
+  getMechanismLockedMotionForKey(key = '') {
+    if (!key) return null;
+    return (Array.isArray(this.mechanismActiveMotions) ? this.mechanismActiveMotions : [])
+      .find((motion) => motion?.key === key && motion.phase !== 'done') || null;
+  }
+
+  getMechanismMotionBasePhases(nodes = [], runtimeSnapshot = this.mechanismRuntimeSnapshot || null) {
+    const runtimeGears = runtimeSnapshot?.gears || {};
+    const phaseNodeById = new Map();
+    (Array.isArray(nodes) ? nodes : []).forEach((node) => {
+      if (node?.id && !phaseNodeById.has(node.id)) phaseNodeById.set(node.id, node);
+    });
+    return new Map([...phaseNodeById.values()].map((node) => {
+      const runtimePhase = Number(runtimeGears[node.id]?.phase);
+      return [
+        node.id,
+        Number.isFinite(runtimePhase) ? runtimePhase : (Number(node.mount?.phase) || 0)
+      ];
+    }));
+  }
+
+  rebaseMechanismAssemblyEntriesToRuntime(assemblyEntries = [], runtimeSnapshot = this.mechanismRuntimeSnapshot || null) {
+    const runtimePlacements = runtimeSnapshot?.placements || {};
+    const runtimeRacks = runtimeSnapshot?.racks || {};
+    return (Array.isArray(assemblyEntries) ? assemblyEntries : []).map((entry) => {
+      const basePlacements = { ...(entry.basePlacements || {}) };
+      Object.keys(basePlacements).forEach((componentKey) => {
+        if (runtimePlacements[componentKey]) basePlacements[componentKey] = runtimePlacements[componentKey];
+      });
+      const componentKey = entry.componentKey || entry.fixedMount?.componentKey || entry.fixedAxis?.componentKey;
+      const rackId = entry.rackId || entry.sourceRackId || entry.rack?.id;
+      return {
+        ...entry,
+        ...(Object.keys(basePlacements).length > 0 ? { basePlacements } : {}),
+        ...(componentKey && runtimePlacements[componentKey] ? { basePlacement: runtimePlacements[componentKey] } : {}),
+        ...(rackId && runtimeRacks[rackId] ? { rack: runtimeRacks[rackId] } : {})
+      };
+    });
+  }
+
+  createMechanismPreviewMotion({
     key,
     tile,
     params,
@@ -7626,106 +8658,606 @@ export default class CityChannelThreeRuntime {
     const normalized = normalizeMechanismParams(params);
     const duration = Math.max(120, Math.round((Math.max(1, Math.abs(targetAngle)) / Math.max(1, normalized.rotationSpeedDegPerSec)) * 1000));
     const delay = Math.round(normalized.triggerDelaySeconds * 1000);
-    const phaseNodeById = new Map();
-    [...rackContactGearNodes, ...gearNodes].forEach((node) => {
-      if (node?.id && !phaseNodeById.has(node.id)) phaseNodeById.set(node.id, node);
-    });
-    const basePhases = new Map([...phaseNodeById.values()].map((node) => [node.id, Number(node.mount?.phase) || 0]));
+    const rebasedAssemblyEntries = this.rebaseMechanismAssemblyEntriesToRuntime(assemblyEntries);
+    const basePhases = this.getMechanismMotionBasePhases([...rackContactGearNodes, ...gearNodes]);
     const createPassiveRackInertiaPlan = typeof this.createPassiveRackInertiaPlan === 'function'
       ? this.createPassiveRackInertiaPlan
       : CityChannelThreeRuntime.prototype.createPassiveRackInertiaPlan;
     const inertiaPlan = createPassiveRackInertiaPlan.call(this, {
-      assemblyEntries,
+      assemblyEntries: rebasedAssemblyEntries,
       gearNodes,
       rackContactGearNodes,
       targetAngle,
       basePhases,
       obstruction
     });
-    const startedAt = Date.now() + delay;
-    const applyAngle = (angle, extraRackDistances = new Map(), progressOverride = null) => {
-      const snapshot = this.createRuntimeSnapshotForMechanism({
-        key,
-        tile,
-        assemblyEntries,
-        gearNodes,
-        rackContactGearNodes,
-        sourceAngle: angle,
-        extraRackDistances,
-        basePhases,
-        obstruction
-      });
-      this.setMechanismRuntimeSnapshot(snapshot);
-      this.config.onMechanismPreviewProgress?.({
-        active: true,
-        key,
-        panelType: tile?.panelType,
-        progress: progressOverride ?? Math.min(1, Math.abs(angle) / Math.max(1, Math.abs(targetAngle))),
-        params: normalized,
-        assemblyId: sourceAssembly?.id || assemblyEntries[0]?.assembly?.id || null
-      });
+    const now = Date.now();
+    return {
+      id: `${key || 'mechanism'}:${now}:${Math.random().toString(36).slice(2)}`,
+      key,
+      tile,
+      params: normalized,
+      sourceAssembly,
+      assemblyEntries: rebasedAssemblyEntries,
+      gearNodes,
+      rackContactGearNodes,
+      targetAngle,
+      obstruction,
+      inertiaPlan,
+      basePhases,
+      durationMs: duration,
+      startedAt: now + delay,
+      createdAt: now,
+      phase: 'forward',
+      angle: 0,
+      progress: 0,
+      extraRackDistances: new Map(),
+      holdUntil: null,
+      phaseStartedAt: null,
+      pausedByFasterDrive: false,
+      pauseStartedAt: null,
+      pausedDurationMs: 0,
+      flashedObstruction: false
     };
-    const animateTo = (fromAngle, toAngle, done = null) => {
-      const runStartedAt = Date.now();
-      const runFrame = () => {
-        const now = Date.now();
-        if (now < startedAt && fromAngle === 0) {
-          this.mechanismPreviewFrame = this.requestMechanismFrame(runFrame);
-          return;
-        }
-        const elapsed = now - (fromAngle === 0 ? startedAt : runStartedAt);
-        const progress = Math.max(0, Math.min(1, elapsed / duration));
-        const eased = getMechanismControlledProgress(progress);
-        applyAngle(fromAngle + ((toAngle - fromAngle) * eased));
-        if (progress < 1) {
-          this.mechanismPreviewFrame = this.requestMechanismFrame(runFrame);
-          return;
-        }
-        this.mechanismPreviewFrame = null;
-        done?.();
-      };
-      this.mechanismPreviewFrame = this.requestMechanismFrame(runFrame);
-    };
-    const animateInertia = (done = null) => {
-      if (!inertiaPlan?.rackDistances?.size) {
-        done?.();
-        return;
-      }
-      const runStartedAt = Date.now();
-      const runFrame = () => {
-        const now = Date.now();
-        const elapsed = now - runStartedAt;
-        const progress = Math.max(0, Math.min(1, elapsed / Math.max(1, inertiaPlan.durationMs || PASSIVE_INERTIA_DURATION_MS)));
-        applyAngle(targetAngle, getRackExtraDistanceMap(inertiaPlan, progress), 1);
-        if (progress < 1) {
-          this.mechanismPreviewFrame = this.requestMechanismFrame(runFrame);
-          return;
-        }
-        this.mechanismPreviewFrame = null;
-        applyAngle(targetAngle, getRackExtraDistanceMap(inertiaPlan, 1), 1);
-        done?.();
-      };
-      this.mechanismPreviewFrame = this.requestMechanismFrame(runFrame);
-    };
+  }
 
-    applyAngle(0);
-    animateTo(0, targetAngle, () => {
-      applyAngle(targetAngle);
-      if (obstruction?.blocked) {
-        this.flashMechanismObstruction(obstruction);
+  getMechanismMotionSnapshot(motion = null) {
+    if (!motion) return null;
+    return this.createRuntimeSnapshotForMechanism({
+      key: motion.key,
+      tile: motion.tile,
+      assemblyEntries: motion.assemblyEntries,
+      gearNodes: motion.gearNodes,
+      rackContactGearNodes: motion.rackContactGearNodes,
+      sourceAngle: motion.angle,
+      extraRackDistances: motion.extraRackDistances,
+      basePhases: motion.basePhases,
+      obstruction: motion.obstruction
+    });
+  }
+
+  updateMechanismMotionState(motion = null, now = Date.now()) {
+    if (!motion || motion.phase === 'done') return false;
+    if (motion.pausedByFasterDrive && (motion.phase === 'forward' || motion.phase === 'return')) {
+      if (motion.pauseStartedAt === null || motion.pauseStartedAt === undefined) motion.pauseStartedAt = now;
+      return true;
+    }
+    if (motion.pauseStartedAt !== null && motion.pauseStartedAt !== undefined) {
+      motion.pausedDurationMs = (Number(motion.pausedDurationMs) || 0) + Math.max(0, now - motion.pauseStartedAt);
+      motion.pauseStartedAt = null;
+    }
+    if (motion.phase === 'forward') {
+      if (now < motion.startedAt) {
+        motion.angle = 0;
+        motion.progress = 0;
+        return true;
+      }
+      const elapsed = Math.max(0, now - motion.startedAt - (Number(motion.pausedDurationMs) || 0));
+      const progress = Math.max(0, Math.min(1, elapsed / Math.max(1, motion.durationMs || 1)));
+      motion.progress = progress;
+      motion.angle = motion.targetAngle * getMechanismControlledProgress(progress);
+      if (progress < 1) return true;
+      motion.angle = motion.targetAngle;
+      motion.progress = 1;
+      if (motion.obstruction?.blocked) {
+        motion.phase = 'blocked';
+        if (!motion.flashedObstruction) {
+          motion.flashedObstruction = true;
+          this.flashMechanismObstruction(motion.obstruction);
+        }
+        return false;
+      }
+      if (motion.inertiaPlan?.rackDistances?.size) {
+        motion.phase = 'inertia';
+        motion.phaseStartedAt = now;
+        motion.pausedDurationMs = 0;
+        motion.pauseStartedAt = null;
+        motion.pausedByFasterDrive = false;
+        motion.extraRackDistances = new Map();
+        return true;
+      }
+      if (motion.params?.autoReturn) {
+        motion.phase = 'hold';
+        motion.holdUntil = now + Math.round((Number(motion.params.autoReturnDelaySeconds) || 0) * 1000);
+        return true;
+      }
+      motion.phase = 'finished';
+      return false;
+    }
+    if (motion.phase === 'inertia') {
+      const progress = Math.max(0, Math.min(1, (now - (motion.phaseStartedAt || now)) / Math.max(1, motion.inertiaPlan?.durationMs || PASSIVE_INERTIA_DURATION_MS)));
+      motion.progress = 1;
+      motion.angle = motion.targetAngle;
+      motion.extraRackDistances = getRackExtraDistanceMap(motion.inertiaPlan, progress);
+      if (progress < 1) return true;
+      motion.extraRackDistances = getRackExtraDistanceMap(motion.inertiaPlan, 1);
+      if (motion.params?.autoReturn) {
+        motion.phase = 'hold';
+        motion.holdUntil = now + Math.round((Number(motion.params.autoReturnDelaySeconds) || 0) * 1000);
+        return true;
+      }
+      motion.phase = 'finished';
+      return false;
+    }
+    if (motion.phase === 'hold') {
+      motion.angle = motion.targetAngle;
+      motion.progress = 1;
+      if (now < (motion.holdUntil || now)) return true;
+      motion.phase = 'return';
+      motion.phaseStartedAt = now;
+      motion.pausedDurationMs = 0;
+      motion.pauseStartedAt = null;
+      motion.pausedByFasterDrive = false;
+      motion.returnFromAngle = motion.targetAngle;
+      return true;
+    }
+    if (motion.phase === 'return') {
+      const elapsed = Math.max(0, now - (motion.phaseStartedAt || now) - (Number(motion.pausedDurationMs) || 0));
+      const progress = Math.max(0, Math.min(1, elapsed / Math.max(1, motion.durationMs || 1)));
+      motion.progress = 1 - progress;
+      motion.angle = (Number(motion.returnFromAngle) || motion.targetAngle) * (1 - getMechanismControlledProgress(progress));
+      if (progress < 1) return true;
+      motion.angle = 0;
+      motion.extraRackDistances = new Map();
+      motion.phase = 'done';
+      return false;
+    }
+    return false;
+  }
+
+  areMechanismRuntimeNumbersClose(left = 0, right = 0, epsilon = 0.001) {
+    return Math.abs((Number(left) || 0) - (Number(right) || 0)) <= epsilon;
+  }
+
+  areMechanismRuntimeVectorsClose(left = null, right = null, epsilon = 0.001) {
+    if (!left || !right) return !left && !right;
+    return this.areMechanismRuntimeNumbersClose(left.x, right.x, epsilon)
+      && this.areMechanismRuntimeNumbersClose(left.y, right.y, epsilon)
+      && this.areMechanismRuntimeNumbersClose(left.z, right.z, epsilon);
+  }
+
+  getMechanismRuntimeVectorMagnitude(vector = null) {
+    if (!vector) return 0;
+    return Math.hypot(
+      Number(vector.x) || 0,
+      Number(vector.y) || 0,
+      Number(vector.z) || 0
+    );
+  }
+
+  areMechanismRuntimeVectorsSameTrend(left = null, right = null, epsilon = 0.001) {
+    if (!left || !right) return !left && !right;
+    const leftMagnitude = this.getMechanismRuntimeVectorMagnitude(left);
+    const rightMagnitude = this.getMechanismRuntimeVectorMagnitude(right);
+    if (leftMagnitude <= epsilon || rightMagnitude <= epsilon) return true;
+    const dot = ((Number(left.x) || 0) * (Number(right.x) || 0))
+      + ((Number(left.y) || 0) * (Number(right.y) || 0))
+      + ((Number(left.z) || 0) * (Number(right.z) || 0));
+    return dot >= (leftMagnitude * rightMagnitude * 0.98);
+  }
+
+  areMechanismRuntimeAnglesSameTrend(left = 0, right = 0, epsilon = 0.001) {
+    const leftAngle = Number(left) || 0;
+    const rightAngle = Number(right) || 0;
+    if (Math.abs(leftAngle) <= epsilon || Math.abs(rightAngle) <= epsilon) return true;
+    return Math.sign(leftAngle) === Math.sign(rightAngle);
+  }
+
+  pickMechanismFurtherRuntimeState(left = {}, right = {}) {
+    if (!left) return right;
+    if (!right) return left;
+    if (left.runtimeTranslation || right.runtimeTranslation) {
+      const leftDistance = Math.max(
+        this.getMechanismRuntimeVectorMagnitude(left.runtimeTranslation),
+        Math.abs(Number(left.runtimeLinearDistance) || 0)
+      );
+      const rightDistance = Math.max(
+        this.getMechanismRuntimeVectorMagnitude(right.runtimeTranslation),
+        Math.abs(Number(right.runtimeLinearDistance) || 0)
+      );
+      return rightDistance > leftDistance + 0.001 ? right : left;
+    }
+    const leftAngle = Math.abs(Number(left.runtimeAngle) || 0);
+    const rightAngle = Math.abs(Number(right.runtimeAngle) || 0);
+    return rightAngle > leftAngle + 0.001 ? right : left;
+  }
+
+  getMechanismMotionSourceSpeed(motion = null) {
+    const duration = Math.max(1, Number(motion?.durationMs) || 1);
+    return Math.abs(Number(motion?.targetAngle) || 0) / duration;
+  }
+
+  getMechanismRuntimeStateMagnitude(state = {}, type = '') {
+    if (!state) return 0;
+    if (type === 'gear') return Math.abs(Number(state.speedRatio) || 0);
+    if (state.runtimeTranslation) {
+      return Math.max(
+        this.getMechanismRuntimeVectorMagnitude(state.runtimeTranslation),
+        Math.abs(Number(state.runtimeLinearDistance) || 0)
+      );
+    }
+    return Math.abs(Number(state.runtimeAngle) || 0);
+  }
+
+  getMechanismRuntimeStateSpeed(motion = null, state = {}, snapshot = null, type = '') {
+    const sourceSpeed = this.getMechanismMotionSourceSpeed(motion);
+    if (type === 'gear') return sourceSpeed * Math.max(0.001, Math.abs(Number(state?.speedRatio) || 0));
+    const sourceAngle = Math.abs(Number(snapshot?.sourceAngle) || 0);
+    const magnitude = this.getMechanismRuntimeStateMagnitude(state, type);
+    if (sourceAngle <= 0.001 || magnitude <= 0.001) return sourceSpeed;
+    return sourceSpeed * (magnitude / sourceAngle);
+  }
+
+  isMechanismMotionSettled(motion = null) {
+    return motion?.phase === 'finished' || motion?.phase === 'blocked';
+  }
+
+  chooseMechanismRuntimeMergeState(
+    existing = null,
+    current = null,
+    sourceMotion = null,
+    currentMotion = null,
+    type = '',
+    sourceSnapshot = null,
+    currentSnapshot = null,
+    suppressedMotionIds = new Set()
+  ) {
+    if (!existing) return { state: current, motion: currentMotion };
+    const suppressedIds = suppressedMotionIds instanceof Set
+      ? suppressedMotionIds
+      : new Set(suppressedMotionIds || []);
+    const sourceSuppressed = !!sourceMotion?.id && suppressedIds.has(sourceMotion.id);
+    const currentSuppressed = !!currentMotion?.id && suppressedIds.has(currentMotion.id);
+    if (sourceSuppressed !== currentSuppressed) {
+      return currentSuppressed
+        ? { state: existing, motion: sourceMotion }
+        : { state: current, motion: currentMotion };
+    }
+    const existingSettled = this.isMechanismMotionSettled(sourceMotion);
+    const currentSettled = this.isMechanismMotionSettled(currentMotion);
+    if (existingSettled && !currentSettled) {
+      return currentMotion?.pausedByFasterDrive
+        ? {
+          state: existing,
+          motion: sourceMotion,
+          releasedMotion: currentMotion,
+          rebaseSnapshot: sourceSnapshot
+        }
+        : { state: current, motion: currentMotion };
+    }
+    if (!existingSettled && currentSettled) {
+      return sourceMotion?.pausedByFasterDrive
+        ? {
+          state: current,
+          motion: currentMotion,
+          releasedMotion: sourceMotion,
+          rebaseSnapshot: currentSnapshot
+        }
+        : { state: existing, motion: sourceMotion };
+    }
+    if (existingSettled && currentSettled) return { state: current, motion: currentMotion };
+    if (type === 'placement' || type === 'rack') {
+      const existingSpeed = this.getMechanismRuntimeStateSpeed(sourceMotion, existing, sourceSnapshot, type);
+      const currentSpeed = this.getMechanismRuntimeStateSpeed(currentMotion, current, currentSnapshot, type);
+      if (Math.abs(existingSpeed - currentSpeed) > 0.0001) {
+        return currentSpeed > existingSpeed
+          ? { state: current, motion: currentMotion, suppressedMotion: sourceMotion }
+          : { state: existing, motion: sourceMotion, suppressedMotion: currentMotion };
+      }
+      const selected = this.pickMechanismFurtherRuntimeState(existing, current);
+      return selected === current
+        ? { state: current, motion: currentMotion }
+        : { state: existing, motion: sourceMotion };
+    }
+    if (type === 'gear') {
+      const existingSpeed = this.getMechanismRuntimeStateSpeed(sourceMotion, existing, sourceSnapshot, type);
+      const currentSpeed = this.getMechanismRuntimeStateSpeed(currentMotion, current, currentSnapshot, type);
+      if (Math.abs(existingSpeed - currentSpeed) > 0.0001) {
+        return currentSpeed > existingSpeed
+          ? { state: current, motion: currentMotion, suppressedMotion: sourceMotion }
+          : { state: existing, motion: sourceMotion, suppressedMotion: currentMotion };
+      }
+    }
+    return { state: existing, motion: sourceMotion };
+  }
+
+  areMechanismPlacementStatesCompatible(left = {}, right = {}) {
+    if (!left || !right) return true;
+    const leftHasTranslation = !!left.runtimeTranslation;
+    const rightHasTranslation = !!right.runtimeTranslation;
+    const leftHasRotation = Number.isFinite(Number(left.runtimeAngle)) && Math.abs(Number(left.runtimeAngle)) > 0.001;
+    const rightHasRotation = Number.isFinite(Number(right.runtimeAngle)) && Math.abs(Number(right.runtimeAngle)) > 0.001;
+    if (leftHasTranslation || rightHasTranslation) {
+      return leftHasTranslation
+        && rightHasTranslation
+        && this.areMechanismRuntimeVectorsSameTrend(left.runtimeTranslation, right.runtimeTranslation);
+    }
+    if (leftHasRotation || rightHasRotation) {
+      return leftHasRotation
+        && rightHasRotation
+        && this.areMechanismRuntimeAnglesSameTrend(left.runtimeAngle, right.runtimeAngle)
+        && this.areMechanismRuntimeVectorsClose(left.runtimeAxisAnchor || left.runtimePivotWorld, right.runtimeAxisAnchor || right.runtimePivotWorld)
+        && (left.runtimeFixedComponentKey || '') === (right.runtimeFixedComponentKey || '');
+    }
+    return true;
+  }
+
+  areMechanismRackStatesCompatible(left = {}, right = {}) {
+    return this.areMechanismRuntimeVectorsSameTrend(left?.runtimeTranslation, right?.runtimeTranslation);
+  }
+
+  areMechanismGearStatesCompatible(left = {}, right = {}) {
+    const leftSpeed = Number(left?.speedRatio) || 0;
+    const rightSpeed = Number(right?.speedRatio) || 0;
+    if (Math.abs(leftSpeed) > 0.001 && Math.abs(rightSpeed) > 0.001) {
+      if (Math.sign(leftSpeed) !== Math.sign(rightSpeed)) return false;
+    }
+    return true;
+  }
+
+  createConcurrentMechanismConflict(type = 'placementMotionConflict', key = '', left = null, right = null) {
+    if (type === 'gearDriveConflict') {
+      return {
+        blocked: true,
+        type,
+        gearKeys: [key].filter(Boolean),
+        gearTargets: key ? [{ gearKey: key }] : []
+      };
+    }
+    if (type === 'rackDriveConflict') {
+      const rackId = key;
+      const rack = rackId ? this.renderModel?.mapData?.racks?.[rackId] : null;
+      return {
+        blocked: true,
+        type,
+        rackId,
+        rackIds: [rackId].filter(Boolean),
+        racks: [rack || left || right].filter(Boolean)
+      };
+    }
+    return {
+      blocked: true,
+      type: 'placementMotionConflict',
+      componentKey: key,
+      placementKeys: [key].filter(Boolean),
+      placements: [right, left].filter(Boolean),
+      obstacleKey: key,
+      obstacle: right || left || null,
+      obstacleKeys: [key].filter(Boolean),
+      obstacles: [right || left].filter(Boolean)
+    };
+  }
+
+  composeMechanismRuntimeSnapshots(motions = []) {
+    const combined = {
+      sourceAngle: 0,
+      placements: {},
+      racks: {},
+      gears: {},
+      sync: [],
+      obstruction: null,
+      suppressedMotionIds: [],
+      motions: motions.map((motion) => ({ id: motion.id, key: motion.key, phase: motion.phase, angle: motion.angle }))
+    };
+    const sourceByPlacement = new Map();
+    const sourceByRack = new Map();
+    const sourceByGear = new Map();
+    const suppressedMotionIds = new Set();
+    const resumeMotionSnapshots = new Map();
+    const recordSelection = (selected = {}) => {
+      if (selected.suppressedMotion?.id) suppressedMotionIds.add(selected.suppressedMotion.id);
+      if (selected.releasedMotion?.id && selected.rebaseSnapshot) {
+        resumeMotionSnapshots.set(selected.releasedMotion.id, selected.rebaseSnapshot);
+      }
+      combined.suppressedMotionIds = [...suppressedMotionIds];
+      combined.resumeMotionSnapshots = resumeMotionSnapshots;
+    };
+    const mergeRuntimeStates = ({
+      states = {},
+      target = {},
+      sourceByKey = new Map(),
+      motion = null,
+      snapshot = null,
+      type = '',
+      conflictType = '',
+      isCompatible = () => true
+    } = {}) => {
+      for (const [key, state] of Object.entries(states || {})) {
+        const existing = target[key];
+        const sourceMotion = sourceByKey.get(key);
+        const sourceSuppressed = !!sourceMotion?.id && suppressedMotionIds.has(sourceMotion.id);
+        const currentSuppressed = !!motion?.id && suppressedMotionIds.has(motion.id);
+        const shouldCheckConflict = existing
+          && !sourceSuppressed
+          && !currentSuppressed
+          && !this.isMechanismMotionSettled(sourceMotion)
+          && !this.isMechanismMotionSettled(motion);
+        if (shouldCheckConflict && !isCompatible(existing, state)) {
+          combined.conflict = this.createConcurrentMechanismConflict(conflictType, key, existing, state);
+          combined.conflict.motionIds = [sourceMotion?.id, motion.id].filter(Boolean);
+          combined.suppressedMotionIds = [...suppressedMotionIds];
+          combined.resumeMotionSnapshots = resumeMotionSnapshots;
+          return false;
+        }
+        const selected = this.chooseMechanismRuntimeMergeState(
+          existing,
+          state,
+          sourceMotion,
+          motion,
+          type,
+          sourceMotion?.lastSnapshot || null,
+          snapshot,
+          suppressedMotionIds
+        );
+        target[key] = selected.state;
+        sourceByKey.set(key, selected.motion);
+        recordSelection(selected);
+      }
+      return true;
+    };
+    for (const motion of motions) {
+      const snapshot = this.getMechanismMotionSnapshot(motion);
+      if (!snapshot) continue;
+      motion.lastSnapshot = snapshot;
+      combined.sourceAngle += Number(snapshot.sourceAngle) || 0;
+      if (!mergeRuntimeStates({
+        states: snapshot.racks,
+        target: combined.racks,
+        sourceByKey: sourceByRack,
+        motion,
+        snapshot,
+        type: 'rack',
+        conflictType: 'rackDriveConflict',
+        isCompatible: this.areMechanismRackStatesCompatible.bind(this)
+      })) return combined;
+      if (!mergeRuntimeStates({
+        states: snapshot.placements,
+        target: combined.placements,
+        sourceByKey: sourceByPlacement,
+        motion,
+        snapshot,
+        type: 'placement',
+        conflictType: 'placementMotionConflict',
+        isCompatible: this.areMechanismPlacementStatesCompatible.bind(this)
+      })) return combined;
+      if (!mergeRuntimeStates({
+        states: snapshot.gears,
+        target: combined.gears,
+        sourceByKey: sourceByGear,
+        motion,
+        snapshot,
+        type: 'gear',
+        conflictType: 'gearDriveConflict',
+        isCompatible: this.areMechanismGearStatesCompatible.bind(this)
+      })) return combined;
+      combined.sync.push(...(snapshot.sync || []));
+      if (snapshot.obstruction && !combined.obstruction) combined.obstruction = snapshot.obstruction;
+    }
+    combined.suppressedMotionIds = [...suppressedMotionIds];
+    combined.resumeMotionSnapshots = resumeMotionSnapshots;
+    return combined;
+  }
+
+  removeMechanismMotionForConflict(conflict = null) {
+    const motions = this.ensureMechanismActiveMotions();
+    const ids = new Set(conflict?.motionIds || []);
+    const candidates = ids.size > 0 ? motions.filter((motion) => ids.has(motion.id)) : motions;
+    const target = candidates.sort((left, right) => (right.createdAt || 0) - (left.createdAt || 0))[0] || null;
+    if (!target) return false;
+    this.mechanismActiveMotions = motions.filter((motion) => motion.id !== target.id);
+    return true;
+  }
+
+  rebaseMechanismMotionToCurrentRuntime(motion = null, runtimeSnapshot = this.mechanismRuntimeSnapshot || null) {
+    if (!motion) return false;
+    motion.assemblyEntries = this.rebaseMechanismAssemblyEntriesToRuntime(motion.assemblyEntries || [], runtimeSnapshot);
+    motion.basePhases = this.getMechanismMotionBasePhases([
+      ...(motion.rackContactGearNodes || []),
+      ...(motion.gearNodes || [])
+    ], runtimeSnapshot);
+    return true;
+  }
+
+  applyMechanismSuppressedMotionState(
+    motions = [],
+    suppressedMotionIds = [],
+    now = Date.now(),
+    resumeMotionSnapshots = new Map()
+  ) {
+    const suppressed = new Set(suppressedMotionIds || []);
+    const resumeSnapshots = resumeMotionSnapshots instanceof Map
+      ? resumeMotionSnapshots
+      : new Map();
+    let changed = false;
+    (Array.isArray(motions) ? motions : []).forEach((motion) => {
+      if (!motion || this.isMechanismMotionSettled(motion)) return;
+      const shouldPause = suppressed.has(motion.id) && (motion.phase === 'forward' || motion.phase === 'return');
+      if (shouldPause) {
+        if (!motion.pausedByFasterDrive) {
+          motion.pausedByFasterDrive = true;
+          motion.pauseStartedAt = now;
+        } else if (motion.pauseStartedAt === null || motion.pauseStartedAt === undefined) {
+          motion.pauseStartedAt = now;
+        }
         return;
       }
-      const scheduleAutoReturn = () => {
-        if (!normalized.autoReturn) return;
-        this.mechanismPreviewTimer = setTimeout(() => {
-          animateTo(targetAngle, 0, () => {
-            applyAngle(0);
-            this.cancelMechanismRuntimePreview();
-          });
-        }, Math.round(normalized.autoReturnDelaySeconds * 1000));
-      };
-      animateInertia(scheduleAutoReturn);
+      if (motion.pausedByFasterDrive) {
+        motion.pausedByFasterDrive = false;
+        if (motion.pauseStartedAt !== null && motion.pauseStartedAt !== undefined) {
+          motion.pausedDurationMs = (Number(motion.pausedDurationMs) || 0) + Math.max(0, now - motion.pauseStartedAt);
+        }
+        motion.pauseStartedAt = null;
+        this.rebaseMechanismMotionToCurrentRuntime(motion, resumeSnapshots.get(motion.id) || this.mechanismRuntimeSnapshot);
+        changed = true;
+      }
     });
+    return changed;
+  }
+
+  stepMechanismMotionWorld(now = Date.now()) {
+    let motions = this.ensureMechanismActiveMotions();
+    let needsFrame = false;
+    motions.forEach((motion) => {
+      needsFrame = this.updateMechanismMotionState(motion, now) || needsFrame;
+    });
+    motions = motions.filter((motion) => motion.phase !== 'done');
+    this.mechanismActiveMotions = motions;
+    if (motions.length <= 0) {
+      this.setMechanismRuntimeSnapshot(null);
+      this.config?.onMechanismPreviewProgress?.(null);
+      return false;
+    }
+    let combined = this.composeMechanismRuntimeSnapshots(motions);
+    if (combined.conflict) {
+      this.flashMechanismObstruction(combined.conflict);
+      this.config?.onToast?.('多个压力板同时驱动的传动趋势发生冲突，后触发的压力板已停止。', 'error');
+      if (this.removeMechanismMotionForConflict(combined.conflict)) {
+        return this.stepMechanismMotionWorld(now);
+      }
+    }
+    if (this.applyMechanismSuppressedMotionState(motions, combined.suppressedMotionIds, now, combined.resumeMotionSnapshots)) {
+      combined = this.composeMechanismRuntimeSnapshots(motions);
+    }
+    this.setMechanismRuntimeSnapshot(combined);
+    const progressMotion = motions[motions.length - 1];
+    this.config?.onMechanismPreviewProgress?.({
+      active: true,
+      key: progressMotion.key,
+      panelType: progressMotion.tile?.panelType,
+      progress: progressMotion.progress,
+      params: progressMotion.params,
+      assemblyId: progressMotion.sourceAssembly?.id || progressMotion.assemblyEntries?.[0]?.assembly?.id || null,
+      activeMotionCount: motions.length
+    });
+    if (needsFrame) this.scheduleMechanismMotionFrame();
+    return needsFrame;
+  }
+
+  scheduleMechanismMotionFrame() {
+    if (this.mechanismPreviewFrame) return;
+    this.mechanismPreviewFrame = this.requestMechanismFrame(() => {
+      this.mechanismPreviewFrame = null;
+      this.stepMechanismMotionWorld(Date.now());
+    });
+  }
+
+  playMechanismRuntimePreview(args = {}) {
+    const getLockedMotion = typeof this.getMechanismLockedMotionForKey === 'function'
+      ? this.getMechanismLockedMotionForKey
+      : CityChannelThreeRuntime.prototype.getMechanismLockedMotionForKey;
+    const lockedMotion = args?.key
+      ? getLockedMotion.call(this, args.key)
+      : null;
+    if (lockedMotion) return false;
+    const createMotion = typeof this.createMechanismPreviewMotion === 'function'
+      ? this.createMechanismPreviewMotion
+      : CityChannelThreeRuntime.prototype.createMechanismPreviewMotion;
+    const motion = createMotion.call(this, args);
+    const motions = this.ensureMechanismActiveMotions();
+    motions.push(motion);
+    this.stepMechanismMotionWorld(Date.now());
+    this.scheduleMechanismMotionFrame();
+    return this.mechanismActiveMotions.includes(motion);
   }
 
   triggerMechanismAtCell(cell, paramsOverride = null) {
@@ -7733,9 +9265,24 @@ export default class CityChannelThreeRuntime {
     const key = createCellKey(cell.x, cell.y, cell.z);
     const tile = this.renderModel?.mapData?.tiles?.[key];
     if (!tile || tile.panelType !== CITY_CHANNEL_TILE_TYPES.GEAR_PRESSURE_PLATE) return false;
-    this.cancelMechanismRuntimePreview();
+    const getLockedMotion = typeof this.getMechanismLockedMotionForKey === 'function'
+      ? this.getMechanismLockedMotionForKey
+      : CityChannelThreeRuntime.prototype.getMechanismLockedMotionForKey;
+    const lockedMotion = getLockedMotion.call(this, key);
+    if (lockedMotion) {
+      this.config.onToast?.(
+        lockedMotion.phase === 'finished' && !lockedMotion.params?.autoReturn
+          ? '压力板本次运动尚未复位，暂时无法再次触发。'
+          : '压力板正在运行或复位，暂时无法再次触发。',
+        'warning'
+      );
+      return false;
+    }
     const mapData = this.renderModel?.mapData || {};
     const normalized = normalizeMechanismParams(paramsOverride || this.config.mechanismParams?.[key]);
+    const clearRuntimeSnapshotIfIdle = typeof this.clearMechanismRuntimeSnapshotIfIdle === 'function'
+      ? this.clearMechanismRuntimeSnapshotIfIdle
+      : CityChannelThreeRuntime.prototype.clearMechanismRuntimeSnapshotIfIdle;
     const targetAngle = normalized.rotationTotalAngle;
     const assemblyGraph = buildMechanicalAssemblies(mapData);
     const sourceAssembly = getAssemblyForCell(assemblyGraph, key);
@@ -7778,19 +9325,19 @@ export default class CityChannelThreeRuntime {
     });
     const motionConflict = motionIntentGraph.conflicts[0] || null;
     if (motionConflict?.type === 'gearDriveConflict') {
-      this.setMechanismRuntimeSnapshot(null);
+      clearRuntimeSnapshotIfIdle.call(this);
       this.flashMechanismObstruction(motionConflict);
       this.config.onToast?.('主动齿轮之间的啮合方向互相矛盾，齿轮组被卡住。', 'error');
       return false;
     }
     if (motionConflict?.type === 'rackDriveConflict') {
-      this.setMechanismRuntimeSnapshot(null);
+      clearRuntimeSnapshotIfIdle.call(this);
       this.flashMechanismObstruction(motionConflict);
       this.config.onToast?.('主动齿轮正在把同一齿条推向相反方向，齿条被卡住。', 'error');
       return false;
     }
     if (motionConflict?.type === 'placementMotionConflict') {
-      this.setMechanismRuntimeSnapshot(null);
+      clearRuntimeSnapshotIfIdle.call(this);
       this.flashMechanismObstruction(motionConflict);
       this.config.onToast?.('同一板材被多个机械约束要求不同运动，传动被卡住。', 'error');
       return false;
@@ -7827,7 +9374,7 @@ export default class CityChannelThreeRuntime {
       obstruction: limitingObstruction
     });
     if (!allowedRotation.canRotate) {
-      this.setMechanismRuntimeSnapshot(null);
+      clearRuntimeSnapshotIfIdle.call(this);
       this.flashMechanismObstruction(limitingObstruction);
       this.config.onToast?.(
         limitingObstruction?.type === 'rackDriveConflict'
@@ -7837,7 +9384,7 @@ export default class CityChannelThreeRuntime {
       );
       return false;
     }
-    this.playMechanismRuntimePreview({
+    const started = this.playMechanismRuntimePreview({
       key,
       tile,
       params: normalized,
@@ -7848,6 +9395,7 @@ export default class CityChannelThreeRuntime {
       targetAngle: allowedRotation.angle,
       obstruction: limitingObstruction
     });
+    if (started === false) return false;
     const gearCount = gearNodes.length;
     const drivenBoardCount = assemblyEntries.reduce((count, entry) => (
       count + (entry.assembly?.componentKeys?.length || 0)
@@ -8967,6 +10515,12 @@ export default class CityChannelThreeRuntime {
     this.gearBindingActiveGlowMaterial.dispose();
     this.gearBindingActiveBoardMaterial.dispose();
     this.gearBindingActiveOutlineMaterial.dispose();
+    this.mechanismDrivePathCoreMaterial.dispose();
+    this.mechanismDrivePathGlowMaterial.dispose();
+    this.mechanismDrivePathNodeMaterial.dispose();
+    this.mechanismDriveSourceFillMaterial.dispose();
+    this.mechanismDriveSourceOutlineMaterial.dispose();
+    this.mechanismDriveSourceGlowMaterial.dispose();
     this.gearBindingInvalidMaterial.dispose();
     this.gearBindingInvalidFillMaterial.dispose();
     this.gearBindingInvalidGlowMaterial.dispose();

@@ -226,6 +226,41 @@ body.city-channel-immersive-active .home-location-dock {
   margin: 0 0.12rem;
 }
 
+.city-channel-mechanism-motion-controls {
+  position: absolute;
+  z-index: 16;
+  left: 50%;
+  bottom: calc(max(20px, env(safe-area-inset-bottom)) + 124px);
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: auto;
+}
+
+.city-channel-mechanism-motion-cancel {
+  min-width: 104px;
+  height: 36px;
+  border: 1px solid rgba(251, 191, 36, 0.52);
+  border-radius: 8px;
+  background: rgba(69, 26, 3, 0.82);
+  color: #fffbeb;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.32rem;
+  cursor: pointer;
+  font-size: 0.78rem;
+  font-weight: 900;
+  box-shadow: 0 14px 32px rgba(0, 0, 0, 0.34), inset 0 1px 0 rgba(255, 255, 255, 0.08);
+  backdrop-filter: blur(14px);
+}
+
+.city-channel-mechanism-motion-cancel:hover {
+  border-color: rgba(253, 224, 71, 0.78);
+  background: rgba(120, 53, 15, 0.88);
+}
+
 .city-channel-thumbnail {
   position: absolute;
   z-index: 15;
@@ -437,6 +472,10 @@ body.city-channel-immersive-active .home-location-dock {
   white-space: nowrap;
 }
 
+.city-channel-immersive.has-mechanism-motion-controls .city-channel-interaction-hints {
+  bottom: calc(max(20px, env(safe-area-inset-bottom)) + 172px);
+}
+
 .city-channel-interaction-hints strong {
   color: #f8fafc;
   font-size: 0.74rem;
@@ -543,6 +582,10 @@ body.city-channel-immersive-active .home-location-dock {
     justify-content: flex-start;
   }
 
+  .city-channel-mechanism-motion-controls {
+    max-width: calc(100vw - 1rem);
+  }
+
   .city-channel-hotbar__item {
     min-width: 58px;
   }
@@ -555,6 +598,10 @@ body.city-channel-immersive-active .home-location-dock {
     max-width: none;
     overflow-x: auto;
     justify-content: flex-start;
+  }
+
+  .city-channel-immersive.has-mechanism-motion-controls .city-channel-interaction-hints {
+    bottom: calc(max(20px, env(safe-area-inset-bottom)) + 170px);
   }
 
   .city-channel-thumbnail {

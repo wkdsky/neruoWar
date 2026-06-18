@@ -28,6 +28,7 @@ import {
   CityChannelEditorTopbar,
   CityChannelHotbar,
   CityChannelInteractionHints,
+  CityChannelMechanismMotionControls,
   CityChannelSelectionActions,
   CityChannelSettingsPopover,
   CityChannelStatusBar,
@@ -250,6 +251,12 @@ const CityChannelEditor = ({
     setMechanismRuntimeSnapshot(null);
     setMechanismPreviewState(null);
   }, []);
+
+  const mechanismMotionActive = !!(mechanismRuntimeSnapshot || mechanismPreviewState?.active);
+
+  const handleCancelMechanismMotion = useCallback(() => {
+    resetMechanismPreview();
+  }, [resetMechanismPreview]);
 
   const handleEditorPointerDownCapture = useCallback((event) => {
     const target = event.target;
@@ -851,7 +858,8 @@ const CityChannelEditor = ({
         'has-palette',
         wallViewMode === 'perspective' ? 'is-wall-transparent' : '',
         wallViewMode === 'solid' ? 'is-wall-solid' : '',
-        showHelperGrid ? 'is-helper-grid-visible' : ''
+        showHelperGrid ? 'is-helper-grid-visible' : '',
+        mechanismMotionActive ? 'has-mechanism-motion-controls' : ''
       ].filter(Boolean).join(' ')}
       onPointerDownCapture={handleEditorPointerDownCapture}
     >
@@ -945,6 +953,12 @@ const CityChannelEditor = ({
         onRunValidation={runValidation}
         onSetOpenPanel={setOpenPanel}
         onToast={addToast}
+      />
+
+      <CityChannelMechanismMotionControls
+        active={mechanismMotionActive}
+        onCancel={handleCancelMechanismMotion}
+        onPointerDown={stopEditorPanelPointerEvent}
       />
 
       <CityChannelInteractionHints

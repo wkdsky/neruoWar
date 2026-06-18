@@ -20,12 +20,14 @@
 - Rack and pinion 是转动自由度和线性自由度之间的运动约束，而不是简单碰撞。
 - 齿轮啮合约束会把一个齿轮的角速度按比例传给另一个齿轮；外齿轮直接啮合方向相反。
 - 同一齿条同一侧的 pinion 若想推动齿条同向移动，齿轮转动方向必须一致；不同侧时方向关系相反。
+- 成熟物理/机械系统通常把同时存在的接触、关节、马达输入放进同一个 step 里求解；多个压力板不应各自覆盖动画状态，而应合并到同一个运行时运动世界里做约束兼容检查。
 
 参考：
 
 - MathWorks Rack and Pinion Constraint: https://www.mathworks.com/help/sm/ref/rackandpinionconstraint.html
 - MathWorks Gear Constraint: https://www.mathworks.com/help/sm/ug/model-gear-constraints-1.html
 - Box2D Gear Joint: https://box2d.org/doc_version_2_4/structb2_gear_joint_def.html
+- Box2D Simulation: https://box2d.org/documentation/md_simulation.html
 
 ## 3. 目标模型
 
@@ -111,8 +113,20 @@
 - 由齿条边导致的 `gearDriveConflict` 会携带 `viaRackId`，graph 会补充 `rackIds/racks` 供红闪提示使用。
 - 但同一齿条上多个显式主动轮方向矛盾时，`viaRackId` 不会抢先生成齿轮冲突，仍由更直接的 `rackDriveConflict` 负责提示。
 - runtime snapshot 中，已经属于主动传动链的齿轮会保持 source angle 计算出的相位；齿条扫过产生的临时 rack-driven 状态只补充主动链外的齿轮，不再覆盖中途接力的主动齿轮。
-- 主动压力板采用伺服式预览：总角度由“整圈数 + 0-360 度余角”组成，主动段按接近恒速的曲线运行，只在起止端主动加减速，结束时强制落在设置的目标角度。
+- 主动压力板采用伺服式预览：总角度由“整圈数 + 0-360 度余角”组成，主动段按线性时间进度匀速运行，`sourceAngle = targetAngle * elapsed / duration`，结束时强制落在设置的目标角度。
 - 被齿条带动过的被动齿轮会在主动段结束后追加短惯性续行；该续行通过 `extraRackDistances` 回写到 runtime snapshot，因此齿条和后续被动齿轮会继续移动/转动，而不是只播放齿轮慢停。
+- Three Runtime 的压力板预览已从单动画改为 `mechanismActiveMotions` 运动世界：任意时刻再次双击压力板会把新的 motion 加入当前世界，不再先取消已有运动。
+- 画布鼠标双击压力板等同于压力板菜单里的“运行”：在浏览和选择工具下，即使压力板未被选中也会直接运行；放置、安装组件、擦除和移动预览状态下不会触发。
+- 运动过程中会显示“撤销运动”按钮，位置在最下方 hotbar 上方一行；点击后调用 `cancelMechanismRuntimePreview`，所有 runtime placement/rack/gear 回到静态默认状态。
+- 运动过程中双击画布上除压力板外的任意位置，也会调用同一个取消入口。双击压力板仍保持“运行压力板”的语义，不会被复位逻辑抢占。
+- 新 motion 会从当前 `mechanismRuntimeSnapshot` 读取齿轮相位，并把当前 runtime placement / rack 状态作为 base，因此被动轮在运动过程中变成主动轮时会接续当前状态，而不是从静态存档相位重新开始。
+- 新 motion 触发前的 gear/rack 接触图会读取当前 `mechanismRuntimeSnapshot.placements/racks`，因此被上一段运动带走的齿条会以当前 runtime 位置参与右侧齿轮啮合，不再只按静态存档位置判断导致空转。
+- 同一块压力板再次触发时，新 motion 会接管旧的同 key motion，并以上一帧 runtime 状态为 base 继续执行，避免同一执行器和自己的旧终点互相冲突。
+- 每帧会合成所有 active motion 的 runtime snapshot；只有两个尚未结算的 motion 对同一板材、齿条或齿轮提出不兼容实时趋势时，才会生成 `placementMotionConflict` / `rackDriveConflict` / `gearDriveConflict`，红闪冲突目标，提示“后触发的压力板已停止”，并移除最新触发的 motion，保留已有运动继续运行。
+- `finished` / `blocked` motion 只保留当前 runtime 姿态，不再作为主动马达约束参与后续冲突判断；新压力板会从当前姿态接续，而不是被旧 motion 的 `speedRatio` / `phase` 误拦。
+- 异步同向驱动同一板材/齿条时，runtime 合成按位移/角度趋势判断兼容，并采用 freewheel / overrunning clutch 语义：实际速度更快的 motion 输出当前自由度，被覆盖的慢 motion 暂停自身角度消耗和倒计时；快源结束或不再覆盖时，慢源会先 rebase 到当前 runtime 姿态，再继续消耗剩余角度。
+- 运动过程中会在每个 active drive root 齿轮上叠加圆形倒计时标记；标记小于齿轮外缘，中心显示剩余圈数，motion 被快源覆盖暂停时标记也暂停。
+- 压力板触发前的 graph/collision 预检如果失败，只在没有 active motion 时清空 runtime snapshot；已有运动不会因为另一块压力板启动失败而被打断。
 
 ### 4.2 主要文件
 
@@ -140,6 +154,10 @@
 - 同一板材收到不同旋转轴趋势时会生成 `placementMotionConflict`。
 - 多条齿条同时拖动同一板材且位移趋势不一致时，会生成 `placementMotionConflict`。
 - 齿轮-齿条-齿轮闭环中，齿轮网和齿条网给出的转动趋势一致时允许，不一致时生成 `gearDriveConflict`。
+- 两个压力板并发运行时，runtime 会把两个 motion 的 placements/gears/racks 合成到同一个 snapshot。
+- 后触发压力板如果把同一齿轮推向相反转动趋势，会实时闪烁 `gearDriveConflict` 并停止后触发 motion，先前 motion 保持运行。
+- 前一个压力板已经 `finished` 后，后一个压力板即使接管同一齿轮/齿条，也不会被旧主动源误判为冲突。
+- 两个压力板异步同向推动同一齿条和同一绑定板材时允许重叠运行，不会仅因当前位移量不同而红闪。
 
 ## 6. 仍需推进
 
@@ -203,6 +221,20 @@ git diff --check
 - 被板材携带的齿条如果沿自身轴线产生位移，也会参与齿轮接触扫描并生成 rack-driven gear runtime state；这样另一侧绑定齿条不只是视觉跟随，还能继续带动被动齿轮。
 - `cityChannelMechanismSimulation.test.js` 已新增“左侧齿条驱动板材，右侧齿条只绑定同一板材也跟随移动，并继续驱动接触齿轮”的回归用例；targeted 测试已通过：`npm test -- --watchAll=false --runTestsByPath src/components/game/cityChannel/cityChannelMechanismSimulation.test.js`，85 个 tests 全部通过。
 - Three Runtime targeted 测试已通过：`npm test -- --watchAll=false --runTestsByPath src/components/game/cityChannel/three/CityChannelThreeRuntime.test.js`，168 个 tests 全部通过。
+- 额外需求：压力板现在可以在任意运动过程中再次双击触发，不能打断其他正在进行的运动；如果运动中的被动轮被另一块压力板变成主动轮，需要实时判断是否能接续或发生冲突。
+- `CityChannelThreeRuntime` 已加入 `mechanismActiveMotions` 运动世界：`playMechanismRuntimePreview` 创建独立 motion，`stepMechanismMotionWorld` 每帧统一推进、合成 snapshot 并做跨 motion 冲突检测；`triggerMechanismAtCell` 不再先调用 `cancelMechanismRuntimePreview`。
+- 新 motion 会通过 `getMechanismMotionBasePhases` / `rebaseMechanismAssemblyEntriesToRuntime` 接续当前 runtime 齿轮相位、板材位置和齿条位置，避免并发触发从静态状态重算。
+- `composeMechanismRuntimeSnapshots` 会检查同一 placement/rack/gear 的兼容性；冲突时生成对应 obstruction，红闪冲突目标，toast 提示后触发压力板停止，并移除 createdAt 最新的 motion。
+- `CityChannelThreeRuntime.test.js` 已新增并发压力板合成 snapshot、同压力板重复触发接续当前相位、同一齿轮相反驱动趋势停止后触发 motion 的回归用例；targeted 测试已通过：`npm test -- --watchAll=false --runTestsByPath src/components/game/cityChannel/three/CityChannelThreeRuntime.test.js`，171 个 tests 全部通过。
+- 本轮同步验证 simulation targeted 测试通过：`npm test -- --watchAll=false --runTestsByPath src/components/game/cityChannel/cityChannelMechanismSimulation.test.js`，85 个 tests 全部通过。
+- 交互修正：`handlePointerUp` 已把压力板双击路由到 `triggerMechanismAtCell`，支持直接点压力板面或压力板上的齿轮；`handlePointerDown` 在浏览/选择状态下不再取消现有机关 motion。
+- `CityChannelThreeRuntime.test.js` 已新增浏览未选中双击运行、选择状态通过齿轮双击运行、放置/移动状态双击不运行、浏览/选择 pointer down 不取消 motion 的回归用例；targeted 测试已通过：`npm test -- --watchAll=false --runTestsByPath src/components/game/cityChannel/three/CityChannelThreeRuntime.test.js`，175 个 tests 全部通过。
+- 新增 `CityChannelMechanismMotionControls`：当 `mechanismRuntimeSnapshot` 或 preview state active 时显示撤销按钮；按钮调用编辑器的 `resetMechanismPreview`。
+- `CityChannelThreeRuntime` 已新增非压力板双击取消逻辑：只有存在 active runtime preview 时生效，且压力板 pick 会被排除，避免覆盖压力板运行。
+- `CityChannelEditorChrome.test.js` 覆盖撤销按钮 active/inactive 渲染和 click 回调；`CityChannelThreeRuntime.test.js` 覆盖非压力板双击取消 motion。targeted 测试已通过：`npm test -- --watchAll=false --runTestsByPath src/components/game/cityChannel/three/CityChannelThreeRuntime.test.js src/components/game/cityChannel/CityChannelEditorChrome.test.js`，177 个 tests 全部通过。
+- 本轮继续修复异步齿轮协同误判：`composeMechanismRuntimeSnapshots` 已把 `finished` / `blocked` motion 视为已结算姿态，后续压力板接管同一 gear/rack/placement 时不再把旧 `speedRatio` 当作主动冲突来源。
+- 同步放宽并发兼容判断：gear 同向同速不再要求 phase 完全同步；placement/rack 改按位移趋势判断，并在同向时选择更前的 runtime state，避免后触发压力板刚开始运行时把正在下移的共同板材/齿条误判或覆盖。
+- `CityChannelThreeRuntime.test.js` 已新增两个回归：旧 pressure motion 结束后反向 `speedRatio` 不再误拦新主动源、异步同向驱动同一 rack/placement 不红闪；targeted 测试已通过：`npm test -- --watchAll=false --runTestsByPath src/components/game/cityChannel/three/CityChannelThreeRuntime.test.js`，178 个 tests 全部通过。
 - 完整 cityChannel 测试已通过：`npm test -- --watchAll=false src/components/game/cityChannel`，16 个 test suites、339 个 tests 全部通过。
 - 生产编译已通过：`npm run build` 输出 `Compiled successfully.`。
 - 3001 dev server 已确认包含本轮代码：`CityChannelEditor` chunk 可搜到 `createRackDrivenAxisBindingRuntimeEntries`，`CityWorkshopPage` chunk 可搜到 `findAssemblyAxisBindingPivotCandidate` / `resolvedFromBinding`。
@@ -258,5 +290,7 @@ git diff --check
 - `cityChannelMechanismSimulation.test.js` 已新增低层回归“keeps an active gear on its source phase when the same rack sweeps over it”；`CityChannelThreeRuntime.test.js` 已新增触发路径回归“lets a middle active gear continue driving a vertical rack after the lower gear disengages”。
 - 本轮验证通过：`npm test -- --watchAll=false src/components/game/cityChannel`，16 个 test suites、354 个 tests 全部通过；`git diff --check` 通过。补充覆盖空白点击不会在 `getPlacementSelectionFromData(null)` 报错。
 - 本轮继续修复：压力板转动参数改为“整圈按钮 + 0-360 度滑条”，速度改为固定挡位；旧的单值角度仍会拆成整圈和余角兼容。
-- `CityChannelThreeRuntime` 主动预览曲线改为接近恒速、末端主动制动；被动齿轮惯性会在主动段结束后转换成齿条额外位移，齿条和被动齿轮随惯性段继续更新。
+- `CityChannelThreeRuntime` 主动预览曲线改为按设置速度匀速推进；被动齿轮惯性会在主动段结束后转换成齿条额外位移，齿条和被动齿轮随惯性段继续更新。
 - 新增回归：`cityChannelMechanismRuntime.test.js` 覆盖角度拆分和速度挡位归一化；`cityChannelMechanismSimulation.test.js` 覆盖 `extraRackDistances` 推动齿条并重算被动齿轮；`CityChannelThreeRuntime.test.js` 覆盖整圈目标角和被动惯性续行。
+- 本轮修复“设置 1 圈但视觉速度不稳/角度不直观”：`getMechanismControlledProgress` 已改为线性夹取，不再在主动段套 ease-in/ease-out；`CityChannelThreeRuntime.test.js` 新增 `1圈 + 0° + 360°/秒` 的回归，断言 0.5 秒为 180°、0.75 秒为 270°、1 秒精确 360° 且不会超过目标角。
+- 本轮继续修复右侧齿轮空转和同向差速误红闪：`getMechanismRuntimeContactMapData` 会把 runtime placements/racks 合入接触图；同向不同速 motion 现在按实际速度选择输出并暂停较慢 motion 的角度消耗，恢复时 rebase 到当前 runtime 姿态；主动轮倒计时 overlay 已接入 `updateGearBindingOverlay`。`CityChannelThreeRuntime.test.js` 新增 runtime rack 接触、慢源暂停/恢复、主动轮倒计时 overlay 三类回归，targeted 测试 182 个通过。
