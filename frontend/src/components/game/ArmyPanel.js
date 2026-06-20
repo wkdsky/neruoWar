@@ -1,19 +1,23 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import './ArmyPanel.css';
-import NumberPadDialog from '../common/NumberPadDialog';
 import { API_BASE } from '../../runtimeConfig';
 import normalizeUnitTypes from '../../game/unit/normalizeUnitTypes';
 import {
   ArmyCloseupThreePreview,
   ArmyBattleImpostorPreview
 } from './unit/ArmyUnitPreviewCanvases';
+import ArmyFormationThreeEditor, {
+  ARMY_FORMATION_MAX_CELLS,
+  expandUnitsToFormationPlacements,
+  getFormationOccupancyMetrics,
+  normalizeFormationPlacements,
+  resolveFormationMovePreview,
+  resolveUnitClassMeta
+} from './unit/ArmyFormationThreeEditor';
 import {
   ArmyBattlefieldItemCloseupPreview,
   ArmyBattlefieldItemBattlePreview
 } from './item/ArmyBattlefieldItemPreviewCanvases';
-
-const QUICK_QTY_STEPS = [10, 50, 100, 500, 1000];
-const TEMPLATE_MAX_COUNT = 999999999;
 
 const parseApiResponse = async (response) => {
   const rawText = await response.text();
@@ -32,16 +36,13 @@ const getApiErrorMessage = (parsed, fallback) => {
   return fallback;
 };
 
+const ARMY_EDITOR_STEPS = ['units', 'formations', 'preview'];
+const ARMY_MAX_UNIT_BASIS = 100;
+
 const getUnitId = (unit) => {
   const id = typeof unit?.id === 'string' ? unit.id.trim() : '';
   if (id) return id;
   return typeof unit?.unitTypeId === 'string' ? unit.unitTypeId.trim() : '';
-};
-
-const normalizeInteger = (value, fallback = 0, min = 0) => {
-  const num = Number(value);
-  if (!Number.isFinite(num)) return fallback;
-  return Math.max(min, Math.floor(num));
 };
 
 const normalizeTemplateUnits = (units = []) => (
@@ -52,6 +53,21 @@ const normalizeTemplateUnits = (units = []) => (
     }))
     .filter((entry) => entry.unitTypeId && entry.count > 0)
 );
+
+const createFormationPlacementId = () => `formation_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+const createFormationSlotId = () => `formation_slot_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+
+const getTemplateId = (template) => (typeof template?.templateId === 'string' ? template.templateId.trim() : '');
+const getFormationSlotId = (formation) => {
+  const id = typeof formation?.id === 'string' ? formation.id.trim() : '';
+  if (id) return id;
+  return typeof formation?.formationId === 'string' ? formation.formationId.trim() : '';
+};
+
+const getTroopDisplayName = (template) => {
+  const name = typeof template?.name === 'string' ? template.name.trim() : '';
+  return name || '未命名部队';
+};
 
 const buildUnitIntro = (unit = {}) => {
   const explicit = typeof unit?.description === 'string' ? unit.description.trim() : '';
@@ -72,6 +88,280 @@ const unitsToSummaryText = (units = [], unitNameById = new Map()) => (
     .map((entry) => `${unitNameById.get(entry.unitTypeId) || entry.unitTypeId}x${entry.count}`)
     .join(' / ')
 );
+
+const normalizeUnitBasisEntries = (entries = []) => {
+  const byId = [];
+  const seen = new Set();
+  (Array.isArray(entries) ? entries : []).forEach((entry) => {
+    const unitTypeId = typeof entry?.unitTypeId === 'string' ? entry.unitTypeId.trim() : '';
+    if (!unitTypeId || seen.has(unitTypeId)) return;
+    seen.add(unitTypeId);
+    byId.push({
+      unitTypeId,
+      basis: Math.max(1, Math.floor(Number(entry?.basis) || Number(entry?.count) || 1))
+    });
+  });
+  if (byId.length === 1) {
+    return [{ ...byId[0], basis: 1 }];
+  }
+  let total = 0;
+  const normalized = byId.map((entry) => {
+    const remaining = Math.max(1, ARMY_MAX_UNIT_BASIS - total);
+    const basis = Math.min(remaining, entry.basis);
+    total += basis;
+    return { ...entry, basis };
+  });
+  return normalized.filter((entry) => entry.basis > 0);
+};
+
+const getUnitBasisTotal = (entries = []) => (
+  normalizeUnitBasisEntries(entries).reduce((sum, entry) => sum + entry.basis, 0)
+);
+
+const buildPercentTenthsByUnitId = (entries = []) => {
+  const normalized = normalizeUnitBasisEntries(entries);
+  const total = normalized.reduce((sum, entry) => sum + entry.basis, 0);
+  if (total <= 0) return new Map();
+  const rawRows = normalized.map((entry) => {
+    const raw = (entry.basis * 1000) / total;
+    const floor = Math.floor(raw);
+    return { unitTypeId: entry.unitTypeId, floor, rest: raw - floor };
+  });
+  let remaining = 1000 - rawRows.reduce((sum, row) => sum + row.floor, 0);
+  rawRows
+    .slice()
+    .sort((a, b) => b.rest - a.rest || a.unitTypeId.localeCompare(b.unitTypeId))
+    .forEach((row) => {
+      if (remaining <= 0) return;
+      row.floor += 1;
+      remaining -= 1;
+    });
+  return new Map(rawRows.map((row) => [row.unitTypeId, row.floor]));
+};
+
+const formatPercentTenths = (tenths = 0) => `${(Math.max(0, Math.floor(Number(tenths) || 0)) / 10).toFixed(1)}%`;
+
+const basisEntriesToUnits = (entries = []) => (
+  normalizeUnitBasisEntries(entries).map((entry) => ({
+    unitTypeId: entry.unitTypeId,
+    count: entry.basis
+  }))
+);
+
+const createFormationSlot = (index = 0, placements = []) => ({
+  id: createFormationSlotId(),
+  name: index <= 0 ? '默认阵型' : `新建阵型${index}`,
+  placements: normalizeFormationPlacements(placements),
+  history: []
+});
+
+const getNextTemplateDraftName = (templates = []) => {
+  const usedNumbers = new Set(
+    (Array.isArray(templates) ? templates : [])
+      .map((template) => {
+        const match = String(template?.name || '').trim().match(/^新建部队(\d+)$/);
+        return match ? Math.max(0, Math.floor(Number(match[1]) || 0)) : 0;
+      })
+      .filter((value) => value > 0)
+  );
+  let nextNumber = 1;
+  while (usedNumbers.has(nextNumber)) nextNumber += 1;
+  return `新建部队${nextNumber}`;
+};
+
+const createTemplateEditorDraft = (name = '') => ({
+  name,
+  unitBasis: [],
+  formations: [createFormationSlot(0)]
+});
+
+const buildUnitBasisRows = (entries = [], unitTypeMap = {}) => {
+  const normalized = normalizeUnitBasisEntries(entries).filter((entry) => unitTypeMap[entry.unitTypeId]);
+  const percentMap = buildPercentTenthsByUnitId(normalized);
+  return normalized.map((entry) => {
+    const unit = unitTypeMap[entry.unitTypeId] || {};
+    return {
+      ...entry,
+      unit,
+      unitName: unit.name || entry.unitTypeId,
+      classMeta: resolveUnitClassMeta(unit),
+      percentTenths: percentMap.get(entry.unitTypeId) || 0
+    };
+  });
+};
+
+const trimPlacementsToBasis = (placements = [], basisEntries = []) => {
+  const allowed = new Map(normalizeUnitBasisEntries(basisEntries).map((entry) => [entry.unitTypeId, entry.basis]));
+  const used = new Map();
+  return normalizeFormationPlacements(placements).filter((placement) => {
+    const max = allowed.get(placement.unitTypeId) || 0;
+    if (max <= 0) return false;
+    const next = (used.get(placement.unitTypeId) || 0) + 1;
+    if (next > max) return false;
+    used.set(placement.unitTypeId, next);
+    return true;
+  });
+};
+
+const normalizeFormationSlots = (formations = [], basisEntries = []) => {
+  const source = Array.isArray(formations) && formations.length > 0
+    ? formations
+    : [createFormationSlot(0)];
+  return source.map((formation, index) => ({
+    id: getFormationSlotId(formation) || createFormationSlotId(),
+    name: (typeof formation?.name === 'string' && formation.name.trim())
+      ? formation.name.trim().slice(0, 24)
+      : (index <= 0 ? '默认阵型' : `新建阵型${index}`),
+    placements: trimPlacementsToBasis(formation?.placements || [], basisEntries),
+    history: Array.isArray(formation?.history) ? formation.history.slice(-20) : []
+  }));
+};
+
+const buildPlacementCountsByUnitId = (placements = []) => (
+  normalizeFormationPlacements(placements).reduce((acc, placement) => {
+    acc[placement.unitTypeId] = (acc[placement.unitTypeId] || 0) + 1;
+    return acc;
+  }, {})
+);
+
+const isFormationLegal = (formation = {}, basisRows = []) => {
+  if (basisRows.length <= 0) return false;
+  const counts = buildPlacementCountsByUnitId(formation?.placements || []);
+  return basisRows.every((row) => (counts[row.unitTypeId] || 0) === row.basis)
+    && normalizeFormationPlacements(formation?.placements || []).length === basisRows.reduce((sum, row) => sum + row.basis, 0);
+};
+
+const createFormationFromUnits = (units = []) => (
+  createFormationSlot(0, expandUnitsToFormationPlacements(normalizeTemplateUnits(units).slice(0, ARMY_MAX_UNIT_BASIS)))
+);
+
+const buildFormationPayload = (formations = [], basisEntries = []) => (
+  normalizeFormationSlots(formations, basisEntries).map((formation) => ({
+    id: formation.id,
+    formationId: formation.id,
+    name: formation.name,
+    placements: normalizeFormationPlacements(formation.placements).map((placement) => ({
+      unitTypeId: placement.unitTypeId,
+      x: placement.x,
+      y: placement.y
+    }))
+  }))
+);
+
+const pushFormationHistory = (formation, nextPlacements) => ({
+  ...formation,
+  placements: normalizeFormationPlacements(nextPlacements),
+  history: [...(Array.isArray(formation.history) ? formation.history : []), normalizeFormationPlacements(formation.placements)].slice(-30)
+});
+
+const areFormationPlacementsEqual = (left = [], right = []) => {
+  const normalizedLeft = normalizeFormationPlacements(left);
+  const normalizedRight = normalizeFormationPlacements(right);
+  if (normalizedLeft.length !== normalizedRight.length) return false;
+  return normalizedLeft.every((placement, index) => {
+    const next = normalizedRight[index];
+    return placement.id === next.id
+      && placement.unitTypeId === next.unitTypeId
+      && placement.x === next.x
+      && placement.y === next.y;
+  });
+};
+
+const normalizeFormationPlacementIds = (ids = []) => (
+  Array.from(new Set((Array.isArray(ids) ? ids : [ids])
+    .map((id) => (typeof id === 'string' ? id.trim() : ''))
+    .filter(Boolean)))
+);
+
+const FORMATION_MINI_PREVIEW_MIN_SPAN = 6;
+
+const buildFormationMiniPreviewGeometry = (metrics = {}) => {
+  const count = Math.max(0, Math.floor(Number(metrics?.count) || 0));
+  if (count <= 0) {
+    return {
+      span: FORMATION_MINI_PREVIEW_MIN_SPAN,
+      offsetX: 0,
+      offsetY: 0
+    };
+  }
+  const width = Math.max(1, Number(metrics.width) || 1);
+  const height = Math.max(1, Number(metrics.height) || 1);
+  const span = Math.max(FORMATION_MINI_PREVIEW_MIN_SPAN, width, height);
+  return {
+    span,
+    offsetX: (span - width) / 2 - (Number(metrics.minX) || 0),
+    offsetY: (span - height) / 2 - (Number(metrics.minY) || 0)
+  };
+};
+
+const buildFormationMiniPreviewTileStyle = (placement = {}, geometry = {}) => {
+  const span = Math.max(1, Number(geometry.span) || FORMATION_MINI_PREVIEW_MIN_SPAN);
+  return {
+    left: `${((Number(placement.x) + (Number(geometry.offsetX) || 0)) / span) * 100}%`,
+    top: `${((Number(placement.y) + (Number(geometry.offsetY) || 0)) / span) * 100}%`,
+    width: `${100 / span}%`,
+    height: `${100 / span}%`
+  };
+};
+
+const FormationMiniPreview = ({ formation = {}, unitTypeMap = {}, className = '' }) => {
+  const placements = normalizeFormationPlacements(formation.placements);
+  const geometry = buildFormationMiniPreviewGeometry(formation.occupancyMetrics);
+  const classes = ['army-formation-mini-preview', className].filter(Boolean).join(' ');
+
+  return (
+    <div className={classes} aria-hidden="true">
+      <div className="army-formation-mini-board">
+        {placements.length <= 0 ? (
+          <span className="army-formation-mini-empty" />
+        ) : placements.map((placement) => {
+          const unit = unitTypeMap[placement.unitTypeId] || {};
+          return (
+            <span
+              key={`mini-${formation.id}-${placement.id}`}
+              className="army-formation-mini-tile"
+              style={{
+                background: resolveUnitClassMeta(unit).color,
+                ...buildFormationMiniPreviewTileStyle(placement, geometry)
+              }}
+            />
+          );
+        })}
+      </div>
+    </div>
+  );
+};
+
+const buildTroopCompositionRows = (units = [], unitTypeMap = {}) => (
+  normalizeTemplateUnits(units)
+    .map((entry) => {
+      const unit = unitTypeMap[entry.unitTypeId] || {};
+      return {
+        ...entry,
+        unit,
+        unitName: unit.name || entry.unitName || entry.unitTypeId,
+        classMeta: resolveUnitClassMeta(unit)
+      };
+    })
+);
+
+const buildTroopAggregateStats = (units = [], unitTypeMap = {}) => {
+  const rows = buildTroopCompositionRows(units, unitTypeMap);
+  const total = rows.reduce((sum, row) => sum + row.count, 0);
+  const weighted = (key) => {
+    if (total <= 0) return 0;
+    const value = rows.reduce((sum, row) => sum + ((Number(row.unit?.[key]) || 0) * row.count), 0) / total;
+    return Math.round(value * 10) / 10;
+  };
+  return {
+    total,
+    speed: weighted('speed'),
+    hp: weighted('hp'),
+    atk: weighted('atk'),
+    def: weighted('def'),
+    range: weighted('range')
+  };
+};
 
 const normalizeBattlefieldItemCatalog = (items = []) => {
   const source = Array.isArray(items) ? items : [];
@@ -141,6 +431,7 @@ const getBattlefieldItemStyleEntries = (style = {}) => (
 const ArmyPanel = ({ initialLibraryTab = 'units', mode = 'barracks' }) => {
   const isLibraryMode = mode === 'library';
   const safeInitialLibraryTab = initialLibraryTab === 'equipment' ? 'equipment' : 'units';
+  const [activeBarracksTab, setActiveBarracksTab] = useState('troops');
   const [libraryTab, setLibraryTab] = useState(safeInitialLibraryTab);
   const [unitTypes, setUnitTypes] = useState([]);
   const [knowledgeBalance, setKnowledgeBalance] = useState(0);
@@ -149,13 +440,12 @@ const ArmyPanel = ({ initialLibraryTab = 'units', mode = 'barracks' }) => {
   const [battlefieldItems, setBattlefieldItems] = useState([]);
   const [battlefieldItemsError, setBattlefieldItemsError] = useState('');
   const [styleModalItemId, setStyleModalItemId] = useState('');
-  const [draftByUnit, setDraftByUnit] = useState({});
-  const [cartByUnit, setCartByUnit] = useState({});
   const [loading, setLoading] = useState(true);
-  const [checkingOut, setCheckingOut] = useState(false);
   const [error, setError] = useState('');
   const [templateNotice, setTemplateNotice] = useState('');
   const [templateActionId, setTemplateActionId] = useState('');
+  const [hoveredTemplateId, setHoveredTemplateId] = useState('');
+  const [selectedTemplateId, setSelectedTemplateId] = useState('');
   const [detailUnitId, setDetailUnitId] = useState('');
   const [detailRotation, setDetailRotation] = useState({ closeup: 0, battle: 0 });
   const [detailDragTarget, setDetailDragTarget] = useState('');
@@ -166,15 +456,15 @@ const ArmyPanel = ({ initialLibraryTab = 'units', mode = 'barracks' }) => {
   const detailItemRotationDragRef = useRef(null);
   const [templateEditorOpen, setTemplateEditorOpen] = useState(false);
   const [templateEditingId, setTemplateEditingId] = useState('');
-  const [templateEditorDraft, setTemplateEditorDraft] = useState({ name: '', units: [] });
-  const [templateEditorDragUnitId, setTemplateEditorDragUnitId] = useState('');
-  const [templateQuantityDialog, setTemplateQuantityDialog] = useState({
-    open: false,
-    unitTypeId: '',
-    unitName: '',
-    max: 0,
-    current: 1
-  });
+  const [templateEditorStep, setTemplateEditorStep] = useState('units');
+  const [templateEditorDraft, setTemplateEditorDraft] = useState(() => createTemplateEditorDraft());
+  const [templateEditorActiveFormationId, setTemplateEditorActiveFormationId] = useState('');
+  const [templateEditorSelectedUnitId, setTemplateEditorSelectedUnitId] = useState('');
+  const [templateEditorHoverUnitId, setTemplateEditorHoverUnitId] = useState('');
+  const [templateEditorSelectedPlacementId, setTemplateEditorSelectedPlacementId] = useState('');
+  const [templateEditorSelectedPlacementIds, setTemplateEditorSelectedPlacementIds] = useState([]);
+  const [templateEditorMoveSelectionIds, setTemplateEditorMoveSelectionIds] = useState([]);
+  const [armyToasts, setArmyToasts] = useState([]);
 
   const token = localStorage.getItem('token');
 
@@ -237,53 +527,179 @@ const ArmyPanel = ({ initialLibraryTab = 'units', mode = 'barracks' }) => {
     [styleModalItem]
   );
 
-  const recruitedUnits = useMemo(
-    () => unitsWithCount.filter((unit) => (Number(unit.count) || 0) > 0),
-    [unitsWithCount]
+  const activeTemplate = useMemo(() => {
+    const preferredId = hoveredTemplateId || selectedTemplateId || getTemplateId(templates[0]);
+    return templates.find((template) => getTemplateId(template) === preferredId) || templates[0] || null;
+  }, [hoveredTemplateId, selectedTemplateId, templates]);
+
+  const activeTemplateCompositionRows = useMemo(
+    () => buildTroopCompositionRows(activeTemplate?.units || [], unitTypeMap),
+    [activeTemplate, unitTypeMap]
   );
 
-  const cartItems = useMemo(() => {
-    return Object.entries(cartByUnit)
-      .map(([unitTypeId, qty]) => {
-        const normalizedQty = normalizeInteger(qty, 0, 0);
-        if (normalizedQty <= 0) return null;
-        const unit = unitTypeMap[unitTypeId];
-        if (!unit) return null;
-        const costKP = Number(unit.costKP) || 0;
-        return {
-          unitTypeId,
-          unit,
-          qty: normalizedQty,
-          subtotalCost: costKP * normalizedQty
-        };
-      })
-      .filter(Boolean);
-  }, [cartByUnit, unitTypeMap]);
+  const activeTemplateStats = useMemo(
+    () => buildTroopAggregateStats(activeTemplate?.units || [], unitTypeMap),
+    [activeTemplate, unitTypeMap]
+  );
 
-  const totalCost = useMemo(() => cartItems.reduce((sum, item) => sum + item.subtotalCost, 0), [cartItems]);
-  const remainBalance = knowledgeBalance - totalCost;
-  const isInsufficient = remainBalance < 0;
+  const activeTemplateBasisRows = useMemo(
+    () => activeTemplateCompositionRows.map((row) => ({ ...row, basis: row.count })),
+    [activeTemplateCompositionRows]
+  );
+
+  const activeTemplateFormationSummaries = useMemo(() => {
+    if (!activeTemplate) return [];
+    return (Array.isArray(activeTemplate.formations) ? activeTemplate.formations : []).map((formation, index) => {
+      const placements = normalizeFormationPlacements(formation?.placements || []);
+      const legal = formation?.legal === true || isFormationLegal({ placements }, activeTemplateBasisRows);
+      return {
+        id: getFormationSlotId(formation) || `formation_${index}`,
+        name: (typeof formation?.name === 'string' && formation.name.trim())
+          ? formation.name.trim()
+          : (index <= 0 ? '默认阵型' : `新建阵型${index}`),
+        placements,
+        occupancyMetrics: getFormationOccupancyMetrics(placements),
+        legal,
+        totalPlaced: Math.max(0, Math.floor(Number(formation?.totalPlaced) || placements.length))
+      };
+    });
+  }, [activeTemplate, activeTemplateBasisRows]);
 
   const templateEditorAvailableRows = useMemo(() => (
     unitsWithCount
       .map((unit) => ({
         unitTypeId: unit.id,
         unitName: unit.name || unit.id,
-        availableForDraft: TEMPLATE_MAX_COUNT,
-        unlimited: true
+        unit
       }))
       .sort((a, b) => a.unitName.localeCompare(b.unitName, 'zh-Hans-CN'))
   ), [unitsWithCount]);
 
+  const templateEditorBasisRows = useMemo(
+    () => buildUnitBasisRows(templateEditorDraft.unitBasis, unitTypeMap),
+    [templateEditorDraft.unitBasis, unitTypeMap]
+  );
+
+  const templateEditorUnits = useMemo(
+    () => basisEntriesToUnits(templateEditorDraft.unitBasis),
+    [templateEditorDraft.unitBasis]
+  );
+
   const templateEditorTotal = useMemo(
-    () => normalizeTemplateUnits(templateEditorDraft.units).reduce((sum, entry) => sum + entry.count, 0),
-    [templateEditorDraft.units]
+    () => getUnitBasisTotal(templateEditorDraft.unitBasis),
+    [templateEditorDraft.unitBasis]
   );
 
   const templateEditorSummary = useMemo(
-    () => unitsToSummaryText(templateEditorDraft.units, unitNameByTypeId),
-    [templateEditorDraft.units, unitNameByTypeId]
+    () => unitsToSummaryText(templateEditorUnits, unitNameByTypeId),
+    [templateEditorUnits, unitNameByTypeId]
   );
+
+  const templateEditorFormations = useMemo(
+    () => normalizeFormationSlots(templateEditorDraft.formations, templateEditorDraft.unitBasis),
+    [templateEditorDraft.formations, templateEditorDraft.unitBasis]
+  );
+
+  const templateEditorActiveFormation = useMemo(() => (
+    templateEditorFormations.find((formation) => formation.id === templateEditorActiveFormationId)
+      || templateEditorFormations[0]
+      || null
+  ), [templateEditorActiveFormationId, templateEditorFormations]);
+
+  const templateEditorPlacements = useMemo(
+    () => normalizeFormationPlacements(templateEditorActiveFormation?.placements || []),
+    [templateEditorActiveFormation]
+  );
+
+  const templateEditorOccupancyMetrics = useMemo(
+    () => getFormationOccupancyMetrics(templateEditorPlacements),
+    [templateEditorPlacements]
+  );
+
+  const templateEditorPlacementCounts = useMemo(
+    () => buildPlacementCountsByUnitId(templateEditorPlacements),
+    [templateEditorPlacements]
+  );
+
+  const templateEditorFormationSummaries = useMemo(
+    () => templateEditorFormations.map((formation) => {
+      const placements = normalizeFormationPlacements(formation.placements);
+      return {
+        ...formation,
+        placements,
+        occupancyMetrics: getFormationOccupancyMetrics(placements),
+        legal: isFormationLegal(formation, templateEditorBasisRows),
+        totalPlaced: placements.length
+      };
+    }),
+    [templateEditorBasisRows, templateEditorFormations]
+  );
+
+  const templateEditorLegalFormationCount = useMemo(
+    () => templateEditorFormationSummaries.filter((formation) => formation.legal).length,
+    [templateEditorFormationSummaries]
+  );
+
+  const templateEditorPreviewStats = useMemo(
+    () => buildTroopAggregateStats(templateEditorUnits, unitTypeMap),
+    [templateEditorUnits, unitTypeMap]
+  );
+
+  const templateEditorActiveUnitRows = useMemo(
+    () => templateEditorBasisRows.map((row) => {
+      const placed = templateEditorPlacementCounts[row.unitTypeId] || 0;
+      return {
+        ...row,
+        placed,
+        remaining: Math.max(0, row.basis - placed)
+      };
+    }),
+    [templateEditorBasisRows, templateEditorPlacementCounts]
+  );
+
+  const templateEditorDetailUnit = useMemo(() => {
+    const unitId = templateEditorHoverUnitId
+      || templateEditorSelectedUnitId
+      || templateEditorBasisRows[0]?.unitTypeId
+      || templateEditorAvailableRows[0]?.unitTypeId
+      || '';
+    return unitTypeMap[unitId] || null;
+  }, [templateEditorAvailableRows, templateEditorBasisRows, templateEditorHoverUnitId, templateEditorSelectedUnitId, unitTypeMap]);
+
+  const templateEditorSelectedPlacements = useMemo(() => {
+    const ids = new Set(normalizeFormationPlacementIds(templateEditorSelectedPlacementIds));
+    return templateEditorPlacements.filter((placement) => ids.has(placement.id));
+  }, [templateEditorPlacements, templateEditorSelectedPlacementIds]);
+
+  useEffect(() => {
+    const liveIds = new Set(templateEditorPlacements.map((placement) => placement.id));
+    const nextSelectedIds = normalizeFormationPlacementIds(templateEditorSelectedPlacementIds)
+      .filter((id) => liveIds.has(id));
+    if (nextSelectedIds.length !== templateEditorSelectedPlacementIds.length) {
+      setTemplateEditorSelectedPlacementIds(nextSelectedIds);
+      setTemplateEditorSelectedPlacementId(nextSelectedIds[0] || '');
+    }
+    const nextMoveIds = normalizeFormationPlacementIds(templateEditorMoveSelectionIds)
+      .filter((id) => liveIds.has(id));
+    if (nextMoveIds.length !== templateEditorMoveSelectionIds.length) {
+      setTemplateEditorMoveSelectionIds(nextMoveIds);
+    }
+  }, [templateEditorMoveSelectionIds, templateEditorPlacements, templateEditorSelectedPlacementIds]);
+
+  const templateEditorDetailClassMeta = useMemo(
+    () => (templateEditorDetailUnit ? resolveUnitClassMeta(templateEditorDetailUnit) : null),
+    [templateEditorDetailUnit]
+  );
+
+  const pushArmyToast = useCallback((message, type = 'info') => {
+    const safeMessage = typeof message === 'string' ? message.trim() : '';
+    if (!safeMessage) return;
+    const id = `army_toast_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+    setArmyToasts((prev) => [...prev.slice(-3), { id, message: safeMessage, type }]);
+    window.setTimeout(() => {
+      setArmyToasts((prev) => prev.filter((toast) => toast.id !== id));
+    }, 3600);
+  }, []);
 
   const fetchArmyData = useCallback(async () => {
     if (!token) {
@@ -335,7 +751,7 @@ const ArmyPanel = ({ initialLibraryTab = 'units', mode = 'barracks' }) => {
       }
 
       if (!templatesResponse.ok) {
-        setError(getApiErrorMessage(templatesParsed, '加载模板失败'));
+        setError(getApiErrorMessage(templatesParsed, '加载部队失败'));
         setLoading(false);
         return;
       }
@@ -355,6 +771,11 @@ const ArmyPanel = ({ initialLibraryTab = 'units', mode = 'barracks' }) => {
       setRoster(nextRoster);
       setKnowledgeBalance(nextBalance);
       setTemplates(nextTemplates);
+      setSelectedTemplateId((prev) => (
+        prev && nextTemplates.some((template) => getTemplateId(template) === prev)
+          ? prev
+          : getTemplateId(nextTemplates[0])
+      ));
       setBattlefieldItems(nextBattlefieldItems);
       setBattlefieldItemsError(
         trainingInitResponse?.ok
@@ -362,17 +783,6 @@ const ArmyPanel = ({ initialLibraryTab = 'units', mode = 'barracks' }) => {
           : getApiErrorMessage(trainingInitParsed, '加载战场设置物失败，请稍后重试')
       );
       setStyleModalItemId('');
-
-      setDraftByUnit((prev) => {
-        const next = { ...prev };
-        nextUnitTypes.forEach((unit) => {
-          const unitId = getUnitId(unit);
-          if (unitId && !Object.prototype.hasOwnProperty.call(next, unitId)) {
-            next[unitId] = '0';
-          }
-        });
-        return next;
-      });
     } catch (requestError) {
       setError(`加载军团信息失败: ${requestError.message}`);
     } finally {
@@ -383,6 +793,28 @@ const ArmyPanel = ({ initialLibraryTab = 'units', mode = 'barracks' }) => {
   useEffect(() => {
     fetchArmyData();
   }, [fetchArmyData]);
+
+  useEffect(() => {
+    if (!error) return;
+    pushArmyToast(error, 'error');
+    setError('');
+  }, [error, pushArmyToast]);
+
+  useEffect(() => {
+    if (!templateNotice) return;
+    const isErrorNotice = /失败|未登录|不足|不能为空|至少|无效|不可/.test(templateNotice);
+    pushArmyToast(templateNotice, isErrorNotice ? 'error' : 'info');
+    setTemplateNotice('');
+  }, [pushArmyToast, templateNotice]);
+
+  useEffect(() => {
+    if (!templateEditorOpen) return;
+    if (templateEditorFormations.length <= 0) return;
+    if (templateEditorActiveFormationId && templateEditorFormations.some((formation) => formation.id === templateEditorActiveFormationId)) {
+      return;
+    }
+    setTemplateEditorActiveFormationId(templateEditorFormations[0].id);
+  }, [templateEditorActiveFormationId, templateEditorFormations, templateEditorOpen]);
 
   useEffect(() => {
     if (!detailUnitId) {
@@ -496,239 +928,395 @@ const ArmyPanel = ({ initialLibraryTab = 'units', mode = 'barracks' }) => {
     setDetailItemDragTarget('');
   }, []);
 
-  const getDraftQty = (unitTypeId) => normalizeInteger(draftByUnit[unitTypeId], 0, 0);
-
-  const updateDraftByDelta = (unitTypeId, delta) => {
-    setDraftByUnit((prev) => {
-      const current = normalizeInteger(prev[unitTypeId], 0, 0);
-      const nextQty = Math.max(0, current + delta);
-      return {
-        ...prev,
-        [unitTypeId]: String(nextQty)
-      };
-    });
-  };
-
-  const addDraftToCart = (unit) => {
-    const unitTypeId = unit.id;
-    const draftQty = getDraftQty(unitTypeId);
-    if (draftQty <= 0) {
-      setError('请先设置大于 0 的征召数量');
-      return;
-    }
-
-    setCartByUnit((prev) => ({
-      ...prev,
-      [unitTypeId]: normalizeInteger(prev[unitTypeId], 0, 0) + draftQty
-    }));
-
-    setDraftByUnit((prev) => ({
-      ...prev,
-      [unitTypeId]: '0'
-    }));
-    setError('');
-  };
-
-  const updateCartQty = (unitTypeId, nextQtyRaw) => {
-    const nextQty = normalizeInteger(nextQtyRaw, 0, 0);
-    setCartByUnit((prev) => {
-      const next = { ...prev };
-      if (nextQty <= 0) {
-        delete next[unitTypeId];
-      } else {
-        next[unitTypeId] = nextQty;
-      }
-      return next;
-    });
-  };
-
-  const removeCartItem = (unitTypeId) => {
-    setCartByUnit((prev) => {
-      const next = { ...prev };
-      delete next[unitTypeId];
-      return next;
-    });
-  };
-
-  const handleCheckout = async () => {
-    if (!token) {
-      setError('未登录，无法结算');
-      return;
-    }
-    if (cartItems.length === 0) {
-      setError('征召预览为空，请先添加兵种');
-      return;
-    }
-    if (isInsufficient) {
-      setError('知识点不足，无法结算');
-      return;
-    }
-
-    setCheckingOut(true);
-    setError('');
-
-    try {
-      const response = await fetch(`${API_BASE}/army/recruit/checkout`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${token}`
-        },
-        body: JSON.stringify({
-          items: cartItems.map((item) => ({
-            unitTypeId: item.unitTypeId,
-            qty: item.qty
-          }))
-        })
-      });
-
-      const parsed = await parseApiResponse(response);
-      if (!response.ok) {
-        setError(getApiErrorMessage(parsed, '结算失败'));
-        return;
-      }
-
-      const nextRoster = Array.isArray(parsed.data?.roster) ? parsed.data.roster : [];
-      const nextBalance = Number.isFinite(parsed.data?.knowledgeBalance)
-        ? parsed.data.knowledgeBalance
-        : knowledgeBalance;
-
-      setRoster(nextRoster);
-      setKnowledgeBalance(nextBalance);
-      setCartByUnit({});
-    } catch (requestError) {
-      setError(`结算失败: ${requestError.message}`);
-    } finally {
-      setCheckingOut(false);
-    }
-  };
-
   const closeTemplateEditor = () => {
     setTemplateEditorOpen(false);
     setTemplateEditingId('');
-    setTemplateEditorDragUnitId('');
-    setTemplateEditorDraft({ name: '', units: [] });
-    setTemplateQuantityDialog({
-      open: false,
-      unitTypeId: '',
-      unitName: '',
-      max: 0,
-      current: 1
-    });
+    setTemplateEditorStep('units');
+    setTemplateEditorDraft(createTemplateEditorDraft());
+    setTemplateEditorActiveFormationId('');
+    setTemplateEditorSelectedUnitId('');
+    setTemplateEditorHoverUnitId('');
+    setTemplateEditorSelectedPlacementId('');
+    setTemplateEditorSelectedPlacementIds([]);
+    setTemplateEditorMoveSelectionIds([]);
   };
 
   const openTemplateCreate = () => {
     setTemplateNotice('');
+    const nextDraft = createTemplateEditorDraft(getNextTemplateDraftName(templates));
     setTemplateEditorOpen(true);
     setTemplateEditingId('');
-    setTemplateEditorDragUnitId('');
-    setTemplateEditorDraft({ name: '', units: [] });
-    setTemplateQuantityDialog({
-      open: false,
-      unitTypeId: '',
-      unitName: '',
-      max: 0,
-      current: 1
-    });
+    setTemplateEditorStep('units');
+    setTemplateEditorDraft(nextDraft);
+    setTemplateEditorActiveFormationId(nextDraft.formations[0]?.id || '');
+    setTemplateEditorSelectedUnitId('');
+    setTemplateEditorHoverUnitId('');
+    setTemplateEditorSelectedPlacementId('');
+    setTemplateEditorSelectedPlacementIds([]);
+    setTemplateEditorMoveSelectionIds([]);
   };
 
   const openTemplateEdit = (template) => {
     if (!template) return;
     setTemplateNotice('');
+    const units = normalizeTemplateUnits(template.units).slice(0, ARMY_MAX_UNIT_BASIS);
+    const unitBasis = normalizeUnitBasisEntries(units.map((entry) => ({
+      unitTypeId: entry.unitTypeId,
+      basis: entry.count
+    })));
+    const fallbackFormation = createFormationFromUnits(unitBasis.map((entry) => ({
+      unitTypeId: entry.unitTypeId,
+      count: entry.basis
+    })));
+    const formations = Array.isArray(template.formations) && template.formations.length > 0
+      ? normalizeFormationSlots(template.formations, unitBasis)
+      : [fallbackFormation];
+    const nextDraft = {
+      name: typeof template.name === 'string' ? template.name : '',
+      unitBasis,
+      formations
+    };
     setTemplateEditorOpen(true);
     setTemplateEditingId(typeof template.templateId === 'string' ? template.templateId : '');
-    setTemplateEditorDragUnitId('');
-    setTemplateEditorDraft({
-      name: typeof template.name === 'string' ? template.name : '',
-      units: normalizeTemplateUnits(template.units)
-    });
-    setTemplateQuantityDialog({
-      open: false,
-      unitTypeId: '',
-      unitName: '',
-      max: 0,
-      current: 1
-    });
+    setTemplateEditorStep('units');
+    setTemplateEditorDraft(nextDraft);
+    setTemplateEditorActiveFormationId(formations[0]?.id || '');
+    setTemplateEditorSelectedUnitId('');
+    setTemplateEditorHoverUnitId('');
+    setTemplateEditorSelectedPlacementId('');
+    setTemplateEditorSelectedPlacementIds([]);
+    setTemplateEditorMoveSelectionIds([]);
   };
 
-  const resolveTemplateUnitMax = useCallback((unitTypeId) => {
-    const safeId = typeof unitTypeId === 'string' ? unitTypeId.trim() : '';
-    if (!safeId) return 0;
-    const row = templateEditorAvailableRows.find((item) => item.unitTypeId === safeId);
-    const baseMax = row?.unlimited
-      ? TEMPLATE_MAX_COUNT
-      : Math.max(0, Math.floor(Number(row?.availableForDraft) || 0));
-    const existing = normalizeTemplateUnits(templateEditorDraft.units)
-      .find((entry) => entry.unitTypeId === safeId)?.count || 0;
-    return Math.min(TEMPLATE_MAX_COUNT, baseMax + existing);
-  }, [templateEditorAvailableRows, templateEditorDraft.units]);
+  const sanitizeDraftFormations = useCallback((unitBasis, formations) => (
+    normalizeFormationSlots(formations, unitBasis)
+  ), []);
 
-  const openTemplateQuantityDialog = useCallback((unitTypeId) => {
+  const handleAddEditorUnit = useCallback((unitTypeId) => {
+    const safeId = typeof unitTypeId === 'string' ? unitTypeId.trim() : '';
+    if (!safeId || !unitTypeMap[safeId]) return;
+    let added = false;
+    setTemplateEditorDraft((prev) => {
+      const current = normalizeUnitBasisEntries(prev.unitBasis);
+      if (current.some((entry) => entry.unitTypeId === safeId)) return prev;
+      if (getUnitBasisTotal(current) >= ARMY_MAX_UNIT_BASIS) return prev;
+      const nextBasis = normalizeUnitBasisEntries([...current, { unitTypeId: safeId, basis: 1 }]);
+      added = true;
+      return {
+        ...prev,
+        unitBasis: nextBasis,
+        formations: sanitizeDraftFormations(nextBasis, prev.formations)
+      };
+    });
+    if (added) {
+      setTemplateEditorSelectedUnitId(safeId);
+      setTemplateEditorSelectedPlacementId('');
+      setTemplateEditorSelectedPlacementIds([]);
+      setTemplateEditorMoveSelectionIds([]);
+    } else {
+      pushArmyToast('该兵种已在部队中，或基础数已达上限', 'error');
+    }
+  }, [pushArmyToast, sanitizeDraftFormations, unitTypeMap]);
+
+  const handleRemoveEditorUnit = useCallback((unitTypeId) => {
     const safeId = typeof unitTypeId === 'string' ? unitTypeId.trim() : '';
     if (!safeId) return;
-    const row = templateEditorAvailableRows.find((item) => item.unitTypeId === safeId);
-    const max = resolveTemplateUnitMax(safeId);
-    if (max <= 0) {
-      setTemplateNotice('该兵种当前不可配置');
-      return;
-    }
-    const current = normalizeTemplateUnits(templateEditorDraft.units).find((entry) => entry.unitTypeId === safeId)?.count || 1;
-    setTemplateQuantityDialog({
-      open: true,
-      unitTypeId: safeId,
-      unitName: row?.unitName || safeId,
-      max,
-      current: Math.max(1, Math.min(max, current))
+    setTemplateEditorDraft((prev) => {
+      const nextBasis = normalizeUnitBasisEntries(prev.unitBasis.filter((entry) => entry.unitTypeId !== safeId));
+      return {
+        ...prev,
+        unitBasis: nextBasis,
+        formations: sanitizeDraftFormations(nextBasis, prev.formations)
+      };
     });
-  }, [resolveTemplateUnitMax, templateEditorAvailableRows, templateEditorDraft.units]);
+    if (templateEditorSelectedUnitId === safeId) setTemplateEditorSelectedUnitId('');
+    if (templateEditorHoverUnitId === safeId) setTemplateEditorHoverUnitId('');
+    setTemplateEditorSelectedPlacementId('');
+    setTemplateEditorSelectedPlacementIds([]);
+    setTemplateEditorMoveSelectionIds([]);
+  }, [sanitizeDraftFormations, templateEditorHoverUnitId, templateEditorSelectedUnitId]);
 
-  const handleTemplateDrop = useCallback((event) => {
+  const handleChangeEditorUnitBasis = useCallback((unitTypeId, nextBasisRaw) => {
+    const safeId = typeof unitTypeId === 'string' ? unitTypeId.trim() : '';
+    if (!safeId || templateEditorBasisRows.length < 2) return;
+    const requested = Math.max(1, Math.floor(Number(nextBasisRaw) || 1));
+    setTemplateEditorDraft((prev) => {
+      const current = normalizeUnitBasisEntries(prev.unitBasis);
+      const otherTotal = current
+        .filter((entry) => entry.unitTypeId !== safeId)
+        .reduce((sum, entry) => sum + entry.basis, 0);
+      const max = Math.max(1, ARMY_MAX_UNIT_BASIS - otherTotal);
+      const nextBasis = normalizeUnitBasisEntries(current.map((entry) => (
+        entry.unitTypeId === safeId
+          ? { ...entry, basis: Math.min(max, requested) }
+          : entry
+      )));
+      return {
+        ...prev,
+        unitBasis: nextBasis,
+        formations: sanitizeDraftFormations(nextBasis, prev.formations)
+      };
+    });
+  }, [sanitizeDraftFormations, templateEditorBasisRows.length]);
+
+  const handleUnitStageDrop = useCallback((event) => {
     event.preventDefault();
-    const droppedUnitTypeId = event.dataTransfer?.getData('application/x-deploy-unit-id')
+    const unitTypeId = event.dataTransfer?.getData('application/x-army-unit-type-id')
       || event.dataTransfer?.getData('text/plain')
       || '';
-    setTemplateEditorDragUnitId('');
-    openTemplateQuantityDialog(droppedUnitTypeId);
-  }, [openTemplateQuantityDialog]);
+    handleAddEditorUnit(unitTypeId);
+  }, [handleAddEditorUnit]);
 
-  const handleConfirmTemplateQuantity = useCallback((qty) => {
-    const safeId = typeof templateQuantityDialog?.unitTypeId === 'string' ? templateQuantityDialog.unitTypeId.trim() : '';
-    if (!safeId) {
-      setTemplateQuantityDialog({ open: false, unitTypeId: '', unitName: '', max: 0, current: 1 });
-      return;
-    }
-    const max = Math.max(1, Math.floor(Number(templateQuantityDialog.max) || 1));
-    const safeQty = Math.max(1, Math.min(max, Math.floor(Number(qty) || 1)));
-    setTemplateEditorDraft((prev) => {
-      const source = normalizeTemplateUnits(prev?.units || []);
-      const idx = source.findIndex((entry) => entry.unitTypeId === safeId);
-      if (idx >= 0) {
-        source[idx] = { ...source[idx], count: safeQty };
-      } else {
-        source.push({ unitTypeId: safeId, count: safeQty });
-      }
-      return { ...prev, units: normalizeTemplateUnits(source) };
-    });
-    setTemplateQuantityDialog({ open: false, unitTypeId: '', unitName: '', max: 0, current: 1 });
-  }, [templateQuantityDialog]);
-
-  const handleRemoveTemplateUnit = (unitTypeId) => {
-    const safeId = typeof unitTypeId === 'string' ? unitTypeId.trim() : '';
-    if (!safeId) return;
+  const updateActiveFormation = useCallback((producer) => {
     setTemplateEditorDraft((prev) => ({
       ...prev,
-      units: normalizeTemplateUnits(prev?.units || []).filter((entry) => entry.unitTypeId !== safeId)
+      formations: normalizeFormationSlots(prev.formations, prev.unitBasis).map((formation) => {
+        if (formation.id !== templateEditorActiveFormation?.id) return formation;
+        const nextPlacements = producer(normalizeFormationPlacements(formation.placements), formation);
+        if (!Array.isArray(nextPlacements)) return formation;
+        if (areFormationPlacementsEqual(formation.placements, nextPlacements)) return formation;
+        return pushFormationHistory(formation, nextPlacements);
+      })
     }));
-  };
+  }, [templateEditorActiveFormation]);
+
+  const canPlaceFormationUnit = useCallback((unitTypeId, cell) => {
+    const safeId = typeof unitTypeId === 'string' ? unitTypeId.trim() : '';
+    if (!safeId || !cell) return false;
+    const row = templateEditorBasisRows.find((item) => item.unitTypeId === safeId);
+    if (!row) return false;
+    if (templateEditorPlacements.some((placement) => placement.x === cell.x && placement.y === cell.y)) return false;
+    return (templateEditorPlacementCounts[safeId] || 0) < row.basis;
+  }, [templateEditorBasisRows, templateEditorPlacementCounts, templateEditorPlacements]);
+
+  const handlePlaceFormationUnit = useCallback((unitTypeId, cell) => {
+    const safeId = typeof unitTypeId === 'string' ? unitTypeId.trim() : '';
+    if (!safeId || !cell || !unitTypeMap[safeId]) return;
+    updateActiveFormation((source) => {
+      const row = templateEditorBasisRows.find((item) => item.unitTypeId === safeId);
+      if (!row) return source;
+      const hitPlacement = source.find((placement) => placement.x === cell.x && placement.y === cell.y) || null;
+      if (hitPlacement?.unitTypeId === safeId) {
+        return source.filter((placement) => placement.id !== hitPlacement.id);
+      }
+      const currentCount = source.filter((placement) => placement.unitTypeId === safeId).length;
+      if (currentCount >= row.basis) return source;
+      if (hitPlacement) {
+        return source.map((placement) => (
+          placement.id === hitPlacement.id
+            ? { ...placement, unitTypeId: safeId }
+            : placement
+        ));
+      }
+      return [
+        ...source,
+        {
+          id: createFormationPlacementId(),
+          unitTypeId: safeId,
+          x: cell.x,
+          y: cell.y
+        }
+      ];
+    });
+    setTemplateEditorSelectedPlacementId('');
+    setTemplateEditorSelectedPlacementIds([]);
+    setTemplateEditorMoveSelectionIds([]);
+  }, [templateEditorBasisRows, unitTypeMap, updateActiveFormation]);
+
+  const handleMoveFormationPlacement = useCallback((placementId, cell) => {
+    const safeId = typeof placementId === 'string' ? placementId.trim() : '';
+    if (!safeId || !cell) return;
+    updateActiveFormation((source) => {
+      if (source.some((placement) => placement.id !== safeId && placement.x === cell.x && placement.y === cell.y)) return source;
+      return source.map((placement) => (
+        placement.id === safeId
+          ? { ...placement, x: cell.x, y: cell.y }
+          : placement
+      ));
+    });
+  }, [updateActiveFormation]);
+
+  const handleSelectFormationPlacements = useCallback((placementIds = []) => {
+    const liveIds = new Set(templateEditorPlacements.map((placement) => placement.id));
+    const safeIds = normalizeFormationPlacementIds(placementIds).filter((id) => liveIds.has(id));
+    setTemplateEditorSelectedPlacementIds(safeIds);
+    setTemplateEditorSelectedPlacementId(safeIds[0] || '');
+    setTemplateEditorMoveSelectionIds([]);
+    if (safeIds.length > 0) {
+      setTemplateEditorSelectedUnitId('');
+    }
+  }, [templateEditorPlacements]);
+
+  const handleSelectFormationPlacement = useCallback((placementId) => {
+    handleSelectFormationPlacements(placementId ? [placementId] : []);
+  }, [handleSelectFormationPlacements]);
+
+  const handleCancelFormationCanvasAction = useCallback(() => {
+    if (templateEditorSelectedUnitId || templateEditorMoveSelectionIds.length > 0) {
+      setTemplateEditorSelectedUnitId('');
+      setTemplateEditorMoveSelectionIds([]);
+      return;
+    }
+    setTemplateEditorSelectedPlacementId('');
+    setTemplateEditorSelectedPlacementIds([]);
+  }, [templateEditorMoveSelectionIds.length, templateEditorSelectedUnitId]);
+
+  const handleDeleteFormationSelection = useCallback((placementIds = templateEditorSelectedPlacementIds) => {
+    const safeIds = new Set(normalizeFormationPlacementIds(placementIds));
+    if (safeIds.size <= 0) return;
+    updateActiveFormation((source) => source.filter((placement) => !safeIds.has(placement.id)));
+    setTemplateEditorSelectedPlacementId('');
+    setTemplateEditorSelectedPlacementIds([]);
+    setTemplateEditorMoveSelectionIds([]);
+  }, [templateEditorSelectedPlacementIds, updateActiveFormation]);
+
+  const handleBeginMoveFormationSelection = useCallback(() => {
+    const safeIds = normalizeFormationPlacementIds(templateEditorSelectedPlacementIds.length > 0
+      ? templateEditorSelectedPlacementIds
+      : templateEditorSelectedPlacementId);
+    if (safeIds.length <= 0) return;
+    setTemplateEditorSelectedUnitId('');
+    setTemplateEditorMoveSelectionIds(safeIds);
+  }, [templateEditorSelectedPlacementId, templateEditorSelectedPlacementIds]);
+
+  const handleMoveFormationSelectionToCell = useCallback((cell) => {
+    if (!cell) return;
+    const safeIds = normalizeFormationPlacementIds(templateEditorMoveSelectionIds.length > 0
+      ? templateEditorMoveSelectionIds
+      : templateEditorSelectedPlacementIds);
+    if (safeIds.length <= 0) return;
+    const preview = resolveFormationMovePreview(templateEditorPlacements, safeIds, cell);
+    if (preview.blocked) {
+      pushArmyToast('目标区域已被其他士兵占用', 'error');
+      return;
+    }
+    const movedById = new Map(preview.placements.map((placement) => [placement.id, placement]));
+    updateActiveFormation((source) => source.map((placement) => {
+      const next = movedById.get(placement.id);
+      return next ? { ...placement, x: next.x, y: next.y } : placement;
+    }));
+    setTemplateEditorMoveSelectionIds([]);
+  }, [
+    pushArmyToast,
+    templateEditorMoveSelectionIds,
+    templateEditorPlacements,
+    templateEditorSelectedPlacementIds,
+    updateActiveFormation
+  ]);
+
+  const handleUndoFormation = useCallback(() => {
+    if (!templateEditorActiveFormation) return;
+    setTemplateEditorDraft((prev) => ({
+      ...prev,
+      formations: normalizeFormationSlots(prev.formations, prev.unitBasis).map((formation) => {
+        if (formation.id !== templateEditorActiveFormation.id) return formation;
+        const history = Array.isArray(formation.history) ? formation.history : [];
+        if (history.length <= 0) return formation;
+        return {
+          ...formation,
+          placements: normalizeFormationPlacements(history[history.length - 1]),
+          history: history.slice(0, -1)
+        };
+      })
+    }));
+    setTemplateEditorSelectedPlacementId('');
+    setTemplateEditorSelectedPlacementIds([]);
+    setTemplateEditorMoveSelectionIds([]);
+  }, [templateEditorActiveFormation]);
+
+  const handleClearFormation = useCallback(() => {
+    updateActiveFormation(() => []);
+    setTemplateEditorSelectedPlacementId('');
+    setTemplateEditorSelectedPlacementIds([]);
+    setTemplateEditorMoveSelectionIds([]);
+  }, [updateActiveFormation]);
+
+  const handleAddFormationSlot = useCallback(() => {
+    const nextFormation = createFormationSlot(templateEditorFormations.length);
+    setTemplateEditorDraft((prev) => {
+      const source = normalizeFormationSlots(prev.formations, prev.unitBasis);
+      return {
+        ...prev,
+        formations: [...source, nextFormation]
+      };
+    });
+    setTemplateEditorActiveFormationId(nextFormation.id);
+    setTemplateEditorSelectedPlacementId('');
+    setTemplateEditorSelectedPlacementIds([]);
+    setTemplateEditorMoveSelectionIds([]);
+  }, [templateEditorFormations.length]);
+
+  const handleDeleteFormationSlot = useCallback((formationId) => {
+    const safeId = typeof formationId === 'string' ? formationId.trim() : '';
+    if (!safeId) return;
+    if (templateEditorFormations.length <= 1) {
+      pushArmyToast('至少保留一个阵型栏', 'error');
+      return;
+    }
+    const nextActiveId = templateEditorActiveFormationId === safeId
+      ? templateEditorFormations.find((formation) => formation.id !== safeId)?.id || ''
+      : templateEditorActiveFormationId;
+    setTemplateEditorDraft((prev) => {
+      const source = normalizeFormationSlots(prev.formations, prev.unitBasis);
+      const next = source.filter((formation) => formation.id !== safeId);
+      return { ...prev, formations: next };
+    });
+    setTemplateEditorActiveFormationId(nextActiveId);
+    setTemplateEditorSelectedPlacementId('');
+    setTemplateEditorSelectedPlacementIds([]);
+    setTemplateEditorMoveSelectionIds([]);
+  }, [pushArmyToast, templateEditorActiveFormationId, templateEditorFormations]);
+
+  const handleRenameFormationSlot = useCallback((formationId, name) => {
+    const safeId = typeof formationId === 'string' ? formationId.trim() : '';
+    setTemplateEditorDraft((prev) => ({
+      ...prev,
+      formations: normalizeFormationSlots(prev.formations, prev.unitBasis).map((formation) => (
+        formation.id === safeId
+          ? { ...formation, name: String(name || '').slice(0, 24) }
+          : formation
+      ))
+    }));
+  }, []);
+
+  const goTemplateEditorStep = useCallback((direction) => {
+    const currentIndex = ARMY_EDITOR_STEPS.indexOf(templateEditorStep);
+    if (direction > 0) {
+      if (templateEditorStep === 'units') {
+        if (templateEditorTotal < 1) {
+          pushArmyToast('至少选择 1 个兵种', 'error');
+          return;
+        }
+        if (templateEditorTotal > ARMY_MAX_UNIT_BASIS) {
+          pushArmyToast(`部队基础数最多 ${ARMY_MAX_UNIT_BASIS}`, 'error');
+          return;
+        }
+      }
+      if (templateEditorStep === 'formations' && templateEditorLegalFormationCount <= 0) {
+        pushArmyToast('至少需要一个合法阵型才能预览', 'error');
+        return;
+      }
+    }
+    const nextIndex = Math.max(0, Math.min(ARMY_EDITOR_STEPS.length - 1, currentIndex + direction));
+    setTemplateEditorStep(ARMY_EDITOR_STEPS[nextIndex] || 'units');
+  }, [pushArmyToast, templateEditorLegalFormationCount, templateEditorStep, templateEditorTotal]);
 
   const submitTemplateEditor = async () => {
     if (!token) {
-      setTemplateNotice('未登录，无法保存模板');
+      setTemplateNotice('未登录，无法保存部队');
       return;
     }
-    const units = normalizeTemplateUnits(templateEditorDraft.units);
+    const units = normalizeTemplateUnits(templateEditorUnits);
     if (units.length <= 0) {
-      setTemplateNotice('请至少添加一个兵种到模板');
+      setTemplateNotice('请至少配置一个士兵单位');
+      return;
+    }
+    if (templateEditorTotal > ARMY_MAX_UNIT_BASIS) {
+      setTemplateNotice(`部队基础数最多 ${ARMY_MAX_UNIT_BASIS}`);
+      return;
+    }
+    if (templateEditorLegalFormationCount <= 0) {
+      setTemplateNotice('至少需要一个合法阵型才能创建部队');
       return;
     }
 
@@ -750,21 +1338,24 @@ const ArmyPanel = ({ initialLibraryTab = 'units', mode = 'barracks' }) => {
           },
           body: JSON.stringify({
             name: templateEditorDraft.name || '',
-            units
+            units,
+            formations: buildFormationPayload(templateEditorFormations, templateEditorDraft.unitBasis)
           })
         }
       );
       const parsed = await parseApiResponse(response);
       if (!response.ok) {
-        setTemplateNotice(getApiErrorMessage(parsed, isEditing ? '更新模板失败' : '创建模板失败'));
+        setTemplateNotice(getApiErrorMessage(parsed, isEditing ? '更新部队失败' : '创建部队失败'));
         return;
       }
       const nextTemplates = Array.isArray(parsed.data?.templates) ? parsed.data.templates : templates;
       setTemplates(nextTemplates);
+      const nextActiveId = getTemplateId(parsed.data?.template) || getTemplateId(nextTemplates[0]);
+      setSelectedTemplateId(nextActiveId);
       closeTemplateEditor();
-      setTemplateNotice(isEditing ? '模板已更新' : '模板已创建');
+      setTemplateNotice(isEditing ? '部队已更新' : '部队已创建');
     } catch (requestError) {
-      setTemplateNotice(`${isEditing ? '更新模板' : '创建模板'}失败: ${requestError.message}`);
+      setTemplateNotice(`${isEditing ? '更新部队' : '创建部队'}失败: ${requestError.message}`);
     } finally {
       setTemplateActionId('');
     }
@@ -773,7 +1364,7 @@ const ArmyPanel = ({ initialLibraryTab = 'units', mode = 'barracks' }) => {
   const deleteTemplate = async (template) => {
     const templateId = typeof template?.templateId === 'string' ? template.templateId.trim() : '';
     if (!templateId || !token) return;
-    if (!window.confirm(`确认删除模板「${template?.name || '未命名模板'}」？`)) return;
+    if (!window.confirm(`确认删除部队「${getTroopDisplayName(template)}」？`)) return;
 
     setTemplateActionId(templateId);
     setTemplateNotice('');
@@ -786,17 +1377,19 @@ const ArmyPanel = ({ initialLibraryTab = 'units', mode = 'barracks' }) => {
       });
       const parsed = await parseApiResponse(response);
       if (!response.ok) {
-        setTemplateNotice(getApiErrorMessage(parsed, '删除模板失败'));
+        setTemplateNotice(getApiErrorMessage(parsed, '删除部队失败'));
         return;
       }
       const nextTemplates = Array.isArray(parsed.data?.templates) ? parsed.data.templates : [];
       setTemplates(nextTemplates);
+      setSelectedTemplateId((prev) => (prev === templateId ? getTemplateId(nextTemplates[0]) : prev));
+      setHoveredTemplateId((prev) => (prev === templateId ? '' : prev));
       if (templateEditingId === templateId) {
         closeTemplateEditor();
       }
-      setTemplateNotice('模板已删除');
+      setTemplateNotice('部队已删除');
     } catch (requestError) {
-      setTemplateNotice(`删除模板失败: ${requestError.message}`);
+      setTemplateNotice(`删除部队失败: ${requestError.message}`);
     } finally {
       setTemplateActionId('');
     }
@@ -811,8 +1404,6 @@ const ArmyPanel = ({ initialLibraryTab = 'units', mode = 'barracks' }) => {
         ) : null}
       </div>
 
-      {error && <div className="army-message army-message-error">{error}</div>}
-      {!isLibraryMode && templateNotice && <div className="army-message army-message-info">{templateNotice}</div>}
       {isLibraryMode ? (
         <div className="army-library-tabs">
           <button
@@ -828,6 +1419,28 @@ const ArmyPanel = ({ initialLibraryTab = 'units', mode = 'barracks' }) => {
             onClick={() => setLibraryTab('equipment')}
           >
             装备库
+          </button>
+        </div>
+      ) : null}
+      {!isLibraryMode ? (
+        <div className="army-barracks-tabs" role="tablist" aria-label="兵营">
+          <button
+            type="button"
+            role="tab"
+            aria-selected={activeBarracksTab === 'troops'}
+            className={`army-barracks-tab ${activeBarracksTab === 'troops' ? 'active' : ''}`}
+            onClick={() => setActiveBarracksTab('troops')}
+          >
+            我的部队
+          </button>
+          <button
+            type="button"
+            role="tab"
+            aria-selected={activeBarracksTab === 'units'}
+            className={`army-barracks-tab ${activeBarracksTab === 'units' ? 'active' : ''}`}
+            onClick={() => setActiveBarracksTab('units')}
+          >
+            兵种一览
           </button>
         </div>
       ) : null}
@@ -900,7 +1513,7 @@ const ArmyPanel = ({ initialLibraryTab = 'units', mode = 'barracks' }) => {
           <section className="army-equipment-section">
             <div className="army-equipment-head">
               <h3>兵种库</h3>
-              <span>仅展示兵种资料，征召请前往兵营</span>
+              <span>仅展示兵种资料，编队请前往兵营</span>
             </div>
             {unitsWithCount.length <= 0 ? (
               <div className="army-preview-empty">暂无可用兵种数据</div>
@@ -940,184 +1553,42 @@ const ArmyPanel = ({ initialLibraryTab = 'units', mode = 'barracks' }) => {
             )}
           </section>
         </div>
-      ) : (
-        <div className="army-content">
-          <div className="army-unit-grid">
-            {unitsWithCount.map((unit) => {
-              const unitId = unit.id;
-              const draftQty = getDraftQty(unitId);
-              const draftCost = draftQty * (Number(unit.costKP) || 0);
-
-              return (
-                <article className="army-unit-card" key={unitId}>
-                  <div className="army-unit-head">
-                    <h3>{unit.name}</h3>
-                    <div className="army-unit-head-right">
-                      <span>{unit.roleTag}</span>
-                      <button
-                        type="button"
-                        className="btn btn-secondary btn-small"
-                        onClick={() => {
-                          setDetailUnitId(unitId);
-                          setDetailRotation({ closeup: 0, battle: 0 });
-                          setDetailDragTarget('');
-                        }}
-                      >
-                        详情
-                      </button>
-                    </div>
-                  </div>
-                  <div className="army-unit-stats">
-                    <span>速度 {unit.speed}</span>
-                    <span>生命 {unit.hp}</span>
-                    <span>攻击 {unit.atk}</span>
-                    <span>防御 {unit.def}</span>
-                    <span>射程 {unit.range}</span>
-                  </div>
-                  <div className="army-unit-cost">单价：{unit.costKP} 知识点</div>
-
-                  <div className="army-unit-actions">
-                    <input
-                      type="number"
-                      min="0"
-                      step="1"
-                      value={draftByUnit[unitId] ?? '0'}
-                      onChange={(event) => {
-                        const nextQty = normalizeInteger(event.target.value, 0, 0);
-                        setDraftByUnit((prev) => ({
-                          ...prev,
-                          [unitId]: String(nextQty)
-                        }));
+      ) : activeBarracksTab === 'troops' ? (
+        <div className="army-troop-workspace">
+          <section className="army-troop-section">
+            <div className="army-troop-toolbar">
+              <div className="army-troop-title">
+                <h3>我的部队</h3>
+                <span>{`已编组 ${templates.length} 支`}</span>
+              </div>
+              <button type="button" className="btn btn-primary btn-small" onClick={openTemplateCreate}>
+                新增部队
+              </button>
+            </div>
+            {templates.length <= 0 ? (
+              <div className="army-preview-empty">暂无部队</div>
+            ) : (
+              <div className="army-troop-grid">
+                {templates.map((template) => {
+                  const templateId = getTemplateId(template);
+                  const summary = unitsToSummaryText(template?.units || [], unitNameByTypeId);
+                  const rowBusy = templateActionId === templateId || templateActionId === '__create__';
+                  const active = activeTemplate && getTemplateId(activeTemplate) === templateId;
+                  return (
+                    <article
+                      key={templateId || getTroopDisplayName(template)}
+                      className={`army-troop-card ${active ? 'is-active' : ''}`}
+                      onMouseEnter={() => setHoveredTemplateId(templateId)}
+                      onFocus={() => {
+                        setHoveredTemplateId(templateId);
+                        setSelectedTemplateId(templateId);
                       }}
-                    />
-                    <button
-                      type="button"
-                      className="btn btn-primary"
-                      disabled={draftQty <= 0}
-                      onClick={() => addDraftToCart(unit)}
+                      tabIndex={0}
                     >
-                      征召
-                    </button>
-                  </div>
-
-                  <div className="army-step-group">
-                    <div className="army-step-row plus">
-                      {QUICK_QTY_STEPS.map((step) => (
-                        <button
-                          key={`plus-${unitId}-${step}`}
-                          type="button"
-                          className="army-step-btn"
-                          onClick={() => updateDraftByDelta(unitId, step)}
-                        >
-                          +{step}
-                        </button>
-                      ))}
-                    </div>
-                    <div className="army-step-row minus">
-                      {QUICK_QTY_STEPS.map((step) => (
-                        <button
-                          key={`minus-${unitId}-${step}`}
-                          type="button"
-                          className="army-step-btn"
-                          onClick={() => updateDraftByDelta(unitId, -step)}
-                        >
-                          -{step}
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-
-                  <div className="army-unit-foot">
-                    <span>当前待征召：{draftQty}</span>
-                    <span>预计消耗：{draftCost}</span>
-                  </div>
-                </article>
-              );
-            })}
-          </div>
-
-          <div className="army-side-panel">
-            <aside className="army-preview-card">
-              <h3>征召预览</h3>
-              {cartItems.length === 0 ? (
-                <div className="army-preview-empty">预览为空，请先点击各兵种的“征召”</div>
-              ) : (
-                <>
-                  <div className="army-preview-list">
-                    {cartItems.map((item) => (
-                      <div className="army-preview-row" key={`preview-${item.unitTypeId}`}>
-                        <span className="army-preview-name">{item.unit.name}</span>
-                        <input
-                          type="number"
-                          min="0"
-                          step="1"
-                          value={item.qty}
-                          onChange={(event) => updateCartQty(item.unitTypeId, event.target.value)}
-                        />
-                        <span className="army-preview-cost">{item.subtotalCost}</span>
-                        <button
-                          type="button"
-                          className="btn-action btn-delete"
-                          onClick={() => removeCartItem(item.unitTypeId)}
-                        >
-                          删除
-                        </button>
-                      </div>
-                    ))}
-                  </div>
-                  <div className="army-preview-summary">
-                    <div>总花费：<strong>{totalCost}</strong> 知识点</div>
-                    <div className={isInsufficient ? 'army-insufficient' : ''}>
-                      结算后剩余：<strong>{remainBalance}</strong> 知识点
-                    </div>
-                  </div>
-                  <button
-                    type="button"
-                    className="btn btn-primary"
-                    disabled={checkingOut || cartItems.length === 0 || isInsufficient}
-                    onClick={handleCheckout}
-                  >
-                    {checkingOut ? '结算中...' : '结算'}
-                  </button>
-                </>
-              )}
-            </aside>
-
-            <aside className="army-roster-card">
-              <h3>我的军团</h3>
-              <div className="army-roster-list">
-                {recruitedUnits.length <= 0 ? (
-                  <div className="army-preview-empty">暂无已征召士兵</div>
-                ) : recruitedUnits.map((unit) => (
-                  <div className="army-roster-row" key={`roster-${unit.id}`}>
-                    <span>{unit.name}</span>
-                    <strong>{unit.count}</strong>
-                  </div>
-                ))}
-              </div>
-            </aside>
-
-            <aside className="army-template-card">
-              <div className="army-template-card-head">
-                <h3>部队模板</h3>
-                <button type="button" className="btn btn-primary btn-small" onClick={openTemplateCreate}>
-                  新建模板
-                </button>
-              </div>
-              {templates.length <= 0 ? (
-                <div className="army-preview-empty">暂无模板，点击“新建模板”创建</div>
-              ) : (
-                <div className="army-template-list">
-                  {templates.map((template) => {
-                    const templateId = typeof template?.templateId === 'string' ? template.templateId : '';
-                    const summary = unitsToSummaryText(template?.units || [], unitNameByTypeId);
-                    const rowBusy = templateActionId === templateId || templateActionId === '__create__';
-                    return (
-                      <div key={templateId || Math.random()} className="army-template-row">
-                        <div className="army-template-meta">
-                          <strong>{template?.name || '未命名模板'}</strong>
+                      <div className="army-troop-card-head">
+                        <div>
+                          <h4>{getTroopDisplayName(template)}</h4>
                           <span>{`总兵力 ${Math.max(0, Math.floor(Number(template?.totalCount) || 0))}`}</span>
-                          <em>{summary || '无兵种配置'}</em>
                         </div>
                         <div className="army-template-actions">
                           <button
@@ -1138,12 +1609,115 @@ const ArmyPanel = ({ initialLibraryTab = 'units', mode = 'barracks' }) => {
                           </button>
                         </div>
                       </div>
-                    );
-                  })}
+                      <p>{summary || '无兵种配置'}</p>
+                    </article>
+                  );
+                })}
+              </div>
+            )}
+          </section>
+
+          <aside className="army-troop-detail-panel">
+            {activeTemplate ? (
+              <>
+                <div className="army-troop-detail-head">
+                  <div>
+                    <h3>{getTroopDisplayName(activeTemplate)}</h3>
+                    <span>{`总兵力 ${activeTemplateStats.total}`}</span>
+                  </div>
+                  <button type="button" className="btn btn-secondary btn-small" onClick={() => openTemplateEdit(activeTemplate)}>
+                    编辑
+                  </button>
                 </div>
-              )}
-            </aside>
-          </div>
+                <div className="army-troop-stat-grid">
+                  <div><span>速度</span><strong>{activeTemplateStats.speed}</strong></div>
+                  <div><span>生命</span><strong>{activeTemplateStats.hp}</strong></div>
+                  <div><span>攻击</span><strong>{activeTemplateStats.atk}</strong></div>
+                  <div><span>防御</span><strong>{activeTemplateStats.def}</strong></div>
+                  <div><span>射程</span><strong>{activeTemplateStats.range}</strong></div>
+                </div>
+                <div className="army-troop-composition">
+                  {activeTemplateCompositionRows.length <= 0 ? (
+                    <div className="army-preview-empty">无兵种配置</div>
+                  ) : activeTemplateCompositionRows.map((row) => (
+                    <div key={`detail-${row.unitTypeId}`} className="army-troop-composition-row">
+                      <i style={{ background: row.classMeta.color }} />
+                      <span>{row.unitName}</span>
+                      <em>{row.classMeta.label}</em>
+                      <strong>{row.count}</strong>
+                    </div>
+                  ))}
+                </div>
+                <div className="army-troop-formation-list">
+                  <div className="army-formation-panel-title">阵型</div>
+                  {activeTemplateFormationSummaries.length <= 0 ? (
+                    <div className="army-preview-empty">无阵型</div>
+                  ) : activeTemplateFormationSummaries.map((formation) => (
+                    <div key={`detail-formation-${formation.id}`} className={`army-template-preview-formation ${formation.legal ? 'is-legal' : ''}`}>
+                      <strong>{formation.name}</strong>
+                      <span>{formation.legal ? '合法' : '未完成'}</span>
+                      <em>{`${formation.totalPlaced}/${activeTemplateStats.total}`}</em>
+                      <FormationMiniPreview
+                        formation={formation}
+                        unitTypeMap={unitTypeMap}
+                        className="is-static is-compact"
+                      />
+                    </div>
+                  ))}
+                </div>
+              </>
+            ) : (
+              <div className="army-preview-empty">暂无部队</div>
+            )}
+          </aside>
+        </div>
+      ) : (
+        <div className="army-equipment-content">
+          <section className="army-equipment-section">
+            <div className="army-equipment-head">
+              <h3>兵种一览</h3>
+              <span>{`已解锁 ${unitsWithCount.length} 类`}</span>
+            </div>
+            {unitsWithCount.length <= 0 ? (
+              <div className="army-preview-empty">暂无可用兵种数据</div>
+            ) : (
+              <div className="army-unit-grid army-unit-grid-library">
+                {unitsWithCount.map((unit) => {
+                  const classMeta = resolveUnitClassMeta(unit);
+                  return (
+                    <article className="army-unit-card army-unit-card-library" key={`barracks-${unit.id}`}>
+                      <div className="army-unit-head">
+                        <h3>{unit.name}</h3>
+                        <div className="army-unit-head-right">
+                          <span style={{ color: classMeta.color }}>{classMeta.label}</span>
+                          <button
+                            type="button"
+                            className="btn btn-secondary btn-small"
+                            onClick={() => {
+                              setDetailUnitId(unit.id);
+                              setDetailRotation({ closeup: 0, battle: 0 });
+                              setDetailDragTarget('');
+                            }}
+                          >
+                            详情
+                          </button>
+                        </div>
+                      </div>
+                      <div className="army-unit-stats">
+                        <span>速度 {unit.speed}</span>
+                        <span>生命 {unit.hp}</span>
+                        <span>攻击 {unit.atk}</span>
+                        <span>防御 {unit.def}</span>
+                        <span>射程 {unit.range}</span>
+                        <span>{`库存 ${unit.count}`}</span>
+                      </div>
+                      <p className="army-equipment-desc">{buildUnitIntro(unit)}</p>
+                    </article>
+                  );
+                })}
+              </div>
+            )}
+          </section>
         </div>
       )}
 
@@ -1407,97 +1981,367 @@ const ArmyPanel = ({ initialLibraryTab = 'units', mode = 'barracks' }) => {
             onClick={(event) => event.stopPropagation()}
             onPointerDown={(event) => event.stopPropagation()}
           >
-            <h4>{templateEditingId ? '编辑部队模板' : '新建部队模板'}</h4>
-            <label>
-              <span>模板名称</span>
-              <input
-                type="text"
-                maxLength={32}
-                value={templateEditorDraft.name || ''}
-                placeholder="不填则自动命名"
-                onChange={(event) => setTemplateEditorDraft((prev) => ({ ...prev, name: event.target.value || '' }))}
-              />
-            </label>
-            <div className="army-template-editor-transfer">
-              <div className="army-template-editor-col">
-                <div className="army-template-editor-col-title">可用兵种（左侧）</div>
-                {templateEditorAvailableRows.map((row) => (
-                  <button
-                    key={`template-left-${row.unitTypeId}`}
-                    type="button"
-                    className="army-template-unit-card"
-                    draggable
-                    onDragStart={(event) => {
-                      event.dataTransfer?.setData('application/x-deploy-unit-id', row.unitTypeId);
-                      event.dataTransfer?.setData('text/plain', row.unitTypeId);
-                      setTemplateEditorDragUnitId(row.unitTypeId);
-                    }}
-                    onDragEnd={() => setTemplateEditorDragUnitId('')}
-                    onClick={() => openTemplateQuantityDialog(row.unitTypeId)}
-                  >
-                    <strong>{row.unitName}</strong>
-                    <span>{row.unlimited ? '可用 ∞' : `可用 ${row.availableForDraft}`}</span>
-                  </button>
-                ))}
+            <div className="army-template-editor-head">
+              <div>
+                <h4>{templateEditingId ? '编辑部队' : '新建部队'}</h4>
+                <span>{`基础数 ${templateEditorTotal}/${ARMY_FORMATION_MAX_CELLS} ｜ 合法阵型 ${templateEditorLegalFormationCount}/${templateEditorFormations.length}`}</span>
               </div>
-              <div
-                className={`army-template-editor-col army-template-editor-col-right ${templateEditorDragUnitId ? 'is-dropzone' : ''}`}
-                onDragOver={(event) => event.preventDefault()}
-                onDrop={handleTemplateDrop}
-              >
-                <div className="army-template-editor-col-title">模板编组（右侧）</div>
-                {normalizeTemplateUnits(templateEditorDraft.units).length <= 0 ? (
-                  <div className="army-template-editor-tip">拖拽左侧兵种到这里后，会弹出数量输入框。</div>
-                ) : null}
-                {normalizeTemplateUnits(templateEditorDraft.units).map((entry) => (
-                  <div key={`template-right-${entry.unitTypeId}`} className="army-template-editor-row">
-                    <span>{`${unitNameByTypeId.get(entry.unitTypeId) || entry.unitTypeId} x${entry.count}`}</span>
-                    <div className="army-template-editor-row-actions">
-                      <button type="button" className="btn btn-secondary btn-small" onClick={() => openTemplateQuantityDialog(entry.unitTypeId)}>数量</button>
-                      <button type="button" className="btn btn-warning btn-small" onClick={() => handleRemoveTemplateUnit(entry.unitTypeId)}>移除</button>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </div>
-            <div className="army-template-editor-summary">
-              {`总兵力 ${templateEditorTotal}${templateEditorSummary ? ` ｜ ${templateEditorSummary}` : ''}`}
-            </div>
-            <div className="army-template-editor-actions">
               <button
                 type="button"
                 className="btn btn-secondary btn-small"
                 onClick={closeTemplateEditor}
                 disabled={Boolean(templateActionId)}
               >
-                取消
+                关闭
+              </button>
+            </div>
+            <div className="army-template-stepper" role="tablist" aria-label="新建部队步骤">
+              {ARMY_EDITOR_STEPS.map((step, index) => {
+                const label = step === 'units' ? '兵种' : (step === 'formations' ? '阵型' : '预览');
+                const active = templateEditorStep === step;
+                return (
+                  <button
+                    key={`army-step-${step}`}
+                    type="button"
+                    role="tab"
+                    aria-selected={active}
+                    className={`army-template-step ${active ? 'active' : ''}`}
+                    onClick={() => {
+                      if (index <= ARMY_EDITOR_STEPS.indexOf(templateEditorStep)) {
+                        setTemplateEditorStep(step);
+                      }
+                    }}
+                  >
+                    <span>{index + 1}</span>
+                    {label}
+                  </button>
+                );
+              })}
+            </div>
+            <label>
+              <span>部队名称</span>
+              <input
+                type="text"
+                maxLength={32}
+                value={templateEditorDraft.name || ''}
+                placeholder="新建部队1"
+                onChange={(event) => setTemplateEditorDraft((prev) => ({ ...prev, name: event.target.value || '' }))}
+              />
+            </label>
+            {templateEditorStep === 'units' ? (
+              <div className="army-unit-selection-stage">
+                <aside className="army-formation-unit-list">
+                  <div className="army-formation-panel-title">可选兵种</div>
+                  {templateEditorAvailableRows.map((row) => {
+                    const picked = templateEditorBasisRows.some((item) => item.unitTypeId === row.unitTypeId);
+                    const classMeta = resolveUnitClassMeta(row.unit);
+                    return (
+                      <button
+                        key={`unit-stage-${row.unitTypeId}`}
+                        type="button"
+                        className={`army-formation-unit-button ${picked ? 'is-selected' : ''}`}
+                        draggable={!picked && templateEditorTotal < ARMY_MAX_UNIT_BASIS}
+                        disabled={picked || templateEditorTotal >= ARMY_MAX_UNIT_BASIS}
+                        onDragStart={(event) => {
+                          event.dataTransfer?.setData('application/x-army-unit-type-id', row.unitTypeId);
+                          event.dataTransfer?.setData('text/plain', row.unitTypeId);
+                        }}
+                        onMouseEnter={() => setTemplateEditorHoverUnitId(row.unitTypeId)}
+                        onFocus={() => setTemplateEditorHoverUnitId(row.unitTypeId)}
+                        onMouseLeave={() => setTemplateEditorHoverUnitId('')}
+                      >
+                        <i style={{ background: classMeta.color }} />
+                        <span>
+                          <strong>{row.unitName}</strong>
+                          <em>{picked ? '已选择' : classMeta.label}</em>
+                        </span>
+                      </button>
+                    );
+                  })}
+                </aside>
+                <section
+                  className="army-unit-selection-dropzone"
+                  onDragOver={(event) => event.preventDefault()}
+                  onDrop={handleUnitStageDrop}
+                >
+                  <div className="army-formation-panel-title">上阵兵种</div>
+                  {templateEditorBasisRows.length <= 0 ? (
+                    <div className="army-unit-selection-empty">拖拽左侧兵种到这里</div>
+                  ) : (
+                    <div className="army-unit-basis-grid">
+                      {templateEditorBasisRows.map((row) => (
+                        <article key={`basis-${row.unitTypeId}`} className="army-unit-basis-card">
+                          <div className="army-unit-basis-head">
+                            <i style={{ background: row.classMeta.color }} />
+                            <div>
+                              <strong>{row.unitName}</strong>
+                              <span>{row.classMeta.label}</span>
+                            </div>
+                            <button type="button" className="btn btn-warning btn-small" onClick={() => handleRemoveEditorUnit(row.unitTypeId)}>
+                              移除
+                            </button>
+                          </div>
+                          <div className="army-unit-basis-percent">{formatPercentTenths(row.percentTenths)}</div>
+                          <label className="army-unit-basis-input">
+                            <span>基础数</span>
+                            <input
+                              type="number"
+                              min={1}
+                              max={ARMY_MAX_UNIT_BASIS}
+                              value={row.basis}
+                              disabled={templateEditorBasisRows.length < 2}
+                              onChange={(event) => handleChangeEditorUnitBasis(row.unitTypeId, event.target.value)}
+                            />
+                          </label>
+                        </article>
+                      ))}
+                    </div>
+                  )}
+                </section>
+                <aside className="army-formation-unit-detail">
+                  <div className="army-formation-panel-title">兵种详情</div>
+                  {templateEditorDetailUnit ? (
+                    <>
+                      <div className="army-formation-detail-head">
+                        <div>
+                          <h5>{templateEditorDetailUnit.name || templateEditorDetailUnit.id}</h5>
+                          <span style={{ color: templateEditorDetailClassMeta?.color }}>
+                            {templateEditorDetailClassMeta?.label || '步兵'}
+                          </span>
+                        </div>
+                      </div>
+                      <div className="army-formation-preview">
+                        <ArmyCloseupThreePreview
+                          unit={templateEditorDetailUnit}
+                          rotationDeg={0}
+                          className="army-formation-preview-canvas"
+                        />
+                      </div>
+                      <div className="army-formation-stat-grid">
+                        <div><span>速度</span><strong>{Number(templateEditorDetailUnit.speed) || 0}</strong></div>
+                        <div><span>生命</span><strong>{Number(templateEditorDetailUnit.hp) || 0}</strong></div>
+                        <div><span>攻击</span><strong>{Number(templateEditorDetailUnit.atk) || 0}</strong></div>
+                        <div><span>防御</span><strong>{Number(templateEditorDetailUnit.def) || 0}</strong></div>
+                        <div><span>射程</span><strong>{Number(templateEditorDetailUnit.range) || 0}</strong></div>
+                        <div><span>库存</span><strong>{Number(templateEditorDetailUnit.count) || 0}</strong></div>
+                      </div>
+                    </>
+                  ) : (
+                    <div className="army-preview-empty">暂无兵种数据</div>
+                  )}
+                </aside>
+              </div>
+            ) : null}
+
+            {templateEditorStep === 'formations' ? (
+              <div className="army-formation-build-stage">
+                <div className="army-formation-selected-strip">
+                  {templateEditorActiveUnitRows.map((row) => (
+                    <button
+                      key={`active-unit-${row.unitTypeId}`}
+                      type="button"
+                      className={`army-formation-top-unit ${templateEditorSelectedUnitId === row.unitTypeId ? 'is-selected' : ''} ${row.remaining <= 0 ? 'is-depleted' : ''}`}
+                      draggable={row.remaining > 0}
+                      onDragStart={(event) => {
+                        event.dataTransfer?.setData('application/x-army-unit-type-id', row.unitTypeId);
+                        event.dataTransfer?.setData('text/plain', row.unitTypeId);
+                        setTemplateEditorSelectedUnitId(row.unitTypeId);
+                        setTemplateEditorSelectedPlacementId('');
+                        setTemplateEditorSelectedPlacementIds([]);
+                        setTemplateEditorMoveSelectionIds([]);
+                      }}
+                      onClick={() => {
+                        setTemplateEditorSelectedUnitId(row.unitTypeId);
+                        setTemplateEditorSelectedPlacementId('');
+                        setTemplateEditorSelectedPlacementIds([]);
+                        setTemplateEditorMoveSelectionIds([]);
+                      }}
+                    >
+                      <i style={{ background: row.classMeta.color }} />
+                      <strong>{row.unitName}</strong>
+                      <span>{formatPercentTenths(row.percentTenths)}</span>
+                      <em>{row.remaining}</em>
+                    </button>
+                  ))}
+                </div>
+                <div className="army-formation-build-layout">
+                  <aside className="army-formation-slot-panel">
+                    <div className="army-formation-slot-head">
+                      <span>阵型栏</span>
+                      <button type="button" className="btn btn-secondary btn-small" onClick={handleAddFormationSlot}>新增阵型</button>
+                    </div>
+                    <div className="army-formation-slot-list">
+                      {templateEditorFormationSummaries.map((formation) => (
+                        <article
+                          key={`formation-slot-${formation.id}`}
+                          className={`army-formation-slot-card ${formation.id === templateEditorActiveFormation?.id ? 'is-active' : ''} ${formation.legal ? 'is-legal' : ''}`}
+                          onClick={() => {
+                            setTemplateEditorActiveFormationId(formation.id);
+                            setTemplateEditorSelectedPlacementId('');
+                            setTemplateEditorSelectedPlacementIds([]);
+                            setTemplateEditorMoveSelectionIds([]);
+                          }}
+                        >
+                          <input
+                            type="text"
+                            value={formation.name}
+                            maxLength={24}
+                            onChange={(event) => handleRenameFormationSlot(formation.id, event.target.value)}
+                            onClick={(event) => event.stopPropagation()}
+                          />
+                          <span>{`${formation.totalPlaced}/${templateEditorTotal}`}</span>
+                          <FormationMiniPreview formation={formation} unitTypeMap={unitTypeMap} />
+                          <button
+                            type="button"
+                            className="btn btn-warning btn-small"
+                            onClick={(event) => {
+                              event.stopPropagation();
+                              handleDeleteFormationSlot(formation.id);
+                            }}
+                          >
+                            删除
+                          </button>
+                        </article>
+                      ))}
+                    </div>
+                  </aside>
+                  <section className="army-formation-stage-panel">
+                    <div className="army-formation-panel-title">{templateEditorActiveFormation?.name || '阵型画布'}</div>
+                    <div className="army-formation-canvas-shell is-adaptive">
+                      <ArmyFormationThreeEditor
+                        unitTypes={unitTypes}
+                        placements={templateEditorPlacements}
+                        selectedUnitTypeId={templateEditorSelectedUnitId}
+                        selectedPlacementId={templateEditorSelectedPlacementId}
+                        selectedPlacementIds={templateEditorSelectedPlacementIds}
+                        isMoveSelectionMode={templateEditorMoveSelectionIds.length > 0}
+                        onPlaceUnit={handlePlaceFormationUnit}
+                        onMovePlacement={handleMoveFormationPlacement}
+                        onSelectPlacement={handleSelectFormationPlacement}
+                        onSelectPlacements={handleSelectFormationPlacements}
+                        onCancelAction={handleCancelFormationCanvasAction}
+                        onBeginMoveSelection={handleBeginMoveFormationSelection}
+                        onDeleteSelection={handleDeleteFormationSelection}
+                        onMoveSelectionToCell={handleMoveFormationSelectionToCell}
+                        canPlaceUnit={canPlaceFormationUnit}
+                        className="army-formation-canvas"
+                      />
+                      <div className="army-formation-dimension-badge">
+                        {`${templateEditorOccupancyMetrics.width}×${templateEditorOccupancyMetrics.height}`}
+                      </div>
+                      <div className="army-formation-canvas-hint">
+                        {templateEditorSelectedUnitId
+                          ? `放置模式：${unitNameByTypeId.get(templateEditorSelectedUnitId) || templateEditorSelectedUnitId}`
+                          : (templateEditorMoveSelectionIds.length > 0
+                            ? `移动模式：${templateEditorMoveSelectionIds.length} 个`
+                            : (templateEditorSelectedPlacements.length > 0
+                              ? `已选中 ${templateEditorSelectedPlacements.length} 个`
+                              : '默认模式'))}
+                      </div>
+                    </div>
+                    <div className="army-formation-selected-actions">
+                      <button type="button" className="btn btn-secondary btn-small" onClick={handleUndoFormation}>
+                        撤销
+                      </button>
+                      <button type="button" className="btn btn-secondary btn-small" onClick={handleClearFormation}>
+                        清空
+                      </button>
+                      <span>{templateEditorSelectedPlacements.length > 0 ? `选区 ${templateEditorSelectedPlacements.length} 个` : '合法阵型需要把上方所有剩余基础数用光。'}</span>
+                    </div>
+                  </section>
+                </div>
+              </div>
+            ) : null}
+
+            {templateEditorStep === 'preview' ? (
+              <div className="army-template-preview-stage">
+                <section className="army-template-preview-section">
+                  <div className="army-formation-panel-title">兵种组成</div>
+                  <div className="army-troop-composition">
+                    {templateEditorBasisRows.map((row) => (
+                      <div key={`preview-unit-${row.unitTypeId}`} className="army-troop-composition-row">
+                        <i style={{ background: row.classMeta.color }} />
+                        <span>{row.unitName}</span>
+                        <em>{formatPercentTenths(row.percentTenths)}</em>
+                        <strong>{row.basis}</strong>
+                      </div>
+                    ))}
+                  </div>
+                </section>
+                <section className="army-template-preview-section">
+                  <div className="army-formation-panel-title">整体数据</div>
+                  <div className="army-troop-stat-grid">
+                    <div><span>速度</span><strong>{templateEditorPreviewStats.speed}</strong></div>
+                    <div><span>生命</span><strong>{templateEditorPreviewStats.hp}</strong></div>
+                    <div><span>攻击</span><strong>{templateEditorPreviewStats.atk}</strong></div>
+                    <div><span>防御</span><strong>{templateEditorPreviewStats.def}</strong></div>
+                    <div><span>射程</span><strong>{templateEditorPreviewStats.range}</strong></div>
+                  </div>
+                </section>
+                <section className="army-template-preview-section">
+                  <div className="army-formation-panel-title">阵型列表</div>
+                  <div className="army-template-preview-formations">
+                    {templateEditorFormationSummaries.map((formation) => (
+                      <div key={`preview-formation-${formation.id}`} className={`army-template-preview-formation ${formation.legal ? 'is-legal' : ''}`}>
+                        <strong>{formation.name}</strong>
+                        <span>{formation.legal ? '合法' : '未完成'}</span>
+                        <em>{`${formation.totalPlaced}/${templateEditorTotal}`}</em>
+                        <FormationMiniPreview
+                          formation={formation}
+                          unitTypeMap={unitTypeMap}
+                          className="is-static"
+                        />
+                      </div>
+                    ))}
+                  </div>
+                </section>
+              </div>
+            ) : null}
+            <div className="army-template-editor-summary">
+              {`基础数 ${templateEditorTotal}/${ARMY_MAX_UNIT_BASIS}${templateEditorSummary ? ` ｜ ${templateEditorSummary}` : ''}`}
+            </div>
+            <div className="army-template-editor-actions">
+              <button
+                type="button"
+                className="btn btn-secondary btn-small"
+                onClick={() => {
+                  if (templateEditorStep === 'units') {
+                    closeTemplateEditor();
+                  } else {
+                    goTemplateEditorStep(-1);
+                  }
+                }}
+                disabled={Boolean(templateActionId)}
+              >
+                {templateEditorStep === 'units' ? '取消' : '上一步'}
               </button>
               <button
                 type="button"
                 className="btn btn-primary btn-small"
-                onClick={submitTemplateEditor}
+                onClick={() => {
+                  if (templateEditorStep === 'preview') {
+                    submitTemplateEditor();
+                  } else {
+                    goTemplateEditorStep(1);
+                  }
+                }}
                 disabled={templateEditorTotal <= 0 || Boolean(templateActionId)}
               >
-                {templateActionId ? '保存中...' : '保存模板'}
+                {templateActionId ? '保存中...' : (templateEditorStep === 'preview' ? (templateEditingId ? '保存部队' : '创建部队') : '下一步')}
               </button>
             </div>
           </div>
         </div>
       )}
-
-      <NumberPadDialog
-        open={templateEditorOpen && templateQuantityDialog.open}
-        title={`设置兵力：${templateQuantityDialog.unitName || templateQuantityDialog.unitTypeId}`}
-        description="可滑动或直接输入数量"
-        min={1}
-        max={Math.max(1, Math.floor(Number(templateQuantityDialog.max) || 1))}
-        initialValue={Math.max(1, Math.floor(Number(templateQuantityDialog.current) || 1))}
-        zIndex={36100}
-        confirmLabel="确定"
-        cancelLabel="取消"
-        onCancel={() => setTemplateQuantityDialog({ open: false, unitTypeId: '', unitName: '', max: 0, current: 1 })}
-        onConfirm={handleConfirmTemplateQuantity}
-      />
+      {armyToasts.length > 0 ? (
+        <div className="army-toast-stack" aria-live="polite">
+          {armyToasts.map((toast) => (
+            <div key={toast.id} className={`army-toast army-toast-${toast.type}`}>
+              {toast.message}
+            </div>
+          ))}
+        </div>
+      ) : null}
     </div>
   );
 };

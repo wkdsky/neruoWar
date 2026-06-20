@@ -426,6 +426,32 @@
   box-shadow: 0 16px 28px rgba(120, 53, 15, 0.38);
 }
 
+.game-container.army-view-active .header:not(.header-mobile) {
+  padding: 0.62rem 0.88rem;
+  margin-bottom: 0.78rem;
+  border-radius: 18px;
+}
+
+.game-container.army-view-active .header:not(.header-mobile) .header-content {
+  gap: 0.66rem;
+}
+
+.game-container.army-view-active .header:not(.header-mobile) .header-title {
+  padding: 0.52rem 0.82rem;
+  border-radius: 14px;
+}
+
+.game-container.army-view-active .header:not(.header-mobile) .user-avatar-container {
+  padding: 0.32rem 0.62rem;
+}
+
+.game-container.army-view-active .header:not(.header-mobile) .user-identity-group > .btn,
+.game-container.army-view-active .header:not(.header-mobile) .related-domains-trigger-btn,
+.game-container.army-view-active .header:not(.header-mobile) .header-action-shell > .btn,
+.game-container.army-view-active .header:not(.header-mobile) .military-menu-trigger {
+  padding: 0.42rem 0.78rem;
+}
+
 .notifications-wrapper,
 .related-domains-wrapper,
 .military-menu-wrapper {
@@ -1254,6 +1280,22 @@
   .header.header-mobile .header-title .icon {
     width: 1rem;
     height: 1rem;
+  }
+
+  .game-container.army-view-active .header.header-mobile {
+    padding: 0.38rem 0.5rem;
+    margin-bottom: 0.56rem;
+    border-radius: 16px;
+  }
+
+  .game-container.army-view-active .header.header-mobile::before {
+    inset: 5px -5px -5px 5px;
+  }
+
+  .game-container.army-view-active .header.header-mobile .header-title {
+    padding: 0.48rem 0.72rem;
+    border-radius: 12px;
+    font-size: 0.92rem;
   }
 
   .header.header-mobile .header-right {

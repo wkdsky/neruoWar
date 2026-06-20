@@ -149,6 +149,36 @@ const ArmyTemplateUnitSchema = new mongoose.Schema({
   }
 }, { _id: false });
 
+const ArmyTemplatePlacementSchema = new mongoose.Schema({
+  unitTypeId: {
+    type: String,
+    required: true
+  },
+  x: {
+    type: Number,
+    default: 0
+  },
+  y: {
+    type: Number,
+    default: 0
+  }
+}, { _id: false });
+
+const ArmyTemplateFormationSchema = new mongoose.Schema({
+  formationId: {
+    type: String,
+    required: true
+  },
+  name: {
+    type: String,
+    default: ''
+  },
+  placements: {
+    type: [ArmyTemplatePlacementSchema],
+    default: []
+  }
+}, { _id: false });
+
 const ArmyTemplateSchema = new mongoose.Schema({
   templateId: {
     type: String,
@@ -160,6 +190,10 @@ const ArmyTemplateSchema = new mongoose.Schema({
   },
   units: {
     type: [ArmyTemplateUnitSchema],
+    default: []
+  },
+  formations: {
+    type: [ArmyTemplateFormationSchema],
     default: []
   },
   createdAt: {

@@ -71,14 +71,25 @@ const buildUnitTypeMap = (unitTypes) => unitTypes.reduce((acc, unit) => {
 
 const MAX_TEMPLATE_NAME_LEN = 32;
 const MAX_TEMPLATE_COUNT = 100;
-const MAX_TEMPLATE_UNIT_COUNT = 999999999;
+const MAX_TEMPLATE_UNIT_COUNT = 100;
+const MAX_TEMPLATE_TOTAL_COUNT = 100;
+const MAX_TEMPLATE_FORMATION_COUNT = 12;
+const MAX_TEMPLATE_FORMATION_NAME_LEN = 24;
+const MAX_TEMPLATE_FORMATION_COORD = 999;
 
 const buildTemplateId = () => `tpl_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
+const buildFormationId = () => `fmt_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
 
 const normalizeTemplateName = (rawName, fallback = '未命名模板') => {
   const name = typeof rawName === 'string' ? rawName.trim() : '';
   if (!name) return fallback;
   return name.slice(0, MAX_TEMPLATE_NAME_LEN);
+};
+
+const normalizeFormationName = (rawName, fallback = '默认阵型') => {
+  const name = typeof rawName === 'string' ? rawName.trim() : '';
+  if (!name) return fallback;
+  return name.slice(0, MAX_TEMPLATE_FORMATION_NAME_LEN);
 };
 
 const normalizeTemplateUnitsLoose = (rawUnits) => {
@@ -90,10 +101,17 @@ const normalizeTemplateUnitsLoose = (rawUnits) => {
     acc[unitTypeId] = (acc[unitTypeId] || 0) + count;
     return acc;
   }, {});
-  return Object.keys(byId).map((unitTypeId) => ({
-    unitTypeId,
-    count: Math.min(MAX_TEMPLATE_UNIT_COUNT, Math.max(1, byId[unitTypeId]))
-  }));
+  const out = [];
+  let total = 0;
+  Object.keys(byId).forEach((unitTypeId) => {
+    if (total >= MAX_TEMPLATE_TOTAL_COUNT) return;
+    const next = Math.min(MAX_TEMPLATE_UNIT_COUNT, Math.max(1, byId[unitTypeId]));
+    const count = Math.min(next, MAX_TEMPLATE_TOTAL_COUNT - total);
+    if (count <= 0) return;
+    out.push({ unitTypeId, count });
+    total += count;
+  });
+  return out;
 };
 
 const normalizeTemplateUnitsStrict = (rawUnits, unitTypeMap) => {
@@ -124,7 +142,160 @@ const normalizeTemplateUnitsStrict = (rawUnits, unitTypeMap) => {
   if (units.length <= 0) {
     return { error: '模板兵种清单不能为空' };
   }
+  const totalCount = units.reduce((sum, entry) => sum + entry.count, 0);
+  if (totalCount > MAX_TEMPLATE_TOTAL_COUNT) {
+    return { error: `部队基础数最多 ${MAX_TEMPLATE_TOTAL_COUNT}` };
+  }
   return { units };
+};
+
+const getFormationId = (formation) => {
+  const formationId = typeof formation?.formationId === 'string' ? formation.formationId.trim() : '';
+  if (formationId) return formationId;
+  return typeof formation?.id === 'string' ? formation.id.trim() : '';
+};
+
+const buildUnitCountMap = (units = []) => (
+  normalizeTemplateUnitsLoose(units).reduce((acc, entry) => {
+    acc.set(entry.unitTypeId, entry.count);
+    return acc;
+  }, new Map())
+);
+
+const buildDefaultFormationPlacements = (units = []) => {
+  const placements = [];
+  let cursor = 0;
+  normalizeTemplateUnitsLoose(units).forEach((entry) => {
+    for (let i = 0; i < entry.count && cursor < MAX_TEMPLATE_TOTAL_COUNT; i += 1) {
+      const row = Math.floor(cursor / 10);
+      placements.push({
+        unitTypeId: entry.unitTypeId,
+        x: (cursor % 10) - 4,
+        y: row - 4
+      });
+      cursor += 1;
+    }
+  });
+  return placements;
+};
+
+const countFormationPlacements = (placements = []) => (
+  (Array.isArray(placements) ? placements : []).reduce((acc, placement) => {
+    const unitTypeId = typeof placement?.unitTypeId === 'string' ? placement.unitTypeId.trim() : '';
+    if (!unitTypeId) return acc;
+    acc.set(unitTypeId, (acc.get(unitTypeId) || 0) + 1);
+    return acc;
+  }, new Map())
+);
+
+const isFormationLegal = (formation, units) => {
+  const unitCounts = buildUnitCountMap(units);
+  const placements = Array.isArray(formation?.placements) ? formation.placements : [];
+  const total = Array.from(unitCounts.values()).reduce((sum, count) => sum + count, 0);
+  if (total <= 0 || placements.length !== total) return false;
+  const placementCounts = countFormationPlacements(placements);
+  return Array.from(unitCounts.entries()).every(([unitTypeId, count]) => (
+    (placementCounts.get(unitTypeId) || 0) === count
+  ));
+};
+
+const normalizeFormationPlacements = (rawPlacements, unitTypeMap, unitCounts, strict = false) => {
+  const source = Array.isArray(rawPlacements) ? rawPlacements : [];
+  const out = [];
+  const occupied = new Set();
+  const used = new Map();
+  for (const raw of source) {
+    if (out.length >= MAX_TEMPLATE_TOTAL_COUNT) break;
+    const unitTypeId = typeof raw?.unitTypeId === 'string' ? raw.unitTypeId.trim() : '';
+    if (!unitTypeId) continue;
+    if (strict && (!unitTypeMap[unitTypeId] || !unitCounts.has(unitTypeId))) {
+      return { error: '阵型中存在无效兵种' };
+    }
+    if (!unitCounts.has(unitTypeId)) continue;
+    const x = Math.max(
+      -MAX_TEMPLATE_FORMATION_COORD,
+      Math.min(MAX_TEMPLATE_FORMATION_COORD, Math.floor(Number(raw?.x) || 0))
+    );
+    const y = Math.max(
+      -MAX_TEMPLATE_FORMATION_COORD,
+      Math.min(MAX_TEMPLATE_FORMATION_COORD, Math.floor(Number(raw?.y) || 0))
+    );
+    const cellKey = `${x}:${y}`;
+    if (occupied.has(cellKey)) {
+      if (strict) return { error: '阵型中存在重复站位' };
+      continue;
+    }
+    const nextUsed = (used.get(unitTypeId) || 0) + 1;
+    if (nextUsed > (unitCounts.get(unitTypeId) || 0)) {
+      if (strict) return { error: '阵型兵种数量超过部队基础数' };
+      continue;
+    }
+    occupied.add(cellKey);
+    used.set(unitTypeId, nextUsed);
+    out.push({ unitTypeId, x, y });
+  }
+  return { placements: out };
+};
+
+const normalizeTemplateFormationsLoose = (rawFormations, units) => {
+  const unitCounts = buildUnitCountMap(units);
+  const source = Array.isArray(rawFormations) && rawFormations.length > 0
+    ? rawFormations
+    : [{
+      formationId: buildFormationId(),
+      name: '默认阵型',
+      placements: buildDefaultFormationPlacements(units)
+    }];
+  const formations = source
+    .slice(0, MAX_TEMPLATE_FORMATION_COUNT)
+    .map((formation, index) => {
+      const normalized = normalizeFormationPlacements(
+        formation?.placements || [],
+        {},
+        unitCounts,
+        false
+      );
+      return {
+        formationId: getFormationId(formation) || buildFormationId(),
+        name: normalizeFormationName(formation?.name, index <= 0 ? '默认阵型' : `新建阵型${index}`),
+        placements: normalized.placements || []
+      };
+    });
+  return formations.length > 0 ? formations : [{
+    formationId: buildFormationId(),
+    name: '默认阵型',
+    placements: buildDefaultFormationPlacements(units)
+  }];
+};
+
+const normalizeTemplateFormationsStrict = (rawFormations, unitTypeMap, units) => {
+  const unitCounts = buildUnitCountMap(units);
+  const source = Array.isArray(rawFormations) && rawFormations.length > 0
+    ? rawFormations
+    : [{
+      formationId: buildFormationId(),
+      name: '默认阵型',
+      placements: buildDefaultFormationPlacements(units)
+    }];
+  const formations = [];
+  for (const [index, formation] of source.slice(0, MAX_TEMPLATE_FORMATION_COUNT).entries()) {
+    const normalized = normalizeFormationPlacements(
+      formation?.placements || [],
+      unitTypeMap,
+      unitCounts,
+      true
+    );
+    if (normalized.error) return { error: normalized.error };
+    formations.push({
+      formationId: getFormationId(formation) || buildFormationId(),
+      name: normalizeFormationName(formation?.name, index <= 0 ? '默认阵型' : `新建阵型${index}`),
+      placements: normalized.placements || []
+    });
+  }
+  if (!formations.some((formation) => isFormationLegal(formation, units))) {
+    return { error: '至少需要一个合法阵型' };
+  }
+  return { formations };
 };
 
 const serializeArmyTemplate = (template, unitTypeMap) => {
@@ -133,6 +304,14 @@ const serializeArmyTemplate = (template, unitTypeMap) => {
     unitName: unitTypeMap[entry.unitTypeId]?.name || entry.unitTypeId,
     count: entry.count
   }));
+  const formations = normalizeTemplateFormationsLoose(template?.formations, units).map((formation) => ({
+    id: formation.formationId,
+    formationId: formation.formationId,
+    name: formation.name,
+    placements: formation.placements,
+    totalPlaced: formation.placements.length,
+    legal: isFormationLegal(formation, units)
+  }));
   const totalCount = units.reduce((sum, item) => sum + item.count, 0);
   const createdAtMs = new Date(template?.createdAt || 0).getTime();
   const updatedAtMs = new Date(template?.updatedAt || 0).getTime();
@@ -140,6 +319,7 @@ const serializeArmyTemplate = (template, unitTypeMap) => {
     templateId: typeof template?.templateId === 'string' ? template.templateId.trim() : '',
     name: normalizeTemplateName(template?.name, '未命名模板'),
     units,
+    formations,
     totalCount,
     createdAt: Number.isFinite(createdAtMs) && createdAtMs > 0 ? new Date(createdAtMs).toISOString() : null,
     updatedAt: Number.isFinite(updatedAtMs) && updatedAtMs > 0 ? new Date(updatedAtMs).toISOString() : null
@@ -465,6 +645,14 @@ router.post('/templates', authenticateToken, async (req, res) => {
     if (normalizedUnits.error) {
       return res.status(400).json({ error: normalizedUnits.error });
     }
+    const normalizedFormations = normalizeTemplateFormationsStrict(
+      req.body?.formations,
+      unitTypeMap,
+      normalizedUnits.units
+    );
+    if (normalizedFormations.error) {
+      return res.status(400).json({ error: normalizedFormations.error });
+    }
 
     const templateName = normalizeTemplateName(req.body?.name, `模板${existingTemplates.length + 1}`);
     const now = new Date();
@@ -472,6 +660,7 @@ router.post('/templates', authenticateToken, async (req, res) => {
       templateId: buildTemplateId(),
       name: templateName,
       units: normalizedUnits.units,
+      formations: normalizedFormations.formations,
       createdAt: now,
       updatedAt: now
     };
@@ -514,8 +703,9 @@ router.put('/templates/:templateId', authenticateToken, async (req, res) => {
     const unitTypeMap = buildUnitTypeMap(unitTypes);
     const hasUnitsPayload = Object.prototype.hasOwnProperty.call(req.body || {}, 'units');
     const hasNamePayload = Object.prototype.hasOwnProperty.call(req.body || {}, 'name');
-    if (!hasUnitsPayload && !hasNamePayload) {
-      return res.status(400).json({ error: '至少提供 name 或 units 字段' });
+    const hasFormationsPayload = Object.prototype.hasOwnProperty.call(req.body || {}, 'formations');
+    if (!hasUnitsPayload && !hasNamePayload && !hasFormationsPayload) {
+      return res.status(400).json({ error: '至少提供 name、units 或 formations 字段' });
     }
 
     const current = templates[index];
@@ -532,10 +722,25 @@ router.put('/templates/:templateId', authenticateToken, async (req, res) => {
       nextUnits = normalizedUnits.units;
     }
 
+    let nextFormations = normalizeTemplateFormationsLoose(current?.formations, nextUnits);
+    if (hasFormationsPayload || hasUnitsPayload) {
+      const formationsPayload = hasFormationsPayload ? req.body?.formations : undefined;
+      const normalizedFormations = normalizeTemplateFormationsStrict(
+        formationsPayload,
+        unitTypeMap,
+        nextUnits
+      );
+      if (normalizedFormations.error) {
+        return res.status(400).json({ error: normalizedFormations.error });
+      }
+      nextFormations = normalizedFormations.formations;
+    }
+
     const nextTemplate = {
       templateId,
       name: nextName,
       units: nextUnits,
+      formations: nextFormations,
       createdAt: current?.createdAt || new Date(),
       updatedAt: new Date()
     };

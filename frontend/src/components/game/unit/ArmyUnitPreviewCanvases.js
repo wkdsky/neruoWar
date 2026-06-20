@@ -53,7 +53,7 @@ const getCloseupMaterials = (unit = {}) => {
   return materials;
 };
 
-const buildCloseupMesh = (unit = {}) => {
+export const buildArmyUnitThreeModel = (unit = {}) => {
   const group = new THREE.Group();
   const materials = getCloseupMaterials(unit);
 
@@ -116,7 +116,7 @@ export const ArmyCloseupThreePreview = ({ unit, rotationDeg = 0, className = '' 
     turntable.position.set(0, 0, 0.6);
     scene.add(turntable);
 
-    const group = buildCloseupMesh(unit);
+    const group = buildArmyUnitThreeModel(unit);
     scene.add(group);
 
     let raf = 0;

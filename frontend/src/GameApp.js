@@ -563,8 +563,6 @@ const App = () => {
     useEffect(() => {
         if (typeof window === 'undefined' || typeof document === 'undefined') return undefined;
 
-        const VIEWPORT_RECOVERY_ATTEMPT_KEY = 'app:viewportRecoveryAttempted';
-        let recoveryTimerId = null;
         let frameId = null;
 
         const syncResponsiveViewport = () => {
@@ -581,20 +579,11 @@ const App = () => {
             }
 
             if (!metrics.hasDesktopLikeLayoutOnMobile) {
-                sessionStorage.removeItem(VIEWPORT_RECOVERY_ATTEMPT_KEY);
                 root.classList.remove('viewport-layout-desynced');
                 return;
             }
 
             root.classList.add('viewport-layout-desynced');
-            if (sessionStorage.getItem(VIEWPORT_RECOVERY_ATTEMPT_KEY) === '1') {
-                return;
-            }
-
-            sessionStorage.setItem(VIEWPORT_RECOVERY_ATTEMPT_KEY, '1');
-            recoveryTimerId = window.setTimeout(() => {
-                window.location.reload();
-            }, 90);
         };
 
         const scheduleViewportSync = () => {
@@ -618,9 +607,6 @@ const App = () => {
         return () => {
             if (frameId !== null) {
                 window.cancelAnimationFrame(frameId);
-            }
-            if (recoveryTimerId !== null) {
-                window.clearTimeout(recoveryTimerId);
             }
             window.removeEventListener('resize', scheduleViewportSync);
             window.removeEventListener('orientationchange', scheduleViewportSync);
@@ -2822,7 +2808,7 @@ const App = () => {
             onUnblockUser={handleUnblockUserFromUserCard}
         >
         <div
-            className={`game-container ${isBattleShellImmersive ? 'battle-shell-immersive' : ''} ${isKnowledgeDomainActive ? 'knowledge-domain-active' : ''} ${isSenseSelectorVisible ? 'sense-selector-open' : ''} ${view === 'home' ? 'home-view-active' : ''} ${(view === 'titleDetail' || view === 'nodeDetail') ? 'knowledge-mainview-active' : ''} ${isSenseArticleSubView(view) ? 'sense-article-shell-active' : ''} ${isSenseArticleHeaderPinned ? 'sense-article-shell-pinned' : ''}`}
+            className={`game-container ${isBattleShellImmersive ? 'battle-shell-immersive' : ''} ${isKnowledgeDomainActive ? 'knowledge-domain-active' : ''} ${isSenseSelectorVisible ? 'sense-selector-open' : ''} ${view === 'home' ? 'home-view-active' : ''} ${view === 'army' ? 'army-view-active' : ''} ${(view === 'titleDetail' || view === 'nodeDetail') ? 'knowledge-mainview-active' : ''} ${isSenseArticleSubView(view) ? 'sense-article-shell-active' : ''} ${isSenseArticleHeaderPinned ? 'sense-article-shell-pinned' : ''}`}
             style={{
               '--knowledge-header-offset': isBattleShellImmersive ? '0px' : `${knowledgeHeaderOffset}px`,
               '--knowledge-domain-top-offset': isKnowledgeDomainActive && !isBattleShellImmersive ? `${knowledgeHeaderOffset}px` : '0px'
