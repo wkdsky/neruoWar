@@ -14,6 +14,7 @@ import { UNIT_INSTANCE_STRIDE } from '../presentation/render/ImpostorRenderer';
 import { BUILDING_INSTANCE_STRIDE } from '../presentation/render/BuildingRenderer';
 import { PROJECTILE_INSTANCE_STRIDE } from '../presentation/render/ProjectileRenderer';
 import { EFFECT_INSTANCE_STRIDE } from '../presentation/render/EffectRenderer';
+import TrainingThreeRenderPipeline from '../presentation/render/TrainingThreeRenderPipeline';
 
 const createNoopImpostorRenderer = () => ({
   updateFromSnapshot() {},
@@ -41,11 +42,13 @@ export default function useBattleRenderPipeline({
   enabled = false,
   loading = false,
   error = '',
-  battleInitData = null
+  battleInitData = null,
+  mode = 'siege'
 } = {}) {
   const pipelineRef = useRef({
     gl: null,
     renderers: null,
+    threePipeline: null,
     proceduralTex: null,
     devOrientationChecked: false,
     prepareFrame: () => ({ width: 0, height: 0 }),
@@ -57,6 +60,7 @@ export default function useBattleRenderPipeline({
 
   const dispose = useCallback(() => {
     const current = pipelineRef.current;
+    if (current?.threePipeline?.dispose) current.threePipeline.dispose();
     const renderers = current?.renderers;
     if (renderers?.ground) renderers.ground.dispose();
     if (renderers?.impostor) renderers.impostor.dispose();
@@ -67,6 +71,7 @@ export default function useBattleRenderPipeline({
     pipelineRef.current = {
       gl: null,
       renderers: null,
+      threePipeline: null,
       proceduralTex: null,
       devOrientationChecked: false,
       prepareFrame: () => ({ width: 0, height: 0 }),
@@ -82,6 +87,24 @@ export default function useBattleRenderPipeline({
       return undefined;
     }
     try {
+      if (mode === 'training') {
+        const threePipeline = new TrainingThreeRenderPipeline(canvasRef.current);
+        pipelineRef.current = {
+          gl: null,
+          renderers: null,
+          threePipeline,
+          proceduralTex: null,
+          devOrientationChecked: false,
+          prepareFrame: () => threePipeline.prepareFrame(),
+          render: (frame) => threePipeline.render(frame),
+          dispose
+        };
+        setGlError('');
+        setIsReady(true);
+        return () => {
+          dispose();
+        };
+      }
       const gl = createBattleGlContext(canvasRef.current);
       if (!gl) {
         setGlError('当前环境不支持 WebGL2，无法进入新版战斗场景');
@@ -165,7 +188,7 @@ export default function useBattleRenderPipeline({
     return () => {
       dispose();
     };
-  }, [battleInitData, canvasRef, dispose, enabled, error, loading]);
+  }, [battleInitData, canvasRef, dispose, enabled, error, loading, mode]);
 
   return {
     pipelineRef,

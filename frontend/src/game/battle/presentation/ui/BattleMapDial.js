@@ -58,6 +58,8 @@ const BattleMapDial = ({
   activeCommand = '',
   onHoverCommandChange
 }) => {
+  const activeCommands = new Set(String(activeCommand || '').split('|').filter(Boolean));
+  const isActive = (command) => activeCommands.has(command);
   const bindHover = (command) => ({
     onMouseEnter: () => onHoverCommandChange?.(command),
     onMouseLeave: () => onHoverCommandChange?.(''),
@@ -73,7 +75,7 @@ const BattleMapDial = ({
             <path
               key={`ring-sector-${row.command}`}
               d={buildRingSectorPath(row.startDeg, row.endDeg)}
-              className={`pve2-map-dial-sector-path ${activeCommand === row.command ? 'active' : ''}`}
+              className={`pve2-map-dial-sector-path ${isActive(row.command) ? 'active' : ''}`}
               onMouseEnter={() => onHoverCommandChange?.(row.command)}
               onMouseLeave={() => onHoverCommandChange?.('')}
             />
@@ -109,7 +111,7 @@ const BattleMapDial = ({
           <span className="pve2-map-dial-core-divider" />
           <button
             type="button"
-            className={`pve2-map-dial-core-btn ccw ${activeCommand === 'rotate_ccw' ? 'active' : ''}`}
+            className={`pve2-map-dial-core-btn ccw ${isActive('rotate_ccw') ? 'active' : ''}`}
             aria-label="地图逆时针旋转"
             title="逆时针旋转"
             {...bindHover('rotate_ccw')}
@@ -118,7 +120,7 @@ const BattleMapDial = ({
           </button>
           <button
             type="button"
-            className={`pve2-map-dial-core-btn cw ${activeCommand === 'rotate_cw' ? 'active' : ''}`}
+            className={`pve2-map-dial-core-btn cw ${isActive('rotate_cw') ? 'active' : ''}`}
             aria-label="地图顺时针旋转"
             title="顺时针旋转"
             {...bindHover('rotate_cw')}

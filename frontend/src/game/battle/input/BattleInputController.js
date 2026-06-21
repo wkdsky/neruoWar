@@ -87,13 +87,20 @@ export const createBattleInputController = ({
           callbacks.setDeployNotice?.(switchResult?.reason || '切换部队阵营失败');
           return;
         }
+        if (switchResult.switched && switchResult.groupId && switchResult.groupId !== targetGroupId) {
+          callbacks.onDeployGroupTeamSwitched?.({
+            prevGroupId: targetGroupId,
+            nextGroupId: switchResult.groupId,
+            nextTeam: switchResult.team
+          });
+        }
         targetGroupId = switchResult.groupId || targetGroupId;
         targetTeam = switchResult.team === 'defender' ? 'defender' : 'attacker';
       }
-      if (!runtime.canDeployAt(world, targetTeam, 10)) {
+      if (!runtime.canDeployGroupFitAt(targetGroupId, world, targetTeam)) {
         callbacks.setDeployNotice?.(targetTeam === 'defender'
-          ? '中间交战区不可部署，请放置在右侧红色区域'
-          : '中间交战区不可部署，请放置在左侧蓝色区域');
+          ? '当前阵型超出右侧红色部署区，请调整位置或切换阵型'
+          : '当前阵型超出左侧蓝色部署区，请调整位置或切换阵型');
         return;
       }
       runtime.moveDeployGroup(targetGroupId, world, targetTeam);
@@ -142,7 +149,7 @@ export const createBattleInputController = ({
     if (
       target
       && typeof target.closest === 'function'
-      && target.closest('.pve2-world-actions, .pve2-battle-actions, .pve2-card-actions, .pve2-deploy-creator, .pve2-deploy-sidebar, .pve2-minimap-wrap, .pve2-map-dial-wrap, .pve2-action-pad, .pve2-skill-float, .pve2-march-float, .pve2-path-confirm-btn, .pve2-hud, .pve2-confirm, .pve2-quick-deploy-backdrop, .pve2-quick-deploy-panel, .number-pad-dialog-overlay, .number-pad-dialog')
+      && target.closest('.pve2-world-actions, .pve2-battle-actions, .pve2-card-actions, .pve2-deploy-creator, .pve2-deploy-sidebar, .pve2-minimap-wrap, .pve2-map-dial-wrap, .pve2-action-pad, .pve2-skill-float, .pve2-march-float, .pve2-path-confirm-btn, .pve2-hud, .pve2-confirm, .pve2-quick-deploy-backdrop, .pve2-quick-deploy-panel, .pve2-formation-wheel, .number-pad-dialog-overlay, .number-pad-dialog')
     ) {
       return;
     }
@@ -286,14 +293,18 @@ export const createBattleInputController = ({
     if (!runtime) return;
     const phase = runtime.getPhase?.();
     if (phase !== 'deploy' && phase !== 'battle') return;
-    if (phase === 'deploy' && getters.getDeployDraggingGroupId?.()) {
-      event.preventDefault();
-      return;
-    }
     if (panDragRef.current) return;
     event.preventDefault();
     const nextDistance = cameraControllerRef.current.distance + (event.deltaY < 0 ? -(constants.CAMERA_ZOOM_STEP || 24) : (constants.CAMERA_ZOOM_STEP || 24));
-    cameraControllerRef.current.distance = clamp(nextDistance, constants.CAMERA_DISTANCE_MIN || 360, constants.CAMERA_DISTANCE_MAX || 980);
+    if (typeof cameraControllerRef.current.setDistanceWithDynamicPitch === 'function') {
+      cameraControllerRef.current.setDistanceWithDynamicPitch(
+        nextDistance,
+        constants.CAMERA_DISTANCE_MIN || 360,
+        constants.CAMERA_DISTANCE_MAX || 980
+      );
+    } else {
+      cameraControllerRef.current.distance = clamp(nextDistance, constants.CAMERA_DISTANCE_MIN || 360, constants.CAMERA_DISTANCE_MAX || 980);
+    }
   };
 
   const onMinimapClick = (worldPoint) => {
@@ -314,6 +325,14 @@ export const createBattleInputController = ({
     const runtime = runtimeRef.current;
     const canvas = canvasRef?.current;
     if (!runtime || !canvas) return;
+    const target = event.target;
+    if (
+      target
+      && typeof target.closest === 'function'
+      && target.closest('.pve2-world-actions, .pve2-battle-actions, .pve2-card-actions, .pve2-deploy-sidebar, .pve2-minimap-wrap, .pve2-map-dial-wrap, .pve2-action-pad, .pve2-skill-float, .pve2-march-float, .pve2-hud, .pve2-confirm, .pve2-quick-deploy-backdrop, .pve2-quick-deploy-panel, .pve2-formation-wheel, .number-pad-dialog-overlay, .number-pad-dialog')
+    ) {
+      return;
+    }
     if (panDragRef.current || deployYawDragRef.current) return;
     const rect = canvas.getBoundingClientRect();
     const px = ((event.clientX - rect.left) / Math.max(1, rect.width)) * canvas.width;
@@ -330,11 +349,33 @@ export const createBattleInputController = ({
         const desiredTeam = callbacks.resolveDeployPlacementTeam?.(world, targetTeam);
         const switchResult = callbacks.switchDeployGroupTeamForTraining?.(targetGroupId, desiredTeam);
         if (!switchResult?.ok) return;
+        if (switchResult.switched && switchResult.groupId && switchResult.groupId !== targetGroupId) {
+          callbacks.onDeployGroupTeamSwitched?.({
+            prevGroupId: targetGroupId,
+            nextGroupId: switchResult.groupId,
+            nextTeam: switchResult.team
+          });
+        }
         targetGroupId = switchResult.groupId || targetGroupId;
         targetTeam = switchResult.team === 'defender' ? 'defender' : 'attacker';
       }
       runtime.moveDeployGroup(targetGroupId, world, targetTeam);
       syncCardsAndMinimap();
+      return;
+    }
+
+    if (runtime.getPhase() === 'deploy') {
+      const picked = runtime.pickDeployGroup(world, getters.isTrainingMode?.() ? 'any' : 'attacker');
+      if (picked?.id && picked.placed !== false) {
+        if (!getters.isTrainingMode?.() && picked.team === 'defender') return;
+        runtime.setSelectedDeployGroup(picked.id);
+        runtime.setFocusSquad(picked.id);
+        callbacks.setSelectedSquadId?.(picked.id);
+        callbacks.setDeployActionAnchorMode?.('world');
+        callbacks.setCards?.(runtime.getCardRows?.() || []);
+      } else {
+        callbacks.setDeployActionAnchorMode?.('');
+      }
       return;
     }
 

@@ -56,10 +56,10 @@ const BattleDeploySidebar = ({
                     type="button"
                     className="pve2-template-row-main"
                     disabled={disabled}
-                    onClick={() => {
+                    onClick={(event) => {
                       if (disabled) return;
                       if (isTrainingMode) {
-                        onCreateTemplateGroup?.(template, attackerTeam);
+                        onCreateTemplateGroup?.(template, attackerTeam, event);
                         return;
                       }
                       onOpenTemplateFillPreview?.(template, attackerTeam);

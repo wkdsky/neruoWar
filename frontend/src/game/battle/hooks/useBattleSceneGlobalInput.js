@@ -9,15 +9,47 @@ const useBattleSceneGlobalInput = ({
   onEscape,
   onTogglePause,
   onTogglePitch,
+  onMapKeyCommand,
+  onFormationKey,
   onCloseMarchModePick,
   onCloseSkillPick
 } = {}) => {
   useEffect(() => {
     if (!open) return undefined;
+    const keyToCommand = (event) => {
+      const key = String(event.key || '').toLowerCase();
+      if (key === 'w') return 'forward';
+      if (key === 's') return 'backward';
+      if (key === 'a') return 'left';
+      if (key === 'd') return 'right';
+      if (key === 'q') return 'rotate_ccw';
+      if (key === 'e') return 'rotate_cw';
+      return '';
+    };
+    const isEditableKeyboardTarget = (target = null) => {
+      const tagName = target?.tagName?.toLowerCase();
+      return tagName === 'input'
+        || tagName === 'textarea'
+        || tagName === 'select'
+        || target?.isContentEditable;
+    };
     const onKeyDown = (event) => {
       if (event.key === 'Escape') {
         onEscape?.();
         return;
+      }
+      if (!isEditableKeyboardTarget(event.target)) {
+        const command = keyToCommand(event);
+        if (command) {
+          event.preventDefault();
+          onMapKeyCommand?.(command, true);
+          return;
+        }
+        if (String(event.key || '').toLowerCase() === 'z' && !event.ctrlKey && !event.metaKey && !event.altKey) {
+          event.preventDefault();
+          onFormationKey?.();
+          return;
+        }
       }
       if (event.code === 'Space') {
         event.preventDefault();
@@ -35,17 +67,30 @@ const useBattleSceneGlobalInput = ({
     };
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [open, onEscape, onTogglePause, onTogglePitch, runtimeRef, spacePressedRef]);
+  }, [open, onEscape, onFormationKey, onMapKeyCommand, onTogglePause, onTogglePitch, runtimeRef, spacePressedRef]);
 
   useEffect(() => {
     if (!open) return undefined;
+    const keyToCommand = (event) => {
+      const key = String(event.key || '').toLowerCase();
+      if (key === 'w') return 'forward';
+      if (key === 's') return 'backward';
+      if (key === 'a') return 'left';
+      if (key === 'd') return 'right';
+      if (key === 'q') return 'rotate_ccw';
+      if (key === 'e') return 'rotate_cw';
+      return '';
+    };
     const onKeyUp = (event) => {
       if (event.code === 'Space') {
         spacePressedRef.current = false;
       }
+      const command = keyToCommand(event);
+      if (command) onMapKeyCommand?.(command, false);
     };
     const onBlur = () => {
       spacePressedRef.current = false;
+      onMapKeyCommand?.('', false, { clearAll: true });
     };
     window.addEventListener('keyup', onKeyUp);
     window.addEventListener('blur', onBlur);
@@ -53,7 +98,7 @@ const useBattleSceneGlobalInput = ({
       window.removeEventListener('keyup', onKeyUp);
       window.removeEventListener('blur', onBlur);
     };
-  }, [open, spacePressedRef]);
+  }, [onMapKeyCommand, open, spacePressedRef]);
 
   useEffect(() => {
     if (!open || !marchModePickOpen) return undefined;

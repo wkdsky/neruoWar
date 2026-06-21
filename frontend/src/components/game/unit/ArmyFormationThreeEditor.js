@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import * as THREE from 'three';
 import { Move, Trash2 } from 'lucide-react';
-import { buildArmyUnitThreeModel } from './ArmyUnitPreviewCanvases';
+import { UNIT_CLASS_META, resolveUnitClassMeta } from './unitClassMeta';
 
 const CELL_SIZE = 10;
 const TILE_BASE_HEIGHT = 0.72;
@@ -9,6 +9,7 @@ const TILE_TOP_HEIGHT = 0.18;
 const TILE_TOP_Z = TILE_BASE_HEIGHT + TILE_TOP_HEIGHT;
 const TILE_SIZE = CELL_SIZE * 0.96;
 const TILE_TOP_SIZE = CELL_SIZE * 0.86;
+const UNIT_MARKER_Z = TILE_TOP_Z + 0.24;
 const OCCUPANCY_OUTLINE_THICKNESS = 0.52;
 const FORMATION_MARGIN_CELLS = 1;
 const MIN_FORMATION_SPAN = 5;
@@ -16,25 +17,7 @@ const DRAG_SELECT_THRESHOLD_PX = 5;
 
 export const ARMY_FORMATION_MAX_CELLS = 100;
 
-export const UNIT_CLASS_META = Object.freeze({
-  infantry: { label: '步兵', color: '#3b82f6', floor: 0x2563eb },
-  cavalry: { label: '骑兵', color: '#f59e0b', floor: 0xd97706 },
-  archer: { label: '弓兵', color: '#22c55e', floor: 0x15803d },
-  artillery: { label: '炮兵', color: '#ef4444', floor: 0xdc2626 }
-});
-
-export const resolveUnitClassMeta = (unit = {}) => {
-  const classTag = typeof unit?.classTag === 'string' ? unit.classTag.trim().toLowerCase() : '';
-  if (UNIT_CLASS_META[classTag]) return UNIT_CLASS_META[classTag];
-  const name = typeof unit?.name === 'string' ? unit.name : '';
-  const roleTag = unit?.roleTag === '远程' ? '远程' : '近战';
-  const speed = Number(unit?.speed) || 0;
-  const range = Number(unit?.range) || 0;
-  if (/(炮|投石|火炮|炮兵|臼炮|加农)/.test(name)) return UNIT_CLASS_META.artillery;
-  if (/(弓|弩|弓兵|弩兵|射手)/.test(name) || (roleTag === '远程' && range >= 3)) return UNIT_CLASS_META.archer;
-  if (/(骑|骑兵|铁骑|龙骑)/.test(name) || speed >= 2.1) return UNIT_CLASS_META.cavalry;
-  return UNIT_CLASS_META.infantry;
-};
+export { UNIT_CLASS_META, resolveUnitClassMeta };
 
 const createPlacementId = () => `slot_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
 
@@ -91,11 +74,18 @@ export const formationPlacementsToUnits = (placements = []) => {
 const disposeOwnedThreeNode = (node) => {
   if (!node) return;
   if (node.userData?.disposeGeometryOnClear && node.geometry?.dispose) node.geometry.dispose();
+  const disposeMaterial = (material) => {
+    if (!material) return;
+    if (material.userData?.disposeTextureOnClear?.dispose) {
+      material.userData.disposeTextureOnClear.dispose();
+    }
+    material.dispose?.();
+  };
   if (!node.userData?.disposeMaterialOnClear) return;
   if (Array.isArray(node.material)) {
-    node.material.forEach((mat) => mat?.dispose?.());
+    node.material.forEach((mat) => disposeMaterial(mat));
   } else {
-    node.material?.dispose?.();
+    disposeMaterial(node.material);
   }
 };
 
@@ -119,6 +109,43 @@ const worldToGrid = (point) => ({
   x: Math.round((Number(point?.x) || 0) / CELL_SIZE),
   y: Math.round(-((Number(point?.y) || 0) / CELL_SIZE))
 });
+
+const getCellKey = (cell) => (
+  cell ? `${Math.floor(Number(cell.x) || 0)}:${Math.floor(Number(cell.y) || 0)}` : ''
+);
+
+const clonePlacement = (placement = {}) => ({
+  id: typeof placement.id === 'string' && placement.id ? placement.id : createPlacementId(),
+  unitTypeId: typeof placement.unitTypeId === 'string' ? placement.unitTypeId.trim() : '',
+  x: Math.floor(Number(placement.x) || 0),
+  y: Math.floor(Number(placement.y) || 0)
+});
+
+const clonePlacements = (placements = []) => (
+  normalizeFormationPlacements(placements).map((placement) => clonePlacement(placement))
+);
+
+const buildPlacementIndex = (placements = []) => {
+  const normalized = clonePlacements(placements);
+  const byCell = new Map();
+  const countByUnit = new Map();
+  normalized.forEach((placement, index) => {
+    byCell.set(getCellKey(placement), { placement, index });
+    countByUnit.set(placement.unitTypeId, (countByUnit.get(placement.unitTypeId) || 0) + 1);
+  });
+  return { placements: normalized, byCell, countByUnit };
+};
+
+const refreshPlacementIndex = (indexState) => {
+  if (!indexState) return indexState;
+  indexState.byCell.clear();
+  indexState.countByUnit.clear();
+  indexState.placements.forEach((placement, index) => {
+    indexState.byCell.set(getCellKey(placement), { placement, index });
+    indexState.countByUnit.set(placement.unitTypeId, (indexState.countByUnit.get(placement.unitTypeId) || 0) + 1);
+  });
+  return indexState;
+};
 
 const normalizePlacementIds = (ids = []) => (
   Array.from(new Set((Array.isArray(ids) ? ids : [ids])
@@ -239,6 +266,206 @@ const markOwnedMesh = (mesh) => {
   return mesh;
 };
 
+const markOwnedMaterialMesh = (mesh) => {
+  mesh.userData.disposeMaterialOnClear = true;
+  return mesh;
+};
+
+const SHARED_GEOMETRIES = {
+  tileBase: new THREE.BoxGeometry(TILE_SIZE, TILE_SIZE, TILE_BASE_HEIGHT),
+  tileTop: new THREE.BoxGeometry(TILE_TOP_SIZE, TILE_TOP_SIZE, TILE_TOP_HEIGHT),
+  tileHighlight: new THREE.BoxGeometry(TILE_TOP_SIZE * 0.72, 0.16, 0.035),
+  unitBase: new THREE.CylinderGeometry(2.9, 3.25, 0.72, 24),
+  unitBody: new THREE.CylinderGeometry(1.62, 1.96, 3.15, 18),
+  unitHead: new THREE.SphereGeometry(1.14, 18, 12),
+  archerBow: new THREE.TorusGeometry(2.05, 0.16, 8, 36, Math.PI * 1.28),
+  archerString: new THREE.BoxGeometry(0.16, 3.8, 0.16),
+  cavalryCone: new THREE.ConeGeometry(1.15, 2.8, 4),
+  cavalryLine: new THREE.BoxGeometry(4.8, 0.42, 0.36),
+  artilleryTube: new THREE.CylinderGeometry(0.42, 0.5, 4.5, 14),
+  artilleryWheel: new THREE.SphereGeometry(0.62, 12, 8),
+  infantryShield: new THREE.CylinderGeometry(1.18, 1.18, 0.34, 24),
+  infantrySpear: new THREE.BoxGeometry(0.24, 4.4, 0.24),
+  selectedRing: new THREE.TorusGeometry(3.92, 0.22, 10, 44)
+};
+
+const createUnitLabelTexture = (label = '', color = '#ffffff') => {
+  const canvas = document.createElement('canvas');
+  canvas.width = 128;
+  canvas.height = 128;
+  const ctx = canvas.getContext('2d');
+  if (!ctx) return null;
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  ctx.fillStyle = 'rgba(2, 6, 23, 0.58)';
+  ctx.beginPath();
+  ctx.arc(64, 64, 48, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.strokeStyle = color;
+  ctx.lineWidth = 8;
+  ctx.beginPath();
+  ctx.arc(64, 64, 47, 0, Math.PI * 2);
+  ctx.stroke();
+  ctx.fillStyle = '#f8fafc';
+  ctx.font = '700 58px sans-serif';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText(String(label || '').slice(0, 2), 64, 66);
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.colorSpace = THREE.SRGBColorSpace;
+  texture.needsUpdate = true;
+  return texture;
+};
+
+const labelTextureCache = new Map();
+const getCachedUnitLabelTexture = (label = '', color = '#ffffff') => {
+  const key = `${String(label || '').slice(0, 2)}:${color}`;
+  if (labelTextureCache.has(key)) return labelTextureCache.get(key);
+  const texture = createUnitLabelTexture(label, color);
+  if (texture) labelTextureCache.set(key, texture);
+  return texture;
+};
+
+const createOwnedMaterial = (MaterialClass, params = {}) => {
+  const material = new MaterialClass(params);
+  material.userData.disposeMaterialOnClear = true;
+  return material;
+};
+
+const addOwnedMesh = (group, geometry, material, configure = null) => {
+  const mesh = new THREE.Mesh(geometry, material);
+  mesh.userData.disposeGeometryOnClear = true;
+  mesh.userData.disposeMaterialOnClear = true;
+  if (typeof configure === 'function') configure(mesh);
+  group.add(mesh);
+  return mesh;
+};
+
+const addSharedGeometryMesh = (group, geometry, material, configure = null) => {
+  const mesh = new THREE.Mesh(geometry, material);
+  mesh.userData.disposeMaterialOnClear = true;
+  if (typeof configure === 'function') configure(mesh);
+  group.add(mesh);
+  return mesh;
+};
+
+const addUnitLabel = (group, meta, ghost = false, invalid = false) => {
+  const texture = getCachedUnitLabelTexture(meta.mark || meta.label || '?', invalid ? '#ef4444' : meta.color);
+  if (!texture) return;
+  const material = new THREE.SpriteMaterial({
+    map: texture,
+    transparent: true,
+    opacity: ghost ? 0.68 : 0.96,
+    depthWrite: false
+  });
+  material.userData.disposeMaterialOnClear = true;
+  const sprite = new THREE.Sprite(material);
+  sprite.userData.disposeMaterialOnClear = true;
+  sprite.scale.set(5.8, 5.8, 1);
+  sprite.position.set(0, 0, 7.6);
+  group.add(sprite);
+};
+
+const applyGhostMaterial = (material, ghost = false, invalid = false) => {
+  if (!material || !ghost) return material;
+  material.transparent = true;
+  material.opacity = invalid ? 0.36 : 0.56;
+  material.depthWrite = false;
+  return material;
+};
+
+const buildFormationUnitMarker = ({ unit, ghost = false, invalid = false }) => {
+  const meta = resolveUnitClassMeta(unit);
+  const baseColor = invalid ? new THREE.Color('#ef4444') : resolveUnitTileColor(unit);
+  const darkColor = baseColor.clone().multiplyScalar(0.42);
+  const lightColor = baseColor.clone().offsetHSL(0, -0.04, 0.18);
+  const classTag = meta.key || 'infantry';
+  const group = new THREE.Group();
+  group.userData.unitClass = classTag;
+
+  const baseMaterial = applyGhostMaterial(createOwnedMaterial(THREE.MeshStandardMaterial, {
+    color: darkColor,
+    roughness: 0.82,
+    metalness: 0.08
+  }), ghost, invalid);
+  addSharedGeometryMesh(group, SHARED_GEOMETRIES.unitBase, baseMaterial, (mesh) => {
+    mesh.position.z = 0.36;
+  });
+
+  const bodyMaterial = applyGhostMaterial(createOwnedMaterial(THREE.MeshStandardMaterial, {
+    color: baseColor,
+    roughness: 0.54,
+    metalness: 0.12
+  }), ghost, invalid);
+  addSharedGeometryMesh(group, SHARED_GEOMETRIES.unitBody, bodyMaterial, (mesh) => {
+    mesh.position.z = 2.45;
+  });
+
+  const headMaterial = applyGhostMaterial(createOwnedMaterial(THREE.MeshStandardMaterial, {
+    color: lightColor,
+    roughness: 0.42,
+    metalness: 0.08
+  }), ghost, invalid);
+  addSharedGeometryMesh(group, SHARED_GEOMETRIES.unitHead, headMaterial, (mesh) => {
+    mesh.position.z = 4.55;
+    mesh.scale.z = 0.88;
+  });
+
+  const accentMaterial = applyGhostMaterial(createOwnedMaterial(THREE.MeshStandardMaterial, {
+    color: invalid ? 0xffc4c4 : 0xfef3c7,
+    roughness: 0.45,
+    metalness: 0.22
+  }), ghost, invalid);
+  const lineMaterial = applyGhostMaterial(createOwnedMaterial(THREE.MeshBasicMaterial, {
+    color: invalid ? 0xffc4c4 : 0xf8fafc
+  }), ghost, invalid);
+
+  if (classTag === 'archer') {
+    addSharedGeometryMesh(group, SHARED_GEOMETRIES.archerBow, accentMaterial, (mesh) => {
+      mesh.position.set(1.1, -0.35, 3.3);
+      mesh.rotation.set(Math.PI * 0.54, 0.1, Math.PI * 0.15);
+      mesh.scale.set(0.76, 1, 1);
+    });
+    addSharedGeometryMesh(group, SHARED_GEOMETRIES.archerString, lineMaterial, (mesh) => {
+      mesh.position.set(1.38, -0.35, 3.28);
+      mesh.rotation.z = Math.PI * 0.06;
+    });
+  } else if (classTag === 'cavalry') {
+    addSharedGeometryMesh(group, SHARED_GEOMETRIES.cavalryCone, accentMaterial, (mesh) => {
+      mesh.position.set(-0.1, 0.1, 5.4);
+      mesh.rotation.z = Math.PI * 0.25;
+    });
+    addSharedGeometryMesh(group, SHARED_GEOMETRIES.cavalryLine, lineMaterial, (mesh) => {
+      mesh.position.set(0, 0, 1.42);
+      mesh.rotation.z = Math.PI * 0.04;
+    });
+  } else if (classTag === 'artillery') {
+    addSharedGeometryMesh(group, SHARED_GEOMETRIES.artilleryTube, accentMaterial, (mesh) => {
+      mesh.position.set(1.25, 0, 3.1);
+      mesh.rotation.y = Math.PI * 0.5;
+      mesh.rotation.z = Math.PI * 0.04;
+    });
+    addSharedGeometryMesh(group, SHARED_GEOMETRIES.artilleryWheel, lineMaterial, (mesh) => {
+      mesh.position.set(-1.7, -1.25, 1.04);
+    });
+    addSharedGeometryMesh(group, SHARED_GEOMETRIES.artilleryWheel, lineMaterial, (mesh) => {
+      mesh.position.set(-1.7, 1.25, 1.04);
+    });
+  } else {
+    addSharedGeometryMesh(group, SHARED_GEOMETRIES.infantryShield, accentMaterial, (mesh) => {
+      mesh.position.set(-1.45, -0.34, 3.15);
+      mesh.rotation.x = Math.PI * 0.5;
+      mesh.scale.set(1, 0.7, 1);
+    });
+    addSharedGeometryMesh(group, SHARED_GEOMETRIES.infantrySpear, lineMaterial, (mesh) => {
+      mesh.position.set(1.48, 0.18, 3.24);
+      mesh.rotation.z = Math.PI * 0.12;
+    });
+  }
+
+  addUnitLabel(group, meta, ghost, invalid);
+  return group;
+};
+
 const buildPlacementTile = ({ placement, unit, ghost = false, invalid = false }) => {
   const world = gridToWorld(placement.x, placement.y);
   const color = invalid ? new THREE.Color('#ef4444') : resolveUnitTileColor(unit);
@@ -246,8 +473,8 @@ const buildPlacementTile = ({ placement, unit, ghost = false, invalid = false })
   const group = new THREE.Group();
   group.userData.placementId = placement.id;
 
-  const base = markOwnedMesh(new THREE.Mesh(
-    new THREE.BoxGeometry(TILE_SIZE, TILE_SIZE, TILE_BASE_HEIGHT),
+  const base = markOwnedMaterialMesh(new THREE.Mesh(
+    SHARED_GEOMETRIES.tileBase,
     new THREE.MeshStandardMaterial({
       color: baseColor,
       roughness: 0.58,
@@ -259,8 +486,8 @@ const buildPlacementTile = ({ placement, unit, ghost = false, invalid = false })
   base.position.set(world.x, world.y, TILE_BASE_HEIGHT * 0.5);
   group.add(base);
 
-  const top = markOwnedMesh(new THREE.Mesh(
-    new THREE.BoxGeometry(TILE_TOP_SIZE, TILE_TOP_SIZE, TILE_TOP_HEIGHT),
+  const top = markOwnedMaterialMesh(new THREE.Mesh(
+    SHARED_GEOMETRIES.tileTop,
     new THREE.MeshStandardMaterial({
       color,
       emissive: color.clone().multiplyScalar(0.18),
@@ -273,8 +500,8 @@ const buildPlacementTile = ({ placement, unit, ghost = false, invalid = false })
   top.position.set(world.x, world.y, TILE_BASE_HEIGHT + (TILE_TOP_HEIGHT * 0.5));
   group.add(top);
 
-  const highlight = markOwnedMesh(new THREE.Mesh(
-    new THREE.BoxGeometry(TILE_TOP_SIZE * 0.72, 0.16, 0.035),
+  const highlight = markOwnedMaterialMesh(new THREE.Mesh(
+    SHARED_GEOMETRIES.tileHighlight,
     new THREE.MeshBasicMaterial({
       color: 0xffffff,
       transparent: true,
@@ -351,26 +578,97 @@ const buildOccupancyOutline = (placements = []) => {
   return group;
 };
 
+const buildFormationGridStage = (bounds = getFormationBounds([])) => {
+  const group = new THREE.Group();
+  const minX = Math.floor(Number(bounds.minX) || 0);
+  const maxX = Math.floor(Number(bounds.maxX) || 0);
+  const minY = Math.floor(Number(bounds.minY) || 0);
+  const maxY = Math.floor(Number(bounds.maxY) || 0);
+  const widthCells = Math.max(1, maxX - minX + 1);
+  const heightCells = Math.max(1, maxY - minY + 1);
+  const worldMin = gridToWorld(minX - 0.5, maxY + 0.5);
+  const worldMax = gridToWorld(maxX + 0.5, minY - 0.5);
+  const centerX = (worldMin.x + worldMax.x) * 0.5;
+  const centerY = (worldMin.y + worldMax.y) * 0.5;
+  const width = widthCells * CELL_SIZE;
+  const height = heightCells * CELL_SIZE;
+
+  addOwnedMesh(
+    group,
+    new THREE.BoxGeometry(width + 1.2, height + 1.2, 0.32),
+    createOwnedMaterial(THREE.MeshStandardMaterial, {
+      color: 0x071827,
+      roughness: 0.94,
+      metalness: 0.03
+    }),
+    (mesh) => {
+      mesh.position.set(centerX, centerY, -0.24);
+    }
+  );
+
+  const createGridMaterial = (center = false) => createOwnedMaterial(THREE.MeshBasicMaterial, {
+    color: center ? 0xf8fafc : 0x1f8da8,
+    transparent: true,
+    opacity: center ? 0.42 : 0.34,
+    depthWrite: false
+  });
+  const lineZ = 0.02;
+  for (let x = minX; x <= maxX + 1; x += 1) {
+    const edge = gridToWorld(x - 0.5, 0).x;
+    addOwnedMesh(
+      group,
+      new THREE.BoxGeometry(0.09, height, 0.06),
+      createGridMaterial(x === 1 || x === 0),
+      (mesh) => {
+        mesh.position.set(edge, centerY, lineZ);
+      }
+    );
+  }
+  for (let y = minY; y <= maxY + 1; y += 1) {
+    const edge = gridToWorld(0, y - 0.5).y;
+    addOwnedMesh(
+      group,
+      new THREE.BoxGeometry(width, 0.09, 0.06),
+      createGridMaterial(y === 1 || y === 0),
+      (mesh) => {
+        mesh.position.set(centerX, edge, lineZ);
+      }
+    );
+  }
+
+  const createBorderMaterial = () => createOwnedMaterial(THREE.MeshBasicMaterial, {
+    color: 0x67e8f9,
+    transparent: true,
+    opacity: 0.68,
+    depthWrite: false
+  });
+  [
+    [centerX, worldMin.y, width + 0.2, 0.22],
+    [centerX, worldMax.y, width + 0.2, 0.22],
+    [worldMin.x, centerY, 0.22, height + 0.2],
+    [worldMax.x, centerY, 0.22, height + 0.2]
+  ].forEach(([x, y, w, h]) => {
+    addOwnedMesh(group, new THREE.BoxGeometry(w, h, 0.08), createBorderMaterial(), (mesh) => {
+      mesh.position.set(x, y, lineZ + 0.04);
+    });
+  });
+
+  return group;
+};
+
 const buildPlacementUnit = ({ placement, unit, selected = false, ghost = false, invalid = false }) => {
   const world = gridToWorld(placement.x, placement.y);
-  const group = buildArmyUnitThreeModel(unit);
-  group.position.set(world.x, world.y, TILE_TOP_Z + (ghost ? 0.36 : 0.18));
-  group.scale.setScalar(0.28);
-  group.rotation.z = Math.PI;
+  const group = buildFormationUnitMarker({ unit, ghost, invalid });
+  group.position.set(world.x, world.y, UNIT_MARKER_Z + (ghost ? 0.24 : 0));
+  group.rotation.z = Math.PI * 0.04;
   group.userData.placementId = placement.id;
   group.traverse((node) => {
     node.userData.placementId = placement.id;
-    if (node.material && ghost) {
-      node.material = node.material.clone();
-      node.material.transparent = true;
-      node.material.opacity = invalid ? 0.34 : 0.52;
-      node.userData.disposeMaterialOnClear = true;
-    }
   });
 
   if (selected) {
     const ring = new THREE.Mesh(
-      new THREE.TorusGeometry(3.7, 0.24, 10, 40),
+      SHARED_GEOMETRIES.selectedRing,
       new THREE.MeshBasicMaterial({
         color: 0xfef3c7,
         transparent: true,
@@ -378,9 +676,8 @@ const buildPlacementUnit = ({ placement, unit, selected = false, ghost = false, 
         depthWrite: false
       })
     );
-    ring.position.set(0, 0, 0.28);
+    ring.position.set(0, 0, 0.3);
     ring.rotation.x = Math.PI / 2;
-    ring.userData.disposeGeometryOnClear = true;
     ring.userData.disposeMaterialOnClear = true;
     group.add(ring);
   }
@@ -414,6 +711,7 @@ const ArmyFormationThreeEditor = ({
   selectedPlacementIds = [],
   isMoveSelectionMode = false,
   onPlaceUnit,
+  onChangePlacements,
   onMovePlacement,
   onSelectPlacement,
   onSelectPlacements,
@@ -422,7 +720,8 @@ const ArmyFormationThreeEditor = ({
   onDeleteSelection,
   onMoveSelectionToCell,
   className = '',
-  canPlaceUnit
+  canPlaceUnit,
+  unitBasis = []
 }) => {
   const canvasRef = useRef(null);
   const rendererRef = useRef(null);
@@ -435,6 +734,8 @@ const ArmyFormationThreeEditor = ({
   const hoverCellRef = useRef(null);
   const boundsRef = useRef(getFormationBounds([]));
   const dragSelectionRef = useRef(null);
+  const placementDragRef = useRef(null);
+  const requestRenderRef = useRef(() => {});
   const [marqueeRect, setMarqueeRect] = useState(null);
   const [selectionUi, setSelectionUi] = useState(null);
   const [rendererError, setRendererError] = useState('');
@@ -446,6 +747,7 @@ const ArmyFormationThreeEditor = ({
     selectedPlacementIds,
     isMoveSelectionMode,
     onPlaceUnit,
+    onChangePlacements,
     onMovePlacement,
     onSelectPlacement,
     onSelectPlacements,
@@ -453,7 +755,8 @@ const ArmyFormationThreeEditor = ({
     onBeginMoveSelection,
     onDeleteSelection,
     onMoveSelectionToCell,
-    canPlaceUnit
+    canPlaceUnit,
+    unitBasis
   });
 
   propsRef.current = {
@@ -464,6 +767,7 @@ const ArmyFormationThreeEditor = ({
     selectedPlacementIds,
     isMoveSelectionMode,
     onPlaceUnit,
+    onChangePlacements,
     onMovePlacement,
     onSelectPlacement,
     onSelectPlacements,
@@ -471,8 +775,19 @@ const ArmyFormationThreeEditor = ({
     onBeginMoveSelection,
     onDeleteSelection,
     onMoveSelectionToCell,
-    canPlaceUnit
+    canPlaceUnit,
+    unitBasis
   };
+
+  const unitLimitMap = useMemo(() => {
+    const map = new Map();
+    (Array.isArray(unitBasis) ? unitBasis : []).forEach((entry) => {
+      const unitTypeId = typeof entry?.unitTypeId === 'string' ? entry.unitTypeId.trim() : '';
+      if (!unitTypeId) return;
+      map.set(unitTypeId, Math.max(0, Math.floor(Number(entry?.basis) || Number(entry?.count) || 0)));
+    });
+    return map;
+  }, [unitBasis]);
 
   const unitMap = useMemo(() => (
     new Map(
@@ -566,6 +881,44 @@ const ArmyFormationThreeEditor = ({
       .map((placement) => placement.id);
   }, [projectWorldToCanvas]);
 
+  const renderFormationScene = useCallback((nextPlacements = placements, options = {}) => {
+    const groups = groupsRef.current;
+    const camera = cameraRef.current;
+    const canvas = canvasRef.current;
+    if (!groups) return;
+    const normalized = clonePlacements(nextPlacements);
+    const bounds = getFormationBounds(normalized);
+    const selectedIds = options.selectedIds instanceof Set
+      ? options.selectedIds
+      : selectedPlacementIdSet;
+    boundsRef.current = bounds;
+    clearGroup(groups.floorGroup, true);
+    clearGroup(groups.outlineGroup, true);
+    clearGroup(groups.unitGroup, true);
+
+    groups.floorGroup.add(buildFormationGridStage(bounds));
+    normalized.forEach((placement) => {
+      const unit = unitMap.get(placement.unitTypeId);
+      if (!unit) return;
+      groups.floorGroup.add(buildPlacementTile({
+        placement,
+        unit,
+        ghost: false
+      }));
+      groups.unitGroup.add(buildPlacementUnit({
+        placement,
+        unit,
+        selected: selectedIds.has(placement.id)
+      }));
+    });
+    groups.outlineGroup.add(buildOccupancyOutline(normalized));
+    updateCameraForBounds(camera, canvas, bounds);
+    if (options.syncSelection !== false) {
+      syncSelectionUi();
+    }
+    requestRenderRef.current();
+  }, [placements, selectedPlacementIdSet, syncSelectionUi, unitMap]);
+
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return undefined;
@@ -590,14 +943,14 @@ const ArmyFormationThreeEditor = ({
         powerPreference: 'high-performance'
       });
     } catch (error) {
-      setRendererError('阵型画布初始化失败，请刷新页面后重试');
+      setRendererError('阵型画布初始化失败，请切换步骤后重试');
       return () => {
         canvas.removeEventListener('webglcontextlost', handleContextLost, false);
         canvas.removeEventListener('webglcontextrestored', handleContextRestored, false);
       };
     }
     setRendererError('');
-    renderer.setPixelRatio(Math.min(2, window.devicePixelRatio || 1));
+    renderer.setPixelRatio(Math.min(1.5, window.devicePixelRatio || 1));
     renderer.setClearColor(0x020617, 1);
 
     const scene = new THREE.Scene();
@@ -626,7 +979,7 @@ const ArmyFormationThreeEditor = ({
 
     let raf = 0;
     const renderFrame = () => {
-      raf = requestAnimationFrame(renderFrame);
+      raf = 0;
       const width = Math.max(1, Math.floor(canvas.clientWidth || 1));
       const height = Math.max(1, Math.floor(canvas.clientHeight || 1));
       if (canvas.width !== width || canvas.height !== height) {
@@ -636,10 +989,28 @@ const ArmyFormationThreeEditor = ({
       }
       renderer.render(scene, camera);
     };
-    renderFrame();
+    const requestRender = () => {
+      if (raf) return;
+      raf = requestAnimationFrame(renderFrame);
+    };
+    requestRenderRef.current = requestRender;
+    let resizeObserver = null;
+    if (typeof ResizeObserver !== 'undefined') {
+      resizeObserver = new ResizeObserver(requestRender);
+      resizeObserver.observe(canvas);
+    } else {
+      window.addEventListener('resize', requestRender);
+    }
+    requestRender();
 
     return () => {
       cancelAnimationFrame(raf);
+      if (resizeObserver) {
+        resizeObserver.disconnect();
+      } else {
+        window.removeEventListener('resize', requestRender);
+      }
+      requestRenderRef.current = () => {};
       clearGroup(floorGroup, true);
       clearGroup(outlineGroup, true);
       clearGroup(unitGroup, true);
@@ -660,7 +1031,10 @@ const ArmyFormationThreeEditor = ({
     if (!groups) return;
     clearGroup(groups.hoverGroup, true);
     clearGroup(groups.ghostGroup, true);
-    if (!cell) return;
+    if (!cell) {
+      requestRenderRef.current();
+      return;
+    }
 
     const {
       selectedUnitTypeId: nextUnitTypeId,
@@ -692,6 +1066,7 @@ const ArmyFormationThreeEditor = ({
           invalid: preview.blocked
         }));
       });
+      requestRenderRef.current();
       return;
     }
     const occupied = normalizeFormationPlacements(nextPlacements)
@@ -721,38 +1096,12 @@ const ArmyFormationThreeEditor = ({
         ghost: true
       }));
     }
+    requestRenderRef.current();
   }, [unitMap]);
 
   useEffect(() => {
-    const groups = groupsRef.current;
-    const camera = cameraRef.current;
-    const canvas = canvasRef.current;
-    if (!groups) return;
-    const normalized = normalizeFormationPlacements(placements);
-    const bounds = getFormationBounds(normalized);
-    boundsRef.current = bounds;
-    clearGroup(groups.floorGroup, true);
-    clearGroup(groups.outlineGroup, true);
-    clearGroup(groups.unitGroup, true);
-
-    normalized.forEach((placement) => {
-      const unit = unitMap.get(placement.unitTypeId);
-      if (!unit) return;
-      groups.floorGroup.add(buildPlacementTile({
-        placement,
-        unit,
-        ghost: false
-      }));
-      groups.unitGroup.add(buildPlacementUnit({
-        placement,
-        unit,
-        selected: selectedPlacementIdSet.has(placement.id)
-      }));
-    });
-    groups.outlineGroup.add(buildOccupancyOutline(normalized));
-    updateCameraForBounds(camera, canvas, bounds);
-    syncSelectionUi();
-  }, [placements, selectedPlacementId, selectedPlacementIdSet, syncSelectionUi, unitMap]);
+    renderFormationScene(placements, { selectedIds: selectedPlacementIdSet });
+  }, [placements, selectedPlacementIdSet, renderFormationScene]);
 
   useEffect(() => {
     syncHoverVisual(hoverCellRef.current);
@@ -795,6 +1144,110 @@ const ArmyFormationThreeEditor = ({
     placeUnit?.(safeUnitTypeId, cell);
   };
 
+  const getLocalUnitLimit = (unitTypeId) => {
+    const safeId = typeof unitTypeId === 'string' ? unitTypeId.trim() : '';
+    if (!safeId) return 0;
+    if (unitLimitMap.has(safeId)) return unitLimitMap.get(safeId);
+    return ARMY_FORMATION_MAX_CELLS;
+  };
+
+  const schedulePlacementDragSceneSync = useCallback((dragState) => {
+    if (!dragState || dragState.syncRaf) return;
+    dragState.syncRaf = requestAnimationFrame(() => {
+      dragState.syncRaf = 0;
+      renderFormationScene(dragState.index.placements, {
+        selectedIds: new Set(),
+        syncSelection: false
+      });
+    });
+  }, [renderFormationScene]);
+
+  const finishPlacementDrag = useCallback((dragState, options = {}) => {
+    if (!dragState) return;
+    if (dragState.syncRaf) {
+      cancelAnimationFrame(dragState.syncRaf);
+      dragState.syncRaf = 0;
+    }
+    clearGroup(groupsRef.current?.ghostGroup, true);
+    clearGroup(groupsRef.current?.hoverGroup, true);
+    const shouldCommit = options.commit !== false;
+    if (!dragState.changed) {
+      requestRenderRef.current();
+      return;
+    }
+    if (!shouldCommit) {
+      renderFormationScene(propsRef.current.placements, { selectedIds: selectedPlacementIdSet });
+      return;
+    }
+    const nextPlacements = clonePlacements(dragState.index.placements);
+    renderFormationScene(nextPlacements, {
+      selectedIds: new Set(),
+      syncSelection: false
+    });
+    if (typeof propsRef.current.onChangePlacements === 'function') {
+      propsRef.current.onChangePlacements(nextPlacements);
+      return;
+    }
+    renderFormationScene(propsRef.current.placements, { selectedIds: selectedPlacementIdSet });
+  }, [renderFormationScene, selectedPlacementIdSet]);
+
+  useEffect(() => {
+    const clearActiveDrag = (event) => {
+      const placementDragState = placementDragRef.current;
+      if (placementDragState && (!event || placementDragState.pointerId === event.pointerId)) {
+        placementDragRef.current = null;
+        finishPlacementDrag(placementDragState, { commit: event?.type !== 'pointercancel' });
+      }
+      if (dragSelectionRef.current) {
+        dragSelectionRef.current = null;
+        setMarqueeRect(null);
+      }
+    };
+    window.addEventListener('pointerup', clearActiveDrag);
+    window.addEventListener('pointercancel', clearActiveDrag);
+    return () => {
+      window.removeEventListener('pointerup', clearActiveDrag);
+      window.removeEventListener('pointercancel', clearActiveDrag);
+    };
+  }, [finishPlacementDrag]);
+
+  const applyPlacementDragCell = (cell, dragState = placementDragRef.current) => {
+    if (!dragState || !cell) return;
+    const safeUnitTypeId = typeof dragState.unitTypeId === 'string' ? dragState.unitTypeId.trim() : '';
+    const key = getCellKey(cell);
+    if (!safeUnitTypeId || !key || dragState.visitedCells.has(key)) return;
+    dragState.visitedCells.add(key);
+
+    const hitEntry = dragState.index.byCell.get(key);
+    const hitPlacement = hitEntry?.placement || null;
+    if (dragState.mode === 'eraseSame') {
+      if (hitPlacement?.unitTypeId === safeUnitTypeId) {
+        dragState.index.placements.splice(hitEntry.index, 1);
+        refreshPlacementIndex(dragState.index);
+        dragState.changed = true;
+        schedulePlacementDragSceneSync(dragState);
+      }
+      return;
+    }
+    if (hitPlacement?.unitTypeId === safeUnitTypeId) return;
+    const currentUnitCount = dragState.index.countByUnit.get(safeUnitTypeId) || 0;
+    if (currentUnitCount >= getLocalUnitLimit(safeUnitTypeId)) return;
+    if (!hitPlacement && dragState.index.placements.length >= ARMY_FORMATION_MAX_CELLS) return;
+    if (hitPlacement) {
+      hitPlacement.unitTypeId = safeUnitTypeId;
+    } else {
+      dragState.index.placements.push({
+        id: createPlacementId(),
+        unitTypeId: safeUnitTypeId,
+        x: cell.x,
+        y: cell.y
+      });
+    }
+    refreshPlacementIndex(dragState.index);
+    dragState.changed = true;
+    schedulePlacementDragSceneSync(dragState);
+  };
+
   const commitPlacementSelection = (ids = [], options = {}) => {
     const current = propsRef.current;
     const safeIds = normalizePlacementIds(ids);
@@ -813,9 +1266,19 @@ const ArmyFormationThreeEditor = ({
   const handlePointerMove = (event) => {
     const cell = resolveCellFromEvent(event);
     const prev = hoverCellRef.current;
-    if (prev?.x === cell?.x && prev?.y === cell?.y) return;
-    hoverCellRef.current = cell;
-    syncHoverVisual(cell);
+    const sameCell = prev?.x === cell?.x && prev?.y === cell?.y;
+
+    const placementDragState = placementDragRef.current;
+    if (placementDragState && placementDragState.pointerId === event.pointerId) {
+      if (!sameCell) hoverCellRef.current = cell;
+      if (!sameCell) applyPlacementDragCell(cell, placementDragState);
+      return;
+    }
+
+    if (!sameCell) {
+      hoverCellRef.current = cell;
+      syncHoverVisual(cell);
+    }
 
     const dragState = dragSelectionRef.current;
     if (!dragState || dragState.pointerId !== event.pointerId) return;
@@ -831,6 +1294,7 @@ const ArmyFormationThreeEditor = ({
 
   const handlePointerLeave = () => {
     hoverCellRef.current = null;
+    if (placementDragRef.current) return;
     boundsRef.current = getFormationBounds(propsRef.current.placements);
     updateCameraForBounds(cameraRef.current, canvasRef.current, boundsRef.current);
     syncHoverVisual(null);
@@ -840,6 +1304,10 @@ const ArmyFormationThreeEditor = ({
     if (event.button === 2) {
       event.preventDefault();
       dragSelectionRef.current = null;
+      if (placementDragRef.current) {
+        finishPlacementDrag(placementDragRef.current, { commit: false });
+      }
+      placementDragRef.current = null;
       setMarqueeRect(null);
       propsRef.current.onCancelAction?.();
       return;
@@ -857,7 +1325,22 @@ const ArmyFormationThreeEditor = ({
     const normalized = normalizeFormationPlacements(currentPlacements);
     const hitPlacement = normalized.find((placement) => placement.x === cell.x && placement.y === cell.y) || null;
     if (currentSelectedUnitTypeId) {
-      tryPlaceUnit(currentSelectedUnitTypeId, cell);
+      const placementDragState = {
+        pointerId: event.pointerId,
+        unitTypeId: currentSelectedUnitTypeId,
+        mode: hitPlacement?.unitTypeId === currentSelectedUnitTypeId ? 'eraseSame' : 'place',
+        visitedCells: new Set(),
+        index: buildPlacementIndex(currentPlacements),
+        changed: false,
+        syncRaf: 0
+      };
+      placementDragRef.current = placementDragState;
+      dragSelectionRef.current = null;
+      clearGroup(groupsRef.current?.ghostGroup, true);
+      clearGroup(groupsRef.current?.hoverGroup, true);
+      requestRenderRef.current();
+      event.currentTarget?.setPointerCapture?.(event.pointerId);
+      applyPlacementDragCell(cell, placementDragState);
       return;
     }
     if (movingSelection) {
@@ -878,6 +1361,14 @@ const ArmyFormationThreeEditor = ({
   };
 
   const handlePointerUp = (event) => {
+    const placementDragState = placementDragRef.current;
+    if (placementDragState && placementDragState.pointerId === event.pointerId) {
+      placementDragRef.current = null;
+      event.currentTarget?.releasePointerCapture?.(event.pointerId);
+      finishPlacementDrag(placementDragState, { commit: true });
+      return;
+    }
+
     const dragState = dragSelectionRef.current;
     if (!dragState || dragState.pointerId !== event.pointerId) return;
     dragSelectionRef.current = null;
@@ -895,6 +1386,18 @@ const ArmyFormationThreeEditor = ({
       return;
     }
     commitPlacementSelection([]);
+  };
+
+  const handlePointerCancel = (event) => {
+    if (placementDragRef.current?.pointerId === event.pointerId) {
+      finishPlacementDrag(placementDragRef.current, { commit: false });
+      placementDragRef.current = null;
+    }
+    if (dragSelectionRef.current?.pointerId === event.pointerId) {
+      dragSelectionRef.current = null;
+      setMarqueeRect(null);
+    }
+    event.currentTarget?.releasePointerCapture?.(event.pointerId);
   };
 
   const handleDrop = (event) => {
@@ -918,6 +1421,7 @@ const ArmyFormationThreeEditor = ({
         onPointerLeave={handlePointerLeave}
         onPointerDown={handlePointerDown}
         onPointerUp={handlePointerUp}
+        onPointerCancel={handlePointerCancel}
         onContextMenu={(event) => event.preventDefault()}
         onDragOver={(event) => event.preventDefault()}
         onDrop={handleDrop}

@@ -259,6 +259,7 @@ export default class CameraController {
     this.up = [0, 0, 1];
 
     this.view = mat4Identity();
+    this.viewWorld = mat4Identity();
     this.projection = mat4Identity();
     this.viewProjection = mat4Identity();
     this.inverseViewProjection = mat4Identity();
@@ -280,6 +281,29 @@ export default class CameraController {
   getPitchBlend() {
     const denom = Math.max(1e-4, this.pitchHigh - this.pitchLow);
     return clamp((this.currentPitch - this.pitchLow) / denom, 0, 1);
+  }
+
+  resolveDynamicPitchForDistance(distance, distanceMin, distanceMax) {
+    const minDistance = Math.max(1, Number(distanceMin) || 1);
+    const maxDistance = Math.max(minDistance + 1, Number(distanceMax) || (minDistance + 1));
+    const distanceT = clamp(((Number(distance) || minDistance) - minDistance) / (maxDistance - minDistance), 0, 1);
+    return this.pitchLow + ((this.pitchHigh - this.pitchLow) * smoothstep(distanceT));
+  }
+
+  setPitchImmediate(pitch) {
+    const next = clamp(Number(pitch) || this.pitchLow, 10, 170);
+    this.currentPitch = next;
+    this.pitchFrom = next;
+    this.pitchTo = next;
+    this.pitchTweenSec = this.pitchTweenDurationSec;
+  }
+
+  setDistanceWithDynamicPitch(distance, distanceMin, distanceMax) {
+    const minDistance = Math.max(1, Number(distanceMin) || 1);
+    const maxDistance = Math.max(minDistance + 1, Number(distanceMax) || (minDistance + 1));
+    const nextDistance = clamp(Number(distance) || minDistance, minDistance, maxDistance);
+    this.distance = nextDistance;
+    this.setPitchImmediate(this.resolveDynamicPitchForDistance(nextDistance, minDistance, maxDistance));
   }
 
   update(dtSec, anchor = null) {
@@ -364,8 +388,8 @@ export default class CameraController {
     );
     const applyView = (view) => {
       this.view = view;
-      const viewProj = mat4Multiply(this.projection, this.view);
-      this.viewProjection = mat4Multiply(viewProj, pivotWorldRotation);
+      this.viewWorld = mat4Multiply(this.view, pivotWorldRotation);
+      this.viewProjection = mat4Multiply(this.projection, this.viewWorld);
       this.inverseViewProjection = mat4Invert(this.viewProjection);
     };
 
@@ -405,6 +429,7 @@ export default class CameraController {
     const forward = forwardFromView;
     return {
       view: this.view,
+      viewWorld: this.viewWorld,
       projection: this.projection,
       viewProjection: this.viewProjection,
       inverseViewProjection: this.inverseViewProjection,

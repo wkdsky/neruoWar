@@ -6,7 +6,7 @@ export const SPEED_MODE_B = 'B_HARMONIC';
 export const SPEED_MODE_C = 'C_PER_TYPE';
 export const SPEED_MODE_AUTO = 'AUTO';
 
-export const CAMERA_ZOOM_STEP = 24;
+export const CAMERA_ZOOM_STEP = 72;
 export const CAMERA_DISTANCE_MIN = 360;
 export const CAMERA_DISTANCE_MAX = 980;
 

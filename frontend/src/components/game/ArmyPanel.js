@@ -3,16 +3,16 @@ import './ArmyPanel.css';
 import { API_BASE } from '../../runtimeConfig';
 import normalizeUnitTypes from '../../game/unit/normalizeUnitTypes';
 import {
-  ArmyCloseupThreePreview,
-  ArmyBattleImpostorPreview
+  ArmyUnitCloseupCanvasPreview,
+  ArmyUnitBattleCanvasPreview
 } from './unit/ArmyUnitPreviewCanvases';
+import { resolveUnitClassMeta } from './unit/unitClassMeta';
 import ArmyFormationThreeEditor, {
   ARMY_FORMATION_MAX_CELLS,
   expandUnitsToFormationPlacements,
   getFormationOccupancyMetrics,
   normalizeFormationPlacements,
-  resolveFormationMovePreview,
-  resolveUnitClassMeta
+  resolveFormationMovePreview
 } from './unit/ArmyFormationThreeEditor';
 import {
   ArmyBattlefieldItemCloseupPreview,
@@ -89,7 +89,11 @@ const unitsToSummaryText = (units = [], unitNameById = new Map()) => (
     .join(' / ')
 );
 
-const normalizeUnitBasisEntries = (entries = []) => {
+const clampUnitBasisValue = (value) => (
+  Math.max(1, Math.min(ARMY_MAX_UNIT_BASIS, Math.floor(Number(value) || 1)))
+);
+
+const normalizeUnitBasisEntryRows = (entries = []) => {
   const byId = [];
   const seen = new Set();
   (Array.isArray(entries) ? entries : []).forEach((entry) => {
@@ -98,20 +102,78 @@ const normalizeUnitBasisEntries = (entries = []) => {
     seen.add(unitTypeId);
     byId.push({
       unitTypeId,
-      basis: Math.max(1, Math.floor(Number(entry?.basis) || Number(entry?.count) || 1))
+      basis: clampUnitBasisValue(Number(entry?.basis) || Number(entry?.count) || 1)
     });
   });
-  if (byId.length === 1) {
-    return [{ ...byId[0], basis: 1 }];
-  }
+  return byId;
+};
+
+const normalizeUnitBasisEntries = (entries = []) => {
+  const byId = normalizeUnitBasisEntryRows(entries);
   let total = 0;
-  const normalized = byId.map((entry) => {
-    const remaining = Math.max(1, ARMY_MAX_UNIT_BASIS - total);
+  const normalized = [];
+  byId.forEach((entry) => {
+    const remaining = ARMY_MAX_UNIT_BASIS - total;
+    if (remaining <= 0) return;
     const basis = Math.min(remaining, entry.basis);
+    if (basis <= 0) return;
     total += basis;
-    return { ...entry, basis };
+    normalized.push({ ...entry, basis });
   });
-  return normalized.filter((entry) => entry.basis > 0);
+  return normalized;
+};
+
+const rebalanceUnitBasisOnChange = (entries = [], unitTypeId = '', nextBasisRaw = 1) => {
+  const safeId = typeof unitTypeId === 'string' ? unitTypeId.trim() : '';
+  const source = normalizeUnitBasisEntryRows(entries);
+  const activeIndex = source.findIndex((entry) => entry.unitTypeId === safeId);
+  if (!safeId || activeIndex < 0) return normalizeUnitBasisEntries(source);
+
+  const otherCount = Math.max(0, source.length - 1);
+  const maxActiveBasis = otherCount > 0
+    ? Math.max(1, ARMY_MAX_UNIT_BASIS - otherCount)
+    : ARMY_MAX_UNIT_BASIS;
+  const requested = Math.min(clampUnitBasisValue(nextBasisRaw), maxActiveBasis);
+  const nextEntries = source.map((entry, index) => (
+    index === activeIndex ? { ...entry, basis: requested } : { ...entry }
+  ));
+  let overflow = nextEntries.reduce((sum, entry) => sum + entry.basis, 0) - ARMY_MAX_UNIT_BASIS;
+  if (overflow <= 0) return normalizeUnitBasisEntries(nextEntries);
+
+  const otherIndexes = nextEntries
+    .map((entry, index) => (index === activeIndex ? -1 : index))
+    .filter((index) => index >= 0);
+  while (overflow > 0) {
+    const adjustableIndexes = [];
+    for (let otherIndexIndex = 0; otherIndexIndex < otherIndexes.length; otherIndexIndex += 1) {
+      const index = otherIndexes[otherIndexIndex];
+      if (nextEntries[index].basis > 1) adjustableIndexes.push(index);
+    }
+    if (adjustableIndexes.length <= 0) break;
+    for (let sortIndex = 0; sortIndex < adjustableIndexes.length - 1; sortIndex += 1) {
+      for (let compareIndex = sortIndex + 1; compareIndex < adjustableIndexes.length; compareIndex += 1) {
+        const leftIndex = adjustableIndexes[sortIndex];
+        const rightIndex = adjustableIndexes[compareIndex];
+        const shouldSwap = nextEntries[rightIndex].basis > nextEntries[leftIndex].basis
+          || (nextEntries[rightIndex].basis === nextEntries[leftIndex].basis && rightIndex < leftIndex);
+        if (shouldSwap) {
+          adjustableIndexes[sortIndex] = rightIndex;
+          adjustableIndexes[compareIndex] = leftIndex;
+        }
+      }
+    }
+    const share = Math.max(1, Math.floor(overflow / adjustableIndexes.length));
+    for (let indexIndex = 0; indexIndex < adjustableIndexes.length && overflow > 0; indexIndex += 1) {
+      const index = adjustableIndexes[indexIndex];
+      const reduction = Math.min(nextEntries[index].basis - 1, share, overflow);
+      nextEntries[index] = {
+        ...nextEntries[index],
+        basis: nextEntries[index].basis - reduction
+      };
+      overflow -= reduction;
+    }
+  }
+  return normalizeUnitBasisEntries(nextEntries);
 };
 
 const getUnitBasisTotal = (entries = []) => (
@@ -247,6 +309,14 @@ const buildFormationPayload = (formations = [], basisEntries = []) => (
     }))
   }))
 );
+
+const buildLegalFormationPayload = (formations = [], basisEntries = []) => {
+  const basisRows = normalizeUnitBasisEntries(basisEntries);
+  return buildFormationPayload(
+    normalizeFormationSlots(formations, basisRows).filter((formation) => isFormationLegal(formation, basisRows)),
+    basisRows
+  );
+};
 
 const pushFormationHistory = (formation, nextPlacements) => ({
   ...formation,
@@ -461,6 +531,7 @@ const ArmyPanel = ({ initialLibraryTab = 'units', mode = 'barracks' }) => {
   const [templateEditorActiveFormationId, setTemplateEditorActiveFormationId] = useState('');
   const [templateEditorSelectedUnitId, setTemplateEditorSelectedUnitId] = useState('');
   const [templateEditorHoverUnitId, setTemplateEditorHoverUnitId] = useState('');
+  const [templateEditorHoverPoint, setTemplateEditorHoverPoint] = useState(null);
   const [templateEditorSelectedPlacementId, setTemplateEditorSelectedPlacementId] = useState('');
   const [templateEditorSelectedPlacementIds, setTemplateEditorSelectedPlacementIds] = useState([]);
   const [templateEditorMoveSelectionIds, setTemplateEditorMoveSelectionIds] = useState([]);
@@ -658,13 +729,9 @@ const ArmyPanel = ({ initialLibraryTab = 'units', mode = 'barracks' }) => {
   );
 
   const templateEditorDetailUnit = useMemo(() => {
-    const unitId = templateEditorHoverUnitId
-      || templateEditorSelectedUnitId
-      || templateEditorBasisRows[0]?.unitTypeId
-      || templateEditorAvailableRows[0]?.unitTypeId
-      || '';
+    const unitId = templateEditorHoverUnitId || '';
     return unitTypeMap[unitId] || null;
-  }, [templateEditorAvailableRows, templateEditorBasisRows, templateEditorHoverUnitId, templateEditorSelectedUnitId, unitTypeMap]);
+  }, [templateEditorHoverUnitId, unitTypeMap]);
 
   const templateEditorSelectedPlacements = useMemo(() => {
     const ids = new Set(normalizeFormationPlacementIds(templateEditorSelectedPlacementIds));
@@ -690,6 +757,30 @@ const ArmyPanel = ({ initialLibraryTab = 'units', mode = 'barracks' }) => {
     () => (templateEditorDetailUnit ? resolveUnitClassMeta(templateEditorDetailUnit) : null),
     [templateEditorDetailUnit]
   );
+
+  const updateTemplateEditorUnitHover = useCallback((unitTypeId, event = null) => {
+    const safeId = typeof unitTypeId === 'string' ? unitTypeId.trim() : '';
+    if (!safeId || !unitTypeMap[safeId]) return;
+    const clientX = Number(event?.clientX);
+    const clientY = Number(event?.clientY);
+    const rect = event?.currentTarget?.getBoundingClientRect?.();
+    const fallbackX = rect ? rect.right : 320;
+    const fallbackY = rect ? rect.top : 180;
+    const rawX = Number.isFinite(clientX) ? clientX : fallbackX;
+    const rawY = Number.isFinite(clientY) ? clientY : fallbackY;
+    const width = typeof window !== 'undefined' ? window.innerWidth : 1280;
+    const height = typeof window !== 'undefined' ? window.innerHeight : 720;
+    setTemplateEditorHoverUnitId(safeId);
+    setTemplateEditorHoverPoint({
+      x: Math.max(12, Math.min(width - 340, rawX + 16)),
+      y: Math.max(12, Math.min(height - 430, rawY + 16))
+    });
+  }, [unitTypeMap]);
+
+  const clearTemplateEditorUnitHover = useCallback(() => {
+    setTemplateEditorHoverUnitId('');
+    setTemplateEditorHoverPoint(null);
+  }, []);
 
   const pushArmyToast = useCallback((message, type = 'info') => {
     const safeMessage = typeof message === 'string' ? message.trim() : '';
@@ -995,28 +1086,31 @@ const ArmyPanel = ({ initialLibraryTab = 'units', mode = 'barracks' }) => {
   const handleAddEditorUnit = useCallback((unitTypeId) => {
     const safeId = typeof unitTypeId === 'string' ? unitTypeId.trim() : '';
     if (!safeId || !unitTypeMap[safeId]) return;
-    let added = false;
+    const currentDraftBasis = normalizeUnitBasisEntries(templateEditorDraft.unitBasis);
+    if (currentDraftBasis.some((entry) => entry.unitTypeId === safeId)) {
+      pushArmyToast('该兵种已在部队中', 'error');
+      return;
+    }
+    if (getUnitBasisTotal(currentDraftBasis) >= ARMY_MAX_UNIT_BASIS) {
+      pushArmyToast('基础数已达上限', 'error');
+      return;
+    }
     setTemplateEditorDraft((prev) => {
       const current = normalizeUnitBasisEntries(prev.unitBasis);
       if (current.some((entry) => entry.unitTypeId === safeId)) return prev;
       if (getUnitBasisTotal(current) >= ARMY_MAX_UNIT_BASIS) return prev;
       const nextBasis = normalizeUnitBasisEntries([...current, { unitTypeId: safeId, basis: 1 }]);
-      added = true;
       return {
         ...prev,
         unitBasis: nextBasis,
         formations: sanitizeDraftFormations(nextBasis, prev.formations)
       };
     });
-    if (added) {
-      setTemplateEditorSelectedUnitId(safeId);
-      setTemplateEditorSelectedPlacementId('');
-      setTemplateEditorSelectedPlacementIds([]);
-      setTemplateEditorMoveSelectionIds([]);
-    } else {
-      pushArmyToast('该兵种已在部队中，或基础数已达上限', 'error');
-    }
-  }, [pushArmyToast, sanitizeDraftFormations, unitTypeMap]);
+    setTemplateEditorSelectedUnitId(safeId);
+    setTemplateEditorSelectedPlacementId('');
+    setTemplateEditorSelectedPlacementIds([]);
+    setTemplateEditorMoveSelectionIds([]);
+  }, [pushArmyToast, sanitizeDraftFormations, templateEditorDraft.unitBasis, unitTypeMap]);
 
   const handleRemoveEditorUnit = useCallback((unitTypeId) => {
     const safeId = typeof unitTypeId === 'string' ? unitTypeId.trim() : '';
@@ -1030,7 +1124,10 @@ const ArmyPanel = ({ initialLibraryTab = 'units', mode = 'barracks' }) => {
       };
     });
     if (templateEditorSelectedUnitId === safeId) setTemplateEditorSelectedUnitId('');
-    if (templateEditorHoverUnitId === safeId) setTemplateEditorHoverUnitId('');
+    if (templateEditorHoverUnitId === safeId) {
+      setTemplateEditorHoverUnitId('');
+      setTemplateEditorHoverPoint(null);
+    }
     setTemplateEditorSelectedPlacementId('');
     setTemplateEditorSelectedPlacementIds([]);
     setTemplateEditorMoveSelectionIds([]);
@@ -1038,26 +1135,16 @@ const ArmyPanel = ({ initialLibraryTab = 'units', mode = 'barracks' }) => {
 
   const handleChangeEditorUnitBasis = useCallback((unitTypeId, nextBasisRaw) => {
     const safeId = typeof unitTypeId === 'string' ? unitTypeId.trim() : '';
-    if (!safeId || templateEditorBasisRows.length < 2) return;
-    const requested = Math.max(1, Math.floor(Number(nextBasisRaw) || 1));
+    if (!safeId) return;
     setTemplateEditorDraft((prev) => {
-      const current = normalizeUnitBasisEntries(prev.unitBasis);
-      const otherTotal = current
-        .filter((entry) => entry.unitTypeId !== safeId)
-        .reduce((sum, entry) => sum + entry.basis, 0);
-      const max = Math.max(1, ARMY_MAX_UNIT_BASIS - otherTotal);
-      const nextBasis = normalizeUnitBasisEntries(current.map((entry) => (
-        entry.unitTypeId === safeId
-          ? { ...entry, basis: Math.min(max, requested) }
-          : entry
-      )));
+      const nextBasis = rebalanceUnitBasisOnChange(prev.unitBasis, safeId, nextBasisRaw);
       return {
         ...prev,
         unitBasis: nextBasis,
         formations: sanitizeDraftFormations(nextBasis, prev.formations)
       };
     });
-  }, [sanitizeDraftFormations, templateEditorBasisRows.length]);
+  }, [sanitizeDraftFormations]);
 
   const handleUnitStageDrop = useCallback((event) => {
     event.preventDefault();
@@ -1122,6 +1209,14 @@ const ArmyPanel = ({ initialLibraryTab = 'units', mode = 'barracks' }) => {
     setTemplateEditorSelectedPlacementIds([]);
     setTemplateEditorMoveSelectionIds([]);
   }, [templateEditorBasisRows, unitTypeMap, updateActiveFormation]);
+
+  const handleChangeFormationPlacements = useCallback((placements = []) => {
+    const nextPlacements = normalizeFormationPlacements(placements);
+    updateActiveFormation(() => nextPlacements);
+    setTemplateEditorSelectedPlacementId('');
+    setTemplateEditorSelectedPlacementIds([]);
+    setTemplateEditorMoveSelectionIds([]);
+  }, [updateActiveFormation]);
 
   const handleMoveFormationPlacement = useCallback((placementId, cell) => {
     const safeId = typeof placementId === 'string' ? placementId.trim() : '';
@@ -1316,9 +1411,15 @@ const ArmyPanel = ({ initialLibraryTab = 'units', mode = 'barracks' }) => {
       return;
     }
     if (templateEditorLegalFormationCount <= 0) {
-      setTemplateNotice('至少需要一个合法阵型才能创建部队');
+      setTemplateNotice('至少需要一个合法阵型才能保存部队');
       return;
     }
+    const legalFormationPayload = buildLegalFormationPayload(templateEditorFormations, templateEditorDraft.unitBasis);
+    if (legalFormationPayload.length <= 0) {
+      setTemplateNotice('至少需要一个合法阵型才能保存部队');
+      return;
+    }
+    const ignoredFormationCount = Math.max(0, templateEditorFormations.length - legalFormationPayload.length);
 
     const isEditing = !!templateEditingId;
     const actionId = isEditing ? templateEditingId : '__create__';
@@ -1339,7 +1440,7 @@ const ArmyPanel = ({ initialLibraryTab = 'units', mode = 'barracks' }) => {
           body: JSON.stringify({
             name: templateEditorDraft.name || '',
             units,
-            formations: buildFormationPayload(templateEditorFormations, templateEditorDraft.unitBasis)
+            formations: legalFormationPayload
           })
         }
       );
@@ -1348,12 +1449,26 @@ const ArmyPanel = ({ initialLibraryTab = 'units', mode = 'barracks' }) => {
         setTemplateNotice(getApiErrorMessage(parsed, isEditing ? '更新部队失败' : '创建部队失败'));
         return;
       }
-      const nextTemplates = Array.isArray(parsed.data?.templates) ? parsed.data.templates : templates;
+      let nextTemplates = Array.isArray(parsed.data?.templates) ? parsed.data.templates : templates;
+      try {
+        const refreshResponse = await fetch(`${API_BASE}/army/templates`, {
+          headers: {
+            Authorization: `Bearer ${token}`
+          }
+        });
+        const refreshParsed = await parseApiResponse(refreshResponse);
+        if (refreshResponse.ok && Array.isArray(refreshParsed.data?.templates)) {
+          nextTemplates = refreshParsed.data.templates;
+        }
+      } catch {
+        // The save already succeeded; keep the save response if the follow-up refresh fails.
+      }
       setTemplates(nextTemplates);
       const nextActiveId = getTemplateId(parsed.data?.template) || getTemplateId(nextTemplates[0]);
       setSelectedTemplateId(nextActiveId);
       closeTemplateEditor();
-      setTemplateNotice(isEditing ? '部队已更新' : '部队已创建');
+      const successMessage = `${isEditing ? '编辑' : '创建'}部队成功${ignoredFormationCount > 0 ? `，已忽略 ${ignoredFormationCount} 个未完成阵型` : ''}`;
+      pushArmyToast(successMessage, 'info');
     } catch (requestError) {
       setTemplateNotice(`${isEditing ? '更新部队' : '创建部队'}失败: ${requestError.message}`);
     } finally {
@@ -1794,7 +1909,7 @@ const ArmyPanel = ({ initialLibraryTab = 'units', mode = 'barracks' }) => {
                   <div className="army-unit-turntable">
                     <div className="army-unit-turntable-shadow" />
                     <div className="army-unit-turntable-disc" />
-                    <ArmyCloseupThreePreview
+                    <ArmyUnitCloseupCanvasPreview
                       unit={detailUnit}
                       rotationDeg={detailRotation.closeup}
                       className="army-unit-visual-dummy"
@@ -1818,7 +1933,7 @@ const ArmyPanel = ({ initialLibraryTab = 'units', mode = 'barracks' }) => {
                   <div className="army-unit-turntable is-battle">
                     <div className="army-unit-turntable-shadow is-battle" />
                     <div className="army-unit-turntable-disc is-battle" />
-                    <ArmyBattleImpostorPreview
+                    <ArmyUnitBattleCanvasPreview
                       unit={detailUnit}
                       rotationDeg={detailRotation.battle}
                       className="army-unit-visual-dummy is-battle"
@@ -2035,20 +2150,31 @@ const ArmyPanel = ({ initialLibraryTab = 'units', mode = 'barracks' }) => {
                   {templateEditorAvailableRows.map((row) => {
                     const picked = templateEditorBasisRows.some((item) => item.unitTypeId === row.unitTypeId);
                     const classMeta = resolveUnitClassMeta(row.unit);
+                    const addBlocked = !picked && templateEditorTotal >= ARMY_MAX_UNIT_BASIS;
                     return (
                       <button
                         key={`unit-stage-${row.unitTypeId}`}
                         type="button"
-                        className={`army-formation-unit-button ${picked ? 'is-selected' : ''}`}
-                        draggable={!picked && templateEditorTotal < ARMY_MAX_UNIT_BASIS}
-                        disabled={picked || templateEditorTotal >= ARMY_MAX_UNIT_BASIS}
+                        className={`army-formation-unit-button ${picked ? 'is-selected' : ''} ${addBlocked ? 'is-disabled' : ''}`}
+                        draggable={!picked && !addBlocked}
+                        aria-disabled={addBlocked}
                         onDragStart={(event) => {
+                          if (picked || addBlocked) {
+                            event.preventDefault();
+                            return;
+                          }
                           event.dataTransfer?.setData('application/x-army-unit-type-id', row.unitTypeId);
                           event.dataTransfer?.setData('text/plain', row.unitTypeId);
                         }}
-                        onMouseEnter={() => setTemplateEditorHoverUnitId(row.unitTypeId)}
-                        onFocus={() => setTemplateEditorHoverUnitId(row.unitTypeId)}
-                        onMouseLeave={() => setTemplateEditorHoverUnitId('')}
+                        onClick={(event) => {
+                          updateTemplateEditorUnitHover(row.unitTypeId, event);
+                          if (!picked) handleAddEditorUnit(row.unitTypeId);
+                        }}
+                        onMouseEnter={(event) => updateTemplateEditorUnitHover(row.unitTypeId, event)}
+                        onMouseMove={(event) => updateTemplateEditorUnitHover(row.unitTypeId, event)}
+                        onFocus={(event) => updateTemplateEditorUnitHover(row.unitTypeId, event)}
+                        onMouseLeave={clearTemplateEditorUnitHover}
+                        onBlur={clearTemplateEditorUnitHover}
                       >
                         <i style={{ background: classMeta.color }} />
                         <span>
@@ -2070,7 +2196,21 @@ const ArmyPanel = ({ initialLibraryTab = 'units', mode = 'barracks' }) => {
                   ) : (
                     <div className="army-unit-basis-grid">
                       {templateEditorBasisRows.map((row) => (
-                        <article key={`basis-${row.unitTypeId}`} className="army-unit-basis-card">
+                        <article
+                          key={`basis-${row.unitTypeId}`}
+                          className="army-unit-basis-card"
+                          tabIndex={0}
+                          onMouseEnter={(event) => updateTemplateEditorUnitHover(row.unitTypeId, event)}
+                          onMouseMove={(event) => updateTemplateEditorUnitHover(row.unitTypeId, event)}
+                          onFocus={(event) => updateTemplateEditorUnitHover(row.unitTypeId, event)}
+                          onMouseLeave={clearTemplateEditorUnitHover}
+                          onBlur={clearTemplateEditorUnitHover}
+                          onClick={(event) => {
+                            const targetTag = String(event.target?.tagName || '').toLowerCase();
+                            if (targetTag === 'button' || targetTag === 'input') return;
+                            updateTemplateEditorUnitHover(row.unitTypeId, event);
+                          }}
+                        >
                           <div className="army-unit-basis-head">
                             <i style={{ background: row.classMeta.color }} />
                             <div>
@@ -2084,52 +2224,90 @@ const ArmyPanel = ({ initialLibraryTab = 'units', mode = 'barracks' }) => {
                           <div className="army-unit-basis-percent">{formatPercentTenths(row.percentTenths)}</div>
                           <label className="army-unit-basis-input">
                             <span>基础数</span>
-                            <input
-                              type="number"
-                              min={1}
-                              max={ARMY_MAX_UNIT_BASIS}
-                              value={row.basis}
-                              disabled={templateEditorBasisRows.length < 2}
-                              onChange={(event) => handleChangeEditorUnitBasis(row.unitTypeId, event.target.value)}
-                            />
+                            <div className="army-unit-basis-range-control">
+                              <input
+                                type="range"
+                                min={1}
+                                max={ARMY_MAX_UNIT_BASIS}
+                                step={1}
+                                value={row.basis}
+                                aria-label={`${row.unitName}基础数`}
+                                onChange={(event) => handleChangeEditorUnitBasis(row.unitTypeId, event.target.value)}
+                              />
+                              <output>{row.basis}</output>
+                            </div>
                           </label>
                         </article>
                       ))}
                     </div>
                   )}
                 </section>
-                <aside className="army-formation-unit-detail">
-                  <div className="army-formation-panel-title">兵种详情</div>
-                  {templateEditorDetailUnit ? (
-                    <>
-                      <div className="army-formation-detail-head">
-                        <div>
-                          <h5>{templateEditorDetailUnit.name || templateEditorDetailUnit.id}</h5>
-                          <span style={{ color: templateEditorDetailClassMeta?.color }}>
-                            {templateEditorDetailClassMeta?.label || '步兵'}
-                          </span>
-                        </div>
+                <aside className="army-template-troop-info-panel">
+                  <div className="army-formation-panel-title">部队信息</div>
+                  <div className="army-template-troop-info-head">
+                    <strong>{templateEditorDraft.name || '新建部队'}</strong>
+                    <span>{templateEditorSummary || '尚未配置兵种'}</span>
+                  </div>
+                  <div className="army-template-troop-info-stats">
+                    <div><span>基础数</span><strong>{`${templateEditorTotal}/${ARMY_FORMATION_MAX_CELLS}`}</strong></div>
+                    <div><span>兵种</span><strong>{templateEditorBasisRows.length}</strong></div>
+                    <div><span>合法阵型</span><strong>{`${templateEditorLegalFormationCount}/${templateEditorFormations.length}`}</strong></div>
+                    <div><span>平均速度</span><strong>{templateEditorPreviewStats.speed}</strong></div>
+                    <div><span>生命</span><strong>{templateEditorPreviewStats.hp}</strong></div>
+                    <div><span>攻击</span><strong>{templateEditorPreviewStats.atk}</strong></div>
+                    <div><span>防御</span><strong>{templateEditorPreviewStats.def}</strong></div>
+                    <div><span>射程</span><strong>{templateEditorPreviewStats.range}</strong></div>
+                  </div>
+                  <div className="army-template-troop-info-compose">
+                    {templateEditorBasisRows.length <= 0 ? (
+                      <div className="army-preview-empty">从左侧添加兵种后汇总部队信息。</div>
+                    ) : templateEditorBasisRows.map((row) => (
+                      <div key={`info-compose-${row.unitTypeId}`} className="army-troop-composition-row">
+                        <i style={{ background: row.classMeta.color }} />
+                        <span>{row.unitName}</span>
+                        <em>{formatPercentTenths(row.percentTenths)}</em>
+                        <strong>{row.basis}</strong>
                       </div>
-                      <div className="army-formation-preview">
-                        <ArmyCloseupThreePreview
-                          unit={templateEditorDetailUnit}
-                          rotationDeg={0}
-                          className="army-formation-preview-canvas"
-                        />
-                      </div>
-                      <div className="army-formation-stat-grid">
-                        <div><span>速度</span><strong>{Number(templateEditorDetailUnit.speed) || 0}</strong></div>
-                        <div><span>生命</span><strong>{Number(templateEditorDetailUnit.hp) || 0}</strong></div>
-                        <div><span>攻击</span><strong>{Number(templateEditorDetailUnit.atk) || 0}</strong></div>
-                        <div><span>防御</span><strong>{Number(templateEditorDetailUnit.def) || 0}</strong></div>
-                        <div><span>射程</span><strong>{Number(templateEditorDetailUnit.range) || 0}</strong></div>
-                        <div><span>库存</span><strong>{Number(templateEditorDetailUnit.count) || 0}</strong></div>
-                      </div>
-                    </>
-                  ) : (
-                    <div className="army-preview-empty">暂无兵种数据</div>
-                  )}
+                    ))}
+                  </div>
+                  <div className="army-template-skill-placeholder">
+                    <strong>部队技能树</strong>
+                    <span>预留区域</span>
+                  </div>
                 </aside>
+                {templateEditorDetailUnit && templateEditorHoverPoint ? (
+                  <div
+                    className="army-template-unit-hover-card"
+                    style={{
+                      left: `${templateEditorHoverPoint.x}px`,
+                      top: `${templateEditorHoverPoint.y}px`
+                    }}
+                  >
+                    <div className="army-template-unit-hover-head">
+                      <div>
+                        <strong>{templateEditorDetailUnit.name || templateEditorDetailUnit.id}</strong>
+                        <span style={{ color: templateEditorDetailClassMeta?.color }}>
+                          {templateEditorDetailClassMeta?.label || '步兵'}
+                        </span>
+                      </div>
+                    </div>
+                    <div className="army-template-unit-hover-preview">
+                      <ArmyUnitCloseupCanvasPreview
+                        unit={templateEditorDetailUnit}
+                        rotationDeg={0}
+                        className="army-formation-preview-canvas"
+                      />
+                    </div>
+                    <div className="army-formation-stat-grid">
+                      <div><span>速度</span><strong>{Number(templateEditorDetailUnit.speed) || 0}</strong></div>
+                      <div><span>生命</span><strong>{Number(templateEditorDetailUnit.hp) || 0}</strong></div>
+                      <div><span>攻击</span><strong>{Number(templateEditorDetailUnit.atk) || 0}</strong></div>
+                      <div><span>防御</span><strong>{Number(templateEditorDetailUnit.def) || 0}</strong></div>
+                      <div><span>射程</span><strong>{Number(templateEditorDetailUnit.range) || 0}</strong></div>
+                      <div><span>库存</span><strong>{Number(templateEditorDetailUnit.count) || 0}</strong></div>
+                    </div>
+                  </div>
+                ) : null}
               </div>
             ) : null}
 
@@ -2216,6 +2394,7 @@ const ArmyPanel = ({ initialLibraryTab = 'units', mode = 'barracks' }) => {
                         selectedPlacementIds={templateEditorSelectedPlacementIds}
                         isMoveSelectionMode={templateEditorMoveSelectionIds.length > 0}
                         onPlaceUnit={handlePlaceFormationUnit}
+                        onChangePlacements={handleChangeFormationPlacements}
                         onMovePlacement={handleMoveFormationPlacement}
                         onSelectPlacement={handleSelectFormationPlacement}
                         onSelectPlacements={handleSelectFormationPlacements}
@@ -2223,6 +2402,7 @@ const ArmyPanel = ({ initialLibraryTab = 'units', mode = 'barracks' }) => {
                         onBeginMoveSelection={handleBeginMoveFormationSelection}
                         onDeleteSelection={handleDeleteFormationSelection}
                         onMoveSelectionToCell={handleMoveFormationSelectionToCell}
+                        unitBasis={templateEditorBasisRows}
                         canPlaceUnit={canPlaceFormationUnit}
                         className="army-formation-canvas"
                       />

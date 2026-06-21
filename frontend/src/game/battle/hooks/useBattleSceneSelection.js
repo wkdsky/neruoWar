@@ -208,7 +208,13 @@ export default function useBattleSceneSelection({
       name: typeof group.name === 'string' ? group.name : '',
       units: unitsMap,
       x: Number(group.x) || 0,
-      y: Number(group.y) || 0
+      y: Number(group.y) || 0,
+      formationRect: group?.formationRect && typeof group.formationRect === 'object'
+        ? { ...group.formationRect }
+        : null,
+      deploySlots: Array.isArray(group?.deploySlots)
+        ? group.deploySlots.map((slot) => ({ ...slot }))
+        : []
     };
     const removeResult = runtime.removeDeployGroup(prevTeam, targetId);
     if (!removeResult?.ok) {

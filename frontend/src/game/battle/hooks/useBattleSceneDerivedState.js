@@ -62,9 +62,11 @@ const useBattleSceneDerivedState = ({
     : SPEED_MODE_B;
   const selectedWaypoints = selectedSquad && Array.isArray(selectedSquad.waypoints) ? selectedSquad.waypoints : [];
 
-  const pitchLabel = cameraRef.current.getPitchBlend() >= 0.5
-    ? `${Math.round(Number(cameraRef.current.pitchHigh) || BATTLE_PITCH_HIGH_DEG)}°`
-    : `${Math.round(Number(cameraRef.current.pitchLow) || BATTLE_PITCH_LOW_DEG)}°`;
+  const pitchLabel = Number.isFinite(Number(cameraRef.current.currentPitch))
+    ? `${Math.round(Number(cameraRef.current.currentPitch))}°`
+    : (cameraRef.current.getPitchBlend() >= 0.5
+      ? `${Math.round(Number(cameraRef.current.pitchHigh) || BATTLE_PITCH_HIGH_DEG)}°`
+      : `${Math.round(Number(cameraRef.current.pitchLow) || BATTLE_PITCH_LOW_DEG)}°`);
 
   const deployEditorIsTeamAuto = isTrainingMode && !deployEditingGroupId;
   const deployRosterRows = (() => {
@@ -131,15 +133,6 @@ const useBattleSceneDerivedState = ({
       })
       .filter(Boolean)
     : [];
-  const selectedDeployHandleLeftDom = (
-    selectedDeployFormation
-    && worldToDom
-  ) ? worldToDom({ x: selectedDeployFormation.leftHandle.x, y: selectedDeployFormation.leftHandle.y, z: 0 }) : null;
-  const selectedDeployHandleRightDom = (
-    selectedDeployFormation
-    && worldToDom
-  ) ? worldToDom({ x: selectedDeployFormation.rightHandle.x, y: selectedDeployFormation.rightHandle.y, z: 0 }) : null;
-
   const worldActionGroupId = selectedDeployGroup?.id || '';
   const worldActionPos = (
     phase === 'deploy'
@@ -228,8 +221,6 @@ const useBattleSceneDerivedState = ({
     selectedDeployGroup,
     selectedDeployFormation,
     selectedDeployFormationLines,
-    selectedDeployHandleLeftDom,
-    selectedDeployHandleRightDom,
     worldActionGroupId,
     worldActionPos,
     selectedBattleActionSquad,

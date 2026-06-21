@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useRef } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import '../presentation/ui/Battle.css';
 import CameraController from '../presentation/render/CameraController';
 import useBattleRuntime from '../hooks/useBattleRuntime';
@@ -15,7 +15,6 @@ import useBattleActions from '../hooks/useBattleActions';
 import useBattleSceneSelection from '../hooks/useBattleSceneSelection';
 import useBattleEscapeHandler from '../hooks/useBattleEscapeHandler';
 import useBattleSceneInputController from '../hooks/useBattleSceneInputController';
-import useBattleDeployFormationResize from '../hooks/useBattleDeployFormationResize';
 import useBattleSceneLifecycle from '../hooks/useBattleSceneLifecycle';
 import useBattleSceneUiState from '../hooks/useBattleSceneUiState';
 import BattleHUD from '../presentation/ui/BattleHUD';
@@ -33,6 +32,7 @@ import BattleMarchModeFloat from '../presentation/ui/BattleMarchModeFloat';
 import BattleSkillPickFloat from '../presentation/ui/BattleSkillPickFloat';
 import DeployGroupInfoPanel from '../presentation/ui/DeployGroupInfoPanel';
 import BattleMapDial from '../presentation/ui/BattleMapDial';
+import BattleFormationWheel from '../presentation/ui/BattleFormationWheel';
 import useDraggablePanel from '../presentation/ui/useDraggablePanel';
 import unitVisualConfig from '../presentation/assets/UnitVisualConfig.example.json';
 import NumberPadDialog from '../../../components/common/NumberPadDialog';
@@ -99,8 +99,17 @@ const BattleSceneContainer = ({
   const deployYawDragRef = useRef(null);
   const deployRectDragRef = useRef(null);
   const spacePressedRef = useRef(false);
+  const mapKeyCommandsRef = useRef(new Set());
   const runtimeInitRef = useRef(null);
   const reportBattleResultRef = useRef(() => {});
+  const [mapKeyCommand, setMapKeyCommand] = useState('');
+  const [deployFormationLibrary, setDeployFormationLibrary] = useState({});
+  const [formationWheelState, setFormationWheelState] = useState({
+    open: false,
+    groupId: '',
+    x: 0,
+    y: 0
+  });
 
   const {
     paused,
@@ -227,7 +236,8 @@ const BattleSceneContainer = ({
     enabled: open,
     loading,
     error,
-    battleInitData
+    battleInitData,
+    mode
   });
 
   const {
@@ -360,8 +370,215 @@ const BattleSceneContainer = ({
     };
   }, [cameraViewRectRef, runtimeRef]);
 
+  const handleMapKeyCommand = useCallback((command, active, options = {}) => {
+    if (options.clearAll) {
+      mapKeyCommandsRef.current.clear();
+      setMapKeyCommand('');
+      return;
+    }
+    if (!command) return;
+    if (active) mapKeyCommandsRef.current.add(command);
+    else mapKeyCommandsRef.current.delete(command);
+    setMapKeyCommand(Array.from(mapKeyCommandsRef.current).sort().join('|'));
+  }, []);
+
+  const handleDeployGroupFormationsChange = useCallback((groupId, formations = [], activeFormationId = '') => {
+    const safeGroupId = String(groupId || '').trim();
+    if (!safeGroupId) return;
+    setDeployFormationLibrary((prev) => {
+      const legalFormations = (Array.isArray(formations) ? formations : [])
+        .filter((formation) => formation && formation.legal !== false)
+        .slice(0, 15);
+      if (legalFormations.length <= 0) {
+        const next = { ...prev };
+        delete next[safeGroupId];
+        return next;
+      }
+      const fallbackId = String(legalFormations[0]?.formationId || legalFormations[0]?.id || '').trim();
+      return {
+        ...prev,
+        [safeGroupId]: {
+          formations: legalFormations,
+          activeFormationId: String(activeFormationId || fallbackId || '').trim()
+        }
+      };
+    });
+  }, []);
+
+  const handleDeployGroupRemoved = useCallback((groupId) => {
+    const safeGroupId = String(groupId || '').trim();
+    if (!safeGroupId) return;
+    setDeployFormationLibrary((prev) => {
+      if (!Object.prototype.hasOwnProperty.call(prev, safeGroupId)) return prev;
+      const next = { ...prev };
+      delete next[safeGroupId];
+      return next;
+    });
+    setFormationWheelState((prev) => (
+      prev.groupId === safeGroupId ? { ...prev, open: false, groupId: '' } : prev
+    ));
+  }, []);
+
+  const handleDeployGroupIdChanged = useCallback((prevGroupId, nextGroupId, nextActiveFormationId = '') => {
+    const safePrevId = String(prevGroupId || '').trim();
+    const safeNextId = String(nextGroupId || '').trim();
+    if (!safePrevId || !safeNextId || safePrevId === safeNextId) return;
+    setDeployFormationLibrary((prev) => {
+      const source = prev[safePrevId];
+      if (!source) return prev;
+      const next = { ...prev };
+      delete next[safePrevId];
+      next[safeNextId] = {
+        ...source,
+        activeFormationId: nextActiveFormationId || source.activeFormationId || ''
+      };
+      return next;
+    });
+    setFormationWheelState((prev) => (
+      prev.groupId === safePrevId ? { ...prev, groupId: safeNextId } : prev
+    ));
+  }, []);
+
+  const getSceneRelativePosition = useCallback((event = null, fallbackWorld = null) => {
+    const sceneRect = sceneRef.current?.getBoundingClientRect();
+    let x = Number(sceneRect?.width) * 0.5 || 360;
+    let y = Number(sceneRect?.height) * 0.5 || 240;
+    if (event?.currentTarget?.getBoundingClientRect && sceneRect) {
+      const targetRect = event.currentTarget.getBoundingClientRect();
+      x = (targetRect.left + (targetRect.width * 0.5)) - sceneRect.left;
+      y = (targetRect.top + (targetRect.height * 0.5)) - sceneRect.top;
+    } else if (Number.isFinite(Number(event?.clientX)) && Number.isFinite(Number(event?.clientY)) && sceneRect) {
+      x = Number(event.clientX) - sceneRect.left;
+      y = Number(event.clientY) - sceneRect.top;
+    } else if (fallbackWorld && worldToDomRef.current) {
+      const dom = worldToDomRef.current({ x: Number(fallbackWorld.x) || 0, y: Number(fallbackWorld.y) || 0, z: 0 });
+      if (dom?.visible !== false) {
+        x = Number(dom.x) || x;
+        y = Number(dom.y) || y;
+      }
+    }
+    const maxX = Math.max(28, Number(sceneRect?.width) || x);
+    const maxY = Math.max(28, Number(sceneRect?.height) || y);
+    const marginX = Math.min(152, Math.max(28, (maxX * 0.5) - 4));
+    const marginY = Math.min(152, Math.max(28, (maxY * 0.5) - 4));
+    return {
+      x: clamp(x, marginX, Math.max(marginX, maxX - marginX)),
+      y: clamp(y, marginY, Math.max(marginY, maxY - marginY))
+    };
+  }, [worldToDomRef]);
+
+  const openFormationWheelForGroup = useCallback((groupId, event = null) => {
+    const runtime = runtimeRef.current;
+    const safeGroupId = String(groupId || '').trim();
+    if (!runtime || runtime.getPhase?.() !== 'deploy' || !safeGroupId) return false;
+    const library = deployFormationLibrary[safeGroupId];
+    const formations = Array.isArray(library?.formations) ? library.formations : [];
+    if (formations.length <= 0) {
+      setDeployNotice('该部队没有可切换的模板阵型');
+      return false;
+    }
+    const group = runtime.getDeployGroupById(safeGroupId);
+    const pos = getSceneRelativePosition(event, group || pointerWorldRef.current);
+    setFormationWheelState({
+      open: true,
+      groupId: safeGroupId,
+      x: pos.x,
+      y: pos.y
+    });
+    setDeployActionAnchorMode('');
+    return true;
+  }, [
+    deployFormationLibrary,
+    getSceneRelativePosition,
+    pointerWorldRef,
+    runtimeRef,
+    setDeployActionAnchorMode,
+    setDeployNotice
+  ]);
+
+  const handleFormationKey = useCallback(() => {
+    if (phase !== 'deploy') return;
+    const targetGroupId = deployDraggingGroupId || selectedSquadId;
+    if (!targetGroupId) return;
+    openFormationWheelForGroup(targetGroupId);
+  }, [deployDraggingGroupId, openFormationWheelForGroup, phase, selectedSquadId]);
+
+  const handleCloseFormationWheel = useCallback(() => {
+    setFormationWheelState((prev) => ({ ...prev, open: false }));
+  }, []);
+
+  const handlePickDeployFormation = useCallback((formation) => {
+    const runtime = runtimeRef.current;
+    const groupId = String(formationWheelState.groupId || deployDraggingGroupId || selectedSquadId || '').trim();
+    if (!runtime || runtime.getPhase?.() !== 'deploy' || !groupId || !formation) return;
+    const group = runtime.getDeployGroupById(groupId);
+    if (!group) {
+      setFormationWheelState((prev) => ({ ...prev, open: false, groupId: '' }));
+      return;
+    }
+    const groupTeam = group.team === TEAM_DEFENDER ? TEAM_DEFENDER : TEAM_ATTACKER;
+    const result = runtime.setDeployGroupFormation(groupId, formation, groupTeam);
+    if (!result?.ok) {
+      setDeployNotice(result?.reason || '阵型切换失败');
+      return;
+    }
+    const formationId = String(formation?.formationId || formation?.id || '').trim();
+    setDeployFormationLibrary((prev) => {
+      const source = prev[groupId];
+      if (!source) return prev;
+      return {
+        ...prev,
+        [groupId]: {
+          ...source,
+          activeFormationId: formationId || source.activeFormationId || ''
+        }
+      };
+    });
+    runtime.setSelectedDeployGroup(groupId);
+    runtime.setFocusSquad(groupId);
+    setSelectedSquadId(groupId);
+    setFormationWheelState((prev) => ({ ...prev, open: false }));
+
+    if (group.placed !== false && !runtime.canDeployGroupFitAt(groupId, group, groupTeam)) {
+      runtime.setDeployGroupPlaced(groupTeam, groupId, false);
+      setDeployDraggingGroup({ groupId, team: groupTeam });
+      setDeployActionAnchorMode('');
+      setDeployNotice('新阵型放不下当前位置，已回到鼠标吸附状态；右键可取消放置');
+    } else {
+      setDeployNotice(`已切换阵型：${formation?.name || '未命名阵型'}`);
+    }
+    setCards(runtime.getCardRows());
+    setMinimapSnapshot(runtime.getMinimapSnapshot());
+  }, [
+    deployDraggingGroupId,
+    formationWheelState.groupId,
+    runtimeRef,
+    selectedSquadId,
+    setCards,
+    setDeployActionAnchorMode,
+    setDeployDraggingGroup,
+    setDeployNotice,
+    setMinimapSnapshot,
+    setSelectedSquadId
+  ]);
+
+  const handleDeployGroupTeamSwitched = useCallback(({ prevGroupId = '', nextGroupId = '', nextTeam = TEAM_ATTACKER } = {}) => {
+    const safePrevId = String(prevGroupId || '').trim();
+    const safeNextId = String(nextGroupId || '').trim();
+    if (!safePrevId || !safeNextId || safePrevId === safeNextId) return;
+    const source = deployFormationLibrary[safePrevId];
+    const activeFormationId = String(source?.activeFormationId || '').trim();
+    const activeFormation = Array.isArray(source?.formations)
+      ? source.formations.find((formation) => String(formation?.formationId || formation?.id || '').trim() === activeFormationId)
+      : null;
+    if (activeFormation) {
+      runtimeRef.current?.setDeployGroupFormation?.(safeNextId, activeFormation, nextTeam === TEAM_DEFENDER ? TEAM_DEFENDER : TEAM_ATTACKER);
+    }
+    handleDeployGroupIdChanged(safePrevId, safeNextId, activeFormationId);
+  }, [deployFormationLibrary, handleDeployGroupIdChanged, runtimeRef]);
+
   useEffect(() => {
-    if (!open || !mapDialCommand) return undefined;
+    if (!open || (!mapDialCommand && !mapKeyCommand)) return undefined;
     let rafId = 0;
     let lastTs = performance.now();
     const step = (ts) => {
@@ -370,8 +587,8 @@ const BattleSceneContainer = ({
       if (runtime && camera) {
         const dt = Math.min(0.05, Math.max(0.001, (ts - lastTs) / 1000));
         lastTs = ts;
-        const panSpeed = Math.max(70, (Number(camera.distance) || 560) * 0.42);
-        const rotateSpeed = 58;
+        const panSpeed = Math.max(170, (Number(camera.distance) || 560) * 1.05);
+        const rotateSpeed = 145;
         const worldYawRad = (Number(camera.worldYawDeg) || 0) * (Math.PI / 180);
         // Default/fallback basis: world aligned.
         let rightX = Math.sin(worldYawRad);
@@ -406,22 +623,26 @@ const BattleSceneContainer = ({
         let nextCenterX = Number(camera.centerX) || 0;
         let nextCenterY = Number(camera.centerY) || 0;
 
-        if (mapDialCommand === 'forward') {
-          nextCenterX += forwardX * panSpeed * dt;
-          nextCenterY += forwardY * panSpeed * dt;
-        } else if (mapDialCommand === 'backward') {
-          nextCenterX -= forwardX * panSpeed * dt;
-          nextCenterY -= forwardY * panSpeed * dt;
-        } else if (mapDialCommand === 'left') {
-          nextCenterX -= rightX * panSpeed * dt;
-          nextCenterY -= rightY * panSpeed * dt;
-        } else if (mapDialCommand === 'right') {
-          nextCenterX += rightX * panSpeed * dt;
-          nextCenterY += rightY * panSpeed * dt;
-        } else if (mapDialCommand === 'rotate_ccw') {
-          camera.worldYawDeg -= rotateSpeed * dt;
-        } else if (mapDialCommand === 'rotate_cw') {
-          camera.worldYawDeg += rotateSpeed * dt;
+        const commands = new Set(mapKeyCommandsRef.current);
+        if (mapDialCommand) commands.add(mapDialCommand);
+        let moveRight = 0;
+        let moveForward = 0;
+        let rotateDirection = 0;
+        if (commands.has('forward')) moveForward += 1;
+        if (commands.has('backward')) moveForward -= 1;
+        if (commands.has('right')) moveRight += 1;
+        if (commands.has('left')) moveRight -= 1;
+        if (commands.has('rotate_ccw')) rotateDirection -= 1;
+        if (commands.has('rotate_cw')) rotateDirection += 1;
+        const moveLen = Math.hypot(moveRight, moveForward);
+        if (moveLen > 1e-4) {
+          const dx = ((rightX * moveRight) + (forwardX * moveForward)) / moveLen;
+          const dy = ((rightY * moveRight) + (forwardY * moveForward)) / moveLen;
+          nextCenterX += dx * panSpeed * dt;
+          nextCenterY += dy * panSpeed * dt;
+        }
+        if (rotateDirection !== 0) {
+          camera.worldYawDeg += rotateDirection * rotateSpeed * dt;
         }
 
         const clampedCenter = clampCameraCenterToField(nextCenterX, nextCenterY);
@@ -434,7 +655,7 @@ const BattleSceneContainer = ({
     return () => {
       if (rafId) cancelAnimationFrame(rafId);
     };
-  }, [clampCameraCenterToField, mapDialCommand, open, runtimeRef]);
+  }, [clampCameraCenterToField, mapDialCommand, mapKeyCommand, open, runtimeRef]);
 
 
   const handleTogglePause = useCallback(() => {
@@ -523,13 +744,6 @@ const BattleSceneContainer = ({
     setSkillPopupSquadId
   });
 
-  const { beginDeployRectResize } = useBattleDeployFormationResize({
-    runtimeRef,
-    deployRectDragRef,
-    deployDraggingGroupId,
-    setDeployActionAnchorMode
-  });
-
   const {
     closeDeployEditor,
     handleOpenDeployCreator,
@@ -565,8 +779,26 @@ const BattleSceneContainer = ({
     setDeployActionAnchorMode,
     setCards,
     setMinimapSnapshot,
-    setTemplateFillPreview
+    setTemplateFillPreview,
+    onDeployGroupFormationsChange: handleDeployGroupFormationsChange,
+    onDeployGroupRemoved: handleDeployGroupRemoved
   });
+
+  const handleCreateTrainingTemplateAtPointer = useCallback((template, team = TEAM_ATTACKER, event = null) => {
+    const canvas = glCanvasRef.current;
+    if (canvas && event && Number.isFinite(Number(event.clientX)) && Number.isFinite(Number(event.clientY))) {
+      const rect = canvas.getBoundingClientRect();
+      if (rect.width > 0 && rect.height > 0) {
+        const px = ((Number(event.clientX) - rect.left) / Math.max(1, rect.width)) * canvas.width;
+        const py = ((Number(event.clientY) - rect.top) / Math.max(1, rect.height)) * canvas.height;
+        const world = cameraRef.current.screenToGround(px, py, { width: canvas.width, height: canvas.height });
+        if (Number.isFinite(Number(world?.x)) && Number.isFinite(Number(world?.y))) {
+          pointerWorldRef.current = world;
+        }
+      }
+    }
+    handleCreateTrainingGroupByTemplate(template, team);
+  }, [cameraRef, glCanvasRef, handleCreateTrainingGroupByTemplate, pointerWorldRef]);
 
   const {
     onMouseDown: handleSceneMouseDown,
@@ -596,6 +828,7 @@ const BattleSceneContainer = ({
     isTrainingMode,
     resolveDeployPlacementTeam,
     switchDeployGroupTeamForTraining,
+    onDeployGroupTeamSwitched: handleDeployGroupTeamSwitched,
     isPathPointBlocked,
     syncBattleCards,
     selectBattleSquad,
@@ -652,7 +885,8 @@ const BattleSceneContainer = ({
     setMinimapSnapshot,
     setDeployNotice,
     setConfirmDeleteGroupId,
-    setConfirmDeletePos
+    setConfirmDeletePos,
+    onDeployGroupRemoved: handleDeployGroupRemoved
   });
 
   const closeDeployInfoPanel = useCallback(() => {
@@ -776,15 +1010,25 @@ const BattleSceneContainer = ({
     closeModal
   });
 
+  const handleSceneEscape = useCallback(() => {
+    if (formationWheelState.open) {
+      handleCloseFormationWheel();
+      return;
+    }
+    handleEscape();
+  }, [formationWheelState.open, handleCloseFormationWheel, handleEscape]);
+
   useBattleSceneGlobalInput({
     open,
     runtimeRef,
     spacePressedRef,
     marchModePickOpen,
     isSkillPickMode: battleUiMode === BATTLE_UI_MODE_SKILL_PICK,
-    onEscape: handleEscape,
+    onEscape: handleSceneEscape,
     onTogglePause: handleTogglePause,
     onTogglePitch: handleTogglePitch,
+    onMapKeyCommand: handleMapKeyCommand,
+    onFormationKey: handleFormationKey,
     onCloseMarchModePick: closeMarchModePick,
     onCloseSkillPick: closeSkillPick
   });
@@ -802,11 +1046,8 @@ const BattleSceneContainer = ({
     deployEditorDraftSummary,
     deployEditorTeamLabel,
     deployEditorTotal,
-    selectedDeployGroup,
     selectedDeployFormation,
     selectedDeployFormationLines,
-    selectedDeployHandleLeftDom,
-    selectedDeployHandleRightDom,
     worldActionGroupId,
     worldActionPos,
     selectedBattleActionSquad,
@@ -895,8 +1136,15 @@ const BattleSceneContainer = ({
 
   if (!open) return null;
 
+  const overlayClassName = [
+    'pve2-overlay',
+    isTrainingMode ? 'is-training-three' : '',
+    deployPlacementLocked ? 'is-deploy-placement-lock' : ''
+  ].filter(Boolean).join(' ');
+  const activeMapCommands = [mapDialCommand, mapKeyCommand].filter(Boolean).join('|');
+
   return (
-    <div className={`pve2-overlay ${deployPlacementLocked ? 'is-deploy-placement-lock' : ''}`}>
+    <div className={overlayClassName}>
       <div className="pve2-head">
         <div className="pve2-title">
           <strong>{battleInitData?.nodeName || (isTrainingMode ? '训练场' : '攻占战')}</strong>
@@ -973,26 +1221,6 @@ const BattleSceneContainer = ({
                 {selectedDeployFormationLines.map((style, idx) => (
                   <div key={`formation-line-${idx}`} className="pve2-formation-line" style={style} />
                 ))}
-                {selectedDeployHandleLeftDom?.visible !== false ? (
-                  <button
-                    type="button"
-                    className="pve2-formation-handle"
-                    style={{ left: `${selectedDeployHandleLeftDom.x}px`, top: `${selectedDeployHandleLeftDom.y}px` }}
-                    onMouseDown={(event) => beginDeployRectResize(event, selectedDeployGroup, -1)}
-                  >
-                    ↔
-                  </button>
-                ) : null}
-                {selectedDeployHandleRightDom?.visible !== false ? (
-                  <button
-                    type="button"
-                    className="pve2-formation-handle"
-                    style={{ left: `${selectedDeployHandleRightDom.x}px`, top: `${selectedDeployHandleRightDom.y}px` }}
-                    onMouseDown={(event) => beginDeployRectResize(event, selectedDeployGroup, 1)}
-                  >
-                    ↔
-                  </button>
-                ) : null}
               </div>
             ) : null}
 
@@ -1045,7 +1273,7 @@ const BattleSceneContainer = ({
                 attackerTeam={TEAM_ATTACKER}
                 disabled={deployPlacementLocked}
                 onCreateDeployGroup={handleOpenDeployCreator}
-                onCreateTemplateGroup={handleCreateTrainingGroupByTemplate}
+                onCreateTemplateGroup={handleCreateTrainingTemplateAtPointer}
                 onOpenTemplateFillPreview={handleOpenTemplateFillPreview}
               />
             )}
@@ -1103,7 +1331,7 @@ const BattleSceneContainer = ({
               onMapClick={handleMinimapClick}
               interactive={!deployPlacementLocked}
             />
-            <BattleMapDial activeCommand={mapDialCommand} onHoverCommandChange={setMapDialCommand} />
+            <BattleMapDial activeCommand={activeMapCommands} onHoverCommandChange={setMapDialCommand} />
 
             {battleUiMode === BATTLE_UI_MODE_PATH ? (
               <div className="pve2-aim-tip">路径规划中：LMB 添加路点，RMB 撤销，点击最后路径点“√”执行</div>
@@ -1187,9 +1415,21 @@ const BattleSceneContainer = ({
                   onInfo={(event) => handleOpenDeployInfo(worldActionGroupId, event)}
                   onMove={(event) => handleDeployMoveWithInfoClose(worldActionGroupId, event)}
                   onEdit={(event) => handleDeployEditWithInfoClose(worldActionGroupId, event)}
+                  onFormation={(event) => openFormationWheelForGroup(worldActionGroupId, event)}
                   onDelete={(event) => handleDeployDeleteWithInfoClose(worldActionGroupId, event)}
                 />
               </div>
+            ) : null}
+
+            {phase === 'deploy' ? (
+              <BattleFormationWheel
+                open={formationWheelState.open}
+                formations={deployFormationLibrary[formationWheelState.groupId]?.formations || []}
+                activeFormationId={deployFormationLibrary[formationWheelState.groupId]?.activeFormationId || ''}
+                position={{ x: formationWheelState.x, y: formationWheelState.y }}
+                onPick={handlePickDeployFormation}
+                onClose={handleCloseFormationWheel}
+              />
             ) : null}
 
             {phase === 'deploy' && !deployPlacementLocked && deployInfoState.open && deployInfoData ? (

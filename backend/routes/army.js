@@ -268,6 +268,55 @@ const normalizeTemplateFormationsLoose = (rawFormations, units) => {
   }];
 };
 
+const normalizeTemplateForStorage = (template) => {
+  const raw = template && typeof template.toObject === 'function'
+    ? template.toObject()
+    : (template || {});
+  const units = normalizeTemplateUnitsLoose(raw.units);
+  const unitCounts = buildUnitCountMap(units);
+  const formations = (Array.isArray(raw.formations) ? raw.formations : [])
+    .slice(0, MAX_TEMPLATE_FORMATION_COUNT)
+    .map((formation, index) => {
+      const normalized = normalizeFormationPlacements(
+        formation?.placements || [],
+        {},
+        unitCounts,
+        false
+      );
+      return {
+        formationId: getFormationId(formation) || buildFormationId(),
+        name: normalizeFormationName(formation?.name, index <= 0 ? '默认阵型' : `新建阵型${index}`),
+        placements: (normalized.placements || []).map((placement) => ({
+          unitTypeId: placement.unitTypeId,
+          x: placement.x,
+          y: placement.y
+        }))
+      };
+    });
+
+  return {
+    templateId: typeof raw.templateId === 'string' ? raw.templateId.trim() : '',
+    name: normalizeTemplateName(raw.name, '未命名模板'),
+    units,
+    formations,
+    createdAt: raw.createdAt || new Date(),
+    updatedAt: raw.updatedAt || new Date()
+  };
+};
+
+const persistArmyTemplates = async (userId, templates) => {
+  const nextTemplates = (Array.isArray(templates) ? templates : [])
+    .map((template) => normalizeTemplateForStorage(template))
+    .filter((template) => template.templateId)
+    .slice(0, MAX_TEMPLATE_COUNT);
+
+  return User.findByIdAndUpdate(
+    userId,
+    { $set: { armyTemplates: nextTemplates } },
+    { new: true, runValidators: true }
+  ).select('armyTemplates');
+};
+
 const normalizeTemplateFormationsStrict = (rawFormations, unitTypeMap, units) => {
   const unitCounts = buildUnitCountMap(units);
   const source = Array.isArray(rawFormations) && rawFormations.length > 0
@@ -665,13 +714,18 @@ router.post('/templates', authenticateToken, async (req, res) => {
       updatedAt: now
     };
 
-    user.armyTemplates = [...existingTemplates, created];
-    await user.save();
+    const savedUser = await persistArmyTemplates(req.user.userId, [...existingTemplates, created]);
+    if (!savedUser) {
+      return res.status(404).json({ error: '用户不存在' });
+    }
+    const savedTemplate = (Array.isArray(savedUser.armyTemplates) ? savedUser.armyTemplates : [])
+      .find((template) => typeof template?.templateId === 'string' && template.templateId.trim() === created.templateId)
+      || created;
 
     return res.json({
       success: true,
-      template: serializeArmyTemplate(created, unitTypeMap),
-      templates: serializeArmyTemplates(user.armyTemplates, unitTypeMap)
+      template: serializeArmyTemplate(savedTemplate, unitTypeMap),
+      templates: serializeArmyTemplates(savedUser.armyTemplates, unitTypeMap)
     });
   } catch (error) {
     console.error('创建部队模板失败:', error);
@@ -745,14 +799,21 @@ router.put('/templates/:templateId', authenticateToken, async (req, res) => {
       updatedAt: new Date()
     };
 
-    templates[index] = nextTemplate;
-    user.armyTemplates = templates;
-    await user.save();
+    const nextTemplates = templates.map((template, templateIndex) => (
+      templateIndex === index ? nextTemplate : template
+    ));
+    const savedUser = await persistArmyTemplates(req.user.userId, nextTemplates);
+    if (!savedUser) {
+      return res.status(404).json({ error: '用户不存在' });
+    }
+    const savedTemplate = (Array.isArray(savedUser.armyTemplates) ? savedUser.armyTemplates : [])
+      .find((template) => typeof template?.templateId === 'string' && template.templateId.trim() === templateId)
+      || nextTemplate;
 
     return res.json({
       success: true,
-      template: serializeArmyTemplate(nextTemplate, unitTypeMap),
-      templates: serializeArmyTemplates(user.armyTemplates, unitTypeMap)
+      template: serializeArmyTemplate(savedTemplate, unitTypeMap),
+      templates: serializeArmyTemplates(savedUser.armyTemplates, unitTypeMap)
     });
   } catch (error) {
     console.error('更新部队模板失败:', error);
@@ -782,13 +843,15 @@ router.delete('/templates/:templateId', authenticateToken, async (req, res) => {
       return res.status(404).json({ error: '模板不存在' });
     }
 
-    user.armyTemplates = nextTemplates;
-    await user.save();
+    const savedUser = await persistArmyTemplates(req.user.userId, nextTemplates);
+    if (!savedUser) {
+      return res.status(404).json({ error: '用户不存在' });
+    }
 
     const unitTypeMap = buildUnitTypeMap(unitTypes);
     return res.json({
       success: true,
-      templates: serializeArmyTemplates(user.armyTemplates, unitTypeMap)
+      templates: serializeArmyTemplates(savedUser.armyTemplates, unitTypeMap)
     });
   } catch (error) {
     console.error('删除部队模板失败:', error);

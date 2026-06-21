@@ -13,6 +13,23 @@ import {
   unitsToMap
 } from '../screens/battleSceneUtils';
 
+const MAX_TEMPLATE_FORMATIONS = 15;
+
+const getTemplateFormationId = (formation = null, index = 0) => {
+  const explicitId = String(formation?.formationId || formation?.id || '').trim();
+  return explicitId || `formation_${index}`;
+};
+
+const normalizeLegalTemplateFormations = (formations = []) => (
+  Array.isArray(formations) ? formations : []
+)
+  .filter((formation) => formation && formation.legal !== false && Array.isArray(formation.placements) && formation.placements.length > 0)
+  .slice(0, MAX_TEMPLATE_FORMATIONS)
+  .map((formation, index) => ({
+    ...formation,
+    formationId: getTemplateFormationId(formation, index)
+  }));
+
 export default function useBattleDeployEditor({
   runtimeRef,
   pointerWorldRef,
@@ -34,7 +51,9 @@ export default function useBattleDeployEditor({
   setDeployActionAnchorMode,
   setCards,
   setMinimapSnapshot,
-  setTemplateFillPreview
+  setTemplateFillPreview,
+  onDeployGroupFormationsChange,
+  onDeployGroupRemoved
 } = {}) {
   const syncCardsAndMinimap = useCallback((runtime) => {
     if (!runtime) return;
@@ -314,29 +333,24 @@ export default function useBattleDeployEditor({
       return { ok: false, reason: '未找到待放置部队' };
     }
     const resolvedTeam = group.team === TEAM_DEFENDER ? TEAM_DEFENDER : TEAM_ATTACKER;
-    const draftUnits = Object.entries(group.units || {}).map(([unitTypeId, count]) => ({
-      unitTypeId,
-      count: Math.max(1, Math.floor(Number(count) || 1))
-    }));
-
-    runtime.setSelectedDeployGroup(group.id);
-    runtime.setFocusSquad(group.id);
-    runtime.setDeployGroupPlaced(resolvedTeam, group.id, false);
-    setSelectedSquadId(group.id);
+    const result = runtime.removeDeployGroup(resolvedTeam, group.id);
+    if (!result?.ok) {
+      setDeployNotice(result?.reason || '取消放置失败');
+      return { ok: false, reason: result?.reason || '取消放置失败' };
+    }
+    const nextSelected = runtime.getDeployGroups()?.selectedId || '';
+    setSelectedSquadId(nextSelected);
     setDeployDraggingGroup({ groupId: '', team: TEAM_ATTACKER });
     setDeployActionAnchorMode('');
     syncCardsAndMinimap(runtime);
-
-    setDeployEditorTeam(resolvedTeam);
-    setDeployEditingGroupId(group.id);
-    setDeployEditorDraft({
-      name: group.name || '',
-      units: normalizeDraftUnits(draftUnits)
-    });
+    onDeployGroupRemoved?.(group.id);
     setDeployQuantityDialog(createDefaultDeployQuantityDialog());
     setDeployEditorDragUnitId('');
-    setDeployEditorOpen(true);
-    setDeployNotice('已撤回到编组页面，可继续调整士兵数量');
+    setDeployEditorOpen(false);
+    setDeployEditingGroupId('');
+    setDeployEditorDraft(createDefaultDeployEditorDraft());
+    setDeployEditorTeam(TEAM_ATTACKER);
+    setDeployNotice('已取消放置');
     return { ok: true, groupId: group.id, team: resolvedTeam };
   }, [
     runtimeRef,
@@ -350,7 +364,8 @@ export default function useBattleDeployEditor({
     setDeployEditorDraft,
     setDeployQuantityDialog,
     setDeployEditorDragUnitId,
-    setDeployEditorOpen
+    setDeployEditorOpen,
+    onDeployGroupRemoved
   ]);
 
   const buildTemplateFillSnapshot = useCallback((template, team = TEAM_ATTACKER) => {
@@ -388,7 +403,7 @@ export default function useBattleDeployEditor({
     return { rows, totalRequested, totalFilled };
   }, [runtimeRef]);
 
-  const createDeployGroupFromTemplateUnits = useCallback((team, unitsMap, templateName = '') => {
+  const createDeployGroupFromTemplateUnits = useCallback((team, unitsMap, templateName = '', templateFormations = []) => {
     const runtime = runtimeRef.current;
     if (!runtime || runtime.getPhase() !== 'deploy') return false;
     const safeTeam = team === TEAM_DEFENDER ? TEAM_DEFENDER : TEAM_ATTACKER;
@@ -404,6 +419,16 @@ export default function useBattleDeployEditor({
       return false;
     }
     const targetGroupId = result.groupId;
+    const legalFormations = normalizeLegalTemplateFormations(templateFormations);
+    const defaultFormation = legalFormations[0] || null;
+    let activeFormationId = '';
+    if (defaultFormation) {
+      const formationResult = runtime.setDeployGroupFormation(targetGroupId, defaultFormation, safeTeam);
+      if (formationResult?.ok) {
+        activeFormationId = getTemplateFormationId(defaultFormation, 0);
+      }
+    }
+    onDeployGroupFormationsChange?.(targetGroupId, legalFormations, activeFormationId);
     runtime.setSelectedDeployGroup(targetGroupId);
     runtime.setFocusSquad(targetGroupId);
     runtime.setDeployGroupPlaced(safeTeam, targetGroupId, false);
@@ -411,9 +436,12 @@ export default function useBattleDeployEditor({
     setDeployDraggingGroup({ groupId: targetGroupId, team: safeTeam });
     setDeployActionAnchorMode('');
     syncCardsAndMinimap(runtime);
-    setDeployNotice(`模板部队已创建，移动鼠标并点击地图放置到${safeTeam === TEAM_DEFENDER ? '右侧红色' : '左侧蓝色'}部署区`);
+    setDeployNotice(defaultFormation
+      ? `模板部队已创建，默认阵型为「${defaultFormation.name || '阵型1'}」，移动鼠标并点击地图放置`
+      : `模板部队已创建，移动鼠标并点击地图放置到${safeTeam === TEAM_DEFENDER ? '右侧红色' : '左侧蓝色'}部署区`);
     return true;
   }, [
+    onDeployGroupFormationsChange,
     pointerWorldRef,
     runtimeRef,
     setDeployActionAnchorMode,
@@ -432,7 +460,7 @@ export default function useBattleDeployEditor({
         unitsMap[row.unitTypeId] = row.filled;
       }
     });
-    createDeployGroupFromTemplateUnits(safeTeam, unitsMap, template?.name || '');
+    createDeployGroupFromTemplateUnits(safeTeam, unitsMap, template?.name || '', template?.formations || []);
   }, [buildTemplateFillSnapshot, createDeployGroupFromTemplateUnits]);
 
   const handleOpenTemplateFillPreview = useCallback((template, team = TEAM_ATTACKER) => {
@@ -464,7 +492,7 @@ export default function useBattleDeployEditor({
         unitsMap[row.unitTypeId] = row.filled;
       }
     });
-    const created = createDeployGroupFromTemplateUnits(safeTeam, unitsMap, template?.name || '');
+    const created = createDeployGroupFromTemplateUnits(safeTeam, unitsMap, template?.name || '', template?.formations || []);
     if (created) {
       handleCloseTemplateFillPreview();
     }

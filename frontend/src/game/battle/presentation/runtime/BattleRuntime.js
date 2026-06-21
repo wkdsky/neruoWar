@@ -109,6 +109,7 @@ const DEPLOY_FORMATION_RATIO_MIN = 1 / 6;
 const DEPLOY_FORMATION_RATIO_MAX = 6;
 const DEPLOY_FORMATION_MIN_EDGE = 8;
 const DEPLOY_FORMATION_MAX_EDGE_MUL = 5.8;
+const TEMPLATE_FORMATION_CELL_SPACING = 13;
 
 const clamp = (value, min, max) => Math.min(max, Math.max(min, value));
 const clampToRange = (value, min, max) => {
@@ -803,6 +804,66 @@ const normalizeFormationFacing = (team = TEAM_ATTACKER, rawFacing = null) => {
   return candidate;
 };
 
+const normalizeTemplateFormationPlacements = (placements = [], units = {}) => {
+  const remaining = normalizeUnitsMap(units || {});
+  const occupied = new Set();
+  const out = [];
+  (Array.isArray(placements) ? placements : []).forEach((placement) => {
+    const unitTypeId = typeof placement?.unitTypeId === 'string' ? placement.unitTypeId.trim() : '';
+    if (!unitTypeId || !remaining[unitTypeId]) return;
+    const x = Math.floor(Number(placement?.x) || 0);
+    const y = Math.floor(Number(placement?.y) || 0);
+    const key = `${x}:${y}`;
+    if (occupied.has(key)) return;
+    occupied.add(key);
+    remaining[unitTypeId] -= 1;
+    out.push({ unitTypeId, x, y });
+  });
+  return out;
+};
+
+const buildTemplateFormationState = (formation = {}, group = {}, team = TEAM_ATTACKER, repConfig = {}) => {
+  const placements = normalizeTemplateFormationPlacements(formation?.placements || [], group?.units || {});
+  if (placements.length <= 0) return null;
+  const minX = Math.min(...placements.map((placement) => placement.x));
+  const maxX = Math.max(...placements.map((placement) => placement.x));
+  const minY = Math.min(...placements.map((placement) => placement.y));
+  const maxY = Math.max(...placements.map((placement) => placement.y));
+  const centerX = (minX + maxX) * 0.5;
+  const centerY = (minY + maxY) * 0.5;
+  const facingRad = normalizeFormationFacing(team, group?.formationRect?.facingRad);
+  const slotCount = Math.max(resolveDeploySlotCount(group?.units || {}, repConfig), placements.length);
+  const width = Math.max(DEPLOY_FORMATION_MIN_EDGE, ((maxX - minX) + 1) * TEMPLATE_FORMATION_CELL_SPACING);
+  const depth = Math.max(DEPLOY_FORMATION_MIN_EDGE, ((maxY - minY) + 1) * TEMPLATE_FORMATION_CELL_SPACING);
+  const baseSlots = placements.map((placement, index) => ({
+    side: (placement.x - centerX) * TEMPLATE_FORMATION_CELL_SPACING,
+    front: -(placement.y - centerY) * TEMPLATE_FORMATION_CELL_SPACING,
+    row: Math.max(0, placement.y - minY),
+    col: Math.max(0, placement.x - minX),
+    unitTypeId: placement.unitTypeId,
+    templateIndex: index
+  }));
+  const fallbackRect = {
+    width,
+    depth,
+    area: width * depth,
+    spacing: TEMPLATE_FORMATION_CELL_SPACING,
+    facingRad,
+    slotCount
+  };
+  const fallbackSlots = buildFormationSlots(slotCount, fallbackRect);
+  const deploySlots = Array.from({ length: slotCount }, (_, index) => baseSlots[index] || fallbackSlots[index] || { side: 0, front: 0, row: 0, col: 0 });
+  const formationId = String(formation?.formationId || formation?.id || '').trim();
+  return {
+    formationRect: {
+      ...fallbackRect,
+      formationId,
+      formationName: typeof formation?.name === 'string' ? formation.name.trim() : ''
+    },
+    deploySlots
+  };
+};
+
 const resolveDeploySlotCount = (units = {}, repConfig = {}) => {
   const normalized = normalizeUnitsMap(units || {});
   const count = estimateRepAgents(normalized, Math.max(1, Number(repConfig?.maxAgentWeight) || 50));
@@ -865,6 +926,23 @@ const buildFormationSlots = (slotCount = 1, formationRect = {}) => {
   });
 };
 
+const normalizeDeploySlotsForCount = (slots = [], slotCount = 1, fallbackRect = {}) => {
+  const total = Math.max(1, Math.floor(Number(slotCount) || 1));
+  const fallbackSlots = buildFormationSlots(total, fallbackRect);
+  return Array.from({ length: total }, (_, index) => {
+    const slot = Array.isArray(slots) ? slots[index] : null;
+    if (!slot) return fallbackSlots[index] || { side: 0, front: 0, row: 0, col: 0 };
+    return {
+      side: Number(slot?.side) || 0,
+      front: Number(slot?.front) || 0,
+      row: Math.max(0, Math.floor(Number(slot?.row) || 0)),
+      col: Math.max(0, Math.floor(Number(slot?.col) || 0)),
+      unitTypeId: typeof slot?.unitTypeId === 'string' ? slot.unitTypeId.trim() : '',
+      templateIndex: Math.max(0, Math.floor(Number(slot?.templateIndex) || index))
+    };
+  });
+};
+
 const buildDeployGroupFormationState = (group = {}, team = TEAM_ATTACKER, repConfig = {}) => {
   const units = normalizeUnitsMap(group?.units || {});
   const slotCount = resolveDeploySlotCount(units, repConfig);
@@ -885,12 +963,17 @@ const buildDeployGroupFormationState = (group = {}, team = TEAM_ATTACKER, repCon
     depth: baseRect.depth,
     spacing,
     facingRad,
-    slotCount
+    slotCount,
+    formationId: typeof prevRect.formationId === 'string' ? prevRect.formationId : '',
+    formationName: typeof prevRect.formationName === 'string' ? prevRect.formationName : ''
   };
+  const hasTemplateSlots = !!formationRect.formationId && Array.isArray(group?.deploySlots) && group.deploySlots.length > 0;
   return {
     ...group,
     formationRect,
-    deploySlots: buildFormationSlots(slotCount, formationRect)
+    deploySlots: hasTemplateSlots
+      ? normalizeDeploySlotsForCount(group.deploySlots, slotCount, formationRect)
+      : buildFormationSlots(slotCount, formationRect)
   };
 };
 
@@ -1091,7 +1174,9 @@ const createSquad = ({
         depth: Math.max(1, Number(group.formationRect.depth) || 1),
         spacing: Math.max(1, Number(group.formationRect.spacing) || DEPLOY_FORMATION_SPACING_DEFAULT),
         facingRad: normalizeFormationFacing(team, group.formationRect.facingRad),
-        slotCount: Math.max(1, Math.floor(Number(group.formationRect.slotCount) || 1))
+        slotCount: Math.max(1, Math.floor(Number(group.formationRect.slotCount) || 1)),
+        formationId: typeof group.formationRect.formationId === 'string' ? group.formationRect.formationId : '',
+        formationName: typeof group.formationRect.formationName === 'string' ? group.formationRect.formationName : ''
       }
       : null,
     deploySlots: Array.isArray(group?.deploySlots)
@@ -1415,6 +1500,54 @@ export default class BattleRuntime {
     };
   }
 
+  setDeployGroupFormation(groupId = '', formation = null, team = TEAM_ANY) {
+    if (this.phase !== 'deploy') return { ok: false, reason: '仅部署阶段可切换阵型' };
+    const group = this.getDeployGroupById(groupId, team);
+    if (!group) return { ok: false, reason: '未找到部队' };
+    const nextFormation = buildTemplateFormationState(formation, group, group.team, this.repConfig);
+    if (!nextFormation) return { ok: false, reason: '阵型不可用' };
+    group.formationRect = {
+      ...nextFormation.formationRect,
+      facingRad: normalizeFormationFacing(group.team, group.formationRect?.facingRad)
+    };
+    group.deploySlots = normalizeDeploySlotsForCount(
+      nextFormation.deploySlots,
+      group.formationRect.slotCount,
+      group.formationRect
+    );
+    return {
+      ok: true,
+      formationRect: { ...group.formationRect },
+      slotCount: group.deploySlots.length
+    };
+  }
+
+  canDeployGroupFitAt(groupId = '', worldPoint = null, team = TEAM_ANY) {
+    if (this.phase !== 'deploy') return false;
+    const group = this.getDeployGroupById(groupId, team);
+    if (!group) return false;
+    this.hydrateDeployGroupFormation(group, group.team);
+    const safeTeam = group.team === TEAM_DEFENDER ? TEAM_DEFENDER : TEAM_ATTACKER;
+    const point = worldPoint || group;
+    const cx = Number(point?.x) || 0;
+    const cy = Number(point?.y) || 0;
+    const facingRad = normalizeFormationFacing(group.team, group.formationRect?.facingRad);
+    const fx = Math.cos(facingRad);
+    const fy = Math.sin(facingRad);
+    const sx = -fy;
+    const sy = fx;
+    const slots = Array.isArray(group.deploySlots) && group.deploySlots.length > 0
+      ? group.deploySlots
+      : buildFormationSlots(Math.max(1, Number(group.formationRect?.slotCount) || 1), group.formationRect || {});
+    if (slots.length <= 0) return this.canDeployAt(point, safeTeam, 10);
+    return slots.every((slot) => {
+      const x = cx + (sx * (Number(slot?.side) || 0)) + (fx * (Number(slot?.front) || 0));
+      const y = cy + (sy * (Number(slot?.side) || 0)) + (fy * (Number(slot?.front) || 0));
+      if (!isXInDeployZone(x, this.field.width, 4, safeTeam)) return false;
+      return y >= (-this.field.height * 0.5 + 4) && y <= (this.field.height * 0.5 - 4);
+    });
+  }
+
   getRosterRows(team = TEAM_ATTACKER) {
     const safeTeam = resolveTeamTag(team);
     const groupRows = safeTeam === TEAM_DEFENDER ? this.defenderDeployGroups : this.attackerDeployGroups;
@@ -1443,7 +1576,7 @@ export default class BattleRuntime {
     return this.getRosterRows(TEAM_DEFENDER);
   }
 
-  createDeployGroup(team = TEAM_ATTACKER, { units = {}, name = '', x, y, placed = false } = {}) {
+  createDeployGroup(team = TEAM_ATTACKER, { units = {}, name = '', x, y, placed = false, formationRect = null, deploySlots = [] } = {}) {
     if (this.phase !== 'deploy') return { ok: false, reason: '仅部署阶段可新建部队' };
     const safeTeam = resolveTeamTag(team);
     const nextUnits = normalizeUnitsMap(units);
@@ -1500,7 +1633,9 @@ export default class BattleRuntime {
       units: nextUnits,
       x: safeX,
       y: safeY,
-      placed: placed !== false
+      placed: placed !== false,
+      formationRect: formationRect && typeof formationRect === 'object' ? { ...formationRect } : undefined,
+      deploySlots: Array.isArray(deploySlots) ? deploySlots.map((slot) => ({ ...slot })) : []
     }, safeTeam);
     targetGroups.push(nextGroup);
     this.selectedDeploySquadId = groupId;
@@ -1595,7 +1730,7 @@ export default class BattleRuntime {
     const group = this.getDeployGroupById(targetId, team);
     if (!group) return false;
     const safePoint = clampPointToField(worldPoint, this.field, 10);
-    group.x = clampXToDeployZone(safePoint.x, this.field.width, 10, resolveTeamTag(group.team));
+    group.x = safePoint.x;
     group.y = safePoint.y;
     return true;
   }

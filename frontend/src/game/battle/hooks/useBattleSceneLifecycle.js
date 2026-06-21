@@ -3,9 +3,10 @@ import {
   BATTLE_PITCH_HIGH_DEG,
   BATTLE_PITCH_LOW_DEG,
   BATTLE_UI_MODE_NONE,
+  CAMERA_DISTANCE_MAX,
+  CAMERA_DISTANCE_MIN,
   DEPLOY_DEFAULT_WORLD_YAW_DEG,
   DEPLOY_DEFAULT_YAW_DEG,
-  DEPLOY_PITCH_DEG,
   TEAM_ATTACKER,
   createDefaultAimState,
   createDefaultDeployDraggingGroup,
@@ -87,11 +88,12 @@ export default function useBattleSceneLifecycle({
     cameraRef.current.mirrorX = false;
     cameraRef.current.pitchLow = BATTLE_PITCH_LOW_DEG;
     cameraRef.current.pitchHigh = BATTLE_PITCH_HIGH_DEG;
-    cameraRef.current.distance = computeDeployOverviewDistance(runtime.getField?.());
-    cameraRef.current.currentPitch = DEPLOY_PITCH_DEG;
-    cameraRef.current.pitchFrom = DEPLOY_PITCH_DEG;
-    cameraRef.current.pitchTo = DEPLOY_PITCH_DEG;
-    cameraRef.current.pitchTweenSec = cameraRef.current.pitchTweenDurationSec;
+    const overviewDistance = computeDeployOverviewDistance(runtime.getField?.());
+    if (typeof cameraRef.current.setDistanceWithDynamicPitch === 'function') {
+      cameraRef.current.setDistanceWithDynamicPitch(overviewDistance, CAMERA_DISTANCE_MIN, CAMERA_DISTANCE_MAX);
+    } else {
+      cameraRef.current.distance = overviewDistance;
+    }
     resetClock();
     setLoopPaused(false);
     setPaused(false);
@@ -207,4 +209,11 @@ export default function useBattleSceneLifecycle({
     setPaused,
     setLoopPaused
   ]);
+
+  useEffect(() => {
+    if (!open) return undefined;
+    return () => {
+      runtimeInitRef.current = null;
+    };
+  }, [open, runtimeInitRef]);
 }

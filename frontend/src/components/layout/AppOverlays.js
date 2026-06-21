@@ -1,5 +1,5 @@
 import React from 'react';
-import { BattleSceneModal } from '../../game/battle';
+import BattleSceneModal from '../../game/battle/screens/BattleSceneModal';
 import BattlefieldPreviewModal from '../game/BattlefieldPreviewModal';
 import AssociationModal from '../modals/AssociationModal';
 import NodeInfoModal from '../modals/NodeInfoModal';
