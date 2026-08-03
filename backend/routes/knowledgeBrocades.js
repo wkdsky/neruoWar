@@ -12,8 +12,15 @@ const MAX_NODES_PER_BROCADE = 300;
 const MAX_BROCADE_NAME_LENGTH = 80;
 const MAX_CONTENT_LENGTH = 200000;
 const MAX_NODE_TITLE_LENGTH = 80;
-const DEFAULT_NODE_SHAPE = 'rectangle';
+const DEFAULT_NODE_SHAPE = 'rounded';
 const DEFAULT_SYSTEM_NODE_TITLE = '新建知识点';
+const NODE_SIZE_LIMITS = {
+  minWidth: 168,
+  maxWidth: 420,
+  minHeight: 88,
+  maxHeight: 320
+};
+const ALLOWED_NODE_SHAPES = new Set(['rounded', 'rectangle', 'pill']);
 
 const getIdString = (value) => {
   if (!value) return '';
@@ -33,6 +40,11 @@ const isValidObjectId = (value) => mongoose.Types.ObjectId.isValid(getIdString(v
 const clampNumber = (value, fallback = 0) => {
   const parsed = Number(value);
   return Number.isFinite(parsed) ? parsed : fallback;
+};
+
+const clampBoundedNumber = (value, fallback, min, max) => {
+  const parsed = clampNumber(value, fallback);
+  return Math.round(Math.min(max, Math.max(min, parsed)));
 };
 
 const normalizeName = (value = '', fallback = '未命名知识锦') => {
@@ -105,9 +117,28 @@ const extractPreviewText = (contentText = '') => {
   return normalized.slice(1).join(' ').slice(0, 180);
 };
 
-const buildDefaultNodeContent = (title = '未命名节点') => `${String(title || '未命名节点').trim() || '未命名节点'}\n\n在这里记录你的知识。`;
+const buildDefaultNodeContent = (title = '未命名节点') => `${String(title || '未命名节点').trim() || '未命名节点'}\n\n`;
 
 const trimPreviewText = (value = '') => String(value || '').trim().slice(0, 240);
+
+const normalizeNodeShape = (value = '', fallback = DEFAULT_NODE_SHAPE) => (
+  ALLOWED_NODE_SHAPES.has(String(value || '').trim()) ? String(value || '').trim() : fallback
+);
+
+const normalizeNodeSize = (value = {}, fallback = {}) => ({
+  width: clampBoundedNumber(
+    value?.width,
+    clampNumber(fallback?.width, 220),
+    NODE_SIZE_LIMITS.minWidth,
+    NODE_SIZE_LIMITS.maxWidth
+  ),
+  height: clampBoundedNumber(
+    value?.height,
+    clampNumber(fallback?.height, 122),
+    NODE_SIZE_LIMITS.minHeight,
+    NODE_SIZE_LIMITS.maxHeight
+  )
+});
 
 const serializeBrocade = (doc = {}) => ({
   _id: getIdString(doc?._id),
@@ -128,6 +159,8 @@ const serializeNodeSummary = (doc = {}) => ({
   title: doc?.title || '未命名节点',
   previewText: doc?.previewText || '',
   contentText: doc?.contentText || '',
+  shape: normalizeNodeShape(doc?.shape),
+  size: normalizeNodeSize(doc?.size),
   position: {
     x: Math.round(clampNumber(doc?.position?.x, 0)),
     y: Math.round(clampNumber(doc?.position?.y, 0))
@@ -200,6 +233,24 @@ const collectSubtreeNodeIds = (nodes = [], rootNodeId = '') => {
   return out;
 };
 
+const wouldCreateParentCycle = (nodes = [], nodeId = '', nextParentNodeId = '') => {
+  if (!nodeId || !nextParentNodeId) return false;
+  if (nodeId === nextParentNodeId) return true;
+  const parentById = new Map(
+    nodes
+      .map((node) => [getIdString(node?._id), getIdString(node?.parentNodeId)])
+      .filter(([id]) => !!id)
+  );
+  const visited = new Set([nodeId]);
+  let currentId = nextParentNodeId;
+  while (currentId) {
+    if (visited.has(currentId)) return true;
+    visited.add(currentId);
+    currentId = parentById.get(currentId) || '';
+  }
+  return false;
+};
+
 router.get('/', authenticateToken, async (req, res) => {
   try {
     const ownerUserId = getRequestUserId(req);
@@ -254,6 +305,7 @@ router.post('/', authenticateToken, async (req, res) => {
       shape: DEFAULT_NODE_SHAPE,
       previewText: rootPreviewText,
       contentText: rootContentText,
+      size: normalizeNodeSize(),
       position: { x: 0, y: 0 }
     });
 
@@ -280,8 +332,28 @@ router.patch('/:brocadeId', authenticateToken, async (req, res) => {
     const brocade = await loadOwnedBrocade(brocadeId, ownerUserId);
     if (!brocade) return res.status(404).json({ error: '知识锦不存在' });
 
+    let updatedRootNode = null;
     if (Object.prototype.hasOwnProperty.call(req.body || {}, 'name')) {
       brocade.name = normalizeName(req.body?.name, brocade.name || '未命名知识锦');
+      if (brocade.rootNodeId) {
+        const rootNode = await KnowledgeBrocadeNode.findOne({
+          _id: brocade.rootNodeId,
+          brocadeId: brocade._id,
+          ownerUserId: brocade.ownerUserId
+        });
+        if (rootNode) {
+          const nextRootTitle = normalizeNodeTitle(brocade.name, rootNode.title || '未命名节点');
+          const normalizedContentText = String(rootNode.contentText || '').replace(/\r/g, '');
+          const contentLines = normalizedContentText.split('\n');
+          rootNode.title = nextRootTitle;
+          rootNode.contentText = normalizedContentText.trim()
+            ? [nextRootTitle, ...contentLines.slice(1)].join('\n')
+            : buildDefaultNodeContent(nextRootTitle);
+          rootNode.previewText = extractPreviewText(rootNode.contentText);
+          await rootNode.save();
+          updatedRootNode = rootNode;
+        }
+      }
     }
     if (req.body?.markOpened) {
       brocade.lastOpenedAt = new Date();
@@ -290,7 +362,8 @@ router.patch('/:brocadeId', authenticateToken, async (req, res) => {
     await brocade.save();
     return res.json({
       success: true,
-      brocade: serializeBrocade(brocade)
+      brocade: serializeBrocade(brocade),
+      ...(updatedRootNode ? { rootNode: serializeNodeSummary(updatedRootNode) } : {})
     });
   } catch (error) {
     console.error('更新知识锦错误:', error);
@@ -400,6 +473,7 @@ router.post('/:brocadeId/nodes', authenticateToken, async (req, res) => {
       shape: DEFAULT_NODE_SHAPE,
       previewText: extractPreviewText(nextContentText),
       contentText: nextContentText,
+      size: normalizeNodeSize(req.body?.size),
       position: {
         x: Math.round(clampNumber(req.body?.position?.x, clampNumber(parentNode?.position?.x, 0) + 240)),
         y: Math.round(clampNumber(req.body?.position?.y, clampNumber(parentNode?.position?.y, 0) + 120))
@@ -454,8 +528,43 @@ router.patch('/:brocadeId/nodes/:nodeId', authenticateToken, async (req, res) =>
         y: Math.round(clampNumber(req.body.position.y, clampNumber(node.position?.y, 0)))
       };
     }
+    if (Object.prototype.hasOwnProperty.call(req.body || {}, 'parentNodeId')) {
+      const nextParentNodeId = getIdString(req.body?.parentNodeId);
+      if (node.isRoot) {
+        return res.status(400).json({ error: '根节点不能重新指定父节点' });
+      }
+      if (!isValidObjectId(nextParentNodeId)) {
+        return res.status(400).json({ error: '父节点不存在' });
+      }
+      if (nextParentNodeId === getIdString(node._id)) {
+        return res.status(400).json({ error: '节点不能成为自己的父节点' });
+      }
+      const targetParentNode = await loadOwnedNode(brocadeId, nextParentNodeId, ownerUserId);
+      if (!targetParentNode) {
+        return res.status(404).json({ error: '父节点不存在' });
+      }
+      const brocadeNodes = await KnowledgeBrocadeNode.find({
+        brocadeId: node.brocadeId,
+        ownerUserId: node.ownerUserId
+      })
+        .select('_id parentNodeId')
+        .lean();
+      if (wouldCreateParentCycle(brocadeNodes, getIdString(node._id), nextParentNodeId)) {
+        return res.status(400).json({ error: '不能把节点拖到自己的下级节点中' });
+      }
+      node.parentNodeId = targetParentNode._id;
+    }
     if (Object.prototype.hasOwnProperty.call(req.body || {}, 'isStarred')) {
       node.isStarred = !!req.body?.isStarred;
+    }
+    if (Object.prototype.hasOwnProperty.call(req.body || {}, 'shape')) {
+      node.shape = normalizeNodeShape(req.body?.shape, normalizeNodeShape(node.shape));
+    }
+    if (req.body?.size && typeof req.body.size === 'object') {
+      const nextSize = normalizeNodeSize(req.body.size, node.size);
+      node.set('size.width', nextSize.width);
+      node.set('size.height', nextSize.height);
+      node.markModified('size');
     }
 
     await node.save();
@@ -525,6 +634,8 @@ router.post('/:brocadeId/nodes/restore', authenticateToken, async (req, res) => 
         title: safeTitle,
         previewText: trimPreviewText(item?.previewText || extractPreviewText(safeContentText)),
         contentText: safeContentText,
+        shape: normalizeNodeShape(item?.shape),
+        size: normalizeNodeSize(item?.size),
         position: {
           x: Math.round(clampNumber(item?.position?.x, 0)),
           y: Math.round(clampNumber(item?.position?.y, 0))
@@ -615,6 +726,10 @@ router.put('/:brocadeId/nodes/:nodeId/content', authenticateToken, async (req, r
     node.title = requestedTitle || (contentText.trim() ? extractNodeTitle(contentText) : normalizeNodeTitle(node.title, '未命名节点'));
     node.previewText = extractPreviewText(contentText);
     await node.save();
+    const brocadeUpdate = { updatedAt: new Date() };
+    if (node.isRoot) {
+      brocadeUpdate.name = normalizeName(node.title, '知识锦');
+    }
     await KnowledgeBrocade.updateOne(
       {
         _id: node.brocadeId,
@@ -622,13 +737,21 @@ router.put('/:brocadeId/nodes/:nodeId/content', authenticateToken, async (req, r
         archivedAt: null
       },
       {
-        $set: { updatedAt: new Date() }
+        $set: brocadeUpdate
       }
     );
+    const nextBrocade = node.isRoot
+      ? await KnowledgeBrocade.findOne({
+        _id: node.brocadeId,
+        ownerUserId: node.ownerUserId,
+        archivedAt: null
+      }).lean()
+      : null;
 
     return res.json({
       success: true,
-      node: serializeNodeSummary(node)
+      node: serializeNodeSummary(node),
+      ...(nextBrocade ? { brocade: serializeBrocade(nextBrocade) } : {})
     });
   } catch (error) {
     console.error('保存知识锦节点内容错误:', error);

@@ -43,6 +43,21 @@ const KnowledgeBrocadeNodeSchema = new mongoose.Schema({
     default: '',
     maxlength: 200000
   },
+  shape: {
+    type: String,
+    enum: ['rounded', 'rectangle', 'pill'],
+    default: 'rounded'
+  },
+  size: {
+    width: {
+      type: Number,
+      default: 220
+    },
+    height: {
+      type: Number,
+      default: 122
+    }
+  },
   position: {
     x: {
       type: Number,
