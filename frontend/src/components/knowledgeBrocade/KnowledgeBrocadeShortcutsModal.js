@@ -4,12 +4,16 @@ import { X } from 'lucide-react';
 const SHORTCUTS = [
   { category: '导航', items: [
     { keys: ['Ctrl', 'F'], description: '打开搜索' },
-    { keys: ['↑', '↓', '←', '→'], description: '选择相邻节点' },
+    { keys: ['鼠标单击'], description: '大纲视图选择节点并切换右侧内容' },
+    { keys: ['单击标题'], description: '直接修改大纲节点标题' },
+    { keys: ['↑', '↓'], description: '大纲视图切换上一个 / 下一个节点' },
+    { keys: ['长按拖动'], description: '大纲视图框选多个节点' },
     { keys: ['Esc'], description: '关闭弹窗 / 取消选择' }
   ]},
   { category: '节点操作', items: [
-    { keys: ['Tab'], description: '添加子节点' },
-    { keys: ['Enter'], description: '添加子节点 / 确认' },
+    { keys: ['Tab'], description: '树视图添加子节点；大纲视图缩进' },
+    { keys: ['Shift', 'Tab'], description: '大纲视图提升层级' },
+    { keys: ['Enter'], description: '树视图添加子节点；大纲视图新建兄弟' },
     { keys: ['E'], description: '编辑选中节点' },
     { keys: ['Space'], description: '折叠 / 展开节点' },
     { keys: ['Delete'], description: '删除选中节点' }

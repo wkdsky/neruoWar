@@ -9,6 +9,7 @@ export default function useBattleLoop({
   runtimeRef,
   pipelineRef,
   cameraControllerRef,
+  idleFrameIntervalMs = 0,
   clockConfig = {},
   debugEnabled = false,
   callbacks = {},
@@ -16,6 +17,7 @@ export default function useBattleLoop({
 } = {}) {
   const clockRef = useRef(new BattleClock({ fixedStep: 1 / 30, ...clockConfig }));
   const rafRef = useRef(0);
+  const timeoutRef = useRef(0);
   const lastFrameRef = useRef(0);
   const fpsStateRef = useRef({ windowSec: 0, frames: 0 });
   const lastHudRef = useRef(0);
@@ -37,7 +39,9 @@ export default function useBattleLoop({
 
   const stop = useCallback(() => {
     if (rafRef.current) cancelAnimationFrame(rafRef.current);
+    if (timeoutRef.current) window.clearTimeout(timeoutRef.current);
     rafRef.current = 0;
+    timeoutRef.current = 0;
     lastFrameRef.current = 0;
     lastHudRef.current = 0;
     fpsStateRef.current = { windowSec: 0, frames: 0 };
@@ -258,7 +262,14 @@ export default function useBattleLoop({
       reportedRef.current = true;
       callbacks.onBattleEnded?.(runtime.getSummary?.());
     }
-    rafRef.current = requestAnimationFrame(frameRef.current);
+    if (idleFrameIntervalMs > 0 && nowPhase !== 'battle') {
+      timeoutRef.current = window.setTimeout(() => {
+        timeoutRef.current = 0;
+        rafRef.current = requestAnimationFrame(frameRef.current);
+      }, idleFrameIntervalMs);
+    } else {
+      rafRef.current = requestAnimationFrame(frameRef.current);
+    }
   };
   useEffect(() => {
     if (!enabled) {

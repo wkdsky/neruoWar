@@ -405,6 +405,7 @@ class WebGLNodeRenderer {
     this.nodeActivationFeedbackSeq = 0;
     this.nodeActivationFeedbackTimeout = 0;
     this.renderingLoop = false; // 标记是否已经在持续渲染循环中
+    this.renderEnabled = true;
     this.lastTime = 0;
 
     // 交互状态
@@ -465,6 +466,8 @@ class WebGLNodeRenderer {
       travelStatus: null,
       syncedAt: 0
     };
+    this.userMarkerCanvas = null;
+    this.userMarkerRenderLoopId = null;
 
     // DOM 标签缓存
     this.labelElements = new Map();
@@ -483,6 +486,33 @@ class WebGLNodeRenderer {
     this.previewLines = [];          // 预览用的临时连线
     this.previewPulseTime = 0;       // 脉冲动画时间
     this.savedState = null;          // 保存的原始状态（用于回滚）
+
+    this.handleVisibilityChange = () => {
+      if (typeof document === 'undefined') return;
+      if (document.visibilityState !== 'visible') {
+        this.stopRenderLoop();
+        this.stopUserMarkerRenderLoop();
+        if (this.previewRenderLoopId) {
+          cancelAnimationFrame(this.previewRenderLoopId);
+          this.previewRenderLoopId = null;
+        }
+        return;
+      }
+
+      if (!this.renderEnabled) return;
+      if (this.previewMode) {
+        this.startPreviewRenderLoop();
+        return;
+      }
+      this.syncUserMarkerRenderLoop();
+      if (this.shouldAnimateOverlay()) {
+        this.renderingLoop = true;
+        this.startRenderLoop();
+      }
+    };
+    if (typeof document !== 'undefined') {
+      document.addEventListener('visibilitychange', this.handleVisibilityChange);
+    }
 
     this.init();
   }
@@ -620,8 +650,34 @@ class WebGLNodeRenderer {
       syncedAt: performance.now()
     };
 
-    if (!this.previewMode) {
+    if (!this.previewMode && this.renderEnabled) {
       this.render();
+    }
+  }
+
+  setRenderEnabled(enabled = true) {
+    this.renderEnabled = enabled !== false;
+    if (!this.renderEnabled) {
+      this.stopRenderLoop();
+      this.stopUserMarkerRenderLoop();
+      if (this.previewRenderLoopId) {
+        cancelAnimationFrame(this.previewRenderLoopId);
+        this.previewRenderLoopId = null;
+      }
+      return;
+    }
+
+    if (this.previewMode) {
+      this.renderUserMarkerCanvas();
+      this.startPreviewRenderLoop();
+      return;
+    }
+
+    this.renderUserMarkerCanvas();
+    this.syncUserMarkerRenderLoop();
+    if (this.shouldAnimateOverlay()) {
+      this.renderingLoop = true;
+      this.startRenderLoop();
     }
   }
 
@@ -790,6 +846,27 @@ class WebGLNodeRenderer {
 
   shouldRenderUserMarkerOverlay() {
     return this.sceneType === 'titleDetail' || this.sceneType === 'nodeDetail';
+  }
+
+  shouldAnimateUserMarker() {
+    if (!this.renderEnabled || this.previewMode) return false;
+    if (typeof document !== 'undefined' && document.visibilityState !== 'visible') return false;
+    if (!this.shouldRenderUserMarkerOverlay() || this.userState?.travelStatus?.isTraveling) return false;
+    return !!this.findVisibleNodeByName(this.userState.locationName);
+  }
+
+  syncUserMarkerRenderLoop() {
+    if (this.shouldAnimateUserMarker()) {
+      this.startUserMarkerRenderLoop();
+    } else {
+      this.stopUserMarkerRenderLoop();
+    }
+  }
+
+  shouldAnimateOverlay() {
+    if (!this.renderEnabled || this.previewMode) return false;
+    if (this.longPressState.active && !this.longPressState.completed) return true;
+    return this.shouldRenderUserMarkerOverlay() && !!this.userState?.travelStatus?.isTraveling;
   }
 
   setCameraOffset(offsetX, offsetY, options = {}) {
@@ -3601,6 +3678,8 @@ class WebGLNodeRenderer {
 
     // 渲染标签与2D overlay
     this.renderLabels();
+    this.renderUserMarkerCanvas();
+    this.syncUserMarkerRenderLoop();
 
     if (this.mapDebugEnabled) {
       const debugState = `${canvas.width}x${canvas.height}|nodes:${this.nodes.size}|lines:${this.lines.length}`;
@@ -3617,32 +3696,73 @@ class WebGLNodeRenderer {
       }
     }
 
-    // 启动持续渲染循环（如果还没有在运行）
+    // 只有存在真实动态内容时才启动持续渲染循环
+    if (!this.renderEnabled || !this.shouldAnimateOverlay()) {
+      this.stopRenderLoop();
+      return;
+    }
     if (!this.animating && !this.renderingLoop && this.nodes.size > 0) {
       this.renderingLoop = true;
       this.startRenderLoop();
     }
   }
 
-  // 持续渲染循环
+  stopRenderLoop() {
+    this.renderingLoop = false;
+    if (this.renderLoopId) {
+      cancelAnimationFrame(this.renderLoopId);
+      this.renderLoopId = null;
+    }
+  }
+
+  stopUserMarkerRenderLoop() {
+    if (this.userMarkerRenderLoopId) {
+      cancelAnimationFrame(this.userMarkerRenderLoopId);
+      this.userMarkerRenderLoopId = null;
+    }
+  }
+
+  startUserMarkerRenderLoop() {
+    if (!this.shouldAnimateUserMarker() || this.userMarkerRenderLoopId) return;
+
+    const animate = (timestamp) => {
+      this.userMarkerRenderLoopId = null;
+      if (!this.shouldAnimateUserMarker()) {
+        this.renderUserMarkerCanvas(timestamp);
+        return;
+      }
+      this.renderUserMarkerCanvas(timestamp);
+      this.userMarkerRenderLoopId = requestAnimationFrame(animate);
+    };
+
+    this.userMarkerRenderLoopId = requestAnimationFrame(animate);
+  }
+
+  // 动态 overlay 渲染循环
   startRenderLoop() {
-    if (!this.renderingLoop) return;
+    if (!this.renderingLoop || !this.renderEnabled || !this.shouldAnimateOverlay()) {
+      this.stopRenderLoop();
+      return;
+    }
     if (this.previewMode) {
-      this.renderingLoop = false;
+      this.stopRenderLoop();
       return;
     }
 
     // 如果没有节点或者在动画中，停止循环
     if (this.nodes.size === 0 || this.animating) {
-      this.renderingLoop = false;
+      this.stopRenderLoop();
       return;
     }
 
     // 每帧刷新overlay动画（按钮图标、用户标记、移动亮点）
     this.renderOverlayCanvas();
 
-    // 继续下一帧
-    this.renderLoopId = requestAnimationFrame(() => this.startRenderLoop());
+    if (this.shouldAnimateOverlay()) {
+      this.renderLoopId = requestAnimationFrame(() => this.startRenderLoop());
+    } else {
+      this.stopRenderLoop();
+    }
   }
 
   getRevealProgressForNode(nodeId = '') {
@@ -4092,6 +4212,34 @@ class WebGLNodeRenderer {
     return overlayCanvas;
   }
 
+  ensureUserMarkerCanvas() {
+    let markerCanvas = this.userMarkerCanvas;
+    if (!markerCanvas) {
+      markerCanvas = document.createElement('canvas');
+      markerCanvas.style.position = 'absolute';
+      markerCanvas.style.top = '0';
+      markerCanvas.style.left = '0';
+      markerCanvas.style.pointerEvents = 'none';
+      markerCanvas.style.zIndex = '1';
+      if (this.canvas.parentElement) {
+        this.canvas.parentElement.appendChild(markerCanvas);
+      }
+      this.userMarkerCanvas = markerCanvas;
+    }
+
+    if (markerCanvas.width !== this.canvas.width) {
+      markerCanvas.width = this.canvas.width;
+    }
+    if (markerCanvas.height !== this.canvas.height) {
+      markerCanvas.height = this.canvas.height;
+    }
+    const width = `${this.canvas.offsetWidth}px`;
+    const height = `${this.canvas.offsetHeight}px`;
+    if (markerCanvas.style.width !== width) markerCanvas.style.width = width;
+    if (markerCanvas.style.height !== height) markerCanvas.style.height = height;
+    return markerCanvas;
+  }
+
   ensureLabelOverlay() {
     let labelOverlay = this.labelOverlay;
     if (!labelOverlay) {
@@ -4385,7 +4533,6 @@ class WebGLNodeRenderer {
     this.renderLongPressChargeRing(ctx);
     if (this.shouldRenderUserMarkerOverlay()) {
       this.renderUserTravelDot(ctx);
-      this.renderUserConeMarker(ctx);
     }
     if (this.mapDebugEnabled && this.nodes.size === 0) {
       this.renderEmptyStateOverlay(ctx);
@@ -4395,6 +4542,21 @@ class WebGLNodeRenderer {
     }
 
     ctx.globalAlpha = 1;
+  }
+
+  renderUserMarkerCanvas(timestamp = performance.now()) {
+    const shouldDrawMarker = this.shouldRenderUserMarkerOverlay()
+      && !this.previewMode
+      && !this.userState?.travelStatus?.isTraveling
+      && !!this.findVisibleNodeByName(this.userState.locationName);
+    if (!shouldDrawMarker && !this.userMarkerCanvas) return;
+
+    const markerCanvas = this.ensureUserMarkerCanvas();
+    const ctx = markerCanvas.getContext('2d');
+    ctx.clearRect(0, 0, markerCanvas.width, markerCanvas.height);
+    if (shouldDrawMarker) {
+      this.renderUserConeMarker(ctx, timestamp);
+    }
   }
 
   renderLongPressChargeRing(ctx) {
@@ -5170,7 +5332,7 @@ class WebGLNodeRenderer {
     return true;
   }
 
-  renderUserConeMarker(ctx) {
+  renderUserConeMarker(ctx, timestamp = performance.now()) {
     if (!this.shouldRenderUserMarkerOverlay()) return;
     if (this.userState?.travelStatus?.isTraveling) return;
 
@@ -5178,8 +5340,8 @@ class WebGLNodeRenderer {
     if (!node) return;
 
     const nodePos = this.worldToScreen(node.x, node.y);
-    const bob = Math.sin(performance.now() * 0.006) * 3.5;
-    const pulse = 1 + Math.sin(performance.now() * 0.01) * 0.09;
+    const bob = Math.sin(timestamp * 0.006) * 3.5;
+    const pulse = 1 + Math.sin(timestamp * 0.01) * 0.09;
     const baseY = nodePos.y - node.radius * node.scale * this.camera.zoom - 10 + bob;
     const coneHeight = 16 * pulse;
     const coneWidth = 10 * pulse;
@@ -5237,6 +5399,8 @@ class WebGLNodeRenderer {
     this.previewNodes.clear();
     this.previewLines = [];
     this.previewPulseTime = 0;
+    this.stopUserMarkerRenderLoop();
+    this.renderUserMarkerCanvas();
 
     if (this.renderLoopId) {
       cancelAnimationFrame(this.renderLoopId);
@@ -5340,10 +5504,13 @@ class WebGLNodeRenderer {
    * 预览渲染循环（带脉冲动画）
    */
   startPreviewRenderLoop() {
-    if (!this.previewMode) return;
+    if (!this.previewMode || !this.renderEnabled || this.previewRenderLoopId) return;
 
     const animate = (timestamp) => {
-      if (!this.previewMode) return;
+      if (!this.previewMode || !this.renderEnabled || document.visibilityState !== 'visible') {
+        this.previewRenderLoopId = null;
+        return;
+      }
 
       // 更新脉冲时间
       this.previewPulseTime = timestamp * 0.001; // 转换为秒
@@ -5400,6 +5567,8 @@ class WebGLNodeRenderer {
 
     // 渲染标签
     this.renderLabels(true);
+    this.renderUserMarkerCanvas();
+    this.syncUserMarkerRenderLoop();
   }
 
   /**
@@ -5644,14 +5813,14 @@ class WebGLNodeRenderer {
   // 销毁
   destroy() {
     // 停止所有渲染循环
-    this.renderingLoop = false;
+    this.stopRenderLoop();
+    this.stopUserMarkerRenderLoop();
+    if (typeof document !== 'undefined' && this.handleVisibilityChange) {
+      document.removeEventListener('visibilitychange', this.handleVisibilityChange);
+    }
     if (this.pendingRenderId) {
       cancelAnimationFrame(this.pendingRenderId);
       this.pendingRenderId = 0;
-    }
-    if (this.renderLoopId) {
-      cancelAnimationFrame(this.renderLoopId);
-      this.renderLoopId = null;
     }
 
     // 停止预览渲染循环
@@ -5667,10 +5836,14 @@ class WebGLNodeRenderer {
     if (this.overlayCanvas) {
       this.overlayCanvas.remove();
     }
+    if (this.userMarkerCanvas) {
+      this.userMarkerCanvas.remove();
+    }
     if (this.labelOverlay) {
       this.labelOverlay.remove();
     }
     this.labelElements.clear();
+    this.userMarkerCanvas = null;
     this.animations = [];
     this.nodes.clear();
     this.nodeButtons.clear();

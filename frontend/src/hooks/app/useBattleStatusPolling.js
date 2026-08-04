@@ -3,6 +3,10 @@ import {
   isTitleBattleView,
   normalizeObjectId
 } from '../../app/appShared';
+import {
+  isDocumentVisible,
+  subscribeToVisibleInterval
+} from './visibilityPolling';
 
 const useBattleStatusPolling = ({
   authenticated,
@@ -26,12 +30,14 @@ const useBattleStatusPolling = ({
       return undefined;
     }
 
-    fetchDistributionParticipationStatus(targetNodeId, true);
-    const timer = setInterval(() => {
+    if (isDocumentVisible()) {
+      fetchDistributionParticipationStatus(targetNodeId, true);
+    }
+    const unsubscribe = subscribeToVisibleInterval(() => {
       fetchDistributionParticipationStatus(targetNodeId, true);
     }, 4000);
 
-    return () => clearInterval(timer);
+    return unsubscribe;
   }, [
     authenticated,
     currentTitleDetail?._id,
@@ -50,11 +56,13 @@ const useBattleStatusPolling = ({
       closeDistributionPanel();
       return undefined;
     }
-    fetchDistributionParticipationStatus(targetNodeId, true, { updatePanel: true });
-    const timer = setInterval(() => {
+    if (isDocumentVisible()) {
+      fetchDistributionParticipationStatus(targetNodeId, true, { updatePanel: true });
+    }
+    const unsubscribe = subscribeToVisibleInterval(() => {
       fetchDistributionParticipationStatus(targetNodeId, true, { updatePanel: true });
     }, 1000);
-    return () => clearInterval(timer);
+    return unsubscribe;
   }, [
     closeDistributionPanel,
     currentTitleDetail?._id,
@@ -70,11 +78,11 @@ const useBattleStatusPolling = ({
       return undefined;
     }
 
-    fetchSiegeStatus(targetNodeId, { silent: true, preserveIntelView: siegeDialog.open });
-    const timer = setInterval(() => {
+    const sync = () => {
       fetchSiegeStatus(targetNodeId, { silent: true, preserveIntelView: siegeDialog.open });
-    }, siegeDialog.open ? 2000 : 4000);
-    return () => clearInterval(timer);
+    };
+    if (isDocumentVisible()) sync();
+    return subscribeToVisibleInterval(sync, siegeDialog.open ? 2000 : 4000);
   }, [
     authenticated,
     clearSiegeStatus,

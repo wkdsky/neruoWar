@@ -858,6 +858,10 @@ class SceneManager {
     this.renderer.setUserState({ locationName, travelStatus });
   }
 
+  setRenderEnabled(enabled = true) {
+    this.renderer.setRenderEnabled(enabled);
+  }
+
   async titleSenseOrbitTransition(newLayout, direction = 'titleToSense', duration = 330, transitionVersion = null, clickedNode = null) {
     if (!this.isLayoutTransitionCurrent(transitionVersion)) return;
     const newCenterConfig = newLayout.nodes.find((node) => node.type === 'center');

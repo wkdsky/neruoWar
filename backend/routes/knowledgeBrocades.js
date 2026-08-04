@@ -13,7 +13,6 @@ const MAX_BROCADE_NAME_LENGTH = 80;
 const MAX_CONTENT_LENGTH = 200000;
 const MAX_NODE_TITLE_LENGTH = 80;
 const DEFAULT_NODE_SHAPE = 'rounded';
-const DEFAULT_SYSTEM_NODE_TITLE = '新建知识点';
 const NODE_SIZE_LIMITS = {
   minWidth: 168,
   maxWidth: 420,
@@ -21,6 +20,7 @@ const NODE_SIZE_LIMITS = {
   maxHeight: 320
 };
 const ALLOWED_NODE_SHAPES = new Set(['rounded', 'rectangle', 'pill']);
+const MARKDOWN_HEADING_PREFIX_PATTERN = /^\s{0,3}#{1,6}\s+/;
 
 const getIdString = (value) => {
   if (!value) return '';
@@ -53,27 +53,12 @@ const normalizeName = (value = '', fallback = '未命名知识锦') => {
   return safe.slice(0, MAX_BROCADE_NAME_LENGTH);
 };
 
+const stripMarkdownHeadingPrefix = (value = '') => String(value || '').replace(MARKDOWN_HEADING_PREFIX_PATTERN, '').trim();
+
 const normalizeNodeTitle = (value = '', fallback = '未命名节点') => {
-  const trimmed = typeof value === 'string' ? value.trim() : '';
+  const trimmed = stripMarkdownHeadingPrefix(value);
   const safe = trimmed || fallback;
   return safe.slice(0, MAX_NODE_TITLE_LENGTH);
-};
-
-const resolveUniqueSiblingNodeTitle = (existingTitles = [], baseTitle = DEFAULT_SYSTEM_NODE_TITLE) => {
-  const normalizedBaseTitle = normalizeNodeTitle(baseTitle, DEFAULT_SYSTEM_NODE_TITLE);
-  const usedTitles = new Set(
-    (Array.isArray(existingTitles) ? existingTitles : [])
-      .map((item) => normalizeNodeTitle(item, ''))
-      .filter(Boolean)
-  );
-  if (!usedTitles.has(normalizedBaseTitle)) {
-    return normalizedBaseTitle;
-  }
-  let duplicateIndex = 2;
-  while (usedTitles.has(`${normalizedBaseTitle} (${duplicateIndex})`)) {
-    duplicateIndex += 1;
-  }
-  return `${normalizedBaseTitle} (${duplicateIndex})`;
 };
 
 const extractNodeTitle = (contentText = '') => {
@@ -81,7 +66,7 @@ const extractNodeTitle = (contentText = '') => {
     .split(/\r?\n/)
     .map((line) => line.trim())
     .filter(Boolean);
-  return (lines[0] || '未命名节点').slice(0, 80);
+  return normalizeNodeTitle(lines[0], '未命名节点');
 };
 
 const extractRequestedNodeTitle = (contentText = '') => {
@@ -90,18 +75,6 @@ const extractRequestedNodeTitle = (contentText = '') => {
     .map((line) => line.trim())
     .filter(Boolean);
   return lines[0] ? normalizeNodeTitle(lines[0], '') : '';
-};
-
-const buildCreateNodeContent = (contentText = '', title = DEFAULT_SYSTEM_NODE_TITLE) => {
-  const normalized = String(contentText || '').replace(/\r/g, '');
-  const trimmed = normalized.trim();
-  if (!trimmed) {
-    return `${normalizeNodeTitle(title, DEFAULT_SYSTEM_NODE_TITLE)}\n\n`;
-  }
-  if (extractRequestedNodeTitle(normalized)) {
-    return normalized;
-  }
-  return `${normalizeNodeTitle(title, DEFAULT_SYSTEM_NODE_TITLE)}\n\n${trimmed}`;
 };
 
 const extractPreviewText = (contentText = '') => {
@@ -156,7 +129,7 @@ const serializeNodeSummary = (doc = {}) => ({
   parentNodeId: getIdString(doc?.parentNodeId),
   isRoot: !!doc?.isRoot,
   isStarred: !!doc?.isStarred,
-  title: doc?.title || '未命名节点',
+  title: normalizeNodeTitle(doc?.title, ''),
   previewText: doc?.previewText || '',
   contentText: doc?.contentText || '',
   shape: normalizeNodeShape(doc?.shape),
@@ -455,21 +428,19 @@ router.post('/:brocadeId/nodes', authenticateToken, async (req, res) => {
       .select('title')
       .lean();
     const siblingTitles = siblingNodes.map((item) => item?.title || '');
-    const fallbackTitle = resolveUniqueSiblingNodeTitle(siblingTitles, DEFAULT_SYSTEM_NODE_TITLE);
-    const requestedContentText = String(req.body?.contentText || '');
+    const requestedContentText = String(req.body?.contentText || '').replace(/\r/g, '');
     const requestedTitle = extractRequestedNodeTitle(requestedContentText) || normalizeNodeTitle(req.body?.title, '');
-    const nextTitle = requestedTitle || fallbackTitle;
     if (requestedTitle && siblingTitles.some((item) => normalizeNodeTitle(item, '') === requestedTitle)) {
       return res.status(400).json({ error: '同级节点中已存在同名节点，请修改第一行标题后再保存' });
     }
-    const nextContentText = buildCreateNodeContent(requestedContentText, nextTitle);
+    const nextContentText = requestedContentText;
     const node = await KnowledgeBrocadeNode.create({
       brocadeId: brocade._id,
       ownerUserId: brocade.ownerUserId,
       parentNodeId: parentNode._id,
       isRoot: false,
       isStarred: !!req.body?.isStarred,
-      title: nextTitle,
+      title: requestedTitle,
       shape: DEFAULT_NODE_SHAPE,
       previewText: extractPreviewText(nextContentText),
       contentText: nextContentText,
@@ -620,10 +591,12 @@ router.post('/:brocadeId/nodes/restore', authenticateToken, async (req, res) => 
       }
       restoreIdSet.add(nodeId);
       const parentNodeId = getIdString(item?.parentNodeId);
-      const contentText = String(item?.contentText || '');
-      const fallbackTitle = normalizeNodeTitle(item?.title, '未命名节点');
-      const safeContentText = contentText || buildDefaultNodeContent(fallbackTitle);
-      const safeTitle = normalizeNodeTitle(item?.title, extractNodeTitle(safeContentText));
+      const contentText = String(item?.contentText || '').replace(/\r/g, '');
+      const safeContentText = contentText;
+      const safeTitle = normalizeNodeTitle(
+        item?.title,
+        safeContentText.trim() ? extractNodeTitle(safeContentText) : ''
+      );
       return {
         _id: new mongoose.Types.ObjectId(nodeId),
         brocadeId: brocade._id,
@@ -702,7 +675,7 @@ router.put('/:brocadeId/nodes/:nodeId/content', authenticateToken, async (req, r
     const node = await loadOwnedNode(brocadeId, nodeId, ownerUserId);
     if (!node) return res.status(404).json({ error: '节点不存在' });
 
-    const contentText = String(req.body?.contentText || '');
+    const contentText = String(req.body?.contentText || '').replace(/\r/g, '');
     const requestedTitle = extractRequestedNodeTitle(contentText) || normalizeNodeTitle(req.body?.title, '');
     if (contentText.length > MAX_CONTENT_LENGTH) {
       return res.status(400).json({ error: `节点内容过长，不能超过 ${MAX_CONTENT_LENGTH} 个字符` });
@@ -723,7 +696,7 @@ router.put('/:brocadeId/nodes/:nodeId/content', authenticateToken, async (req, r
     }
 
     node.contentText = contentText;
-    node.title = requestedTitle || (contentText.trim() ? extractNodeTitle(contentText) : normalizeNodeTitle(node.title, '未命名节点'));
+    node.title = requestedTitle || (contentText.trim() ? extractNodeTitle(contentText) : '');
     node.previewText = extractPreviewText(contentText);
     await node.save();
     const brocadeUpdate = { updatedAt: new Date() };

@@ -31,7 +31,6 @@ import BattleDeployEditorPanel from '../presentation/ui/BattleDeployEditorPanel'
 import BattleMarchModeFloat from '../presentation/ui/BattleMarchModeFloat';
 import BattleSkillPickFloat from '../presentation/ui/BattleSkillPickFloat';
 import DeployGroupInfoPanel from '../presentation/ui/DeployGroupInfoPanel';
-import BattleMapDial from '../presentation/ui/BattleMapDial';
 import BattleFormationWheel from '../presentation/ui/BattleFormationWheel';
 import useDraggablePanel from '../presentation/ui/useDraggablePanel';
 import unitVisualConfig from '../presentation/assets/UnitVisualConfig.example.json';
@@ -73,6 +72,34 @@ import {
   toCardsByTeam
 } from './battleSceneUtils';
 
+const EDGE_SCROLL_ZONE_PX = 42;
+const EDGE_SCROLL_CURVE = 1.55;
+
+const isBattleDocumentActive = () => (
+  typeof document === 'undefined'
+    || (
+      document.visibilityState === 'visible'
+      && (typeof document.hasFocus !== 'function' || document.hasFocus())
+    )
+);
+
+const resolveEdgeScrollAxis = (position, start, end) => {
+  const axisLength = Math.max(1, end - start);
+  const edgeZone = Math.min(EDGE_SCROLL_ZONE_PX, axisLength * 0.25);
+  const leadingDepth = (start + edgeZone) - position;
+  const trailingDepth = position - (end - edgeZone);
+  if (leadingDepth <= 0 && trailingDepth <= 0) return 0;
+  const direction = leadingDepth > trailingDepth ? -1 : 1;
+  const depth = Math.max(leadingDepth, trailingDepth);
+  const normalizedDepth = clamp(depth / Math.max(1, edgeZone), 0, 1);
+  return direction * (normalizedDepth ** EDGE_SCROLL_CURVE);
+};
+
+const resolveEdgeScrollVector = (pointer, rect) => ({
+  x: resolveEdgeScrollAxis(pointer.clientX, rect.left, rect.right),
+  y: -resolveEdgeScrollAxis(pointer.clientY, rect.top, rect.bottom)
+});
+
 const BattleSceneContainer = ({
   open = false,
   loading = false,
@@ -100,6 +127,8 @@ const BattleSceneContainer = ({
   const deployRectDragRef = useRef(null);
   const spacePressedRef = useRef(false);
   const mapKeyCommandsRef = useRef(new Set());
+  const edgeScrollPointerRef = useRef({ active: false, clientX: 0, clientY: 0 });
+  const edgeScrollMotionRef = useRef({ intensity: 0, directionKey: '', carrying: false });
   const runtimeInitRef = useRef(null);
   const reportBattleResultRef = useRef(() => {});
   const [mapKeyCommand, setMapKeyCommand] = useState('');
@@ -183,8 +212,6 @@ const BattleSceneContainer = ({
     setShowMidlineDebug,
     isPanning,
     setIsPanning,
-    mapDialCommand,
-    setMapDialCommand,
     deployDraggingGroupId,
     deployDraggingTeam
   } = useBattleSceneUiState();
@@ -256,6 +283,7 @@ const BattleSceneContainer = ({
     runtimeRef,
     pipelineRef,
     cameraControllerRef: cameraRef,
+    idleFrameIntervalMs: isTrainingMode ? (1000 / 20) : 0,
     debugEnabled,
     callbacks: {
       onBattleEnded: (summary) => {
@@ -578,19 +606,53 @@ const BattleSceneContainer = ({
   }, [deployFormationLibrary, handleDeployGroupIdChanged, runtimeRef]);
 
   useEffect(() => {
-    if (!open || (!mapDialCommand && !mapKeyCommand)) return undefined;
+    if (!open) return undefined;
+    const clearEdgeScroll = () => {
+      edgeScrollPointerRef.current.active = false;
+      edgeScrollMotionRef.current = { intensity: 0, directionKey: '', carrying: false };
+    };
+    const handleWindowMouseMove = (event) => {
+      if (!isBattleDocumentActive()) {
+        clearEdgeScroll();
+        return;
+      }
+      const clientX = Number(event.clientX);
+      const clientY = Number(event.clientY);
+      if (!Number.isFinite(clientX) || !Number.isFinite(clientY)) {
+        clearEdgeScroll();
+        return;
+      }
+      edgeScrollPointerRef.current = { active: true, clientX, clientY };
+    };
+    const handleVisibilityChange = () => {
+      if (document.visibilityState !== 'visible') clearEdgeScroll();
+    };
+    window.addEventListener('mousemove', handleWindowMouseMove, true);
+    window.addEventListener('blur', clearEdgeScroll);
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    return () => {
+      window.removeEventListener('mousemove', handleWindowMouseMove, true);
+      window.removeEventListener('blur', clearEdgeScroll);
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+      clearEdgeScroll();
+    };
+  }, [open]);
+
+  useEffect(() => {
+    if (!open) return undefined;
     let rafId = 0;
+    let idleTimerId = 0;
     let lastTs = performance.now();
     const step = (ts) => {
       const runtime = runtimeRef.current;
       const camera = cameraRef.current;
+      let hasActiveCameraMotion = false;
       if (runtime && camera) {
         const dt = Math.min(0.05, Math.max(0.001, (ts - lastTs) / 1000));
         lastTs = ts;
         const panSpeed = Math.max(170, (Number(camera.distance) || 560) * 1.05);
         const rotateSpeed = 145;
         const worldYawRad = (Number(camera.worldYawDeg) || 0) * (Math.PI / 180);
-        // Default/fallback basis: world aligned.
         let rightX = Math.sin(worldYawRad);
         let rightY = Math.cos(worldYawRad);
         let forwardX = Math.cos(worldYawRad);
@@ -624,7 +686,6 @@ const BattleSceneContainer = ({
         let nextCenterY = Number(camera.centerY) || 0;
 
         const commands = new Set(mapKeyCommandsRef.current);
-        if (mapDialCommand) commands.add(mapDialCommand);
         let moveRight = 0;
         let moveForward = 0;
         let rotateDirection = 0;
@@ -641,6 +702,44 @@ const BattleSceneContainer = ({
           nextCenterX += dx * panSpeed * dt;
           nextCenterY += dy * panSpeed * dt;
         }
+
+        const documentActive = isBattleDocumentActive();
+        const edgePointer = edgeScrollPointerRef.current;
+        if (!documentActive) edgePointer.active = false;
+        const sceneRect = sceneRef.current?.getBoundingClientRect?.();
+        const edgeScroll = documentActive
+          && edgePointer.active
+          && !panDragRef.current
+          && sceneRect
+          && (runtime.getPhase?.() === 'deploy' || runtime.getPhase?.() === 'battle')
+          ? resolveEdgeScrollVector(edgePointer, sceneRect)
+          : { x: 0, y: 0 };
+        const rawEdgeIntensity = Math.max(Math.abs(edgeScroll.x), Math.abs(edgeScroll.y));
+        const edgeMotion = edgeScrollMotionRef.current;
+        let edgeIntensity = 0;
+        if (rawEdgeIntensity > 1e-4) {
+          const edgeDirectionKey = `${Math.sign(edgeScroll.x)},${Math.sign(edgeScroll.y)}`;
+          const directionChanged = edgeMotion.directionKey && edgeMotion.directionKey !== edgeDirectionKey;
+          if (directionChanged) edgeMotion.carrying = true;
+          if (!edgeMotion.carrying) {
+            edgeMotion.intensity = rawEdgeIntensity;
+          } else {
+            edgeMotion.intensity = Math.max(edgeMotion.intensity, rawEdgeIntensity);
+          }
+          edgeMotion.directionKey = edgeDirectionKey;
+          edgeIntensity = edgeMotion.intensity;
+        } else {
+          edgeMotion.intensity = 0;
+          edgeMotion.directionKey = '';
+          edgeMotion.carrying = false;
+        }
+        const edgeLength = Math.hypot(edgeScroll.x, edgeScroll.y);
+        if (edgeIntensity > 1e-4 && edgeLength > 1e-4) {
+          const edgeWorldX = ((rightX * edgeScroll.x) + (forwardX * edgeScroll.y)) / edgeLength;
+          const edgeWorldY = ((rightY * edgeScroll.x) + (forwardY * edgeScroll.y)) / edgeLength;
+          nextCenterX += edgeWorldX * panSpeed * edgeIntensity * dt;
+          nextCenterY += edgeWorldY * panSpeed * edgeIntensity * dt;
+        }
         if (rotateDirection !== 0) {
           camera.worldYawDeg += rotateDirection * rotateSpeed * dt;
         }
@@ -648,14 +747,27 @@ const BattleSceneContainer = ({
         const clampedCenter = clampCameraCenterToField(nextCenterX, nextCenterY);
         camera.centerX = clampedCenter.x;
         camera.centerY = clampedCenter.y;
+        hasActiveCameraMotion = (
+          moveLen > 1e-4
+          || edgeIntensity > 1e-4
+          || rotateDirection !== 0
+        );
       }
-      rafId = requestAnimationFrame(step);
+      if (hasActiveCameraMotion) {
+        rafId = requestAnimationFrame(step);
+      } else {
+        idleTimerId = window.setTimeout(() => {
+          idleTimerId = 0;
+          rafId = requestAnimationFrame(step);
+        }, 100);
+      }
     };
     rafId = requestAnimationFrame(step);
     return () => {
       if (rafId) cancelAnimationFrame(rafId);
+      if (idleTimerId) window.clearTimeout(idleTimerId);
     };
-  }, [clampCameraCenterToField, mapDialCommand, mapKeyCommand, open, runtimeRef]);
+  }, [clampCameraCenterToField, mapKeyCommand, open, runtimeRef]);
 
 
   const handleTogglePause = useCallback(() => {
@@ -1141,7 +1253,6 @@ const BattleSceneContainer = ({
     isTrainingMode ? 'is-training-three' : '',
     deployPlacementLocked ? 'is-deploy-placement-lock' : ''
   ].filter(Boolean).join(' ');
-  const activeMapCommands = [mapDialCommand, mapKeyCommand].filter(Boolean).join('|');
 
   return (
     <div className={overlayClassName}>
@@ -1331,7 +1442,6 @@ const BattleSceneContainer = ({
               onMapClick={handleMinimapClick}
               interactive={!deployPlacementLocked}
             />
-            <BattleMapDial activeCommand={activeMapCommands} onHoverCommandChange={setMapDialCommand} />
 
             {battleUiMode === BATTLE_UI_MODE_PATH ? (
               <div className="pve2-aim-tip">路径规划中：LMB 添加路点，RMB 撤销，点击最后路径点“√”执行</div>

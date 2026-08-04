@@ -149,7 +149,7 @@ export const createBattleInputController = ({
     if (
       target
       && typeof target.closest === 'function'
-      && target.closest('.pve2-world-actions, .pve2-battle-actions, .pve2-card-actions, .pve2-deploy-creator, .pve2-deploy-sidebar, .pve2-minimap-wrap, .pve2-map-dial-wrap, .pve2-action-pad, .pve2-skill-float, .pve2-march-float, .pve2-path-confirm-btn, .pve2-hud, .pve2-confirm, .pve2-quick-deploy-backdrop, .pve2-quick-deploy-panel, .pve2-formation-wheel, .number-pad-dialog-overlay, .number-pad-dialog')
+      && target.closest('.pve2-world-actions, .pve2-battle-actions, .pve2-card-actions, .pve2-deploy-creator, .pve2-deploy-sidebar, .pve2-minimap-wrap, .pve2-action-pad, .pve2-skill-float, .pve2-march-float, .pve2-path-confirm-btn, .pve2-hud, .pve2-confirm, .pve2-quick-deploy-backdrop, .pve2-quick-deploy-panel, .pve2-formation-wheel, .number-pad-dialog-overlay, .number-pad-dialog')
     ) {
       return;
     }
@@ -329,7 +329,7 @@ export const createBattleInputController = ({
     if (
       target
       && typeof target.closest === 'function'
-      && target.closest('.pve2-world-actions, .pve2-battle-actions, .pve2-card-actions, .pve2-deploy-sidebar, .pve2-minimap-wrap, .pve2-map-dial-wrap, .pve2-action-pad, .pve2-skill-float, .pve2-march-float, .pve2-hud, .pve2-confirm, .pve2-quick-deploy-backdrop, .pve2-quick-deploy-panel, .pve2-formation-wheel, .number-pad-dialog-overlay, .number-pad-dialog')
+      && target.closest('.pve2-world-actions, .pve2-battle-actions, .pve2-card-actions, .pve2-deploy-sidebar, .pve2-minimap-wrap, .pve2-action-pad, .pve2-skill-float, .pve2-march-float, .pve2-hud, .pve2-confirm, .pve2-quick-deploy-backdrop, .pve2-quick-deploy-panel, .pve2-formation-wheel, .number-pad-dialog-overlay, .number-pad-dialog')
     ) {
       return;
     }

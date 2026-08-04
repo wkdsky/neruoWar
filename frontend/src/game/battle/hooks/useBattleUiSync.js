@@ -1,4 +1,8 @@
 import { useEffect, useState } from 'react';
+import {
+  areJsonValuesEqual,
+  subscribeToVisibleInterval
+} from './../../../hooks/app/visibilityPolling';
 
 const EMPTY_STATUS = { phase: 'deploy', timerSec: 0, ended: false, endReason: '' };
 
@@ -18,19 +22,24 @@ export default function useBattleUiSync({
       setMinimapSnapshot(null);
       return undefined;
     }
-    let timerId = 0;
     const sync = () => {
       const runtime = runtimeRef?.current;
       if (!runtime) return;
-      setBattleStatus(runtime.getBattleStatus?.() || EMPTY_STATUS);
-      setCardRows(runtime.getCardRows?.() || []);
-      setMinimapSnapshot(runtime.getMinimapSnapshot?.() || null);
+      const nextBattleStatus = runtime.getBattleStatus?.() || EMPTY_STATUS;
+      const nextCardRows = runtime.getCardRows?.() || [];
+      const nextMinimapSnapshot = runtime.getMinimapSnapshot?.() || null;
+      setBattleStatus((previous) => (
+        areJsonValuesEqual(previous, nextBattleStatus) ? previous : nextBattleStatus
+      ));
+      setCardRows((previous) => (
+        areJsonValuesEqual(previous, nextCardRows) ? previous : nextCardRows
+      ));
+      setMinimapSnapshot((previous) => (
+        areJsonValuesEqual(previous, nextMinimapSnapshot) ? previous : nextMinimapSnapshot
+      ));
     };
     sync();
-    timerId = window.setInterval(sync, Math.max(30, Number(intervalMs) || 120));
-    return () => {
-      if (timerId) window.clearInterval(timerId);
-    };
+    return subscribeToVisibleInterval(sync, Math.max(30, Number(intervalMs) || 120));
   }, [enabled, intervalMs, runtimeRef]);
 
   return {

@@ -400,6 +400,15 @@ const KnowledgeDomainScene = ({
     applyScenePanOffset(scenePanOffsetRef.current);
     rendererRef.current.startRenderLoop();
 
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible') {
+        rendererRef.current?.startRenderLoop();
+      } else {
+        rendererRef.current?.stopRenderLoop();
+      }
+    };
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+
     // 监听窗口大小变化
     const handleResize = () => {
       if (container && rendererRef.current) {
@@ -416,6 +425,7 @@ const KnowledgeDomainScene = ({
 
     return () => {
       window.removeEventListener('resize', handleResize);
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
       if (rendererRef.current) {
         rendererRef.current.destroy();
         rendererRef.current = null;

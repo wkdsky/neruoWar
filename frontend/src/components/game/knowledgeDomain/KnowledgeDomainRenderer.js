@@ -9,6 +9,8 @@ class KnowledgeDomainRenderer {
     this.canvas = canvas;
     this.ctx = canvas.getContext('2d');
     this.animationId = null;
+    this.lastRenderTime = 0;
+    this.frameIntervalMs = 1000 / 30;
     this.time = 0;
     this.viewOffset = { x: 0, y: 0 };
     this.cameraAngleDeg = CITY_CAMERA_DEFAULT_ANGLE_DEG;
@@ -217,7 +219,7 @@ class KnowledgeDomainRenderer {
     ctx.stroke();
   }
 
-  drawParticles() {
+  drawParticles(deltaSeconds = 1 / 60) {
     const ctx = this.ctx;
     const width = this.canvas.width;
     const height = this.canvas.height;
@@ -226,7 +228,7 @@ class KnowledgeDomainRenderer {
     const centerY = metrics.centerY + this.viewOffset.y;
 
     for (const particle of this.particles) {
-      particle.y += particle.speed;
+      particle.y += particle.speed * Math.min(2, Math.max(0, deltaSeconds * 60));
       if (particle.y > 1) particle.y = -1;
 
       const projX = centerX + particle.x * width * 0.4;
@@ -261,10 +263,14 @@ class KnowledgeDomainRenderer {
     }
   }
 
-  render() {
+  render(timestamp = performance.now()) {
     const ctx = this.ctx;
     const width = this.canvas.width;
     const height = this.canvas.height;
+    const deltaSeconds = this.lastRenderTime > 0
+      ? Math.min(0.1, Math.max(0, (timestamp - this.lastRenderTime) / 1000))
+      : (1 / 60);
+    this.lastRenderTime = timestamp;
 
     ctx.fillStyle = this.groundColor;
     ctx.fillRect(0, 0, width, height);
@@ -275,17 +281,26 @@ class KnowledgeDomainRenderer {
     this.drawPulseRings();
     this.drawGate('cheng');
     this.drawGate('qi');
-    this.drawParticles();
+    this.drawParticles(deltaSeconds);
 
-    this.time += 0.016;
+    this.time += deltaSeconds;
   }
 
   startRenderLoop() {
-    const animate = () => {
-      this.render();
+    if (this.animationId) return;
+    this.lastRenderTime = 0;
+    this.render(performance.now());
+    const animate = (timestamp) => {
+      if (typeof document !== 'undefined' && document.visibilityState !== 'visible') {
+        this.animationId = null;
+        return;
+      }
+      if (timestamp - this.lastRenderTime >= this.frameIntervalMs) {
+        this.render(timestamp);
+      }
       this.animationId = requestAnimationFrame(animate);
     };
-    animate();
+    this.animationId = requestAnimationFrame(animate);
   }
 
   stopRenderLoop() {
@@ -293,6 +308,7 @@ class KnowledgeDomainRenderer {
       cancelAnimationFrame(this.animationId);
       this.animationId = null;
     }
+    this.lastRenderTime = 0;
   }
 
   destroy() {

@@ -28,7 +28,7 @@ const KnowledgeBrocadeNodeSchema = new mongoose.Schema({
   },
   title: {
     type: String,
-    default: '未命名节点',
+    default: '',
     trim: true,
     maxlength: 80
   },

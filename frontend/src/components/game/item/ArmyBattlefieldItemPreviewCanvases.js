@@ -30,7 +30,10 @@ const buildBattlefieldItemMesh = (item = {}, options = {}) => {
 const updateRendererSize = (canvas, renderer, camera) => {
   const width = canvas.clientWidth || 320;
   const height = canvas.clientHeight || 220;
-  if (canvas.width === width && canvas.height === height) return;
+  const pixelRatio = renderer.getPixelRatio?.() || 1;
+  const targetWidth = Math.round(width * pixelRatio);
+  const targetHeight = Math.round(height * pixelRatio);
+  if (canvas.width === targetWidth && canvas.height === targetHeight) return;
   renderer.setSize(width, height, false);
   camera.aspect = Math.max(0.2, width / Math.max(1, height));
   camera.updateProjectionMatrix();
@@ -38,6 +41,7 @@ const updateRendererSize = (canvas, renderer, camera) => {
 
 export const ArmyBattlefieldItemCloseupPreview = ({ item, rotationDeg = 0, className = '' }) => {
   const canvasRef = useRef(null);
+  const renderRef = useRef(() => {});
   const rotationRef = useRef(0);
   const itemRef = useRef(item || null);
   rotationRef.current = Number(rotationDeg) || 0;
@@ -78,9 +82,7 @@ export const ArmyBattlefieldItemCloseupPreview = ({ item, rotationDeg = 0, class
 
     refreshMesh();
 
-    let raf = 0;
-    const frame = () => {
-      raf = requestAnimationFrame(frame);
+    const renderScene = () => {
       updateRendererSize(canvas, renderer, camera);
       if (!currentGroup) return;
       const radius = Math.max(6, Number(currentGroup.userData?.radius) || 6);
@@ -90,10 +92,20 @@ export const ArmyBattlefieldItemCloseupPreview = ({ item, rotationDeg = 0, class
       currentGroup.rotation.z = (rotationRef.current * Math.PI) / 180;
       renderer.render(scene, camera);
     };
-    frame();
+    renderRef.current = renderScene;
+    renderScene();
+    const handleResize = () => renderScene();
+    window.addEventListener('resize', handleResize);
+    let resizeObserver = null;
+    if (typeof ResizeObserver === 'function') {
+      resizeObserver = new ResizeObserver(handleResize);
+      resizeObserver.observe(canvas);
+    }
 
     return () => {
-      cancelAnimationFrame(raf);
+      window.removeEventListener('resize', handleResize);
+      resizeObserver?.disconnect();
+      renderRef.current = () => {};
       if (currentGroup) {
         clearObject3D(currentGroup);
         scene.remove(currentGroup);
@@ -102,11 +114,16 @@ export const ArmyBattlefieldItemCloseupPreview = ({ item, rotationDeg = 0, class
     };
   }, [item]);
 
+  useEffect(() => {
+    renderRef.current();
+  }, [rotationDeg]);
+
   return <canvas ref={canvasRef} className={className} style={{ width: '100%', height: '100%', display: 'block' }} />;
 };
 
 export const ArmyBattlefieldItemBattlePreview = ({ item, rotationDeg = 0, className = '' }) => {
   const canvasRef = useRef(null);
+  const renderRef = useRef(() => {});
   const rotationRef = useRef(0);
   const itemRef = useRef(item || null);
   rotationRef.current = Number(rotationDeg) || 0;
@@ -171,9 +188,7 @@ export const ArmyBattlefieldItemBattlePreview = ({ item, rotationDeg = 0, classN
 
     refreshMesh();
 
-    let raf = 0;
-    const frame = () => {
-      raf = requestAnimationFrame(frame);
+    const renderScene = () => {
       updateRendererSize(canvas, renderer, camera);
       if (!currentGroup) return;
       const radius = Math.max(6, Number(currentGroup.userData?.radius) || 6);
@@ -183,10 +198,20 @@ export const ArmyBattlefieldItemBattlePreview = ({ item, rotationDeg = 0, classN
       currentGroup.rotation.z = (rotationRef.current * Math.PI) / 180;
       renderer.render(scene, camera);
     };
-    frame();
+    renderRef.current = renderScene;
+    renderScene();
+    const handleResize = () => renderScene();
+    window.addEventListener('resize', handleResize);
+    let resizeObserver = null;
+    if (typeof ResizeObserver === 'function') {
+      resizeObserver = new ResizeObserver(handleResize);
+      resizeObserver.observe(canvas);
+    }
 
     return () => {
-      cancelAnimationFrame(raf);
+      window.removeEventListener('resize', handleResize);
+      resizeObserver?.disconnect();
+      renderRef.current = () => {};
       if (currentGroup) {
         clearObject3D(currentGroup);
         scene.remove(currentGroup);
@@ -198,6 +223,10 @@ export const ArmyBattlefieldItemBattlePreview = ({ item, rotationDeg = 0, classN
       renderer.dispose();
     };
   }, [item]);
+
+  useEffect(() => {
+    renderRef.current();
+  }, [rotationDeg]);
 
   return <canvas ref={canvasRef} className={className} style={{ width: '100%', height: '100%', display: 'block' }} />;
 };

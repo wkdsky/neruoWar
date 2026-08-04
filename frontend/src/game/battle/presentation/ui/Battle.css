@@ -173,25 +173,6 @@
   cursor: grabbing;
 }
 
-.pve2-overlay.is-training-three .pve2-map-dial-wrap::after {
-  content: "WASD / QE";
-  position: absolute;
-  left: 50%;
-  top: calc(100% + 6px);
-  transform: translateX(-50%);
-  min-width: 88px;
-  text-align: center;
-  font-size: 10px;
-  font-weight: 800;
-  letter-spacing: 0.04em;
-  color: #dbeafe;
-  border: 1px solid rgba(125, 211, 252, 0.3);
-  border-radius: 999px;
-  background: rgba(6, 13, 22, 0.82);
-  padding: 3px 7px;
-  pointer-events: none;
-}
-
 .pve2-overlay-canvas {
   z-index: 3;
   pointer-events: none;
@@ -470,105 +451,6 @@
   cursor: not-allowed;
   opacity: 0.62;
   filter: saturate(0.68);
-}
-
-.pve2-map-dial-wrap {
-  position: absolute;
-  right: 18px;
-  bottom: 178px;
-  z-index: 12;
-  pointer-events: auto;
-}
-
-.pve2-map-dial {
-  width: 122px;
-  height: 122px;
-  border-radius: 999px;
-  position: relative;
-  border: 2px solid rgba(15, 23, 42, 0.92);
-  background: rgba(226, 232, 240, 0.22);
-  box-shadow: 0 10px 22px rgba(2, 6, 23, 0.32);
-  backdrop-filter: blur(3px);
-  overflow: hidden;
-}
-
-.pve2-map-dial-ring-svg {
-  position: absolute;
-  inset: 0;
-  width: 100%;
-  height: 100%;
-  z-index: 2;
-}
-
-.pve2-map-dial-sector-path {
-  fill: transparent;
-  cursor: pointer;
-  transition: fill 0.12s ease;
-}
-
-.pve2-map-dial-sector-path.active,
-.pve2-map-dial-sector-path:hover {
-  fill: rgba(56, 189, 248, 0.2);
-}
-
-.pve2-map-dial-ring-separator {
-  stroke: rgba(15, 23, 42, 0.92);
-  stroke-width: 2.2;
-  stroke-linecap: round;
-  pointer-events: none;
-}
-
-.pve2-map-dial-arrow-text {
-  fill: rgba(15, 23, 42, 0.95);
-  font-size: 24px;
-  font-weight: 500;
-  pointer-events: none;
-  user-select: none;
-}
-
-.pve2-map-dial-core {
-  position: absolute;
-  inset: 28px;
-  border-radius: 999px;
-  border: 2px solid rgba(15, 23, 42, 0.92);
-  background: rgba(226, 232, 240, 0.16);
-  z-index: 6;
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  overflow: hidden;
-}
-
-.pve2-map-dial-core-divider {
-  position: absolute;
-  top: 0;
-  bottom: 0;
-  left: 50%;
-  width: 2px;
-  transform: translateX(-50%);
-  background: rgba(15, 23, 42, 0.92);
-  pointer-events: none;
-}
-
-.pve2-map-dial-core-btn {
-  border: none;
-  background: transparent;
-  color: rgba(31, 41, 55, 0.95);
-  cursor: pointer;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  transition: background-color 0.12s ease;
-}
-
-.pve2-map-dial-core-btn:hover,
-.pve2-map-dial-core-btn.active {
-  background: rgba(56, 189, 248, 0.16);
-}
-
-.pve2-map-dial-core-btn svg {
-  width: 30px;
-  height: 30px;
-  fill: currentColor;
 }
 
 .pve2-minimap-label {
@@ -1873,20 +1755,6 @@
     height: 116px;
   }
 
-  .pve2-map-dial-wrap {
-    right: 10px;
-    bottom: 152px;
-  }
-
-  .pve2-map-dial {
-    width: 106px;
-    height: 106px;
-  }
-
-  .pve2-map-dial-core {
-    inset: 24px;
-  }
-
   .pve2-hud {
     top: 8px;
     left: 8px;
@@ -1986,24 +1854,6 @@
   .pve2-minimap {
     width: 136px;
     height: 88px;
-  }
-
-  .pve2-map-dial-wrap {
-    right: 8px;
-    bottom: 194px;
-  }
-
-  .pve2-map-dial {
-    width: 88px;
-    height: 88px;
-  }
-
-  .pve2-map-dial-core {
-    inset: 20px;
-  }
-
-  .pve2-map-dial-arrow-text {
-    font-size: 18px;
   }
 
   .pve2-runtime-debug,

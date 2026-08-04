@@ -1,6 +1,11 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { API_BASE } from '../runtimeConfig';
 import { isAnnouncementNotification, isSocialNotification } from '../app/appShared';
+import {
+  areJsonValuesEqual,
+  isDocumentVisible,
+  subscribeToVisibleInterval
+} from './app/visibilityPolling';
 
 const sortByCreatedAtDesc = (items = []) => (
   [...items].sort((left, right) => new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime())
@@ -63,8 +68,13 @@ const useNotificationCenter = ({
       }
 
       const nextNotifications = data.notifications || [];
-      setNotifications(nextNotifications);
-      setNotificationUnreadCount(countUnreadVisibleNotifications(nextNotifications));
+      setNotifications((previous) => (
+        areJsonValuesEqual(previous, nextNotifications) ? previous : nextNotifications
+      ));
+      const nextUnreadCount = countUnreadVisibleNotifications(nextNotifications);
+      setNotificationUnreadCount((previous) => (
+        previous === nextUnreadCount ? previous : nextUnreadCount
+      ));
       return data;
     } catch (error) {
       if (!silent) {
@@ -99,7 +109,9 @@ const useNotificationCenter = ({
         return [];
       }
 
-      setAdminPendingNodes(data);
+      setAdminPendingNodes((previous) => (
+        areJsonValuesEqual(previous, data) ? previous : data
+      ));
       return data;
     } catch (error) {
       if (!silent) {
@@ -317,21 +329,18 @@ const useNotificationCenter = ({
       return;
     }
 
-    fetchNotifications(true);
-    if (isAdmin) {
-      fetchAdminPendingNodeReminders(true);
-    } else {
-      setAdminPendingNodes([]);
-    }
-
-    const timer = setInterval(() => {
+    const sync = () => {
       fetchNotifications(true);
       if (isAdmin) {
         fetchAdminPendingNodeReminders(true);
+      } else {
+        setAdminPendingNodes((previous) => (previous.length === 0 ? previous : []));
       }
-    }, 8000);
+    };
+    if (isDocumentVisible()) sync();
+    const unsubscribe = subscribeToVisibleInterval(sync, 8000);
 
-    return () => clearInterval(timer);
+    return unsubscribe;
   }, [authenticated, fetchAdminPendingNodeReminders, fetchNotifications, isAdmin, resetNotificationCenter]);
 
   const pendingMasterApplyCount = useMemo(() => (

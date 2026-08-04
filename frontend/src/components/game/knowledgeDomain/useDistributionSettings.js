@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { API_BASE } from '../../../runtimeConfig';
+import { subscribeToVisibleInterval } from '../../../hooks/app/visibilityPolling';
 import { getApiError, parseApiResponse } from './api';
 import {
   buildDistributionRulePayload,
@@ -539,10 +540,9 @@ const useDistributionSettings = ({
   useEffect(() => {
     if (!isVisible || activeTab !== 'manage') return undefined;
     setDistributionClockMs(Date.now());
-    const timerId = setInterval(() => {
+    return subscribeToVisibleInterval(() => {
       setDistributionClockMs(Date.now());
     }, 1000);
-    return () => clearInterval(timerId);
   }, [activeTab, isVisible]);
 
   useEffect(() => {
@@ -554,10 +554,9 @@ const useDistributionSettings = ({
       hasUnsavedDistributionDraft ||
       isDistributionRuleModalOpen
     ) return undefined;
-    const timerId = setInterval(() => {
+    return subscribeToVisibleInterval(() => {
       fetchDistributionSettings(true);
     }, 15000);
-    return () => clearInterval(timerId);
   }, [
     activeTab,
     distributionState.canView,

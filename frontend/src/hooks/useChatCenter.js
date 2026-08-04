@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { API_BASE } from '../runtimeConfig';
+import { subscribeToVisibleInterval } from './app/visibilityPolling';
 
 const DEFAULT_MESSAGE_PAGE_SIZE = 30;
 const OBJECT_ID_PATTERN = /^[a-f\d]{24}$/i;
@@ -1971,8 +1972,10 @@ const useChatCenter = ({
       }
     };
 
-    const intervalId = window.setInterval(syncChatSnapshot, isChatDockExpanded ? 15000 : 60000);
-    return () => window.clearInterval(intervalId);
+    return subscribeToVisibleInterval(
+      syncChatSnapshot,
+      isChatDockExpanded ? 15000 : 60000
+    );
   }, [
     authenticated,
     fetchConversations,

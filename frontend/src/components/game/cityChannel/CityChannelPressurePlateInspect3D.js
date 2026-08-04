@@ -235,6 +235,7 @@ const CityChannelPressurePlateInspect3D = ({
 }) => {
   const mountRef = useRef(null);
   const modelRef = useRef(null);
+  const renderRef = useRef(() => {});
   const dragRef = useRef(null);
   const orbitRef = useRef({ yaw: 0.54, pitch: -0.26 });
 
@@ -269,6 +270,9 @@ const CityChannelPressurePlateInspect3D = ({
     scene.add(model);
     applyPose(model, 0, {});
 
+    const renderScene = () => {
+      renderer.render(scene, camera);
+    };
     const resize = () => {
       const rect = mount.getBoundingClientRect();
       const width = Math.max(1, rect.width);
@@ -276,20 +280,15 @@ const CityChannelPressurePlateInspect3D = ({
       renderer.setSize(width, height, false);
       camera.aspect = width / height;
       camera.updateProjectionMatrix();
+      renderScene();
     };
     resize();
     window.addEventListener('resize', resize);
-
-    let frameId = 0;
-    const render = () => {
-      renderer.render(scene, camera);
-      frameId = requestAnimationFrame(render);
-    };
-    frameId = requestAnimationFrame(render);
+    renderRef.current = renderScene;
 
     return () => {
-      cancelAnimationFrame(frameId);
       window.removeEventListener('resize', resize);
+      renderRef.current = () => {};
       modelRef.current = null;
       scene.traverse((object) => {
         if (object.geometry) object.geometry.dispose();
@@ -307,6 +306,7 @@ const CityChannelPressurePlateInspect3D = ({
     if (!modelRef.current || !inspectMode?.active) return;
     const progress = previewState?.key === inspectMode.key ? previewState.progress : 0;
     applyPose(modelRef.current, progress, previewState?.key === inspectMode.key ? previewState.params : mechanismParams);
+    renderRef.current();
   }, [inspectMode?.active, inspectMode?.key, mechanismParams, previewState]);
 
   const handlePointerDown = (event) => {
@@ -330,6 +330,7 @@ const CityChannelPressurePlateInspect3D = ({
     ));
     modelRef.current.rotation.y = orbitRef.current.yaw;
     modelRef.current.rotation.x = orbitRef.current.pitch;
+    renderRef.current();
   };
 
   const handlePointerUp = (event) => {

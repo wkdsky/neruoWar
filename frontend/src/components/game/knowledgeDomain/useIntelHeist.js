@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { API_BASE } from '../../../runtimeConfig';
+import { subscribeToVisibleInterval } from '../../../hooks/app/visibilityPolling';
 import { getApiError, parseApiResponse } from './api';
 import { INTEL_HEIST_SCAN_MS, INTEL_HEIST_TIMEOUT_BUFFER_MS } from './shared';
 
@@ -246,10 +247,9 @@ const useIntelHeist = ({
 
   useEffect(() => {
     if (!isVisible || !isIntelHeistMode || !intelHeistState.active || isIntelHeistExitConfirmOpen) return undefined;
-    const timerId = setInterval(() => {
+    return subscribeToVisibleInterval(() => {
       setIntelHeistClockMs(Date.now());
     }, 100);
-    return () => clearInterval(timerId);
   }, [intelHeistState.active, isIntelHeistExitConfirmOpen, isIntelHeistMode, isVisible]);
 
   useEffect(() => {

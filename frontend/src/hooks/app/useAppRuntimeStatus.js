@@ -5,6 +5,11 @@ import {
   normalizeObjectId,
   normalizeSiegeUnitEntries
 } from '../../app/appShared';
+import {
+  areJsonValuesEqual,
+  isDocumentVisible,
+  subscribeToVisibleInterval
+} from './visibilityPolling';
 
 const useAppRuntimeStatus = ({
   authenticated,
@@ -66,7 +71,9 @@ const useAppRuntimeStatus = ({
         knowledgeBalance: Number.isFinite(knowledgeBalanceValue) ? Math.max(0, knowledgeBalanceValue) : 0,
         armyCount: Number.isFinite(armyCountValue) ? Math.max(0, Math.floor(armyCountValue)) : 0
       };
-      setHeaderUserStats(nextStats);
+      setHeaderUserStats((previous) => (
+        areJsonValuesEqual(previous, nextStats) ? previous : nextStats
+      ));
       return nextStats;
     } catch (_error) {
       setHeaderUserStats((prev) => ({ ...prev, loading: false }));
@@ -111,7 +118,9 @@ const useAppRuntimeStatus = ({
           arriveAt: item?.arriveAt || null
         }))
         : [];
-      setSiegeSupportStatuses(supports);
+      setSiegeSupportStatuses((previous) => (
+        areJsonValuesEqual(previous, supports) ? previous : supports
+      ));
       return supports;
     } catch (error) {
       if (!silent) {
@@ -192,14 +201,14 @@ const useAppRuntimeStatus = ({
       return undefined;
     }
 
-    fetchHeaderUserStats({ silent: true });
-    const timerId = setInterval(() => {
+    if (isDocumentVisible()) {
+      fetchHeaderUserStats({ silent: true });
+    }
+    const unsubscribe = subscribeToVisibleInterval(() => {
       fetchHeaderUserStats({ silent: true });
     }, 30000);
 
-    return () => {
-      clearInterval(timerId);
-    };
+    return unsubscribe;
   }, [authenticated, fetchHeaderUserStats, setHeaderUserStats]);
 
   useEffect(() => {
@@ -226,12 +235,14 @@ const useAppRuntimeStatus = ({
       return;
     }
 
-    fetchTravelStatus(true);
-    const timer = setInterval(() => {
+    if (isDocumentVisible()) {
+      fetchTravelStatus(true);
+    }
+    const unsubscribe = subscribeToVisibleInterval(() => {
       fetchTravelStatus(true);
     }, 1000);
 
-    return () => clearInterval(timer);
+    return unsubscribe;
   }, [authenticated, fetchTravelStatus, isAdmin, setTravelStatus, travelStatusRef]);
 
   useEffect(() => {
@@ -240,11 +251,13 @@ const useAppRuntimeStatus = ({
       return;
     }
 
-    fetchSiegeSupportStatuses(true);
-    const timer = setInterval(() => {
+    if (isDocumentVisible()) {
+      fetchSiegeSupportStatuses(true);
+    }
+    const unsubscribe = subscribeToVisibleInterval(() => {
       fetchSiegeSupportStatuses(true);
     }, 3000);
-    return () => clearInterval(timer);
+    return unsubscribe;
   }, [authenticated, fetchSiegeSupportStatuses, isAdmin, setSiegeSupportStatuses]);
 
   useEffect(() => {

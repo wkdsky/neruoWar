@@ -75,6 +75,7 @@ const useKnowledgeDomainTransition = ({
         setShowKnowledgeDomain(true);
         setIsTransitioningToDomain(false);
         setDomainTransitionProgress(1);
+        sceneManagerRef.current?.setRenderEnabled(false);
       },
       (progress) => {
         setDomainTransitionProgress(progress);
@@ -132,6 +133,7 @@ const useKnowledgeDomainTransition = ({
     }
 
     setIsTransitioningToDomain(true);
+    sceneManagerRef.current.setRenderEnabled(true);
 
     sceneManagerRef.current.exitKnowledgeDomain(
       () => {

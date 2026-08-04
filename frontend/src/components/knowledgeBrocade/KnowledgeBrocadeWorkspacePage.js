@@ -13,6 +13,7 @@ import './KnowledgeBrocadeWorkspacePage.css';
 import KnowledgeBrocadeMiniMap from './KnowledgeBrocadeMiniMap';
 import KnowledgeBrocadeSearchModal from './KnowledgeBrocadeSearchModal';
 import KnowledgeBrocadeShortcutsModal from './KnowledgeBrocadeShortcutsModal';
+import { markdownToRichHtml } from '../senseArticle/editor/paste/markdownToRichContent';
 
 const WORKSPACE_PADDING_X = 144;
 const WORKSPACE_PADDING_Y = 240;
@@ -28,7 +29,6 @@ const NODE_SIZE_LIMITS = {
 };
 const NODE_SHAPES = ['rounded', 'rectangle', 'pill'];
 const NODE_RESIZE_DIRECTIONS = ['n', 'e', 's', 'w', 'ne', 'se', 'sw', 'nw'];
-const DEFAULT_SYSTEM_NODE_TITLE = '新建知识点';
 const LEGACY_NODE_CONTENT_PLACEHOLDER = '在这里记录你的知识。';
 const ZOOM_MAX = 1.22;
 const ZOOM_DEFAULT = 1;
@@ -50,44 +50,33 @@ const EDGE_VIEW_MODE = {
   MERGED: 'merged',
   STRAIGHT: 'straight'
 };
+const VIEW_MODE = {
+  TREE: 'tree',
+  OUTLINE: 'outline'
+};
 const CANVAS_THEME = {
   DAY: 'day',
   NIGHT: 'night'
 };
 
-const normalizeNodeTitle = (value, fallback = DEFAULT_SYSTEM_NODE_TITLE) => {
-  const trimmed = typeof value === 'string' ? value.trim() : '';
+const MARKDOWN_HEADING_PREFIX_PATTERN = /^\s{0,3}#{1,6}\s+/;
+
+const stripMarkdownHeadingPrefix = (value) => String(value || '').replace(MARKDOWN_HEADING_PREFIX_PATTERN, '').trim();
+
+const normalizeNodeTitle = (value, fallback = '') => {
+  const trimmed = stripMarkdownHeadingPrefix(value);
   return (trimmed || fallback).slice(0, 80);
 };
 
-const resolveUniqueSiblingNodeTitle = (existingTitles = [], baseTitle = DEFAULT_SYSTEM_NODE_TITLE) => {
-  const normalizedBaseTitle = normalizeNodeTitle(baseTitle, DEFAULT_SYSTEM_NODE_TITLE);
-  const usedTitles = new Set(
-    (Array.isArray(existingTitles) ? existingTitles : [])
-      .map((item) => normalizeNodeTitle(item, ''))
-      .filter(Boolean)
-  );
-  if (!usedTitles.has(normalizedBaseTitle)) {
-    return normalizedBaseTitle;
-  }
-  let duplicateIndex = 2;
-  while (usedTitles.has(`${normalizedBaseTitle} (${duplicateIndex})`)) {
-    duplicateIndex += 1;
-  }
-  return `${normalizedBaseTitle} (${duplicateIndex})`;
-};
-
-const buildCreateDraftContent = (contentText, fallbackTitle = DEFAULT_SYSTEM_NODE_TITLE) => {
-  const normalized = String(contentText || '').replace(/\r/g, '');
-  const trimmed = normalized.trim();
-  if (!trimmed) {
-    return `${normalizeNodeTitle(fallbackTitle, DEFAULT_SYSTEM_NODE_TITLE)}\n\n`;
-  }
-  const firstLine = normalized.split('\n')[0]?.trim() || '';
-  if (firstLine) {
-    return normalized;
-  }
-  return `${normalizeNodeTitle(fallbackTitle, DEFAULT_SYSTEM_NODE_TITLE)}\n\n${trimmed}`;
+const buildNodeEditorPreviewSource = (value = '') => {
+  const normalized = String(value || '').replace(/\r/g, '');
+  const lines = normalized.split('\n');
+  const firstContentLineIndex = lines.findIndex((line) => line.trim());
+  if (firstContentLineIndex < 0) return normalized;
+  const titleText = stripMarkdownHeadingPrefix(lines[firstContentLineIndex]);
+  if (!titleText) return normalized;
+  lines[firstContentLineIndex] = `# ${titleText}`;
+  return lines.join('\n');
 };
 
 const getNodeBodyContentText = (node = {}) => {
@@ -96,11 +85,22 @@ const getNodeBodyContentText = (node = {}) => {
   const titleText = String(node?.title || '').trim();
   const lines = contentText.split('\n');
   const titleLineIndex = lines.findIndex((line) => line.trim());
-  if (titleText && titleLineIndex >= 0 && lines[titleLineIndex].trim() === titleText) {
+  const firstContentTitle = titleLineIndex >= 0 ? normalizeNodeTitle(lines[titleLineIndex], '') : '';
+  if (titleText && firstContentTitle === normalizeNodeTitle(titleText, '')) {
     const bodyText = lines.slice(titleLineIndex + 1).join('\n');
     return bodyText.trim() === LEGACY_NODE_CONTENT_PLACEHOLDER ? '' : bodyText;
   }
   return contentText.trim() === LEGACY_NODE_CONTENT_PLACEHOLDER ? '' : contentText;
+};
+
+const buildNodeContentWithTitle = (node = {}, nextTitle = '') => {
+  const normalizedContentText = String(node?.contentText || '').replace(/\r/g, '');
+  if (!normalizedContentText.trim()) return `${nextTitle}\n\n`;
+  const lines = normalizedContentText.split('\n');
+  const firstContentLineIndex = lines.findIndex((line) => line.trim());
+  if (firstContentLineIndex < 0) return `${nextTitle}\n\n`;
+  lines[firstContentLineIndex] = nextTitle;
+  return lines.join('\n');
 };
 
 const getTouchDistance = (touchA, touchB) => {
@@ -169,7 +169,7 @@ const snapshotNodeForHistory = (node = {}) => ({
   parentNodeId: node?.parentNodeId || '',
   isRoot: !!node?.isRoot,
   isStarred: !!node?.isStarred,
-  title: node?.title || '未命名节点',
+  title: node?.title || '',
   previewText: node?.previewText || '',
   contentText: node?.contentText || '',
   shape: normalizeNodeShape(node?.shape),
@@ -413,6 +413,62 @@ const canPreviewBrocadeReparent = (nodes = [], draggedNodeId = '', targetNodeId 
   return !isNodeDescendantOf(nodes, targetNodeId, draggedNodeId);
 };
 
+const canMoveBrocadeNodeToParent = (nodes = [], draggedNodeId = '', nextParentNodeId = '') => {
+  if (!draggedNodeId || !nextParentNodeId || draggedNodeId === nextParentNodeId) return false;
+  const nodesById = new Map(nodes.map((node) => [node?._id, node]));
+  const draggedNode = nodesById.get(draggedNodeId);
+  const nextParentNode = nodesById.get(nextParentNodeId);
+  if (!draggedNode || !nextParentNode || draggedNode?.isRoot) return false;
+  if ((draggedNode?.parentNodeId || '') === nextParentNodeId) return true;
+  return !isNodeDescendantOf(nodes, nextParentNodeId, draggedNodeId);
+};
+
+const resolveOutlineSiblingDropPosition = (nodes = [], draggedNodeId = '', targetNode = null, placement = 'after') => {
+  if (!targetNode?._id || !['before', 'after'].includes(placement)) return null;
+  const targetX = Number(targetNode?.position?.x) || 0;
+  const targetY = Number(targetNode?.position?.y) || 0;
+  const targetHeight = getNodeSize(targetNode).height;
+  const direction = placement === 'before' ? -1 : 1;
+  const xOffsets = [0, -1, 1, -2, 2, -3, 3];
+  const blockedNodes = nodes.filter((node) => node?._id && node?._id !== draggedNodeId);
+  let bestPosition = {
+    x: targetX,
+    y: targetY + direction * (targetHeight + REPARENT_NODE_BASE_GAP_Y)
+  };
+  let bestWorstOverlap = Number.POSITIVE_INFINITY;
+  let bestTotalOverlap = Number.POSITIVE_INFINITY;
+
+  const evaluateCandidate = (position) => {
+    const overlaps = blockedNodes.map((node) => getNodeOverlapArea(position, node));
+    const worstOverlap = overlaps.reduce((max, area) => Math.max(max, area), 0);
+    const totalOverlap = overlaps.reduce((sum, area) => sum + area, 0);
+    if (
+      worstOverlap < bestWorstOverlap
+      || (worstOverlap === bestWorstOverlap && totalOverlap < bestTotalOverlap)
+    ) {
+      bestPosition = position;
+      bestWorstOverlap = worstOverlap;
+      bestTotalOverlap = totalOverlap;
+    }
+    return worstOverlap <= REPARENT_NODE_MAX_OVERLAP_AREA;
+  };
+
+  for (let rowIndex = 0; rowIndex <= 10; rowIndex += 1) {
+    for (const xOffset of xOffsets) {
+      const distance = targetHeight + REPARENT_NODE_BASE_GAP_Y + rowIndex * REPARENT_NODE_STEP_Y;
+      const candidate = {
+        x: targetX + xOffset * REPARENT_NODE_STEP_X,
+        y: targetY + direction * distance
+      };
+      if (evaluateCandidate(candidate)) {
+        return cloneNodePosition(candidate);
+      }
+    }
+  }
+
+  return cloneNodePosition(bestPosition);
+};
+
 const getCanvasPointFromClientPoint = (
   clientX,
   clientY,
@@ -503,6 +559,62 @@ const buildBrocadeOutlineTree = (nodes = []) => {
   ).map((node) => buildNode(node));
 };
 
+const sortBrocadeNodesByPosition = (nodes = []) => [...nodes].sort((left, right) => (
+  (Number(left?.position?.y) || 0) - (Number(right?.position?.y) || 0)
+  || (Number(left?.position?.x) || 0) - (Number(right?.position?.x) || 0)
+  || String(left?._id || '').localeCompare(String(right?._id || ''))
+));
+
+const resolveOutlineSiblingInsertion = (siblingNode, nodes = []) => {
+  const parentNodeId = siblingNode?.parentNodeId || '';
+  const siblingNodes = sortBrocadeNodesByPosition(
+    nodes.filter((node) => (node?.parentNodeId || '') === parentNodeId)
+  );
+  const siblingIndex = siblingNodes.findIndex((node) => node?._id === siblingNode?._id);
+  const siblingSize = getNodeSize(siblingNode);
+  const position = {
+    x: Number(siblingNode?.position?.x) || 0,
+    y: (Number(siblingNode?.position?.y) || 0) + siblingSize.height + REPARENT_NODE_BASE_GAP_Y
+  };
+  if (siblingIndex < 0) return { position, moves: [] };
+
+  const moves = [];
+  let previousBottomY = position.y + NODE_HEIGHT;
+  siblingNodes.slice(siblingIndex + 1).forEach((node) => {
+    const currentPosition = cloneNodePosition(node?.position);
+    const nextY = Math.max(
+      Number(node?.position?.y) || 0,
+      previousBottomY + REPARENT_NODE_BASE_GAP_Y
+    );
+    const nextPosition = cloneNodePosition({
+      x: Number(node?.position?.x) || position.x,
+      y: nextY
+    });
+    if (!arePositionsEqual(currentPosition, nextPosition)) {
+      moves.push({
+        nodeId: node?._id,
+        beforePosition: currentPosition,
+        afterPosition: nextPosition,
+        beforeParentNodeId: node?.parentNodeId || '',
+        afterParentNodeId: node?.parentNodeId || ''
+      });
+    }
+    previousBottomY = nextY + getNodeSize(node).height;
+  });
+
+  return { position, moves };
+};
+
+const getOutlineSelectionRoots = (nodes = [], selectedIds = []) => {
+  const selectedIdSet = new Set(selectedIds.filter(Boolean));
+  return nodes.filter((node) => {
+    if (!selectedIdSet.has(node?._id) || node?.isRoot) return selectedIdSet.has(node?._id);
+    return !Array.from(selectedIdSet).some((ancestorId) => (
+      ancestorId !== node?._id && isNodeDescendantOf(nodes, node?._id, ancestorId)
+    ));
+  });
+};
+
 const collectBrocadeOutlineExpandableIds = (branches = []) => {
   const ids = [];
   branches.forEach((branch) => {
@@ -520,7 +632,7 @@ const formatBrocadeTextPreviewBranch = (branch, depth = 0) => {
   if (!node?._id) return [];
   const indent = '  '.repeat(depth);
   const bodyIndent = '  '.repeat(depth + 2);
-  const title = normalizeNodeTitle(node?.title, '未命名节点').replace(/\s+/g, ' ');
+  const title = normalizeNodeTitle(node?.title, '').replace(/\s+/g, ' ');
   const bodyText = getNodeBodyContentText(node).trim();
   const lines = [`${indent}- ${title}`];
   if (bodyText) {
@@ -543,55 +655,182 @@ const buildBrocadeTextPreview = (nodes = []) => {
     .join('\n');
 };
 
-const BrocadeOutlineBranch = ({
+const BrocadeOutlineTreeBranch = ({
   branch,
   activeNodeId = '',
+  selectedNodeIds,
   expandedIds,
   onToggle,
-  onJump
+  onSelect,
+  editingNodeId = '',
+  editingTitle = '',
+  onStartTitleEdit,
+  onChangeTitle,
+  onCommitTitle,
+  onCancelTitle,
+  onConfirmTitleAndCreateSibling,
+  onNavigateFromTitle,
+  draggedNodeId = '',
+  dropTargetNodeId = '',
+  dropPlacement = '',
+  onDragStart,
+  onDragOver,
+  onDrop,
+  onDragEnd,
+  setRowRef,
+  setItemRef,
+  setTitleInputRef
 }) => {
   const currentNode = branch?.node || null;
   const hasChildren = Array.isArray(branch?.children) && branch.children.length > 0;
   const isExpanded = hasChildren ? expandedIds.has(currentNode?._id) : false;
+  const isActive = currentNode?._id === activeNodeId;
+  const isSelected = selectedNodeIds.has(currentNode?._id);
+  const isEditingTitle = editingNodeId === currentNode?._id;
+  const isDragging = draggedNodeId === currentNode?._id;
+  const isDropTarget = dropTargetNodeId === currentNode?._id;
   if (!currentNode?._id) return null;
   return (
-    <div className="jinzhi-outline-tree__branch">
-      <div className="jinzhi-outline-tree__row" style={{ '--jinzhi-outline-depth': branch.depth || 0 }}>
+    <div className="jinzhi-outline-view__branch">
+      <div
+        ref={(element) => setRowRef(currentNode._id, element)}
+        className="jinzhi-outline-view__row"
+        style={{ '--jinzhi-outline-depth': branch.depth || 0 }}
+        data-node-id={currentNode._id}
+      >
         {hasChildren ? (
           <button
             type="button"
-            className="jinzhi-outline-tree__toggle"
+            className="jinzhi-outline-view__toggle"
             aria-label={isExpanded ? '收起下级节点' : '展开下级节点'}
             aria-expanded={isExpanded}
-            onClick={() => onToggle(currentNode._id)}
+            onClick={(event) => {
+              event.stopPropagation();
+              onToggle(currentNode._id);
+            }}
           >
             {isExpanded ? '−' : '+'}
           </button>
         ) : (
-          <span className="jinzhi-outline-tree__toggle-placeholder" aria-hidden="true" />
+          <span className="jinzhi-outline-view__toggle-placeholder" aria-hidden="true" />
         )}
-        <button
-          type="button"
-          className={`jinzhi-outline-tree__item${currentNode._id === activeNodeId ? ' is-active' : ''}${currentNode?.isRoot ? ' is-root' : ''}`}
-          onClick={() => onJump(currentNode._id)}
+        <div
+          ref={(element) => setItemRef(currentNode._id, element)}
+          className={`jinzhi-outline-view__item${isActive ? ' is-active' : ''}${isSelected ? ' is-selected' : ''}${currentNode?.isRoot ? ' is-root' : ''}${isDragging ? ' is-dragging' : ''}${isDropTarget ? ` is-drop-target is-drop-${dropPlacement}` : ''}`}
+          role="treeitem"
+          tabIndex={0}
+          aria-selected={isSelected}
+          onClick={(event) => onSelect(currentNode._id, event)}
+          onDragOver={(event) => onDragOver(currentNode._id, event)}
+          onDrop={(event) => onDrop(currentNode._id, event)}
         >
-          <span className="jinzhi-outline-tree__title">{currentNode?.title || '未命名节点'}</span>
-          {currentNode?.isStarred ? <span className="jinzhi-outline-tree__tag">星标</span> : null}
-        </button>
+          {isEditingTitle ? (
+            <input
+              ref={(element) => setTitleInputRef(currentNode._id, element)}
+              type="text"
+              className="jinzhi-outline-view__title-input"
+              value={editingTitle}
+              maxLength={80}
+              placeholder="未命名节点"
+              aria-label="编辑节点标题"
+              autoFocus
+              onChange={(event) => onChangeTitle(event.target.value)}
+              onFocus={(event) => event.currentTarget.select()}
+              onPointerDown={(event) => event.stopPropagation()}
+              onClick={(event) => event.stopPropagation()}
+              onKeyDown={(event) => {
+                if (event.key === 'ArrowUp' || event.key === 'ArrowDown') {
+                  event.preventDefault();
+                  event.stopPropagation();
+                  onNavigateFromTitle(currentNode._id, event.currentTarget.value, event.key);
+                  return;
+                }
+                if (event.key === 'Enter') {
+                  event.preventDefault();
+                  event.stopPropagation();
+                  const nextTitle = event.currentTarget.value;
+                  const isNewUntitledNode = !String(currentNode?.title || '').trim();
+                  if (isNewUntitledNode) {
+                    onConfirmTitleAndCreateSibling(currentNode._id, nextTitle);
+                    return;
+                  }
+                  onCommitTitle(currentNode._id, nextTitle);
+                } else if (event.key === 'Escape') {
+                  event.preventDefault();
+                  event.stopPropagation();
+                  onCancelTitle();
+                }
+              }}
+              onBlur={(event) => onCommitTitle(currentNode._id, event.currentTarget.value)}
+            />
+          ) : (
+            <span
+              className="jinzhi-outline-view__title"
+              onClick={(event) => {
+                event.stopPropagation();
+                onSelect(currentNode._id, event);
+              }}
+              onDoubleClick={(event) => {
+                event.stopPropagation();
+                onStartTitleEdit(currentNode._id);
+              }}
+              title="双击修改标题"
+            >
+              {normalizeNodeTitle(currentNode?.title, '未命名节点')}
+            </span>
+          )}
+          {currentNode?.isStarred ? <span className="jinzhi-outline-view__tag">星标</span> : null}
+          <button
+            type="button"
+            className="jinzhi-outline-view__drag-handle"
+            draggable={!currentNode?.isRoot}
+            aria-label={currentNode?.isRoot ? '根节点不可移动' : '拖拽移动节点'}
+            title={currentNode?.isRoot ? '根节点不可移动' : '拖拽到上下位置或其他节点下'}
+            disabled={currentNode?.isRoot}
+            onPointerDown={(event) => {
+              event.stopPropagation();
+              onSelect(currentNode._id, event);
+            }}
+            onClick={(event) => {
+              event.stopPropagation();
+              onSelect(currentNode._id, event);
+            }}
+            onDragStart={(event) => onDragStart(currentNode._id, event)}
+            onDragEnd={onDragEnd}
+          >
+            ↕
+          </button>
+        </div>
       </div>
       {hasChildren && isExpanded ? (
-        <div
-          className="jinzhi-outline-tree__children"
-          style={{ '--jinzhi-outline-depth': (branch.depth || 0) + 1 }}
-        >
+        <div className="jinzhi-outline-view__children">
           {branch.children.map((childBranch) => (
-            <BrocadeOutlineBranch
+            <BrocadeOutlineTreeBranch
               key={childBranch?.node?._id || `${currentNode._id}-child`}
               branch={childBranch}
               activeNodeId={activeNodeId}
+              selectedNodeIds={selectedNodeIds}
               expandedIds={expandedIds}
               onToggle={onToggle}
-              onJump={onJump}
+              onSelect={onSelect}
+              editingNodeId={editingNodeId}
+              editingTitle={editingTitle}
+              onStartTitleEdit={onStartTitleEdit}
+              onChangeTitle={onChangeTitle}
+              onCommitTitle={onCommitTitle}
+              onCancelTitle={onCancelTitle}
+              onConfirmTitleAndCreateSibling={onConfirmTitleAndCreateSibling}
+              onNavigateFromTitle={onNavigateFromTitle}
+              draggedNodeId={draggedNodeId}
+              dropTargetNodeId={dropTargetNodeId}
+              dropPlacement={dropPlacement}
+              onDragStart={onDragStart}
+              onDragOver={onDragOver}
+              onDrop={onDrop}
+              onDragEnd={onDragEnd}
+              setRowRef={setRowRef}
+              setItemRef={setItemRef}
+              setTitleInputRef={setTitleInputRef}
             />
           ))}
         </div>
@@ -600,22 +839,329 @@ const BrocadeOutlineBranch = ({
   );
 };
 
-const BrocadeOutlineModal = ({
-  open = false,
-  brocadeName = '',
+const BrocadeOutlineTreeView = ({
   nodes = [],
   activeNodeId = '',
-  onClose,
-  onJump
+  selectedNodeIds = new Set(),
+  onSelect,
+  onLassoSelect,
+  editingNodeId = '',
+  editingTitle = '',
+  onStartTitleEdit,
+  onChangeTitle,
+  onCommitTitle,
+  onCancelTitle,
+  onConfirmTitleAndCreateSibling,
+  onNavigateFromTitle,
+  onNavigate,
+  onCreateSibling,
+  onRequestDelete,
+  onMoveNode
 }) => {
   const outlineTree = useMemo(() => buildBrocadeOutlineTree(nodes), [nodes]);
   const [expandedIds, setExpandedIds] = useState([]);
+  const [lassoRect, setLassoRect] = useState(null);
+  const rowRefs = useRef(new Map());
+  const itemRefs = useRef(new Map());
+  const titleInputRefs = useRef(new Map());
+  const treeRef = useRef(null);
+  const pointerRef = useRef(null);
+  const suppressClickRef = useRef(false);
+  const [pointerPosition, setPointerPosition] = useState(null);
+  const [dragState, setDragState] = useState(null);
   const expandedIdSet = useMemo(() => new Set(expandedIds), [expandedIds]);
+  const visibleOutlineNodes = useMemo(() => {
+    const visibleNodes = [];
+    const appendBranches = (branches = []) => {
+      branches.forEach((branch) => {
+        if (!branch?.node?._id) return;
+        visibleNodes.push(branch.node);
+        if (expandedIdSet.has(branch.node._id)) {
+          appendBranches(branch.children || []);
+        }
+      });
+    };
+    appendBranches(outlineTree);
+    return visibleNodes;
+  }, [expandedIdSet, outlineTree]);
+  const selectedOutlineNodes = useMemo(() => (
+    nodes.filter((node) => node?._id && selectedNodeIds.has(node._id))
+  ), [nodes, selectedNodeIds]);
+  const deletableSelectedNodes = useMemo(() => (
+    selectedOutlineNodes.filter((node) => !node.isRoot)
+  ), [selectedOutlineNodes]);
+  const deleteActionAnchor = useMemo(() => {
+    if (
+      selectedNodeIds.size < 2
+      || deletableSelectedNodes.length !== selectedOutlineNodes.length
+      || !pointerPosition
+    ) return null;
+    let closest = null;
+    deletableSelectedNodes.forEach((node) => {
+      const item = itemRefs.current.get(node._id);
+      if (!item) return;
+      const rect = item.getBoundingClientRect();
+      const distance = Math.hypot(
+        pointerPosition.x - (rect.left + rect.width / 2),
+        pointerPosition.y - (rect.top + rect.height / 2)
+      );
+      if (!closest || distance < closest.distance) {
+        closest = { nodeId: node._id, distance, rect };
+      }
+    });
+    if (!closest) return null;
+    return {
+      nodeId: closest.nodeId,
+      left: closest.rect.left + closest.rect.width / 2,
+      top: Math.max(8, closest.rect.top - 40)
+    };
+  }, [deletableSelectedNodes, pointerPosition, selectedNodeIds.size, selectedOutlineNodes.length]);
+
+  const resolveDropState = useCallback((targetNodeId, event) => {
+    const draggedNodeId = dragState?.nodeId || event.dataTransfer?.getData('text/plain') || '';
+    if (!draggedNodeId || draggedNodeId === targetNodeId) return null;
+    const targetNode = nodes.find((node) => node?._id === targetNodeId);
+    if (!targetNode?._id) return null;
+    const targetRect = event.currentTarget.getBoundingClientRect();
+    const relativeY = (event.clientY - targetRect.top) / Math.max(1, targetRect.height);
+    const placement = relativeY < 0.25 ? 'before' : (relativeY > 0.75 ? 'after' : 'child');
+    const nextParentNodeId = placement === 'child'
+      ? targetNodeId
+      : targetNode.parentNodeId || '';
+    if (!canMoveBrocadeNodeToParent(nodes, draggedNodeId, nextParentNodeId)) return null;
+    return { nodeId: draggedNodeId, targetNodeId, placement };
+  }, [dragState?.nodeId, nodes]);
+
+  const handleDragStart = useCallback((nodeId, event) => {
+    if (!nodeId || nodes.find((node) => node?._id === nodeId)?.isRoot) return;
+    event.stopPropagation();
+    event.dataTransfer?.setData('text/plain', nodeId);
+    if (event.dataTransfer) event.dataTransfer.effectAllowed = 'move';
+    setDragState({ nodeId, targetNodeId: '', placement: '' });
+    onSelect(nodeId, event);
+  }, [nodes, onSelect]);
+
+  const handleDragOver = useCallback((targetNodeId, event) => {
+    const nextDropState = resolveDropState(targetNodeId, event);
+    if (!nextDropState) return;
+    event.preventDefault();
+    if (event.dataTransfer) event.dataTransfer.dropEffect = 'move';
+    setDragState((prev) => (
+      prev?.nodeId === nextDropState.nodeId
+      && prev?.targetNodeId === nextDropState.targetNodeId
+      && prev?.placement === nextDropState.placement
+        ? prev
+        : nextDropState
+    ));
+  }, [resolveDropState]);
+
+  const handleDrop = useCallback((targetNodeId, event) => {
+    const nextDropState = resolveDropState(targetNodeId, event);
+    if (!nextDropState) return;
+    event.preventDefault();
+    event.stopPropagation();
+    setDragState(null);
+    onMoveNode(nextDropState);
+  }, [onMoveNode, resolveDropState]);
+
+  const handleDragEnd = useCallback(() => {
+    setDragState(null);
+  }, []);
+
+  const getAdjacentNode = useCallback((nodeId, key) => {
+    const currentIndex = visibleOutlineNodes.findIndex((node) => node?._id === nodeId);
+    const nextIndex = currentIndex < 0
+      ? (key === 'ArrowDown' ? 0 : visibleOutlineNodes.length - 1)
+      : currentIndex + (key === 'ArrowDown' ? 1 : -1);
+    return visibleOutlineNodes[nextIndex] || null;
+  }, [visibleOutlineNodes]);
+
+  const handleNavigate = useCallback((event) => {
+    if (event.target?.closest?.('input, textarea')) return;
+    if (event.key !== 'ArrowUp' && event.key !== 'ArrowDown') return;
+    event.preventDefault();
+    event.stopPropagation();
+    const nextNode = getAdjacentNode(activeNodeId, event.key);
+    if (nextNode?._id) onNavigate(nextNode._id, event);
+  }, [activeNodeId, getAdjacentNode, onNavigate]);
+
+  const handleWindowKeyDown = useCallback((event) => {
+    if (event.defaultPrevented || editingNodeId) return;
+    if (event.target?.closest?.('input, textarea, button, [contenteditable="true"]')) return;
+    if (event.key !== 'ArrowUp' && event.key !== 'ArrowDown' && !(event.key === 'Enter' && !event.shiftKey)) return;
+    event.preventDefault();
+    event.stopPropagation();
+    if (event.key === 'Enter') {
+      onCreateSibling(activeNodeId);
+      return;
+    }
+    const nextNode = getAdjacentNode(activeNodeId, event.key);
+    if (nextNode?._id) onNavigate(nextNode._id, event);
+  }, [activeNodeId, editingNodeId, getAdjacentNode, onCreateSibling, onNavigate]);
+
+  const handleNavigateFromTitle = useCallback((nodeId, draft, key) => {
+    const nextNode = getAdjacentNode(nodeId, key);
+    const draftText = String(draft || '');
+    Promise.resolve(onCommitTitle(nodeId, draftText)).then((didCommit) => {
+      if (didCommit === false && draftText.trim()) return;
+      onCancelTitle(nodeId);
+      if (nextNode?._id) onNavigate(nextNode._id);
+    }).catch(() => undefined);
+  }, [getAdjacentNode, onCancelTitle, onCommitTitle, onNavigate]);
 
   useEffect(() => {
-    if (!open) return;
     setExpandedIds(collectBrocadeOutlineExpandableIds(outlineTree));
-  }, [open, outlineTree]);
+  }, [outlineTree]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return undefined;
+    window.addEventListener('keydown', handleWindowKeyDown);
+    return () => window.removeEventListener('keydown', handleWindowKeyDown);
+  }, [handleWindowKeyDown]);
+
+  const setRowRef = useCallback((nodeId, element) => {
+    if (!nodeId) return;
+    if (element) {
+      rowRefs.current.set(nodeId, element);
+    } else {
+      rowRefs.current.delete(nodeId);
+    }
+  }, []);
+
+  const setItemRef = useCallback((nodeId, element) => {
+    if (!nodeId) return;
+    if (element) {
+      itemRefs.current.set(nodeId, element);
+    } else {
+      itemRefs.current.delete(nodeId);
+    }
+  }, []);
+
+  const setTitleInputRef = useCallback((nodeId, element) => {
+    if (!nodeId) return;
+    if (element) {
+      titleInputRefs.current.set(nodeId, element);
+    } else {
+      titleInputRefs.current.delete(nodeId);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!activeNodeId) return;
+    const row = rowRefs.current.get(activeNodeId);
+    row?.scrollIntoView?.({ block: 'nearest', inline: 'nearest' });
+  }, [activeNodeId, expandedIdSet, visibleOutlineNodes.length]);
+
+  useEffect(() => {
+    if (editingNodeId) {
+      const input = titleInputRefs.current.get(editingNodeId);
+      if (input) {
+        input.focus();
+        input.select();
+      }
+      return;
+    }
+    const focusActiveItem = () => {
+      const item = activeNodeId ? itemRefs.current.get(activeNodeId) : null;
+      if (item) {
+        item.focus({ preventScroll: true });
+        return;
+      }
+      treeRef.current?.focus({ preventScroll: true });
+    };
+    if (typeof window === 'undefined') {
+      focusActiveItem();
+      return undefined;
+    }
+    const frame = window.requestAnimationFrame(focusActiveItem);
+    return () => window.cancelAnimationFrame(frame);
+  }, [activeNodeId, editingNodeId, expandedIdSet, visibleOutlineNodes.length]);
+
+  const getLassoSelection = useCallback((rect) => {
+    const selectedIds = [];
+    rowRefs.current.forEach((element, nodeId) => {
+      const rowRect = element.getBoundingClientRect();
+      const intersects = (
+        rowRect.left <= rect.right
+        && rowRect.right >= rect.left
+        && rowRect.top <= rect.bottom
+        && rowRect.bottom >= rect.top
+      );
+      if (intersects) selectedIds.push(nodeId);
+    });
+    return selectedIds;
+  }, []);
+
+  const getLassoRect = useCallback((startX, startY, endX, endY) => ({
+    left: Math.min(startX, endX),
+    top: Math.min(startY, endY),
+    width: Math.abs(endX - startX),
+    height: Math.abs(endY - startY),
+    right: Math.max(startX, endX),
+    bottom: Math.max(startY, endY)
+  }), []);
+
+  const handlePointerDown = useCallback((event) => {
+    if (event.button !== 0 || event.target?.closest?.('.jinzhi-outline-view__toggle')) return;
+    setPointerPosition({ x: event.clientX, y: event.clientY });
+    const pointerState = {
+      pointerId: event.pointerId,
+      startX: event.clientX,
+      startY: event.clientY,
+      active: false,
+      selectionIds: [],
+      activeNodeId: '',
+      timer: window.setTimeout(() => {
+        if (pointerRef.current?.pointerId === event.pointerId) {
+          pointerRef.current.active = true;
+          treeRef.current?.setPointerCapture?.(event.pointerId);
+        }
+      }, 220)
+    };
+    pointerRef.current = pointerState;
+  }, []);
+
+  const handlePointerMove = useCallback((event) => {
+    setPointerPosition({ x: event.clientX, y: event.clientY });
+    const pointerState = pointerRef.current;
+    if (!pointerState || pointerState.pointerId !== event.pointerId || !pointerState.active) return;
+    event.preventDefault();
+    const nextRect = getLassoRect(pointerState.startX, pointerState.startY, event.clientX, event.clientY);
+    pointerState.selectionIds = getLassoSelection(nextRect);
+    const hoveredNode = Array.from(rowRefs.current.entries()).find(([, element]) => {
+      const rect = element.getBoundingClientRect();
+      return event.clientX >= rect.left
+        && event.clientX <= rect.right
+        && event.clientY >= rect.top
+        && event.clientY <= rect.bottom;
+    });
+    pointerState.activeNodeId = hoveredNode?.[0] || pointerState.selectionIds[0] || '';
+    setLassoRect(nextRect);
+  }, [getLassoRect, getLassoSelection]);
+
+  const handlePointerUp = useCallback((event) => {
+    setPointerPosition({ x: event.clientX, y: event.clientY });
+    const pointerState = pointerRef.current;
+    if (!pointerState || pointerState.pointerId !== event.pointerId) return;
+    window.clearTimeout(pointerState.timer);
+    const didMove = Math.hypot(
+      event.clientX - pointerState.startX,
+      event.clientY - pointerState.startY
+    ) > 8;
+    if (pointerState.active && didMove) {
+      event.preventDefault();
+      suppressClickRef.current = true;
+      onLassoSelect(pointerState.selectionIds, pointerState.activeNodeId);
+      window.setTimeout(() => {
+        suppressClickRef.current = false;
+      }, 80);
+    }
+    if (event.currentTarget.hasPointerCapture?.(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId);
+    }
+    pointerRef.current = null;
+    setLassoRect(null);
+  }, [onLassoSelect]);
 
   const handleToggle = useCallback((nodeId) => {
     if (!nodeId) return;
@@ -626,38 +1172,208 @@ const BrocadeOutlineModal = ({
     ));
   }, []);
 
+  return (
+    <div
+      ref={treeRef}
+      className="jinzhi-outline-view__tree"
+      tabIndex={0}
+      role="tree"
+      aria-label="知识锦大纲"
+      onKeyDown={handleNavigate}
+      onPointerDown={handlePointerDown}
+      onPointerMove={handlePointerMove}
+      onPointerUp={handlePointerUp}
+      onPointerCancel={handlePointerUp}
+      onClickCapture={(event) => {
+        if (suppressClickRef.current) {
+          event.preventDefault();
+          event.stopPropagation();
+        }
+      }}
+    >
+      {outlineTree.length > 0 ? outlineTree.map((branch) => (
+        <BrocadeOutlineTreeBranch
+          key={branch?.node?._id || 'outline-root'}
+          branch={branch}
+          activeNodeId={activeNodeId}
+          selectedNodeIds={selectedNodeIds}
+          expandedIds={expandedIdSet}
+          onToggle={handleToggle}
+          onSelect={onSelect}
+          editingNodeId={editingNodeId}
+          editingTitle={editingTitle}
+          onStartTitleEdit={onStartTitleEdit}
+          onChangeTitle={onChangeTitle}
+          onCommitTitle={onCommitTitle}
+          onCancelTitle={onCancelTitle}
+          onConfirmTitleAndCreateSibling={onConfirmTitleAndCreateSibling}
+          onNavigateFromTitle={handleNavigateFromTitle}
+          draggedNodeId={dragState?.nodeId || ''}
+          dropTargetNodeId={dragState?.targetNodeId || ''}
+          dropPlacement={dragState?.placement || ''}
+          onDragStart={handleDragStart}
+          onDragOver={handleDragOver}
+          onDrop={handleDrop}
+          onDragEnd={handleDragEnd}
+          setRowRef={setRowRef}
+          setItemRef={setItemRef}
+          setTitleInputRef={setTitleInputRef}
+        />
+      )) : (
+        <div className="jinzhi-outline-view__empty">当前知识锦还没有可展示的节点。</div>
+      )}
+      {lassoRect ? (
+        <div
+          className="jinzhi-outline-view__lasso"
+          style={{
+            left: `${lassoRect.left}px`,
+            top: `${lassoRect.top}px`,
+            width: `${lassoRect.width}px`,
+            height: `${lassoRect.height}px`
+          }}
+        />
+      ) : null}
+      {deleteActionAnchor ? (
+        <button
+          type="button"
+          className="jinzhi-outline-view__multi-delete"
+          style={{
+            left: `${deleteActionAnchor.left}px`,
+            top: `${deleteActionAnchor.top}px`
+          }}
+          aria-label="删除选中的节点"
+          title="删除选中的节点"
+          onPointerDown={(event) => {
+            event.preventDefault();
+            event.stopPropagation();
+          }}
+          onClick={(event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            onRequestDelete?.(Array.from(selectedNodeIds));
+          }}
+        >
+          <Trash2 size={15} />
+        </button>
+      ) : null}
+    </div>
+  );
+};
+
+const BrocadeOutlineContentPanel = ({
+  node = null,
+  selectedCount = 0,
+  childCount = 0,
+  onDelete
+}) => {
+  const bodyText = getNodeBodyContentText(node || {}).trim();
+  const bodyHtml = useMemo(() => markdownToRichHtml(bodyText), [bodyText]);
+
+  if (!node) {
+    return (
+      <section className="jinzhi-outline-view__content-panel jinzhi-outline-view__content-panel--empty">
+        <div className="jinzhi-outline-view__content-empty">从左侧大纲选择一个节点，查看或编辑它的独立内容。</div>
+      </section>
+    );
+  }
+
+  return (
+    <section className="jinzhi-outline-view__content-panel">
+      <div className="jinzhi-outline-view__content-header">
+        <div>
+          <div className="jinzhi-outline-view__eyebrow">节点内容</div>
+          <h2>{normalizeNodeTitle(node.title, '未命名节点')}</h2>
+        </div>
+        <div className="jinzhi-outline-view__selection-count">
+          {selectedCount > 1 ? `已选 ${selectedCount} 个` : '当前节点'}
+        </div>
+      </div>
+      <div className="jinzhi-outline-view__content-actions">
+        <button
+          type="button"
+          className="btn btn-small btn-danger"
+          onClick={onDelete}
+          disabled={node.isRoot}
+          title={node.isRoot ? '根节点不可删除' : '删除当前节点'}
+        >
+          <Trash2 size={14} />
+          {node.isRoot ? '根节点不可删除' : '删除'}
+        </button>
+      </div>
+      <div className="jinzhi-outline-view__content-meta">
+        <span>{node.isRoot ? '根节点' : '普通节点'}</span>
+        <span>下级节点 {childCount}</span>
+        {node.updatedAt ? <span>{new Date(node.updatedAt).toLocaleString('zh-CN', { hour12: false })}</span> : null}
+      </div>
+      <div className="jinzhi-outline-view__content-box">
+        {bodyText ? (
+          <div className="jinzhi-outline-view__markdown" dangerouslySetInnerHTML={{ __html: bodyHtml }} />
+        ) : (
+          <div className="jinzhi-outline-view__content-placeholder">当前节点还没有正文内容。按 E 打开编辑器。</div>
+        )}
+      </div>
+      <div className="jinzhi-outline-view__content-tip">单击左侧标题可直接改名；按 E 可编辑正文。</div>
+    </section>
+  );
+};
+
+const BrocadeOutlineDeleteConfirmModal = ({
+  open = false,
+  nodes = [],
+  saving = false,
+  onClose,
+  onConfirm
+}) => {
   if (!open) return null;
 
   return (
-    <div className="jinzhi-outline-modal-backdrop" onClick={onClose}>
-      <div className="jinzhi-outline-modal" onClick={(event) => event.stopPropagation()}>
+    <div
+      className="jinzhi-outline-modal-backdrop"
+      role="presentation"
+      onMouseDown={(event) => {
+        if (event.target === event.currentTarget && !saving) onClose();
+      }}
+    >
+      <div
+        className="jinzhi-outline-modal jinzhi-outline-delete-modal"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="jinzhi-outline-delete-title"
+        onMouseDown={(event) => event.stopPropagation()}
+      >
         <div className="jinzhi-outline-modal__header">
           <div>
-            <div className="jinzhi-outline-modal__eyebrow">Brocade Outline</div>
-            <h3>{brocadeName || '知识锦大纲'}</h3>
+            <div className="jinzhi-outline-modal__eyebrow">Delete Selected Nodes</div>
+            <h3 id="jinzhi-outline-delete-title">确认删除选中的节点？</h3>
           </div>
-          <button type="button" className="jinzhi-outline-modal__close" onClick={onClose} aria-label="关闭大纲视图">
+          <button
+            type="button"
+            className="jinzhi-outline-modal__close"
+            onClick={onClose}
+            disabled={saving}
+            aria-label="关闭删除确认"
+          >
             <X size={16} />
           </button>
         </div>
-        <div className="jinzhi-outline-modal__meta">节点 {nodes.length}</div>
-        <div className="jinzhi-outline-modal__body">
-          {outlineTree.length > 0 ? (
-            <div className="jinzhi-outline-tree">
-              {outlineTree.map((branch) => (
-                <BrocadeOutlineBranch
-                  key={branch?.node?._id || 'outline-root'}
-                  branch={branch}
-                  activeNodeId={activeNodeId}
-                  expandedIds={expandedIdSet}
-                  onToggle={handleToggle}
-                  onJump={onJump}
-                />
-              ))}
-            </div>
-          ) : (
-            <div className="jinzhi-outline-modal__empty">当前知识锦还没有可展示的节点。</div>
-          )}
+        <div className="jinzhi-outline-modal__meta">
+          以下共选中 {nodes.length} 个节点，删除后将同时删除这些节点的全部子节点。
+        </div>
+        <div className="jinzhi-outline-delete-modal__body">
+          <ul className="jinzhi-outline-delete-modal__list">
+            {nodes.map((node) => (
+              <li key={node?._id || node?.title} className="jinzhi-outline-delete-modal__item">
+                {normalizeNodeTitle(node?.title, '未命名节点')}
+              </li>
+            ))}
+          </ul>
+        </div>
+        <div className="jinzhi-outline-modal__footer">
+          <button type="button" className="btn btn-secondary" onClick={onClose} disabled={saving}>取消</button>
+          <button type="button" className="btn btn-danger" onClick={onConfirm} disabled={saving || nodes.length < 1}>
+            <Trash2 size={14} />
+            {saving ? '删除中...' : `删除 ${nodes.length} 个节点`}
+          </button>
         </div>
       </div>
     </div>
@@ -848,6 +1564,8 @@ const NodeEditorModal = ({
   const editingNodeIdRef = useRef('');
   const lastSavedDraftRef = useRef('');
   const autoSaveTimerRef = useRef(0);
+  const previewSource = useMemo(() => buildNodeEditorPreviewSource(draft), [draft]);
+  const previewHtml = useMemo(() => markdownToRichHtml(previewSource), [previewSource]);
 
   useEffect(() => {
     if (!open) {
@@ -861,7 +1579,7 @@ const NodeEditorModal = ({
     const nodeId = node?._id || '';
     if (!nodeId || editingNodeIdRef.current === nodeId) return;
     const savedContentText = String(node?.contentText || '').replace(/\r/g, '');
-    const initialDraft = savedContentText || `${normalizeNodeTitle(node?.title, '未命名节点')}\n\n`;
+    const initialDraft = savedContentText;
     editingNodeIdRef.current = nodeId;
     lastSavedDraftRef.current = initialDraft;
     setDraft(initialDraft);
@@ -939,7 +1657,7 @@ const NodeEditorModal = ({
         <div className="jinzhi-editor-modal__header">
           <div>
             <div className="jinzhi-editor-modal__eyebrow">Node Editor</div>
-            <h3>{node?.title || '未命名节点'}</h3>
+            <h3>{normalizeNodeTitle(node?.title, '')}</h3>
           </div>
           <button
             type="button"
@@ -950,13 +1668,26 @@ const NodeEditorModal = ({
             {isClosing ? '保存中...' : '关闭'}
           </button>
         </div>
-        <textarea
-          value={draft}
-          maxLength={200000}
-          className="jinzhi-editor-modal__textarea"
-          placeholder={'第一行作为卡片标题。\n\n在这里记录内容，换行和段落会原样保留。'}
-          onChange={(event) => setDraft(event.target.value)}
-        />
+        <div className="jinzhi-editor-modal__workspace">
+          <div className="jinzhi-editor-modal__pane">
+            <div className="jinzhi-editor-modal__pane-label">Markdown 原文</div>
+            <textarea
+              value={draft}
+              maxLength={200000}
+              className="jinzhi-editor-modal__textarea"
+              placeholder={'第一行作为卡片标题。\n\n使用 ## 子标题、### 小标题组织内容。'}
+              onChange={(event) => setDraft(event.target.value)}
+              autoFocus
+            />
+          </div>
+          <div className="jinzhi-editor-modal__pane">
+            <div className="jinzhi-editor-modal__pane-label">格式预览</div>
+            <div
+              className="jinzhi-editor-modal__markdown-preview"
+              dangerouslySetInnerHTML={{ __html: previewHtml }}
+            />
+          </div>
+        </div>
         <div className="jinzhi-editor-modal__footer">
           <div className={`jinzhi-editor-modal__autosave is-${autoSaveState}`}>
             {autoSaveLabel}
@@ -988,7 +1719,6 @@ const NodeEditorModal = ({
 const NodeCreateModal = ({
   open,
   parentNode,
-  nodes = [],
   saving = false,
   onClose,
   onSubmit
@@ -996,25 +1726,15 @@ const NodeCreateModal = ({
   const [contentText, setContentText] = useState('');
   const [isStarred, setIsStarred] = useState(false);
 
-  const siblingTitles = useMemo(() => (
-    nodes
-      .filter((item) => item?.parentNodeId === parentNode?._id)
-      .map((item) => item?.title || '')
-  ), [nodes, parentNode?._id]);
-  const suggestedSystemTitle = useMemo(
-    () => resolveUniqueSiblingNodeTitle(siblingTitles, DEFAULT_SYSTEM_NODE_TITLE),
-    [siblingTitles]
-  );
-
   useEffect(() => {
     if (!open) return;
     setContentText('');
     setIsStarred(false);
-  }, [open, suggestedSystemTitle]);
+  }, [open]);
 
   if (!open || !parentNode) return null;
 
-  const effectiveContentText = buildCreateDraftContent(contentText, suggestedSystemTitle);
+  const effectiveContentText = String(contentText || '').replace(/\r/g, '');
 
   return (
     <div className="jinzhi-create-modal-backdrop" onClick={onClose}>
@@ -1040,7 +1760,7 @@ const NodeCreateModal = ({
             value={contentText}
             maxLength={200000}
             className="jinzhi-create-modal__textarea"
-            placeholder={`${suggestedSystemTitle}\n\n在这里继续填写这个知识点的内容。`}
+            placeholder={'第一行可填写标题。\n\n在这里继续填写这个知识点的内容。'}
             onChange={(event) => setContentText(event.target.value)}
           />
         </div>
@@ -1084,10 +1804,13 @@ const KnowledgeBrocadeWorkspacePage = ({
   const brocadeTitleCommitRef = useRef(false);
   const starRequestVersionRef = useRef(new Map());
   const contentSaveRequestVersionRef = useRef(new Map());
+  const outlineTitleCommitRef = useRef(false);
+  const toastTimerRef = useRef(0);
   const [brocade, setBrocade] = useState(null);
   const [nodes, setNodes] = useState([]);
   const [loading, setLoading] = useState(false);
   const [errorText, setErrorText] = useState('');
+  const [toastText, setToastText] = useState('');
   const [selectedNodeId, setSelectedNodeId] = useState('');
   const [editorOpen, setEditorOpen] = useState(false);
   const [savingContent, setSavingContent] = useState(false);
@@ -1096,6 +1819,7 @@ const KnowledgeBrocadeWorkspacePage = ({
   const [historyState, setHistoryState] = useState(() => ({ undoStack: [], redoStack: [] }));
   const [historyActionId, setHistoryActionId] = useState('');
   const [edgeViewMode, setEdgeViewMode] = useState(EDGE_VIEW_MODE.MERGED);
+  const [viewMode, setViewMode] = useState(VIEW_MODE.TREE);
   const [canvasTheme, setCanvasTheme] = useState(() => {
     if (typeof window === 'undefined') return CANVAS_THEME.NIGHT;
     const storedValue = window.localStorage.getItem(THEME_STORAGE_KEY);
@@ -1103,7 +1827,10 @@ const KnowledgeBrocadeWorkspacePage = ({
   });
   const [isPanning, setIsPanning] = useState(false);
   const [createParentNode, setCreateParentNode] = useState(null);
-  const [outlineOpen, setOutlineOpen] = useState(false);
+  const [outlineSelectedNodeIds, setOutlineSelectedNodeIds] = useState(() => new Set());
+  const [editingOutlineNodeId, setEditingOutlineNodeId] = useState('');
+  const [outlineTitleDraft, setOutlineTitleDraft] = useState('');
+  const [outlineDeleteDialog, setOutlineDeleteDialog] = useState(null);
   const [textPreviewOpen, setTextPreviewOpen] = useState(false);
   const [inspectorAnchor, setInspectorAnchor] = useState(null);
   const [zoom, setZoom] = useState(ZOOM_DEFAULT);
@@ -1119,6 +1846,26 @@ const KnowledgeBrocadeWorkspacePage = ({
   const [showMiniMap, setShowMiniMap] = useState(true);
   const [scrollLeft, setScrollLeft] = useState(0);
   const [scrollTop, setScrollTop] = useState(0);
+
+  const showWorkspaceToast = useCallback((message) => {
+    if (!message) return;
+    if (toastTimerRef.current && typeof window !== 'undefined') {
+      window.clearTimeout(toastTimerRef.current);
+    }
+    setToastText(message);
+    if (typeof window !== 'undefined') {
+      toastTimerRef.current = window.setTimeout(() => {
+        setToastText('');
+        toastTimerRef.current = 0;
+      }, 2200);
+    }
+  }, []);
+
+  useEffect(() => () => {
+    if (toastTimerRef.current && typeof window !== 'undefined') {
+      window.clearTimeout(toastTimerRef.current);
+    }
+  }, []);
 
   const selectedNode = useMemo(
     () => nodes.find((item) => item?._id === selectedNodeId) || null,
@@ -1140,6 +1887,11 @@ const KnowledgeBrocadeWorkspacePage = ({
     );
   })();
   const nodesById = useMemo(() => new Map(nodes.map((item) => [item?._id, item])), [nodes]);
+  const outlineDeleteDialogNodes = useMemo(() => (
+    (outlineDeleteDialog?.nodeIds || [])
+      .map((nodeId) => nodesById.get(nodeId))
+      .filter((node) => node?._id && !node.isRoot)
+  ), [nodesById, outlineDeleteDialog]);
   const childCountByNodeId = useMemo(() => {
     const counts = new Map();
     nodes.forEach((node) => {
@@ -1385,121 +2137,6 @@ const KnowledgeBrocadeWorkspacePage = ({
     loadGraph();
   }, [loadGraph]);
 
-  // 快捷键监听
-  useEffect(() => {
-    if (typeof window === 'undefined') return;
-
-    const handleKeyDown = (event) => {
-      // 忽略编辑器内的按键
-      if (event.target.tagName === 'TEXTAREA' || event.target.tagName === 'INPUT') {
-        return;
-      }
-
-      const isMac = navigator.platform.toUpperCase().indexOf('MAC') >= 0;
-      const cmdKey = isMac ? event.metaKey : event.ctrlKey;
-
-      // Ctrl/Cmd + F: 打开搜索
-      if (cmdKey && event.key === 'f') {
-        event.preventDefault();
-        setSearchOpen(true);
-        return;
-      }
-
-      // Ctrl/Cmd + Z: 撤销
-      if (cmdKey && !event.shiftKey && event.key === 'z') {
-        event.preventDefault();
-        if (canUndo) {
-          handleUndo();
-        }
-        return;
-      }
-
-      // Ctrl/Cmd + Shift + Z / Ctrl + Y: 重做
-      if ((cmdKey && event.shiftKey && event.key === 'z') || (cmdKey && event.key === 'y')) {
-        event.preventDefault();
-        if (canRedo) {
-          handleRedo();
-        }
-        return;
-      }
-
-      // Tab / Enter: 添加子节点
-      if (event.key === 'Tab' || (event.key === 'Enter' && !event.shiftKey)) {
-        if (selectedNodeId && !createParentNode) {
-          event.preventDefault();
-          const nodeToAddChild = nodesById.get(selectedNodeId);
-          if (nodeToAddChild) {
-            setCreateParentNode(nodeToAddChild);
-          }
-        }
-        return;
-      }
-
-      // E: 编辑节点
-      if (event.key === 'e' || event.key === 'E') {
-        if (selectedNodeId && !editorOpen) {
-          event.preventDefault();
-          setEditorOpen(true);
-        }
-        return;
-      }
-
-      // Delete / Backspace: 删除节点
-      if (event.key === 'Delete' || event.key === 'Backspace') {
-        if (selectedNodeId && selectedNode && !selectedNode.isRoot) {
-          event.preventDefault();
-          handleDeleteNode(selectedNode);
-        }
-        return;
-      }
-
-      // Space: 折叠/展开
-      if (event.key === ' ') {
-        if (selectedNodeId && childCountByNodeId.get(selectedNodeId) > 0) {
-          event.preventDefault();
-          setCollapsedNodeIds((prev) => {
-            const next = new Set(prev);
-            if (next.has(selectedNodeId)) {
-              next.delete(selectedNodeId);
-            } else {
-              next.add(selectedNodeId);
-            }
-            return next;
-          });
-        }
-        return;
-      }
-
-      // Escape: 关闭弹窗/取消选择
-      if (event.key === 'Escape') {
-        if (searchOpen) { setSearchOpen(false); return; }
-        if (shortcutsOpen) { setShortcutsOpen(false); return; }
-        if (editorOpen) { setEditorOpen(false); return; }
-        if (outlineOpen) { setOutlineOpen(false); return; }
-        if (textPreviewOpen) { setTextPreviewOpen(false); return; }
-        if (createParentNode) { setCreateParentNode(null); return; }
-        if (selectedNodeId) { setSelectedNodeId(''); return; }
-        return;
-      }
-    };
-
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [
-    canUndo,
-    canRedo,
-    childCountByNodeId,
-    createParentNode,
-    editorOpen,
-    nodesById,
-    outlineOpen,
-    searchOpen,
-    selectedNode,
-    selectedNodeId,
-    shortcutsOpen,
-    textPreviewOpen
-  ]);
-
   useEffect(() => {
     if (typeof window === 'undefined') return;
     window.localStorage.setItem(THEME_STORAGE_KEY, canvasTheme);
@@ -1524,6 +2161,13 @@ const KnowledgeBrocadeWorkspacePage = ({
       x: event.clientX - rect.left,
       y: event.clientY - rect.top
     });
+  }, []);
+
+  const openNodeEditor = useCallback((nodeId) => {
+    if (!nodeId) return;
+    setSelectedNodeId(nodeId);
+    setInspectorAnchor(null);
+    setEditorOpen(true);
   }, []);
 
   const closeNodeInspector = useCallback(() => {
@@ -1667,15 +2311,15 @@ const KnowledgeBrocadeWorkspacePage = ({
           const rect = container.getBoundingClientRect();
           const localX = event.clientX - rect.left;
           const localY = event.clientY - rect.top;
-          const autoPanX = localX < DRAG_AUTOPAN_THRESHOLD
-            ? -getDragAutopanDelta(DRAG_AUTOPAN_THRESHOLD - localX)
-            : (localX > rect.width - DRAG_AUTOPAN_THRESHOLD
-                ? getDragAutopanDelta(localX - (rect.width - DRAG_AUTOPAN_THRESHOLD))
+          const autoPanX = localX < 0
+            ? -getDragAutopanDelta(-localX)
+            : (localX > rect.width
+                ? getDragAutopanDelta(localX - rect.width)
                 : 0);
-          const autoPanY = localY < DRAG_AUTOPAN_THRESHOLD
-            ? -getDragAutopanDelta(DRAG_AUTOPAN_THRESHOLD - localY)
-            : (localY > rect.height - DRAG_AUTOPAN_THRESHOLD
-                ? getDragAutopanDelta(localY - (rect.height - DRAG_AUTOPAN_THRESHOLD))
+          const autoPanY = localY < 0
+            ? -getDragAutopanDelta(-localY)
+            : (localY > rect.height
+                ? getDragAutopanDelta(localY - rect.height)
                 : 0);
           const maxLeft = Math.max(0, container.scrollWidth - container.clientWidth);
           const maxTop = Math.max(0, container.scrollHeight - container.clientHeight);
@@ -1683,27 +2327,31 @@ const KnowledgeBrocadeWorkspacePage = ({
           nextScrollTop = Math.min(maxTop, Math.max(0, container.scrollTop + autoPanY));
           container.scrollLeft = nextScrollLeft;
           container.scrollTop = nextScrollTop;
+          nextScrollLeft = container.scrollLeft;
+          nextScrollTop = container.scrollTop;
         }
         dragCurrent.lastScrollLeft = nextScrollLeft;
         dragCurrent.lastScrollTop = nextScrollTop;
         const dx = event.clientX - dragCurrent.startX + (nextScrollLeft - dragCurrent.originScrollLeft);
         const dy = event.clientY - dragCurrent.startY + (nextScrollTop - dragCurrent.originScrollTop);
         const zoomScale = zoomRef.current || ZOOM_DEFAULT;
-        const visibleContentLeft = Math.max(0, (nextScrollLeft - stageOffsetX) / zoomScale);
-        const visibleContentTop = Math.max(0, (nextScrollTop - stageOffsetY) / zoomScale);
-        const visibleContentRight = Math.min(
-          canvasMetrics.width,
-          (nextScrollLeft + (container?.clientWidth || viewportSize.width) - stageOffsetX) / zoomScale
+        const pointerCanvasPoint = getCanvasPointFromClientPoint(
+          event.clientX,
+          event.clientY,
+          container,
+          stageOffsetX,
+          stageOffsetY,
+          zoomScale
         );
-        const visibleContentBottom = Math.min(
-          canvasMetrics.height,
-          (nextScrollTop + (container?.clientHeight || viewportSize.height) - stageOffsetY) / zoomScale
-        );
-        const draggedNodeSize = dragCurrent.nodeSize || { width: NODE_WIDTH, height: NODE_HEIGHT };
-        const minNodeX = visibleContentLeft - canvasMetrics.originX;
-        const maxNodeX = visibleContentRight - canvasMetrics.originX - draggedNodeSize.width;
-        const minNodeY = visibleContentTop - canvasMetrics.originY;
-        const maxNodeY = visibleContentBottom - canvasMetrics.originY - draggedNodeSize.height;
+        const nextPosition = pointerCanvasPoint
+          ? {
+            x: pointerCanvasPoint.x - (Number(canvasMetrics.originX) || 0) - (dragCurrent.pointerOffsetX || 0),
+            y: pointerCanvasPoint.y - (Number(canvasMetrics.originY) || 0) - (dragCurrent.pointerOffsetY || 0)
+          }
+          : {
+            x: dragCurrent.originX + dx / zoomScale,
+            y: dragCurrent.originY + dy / zoomScale
+          };
         const nextPreviewParentNodeId = resolveDragReparentTargetId({
           nodes,
           hitTestNodes: visibleNodes,
@@ -1730,20 +2378,7 @@ const KnowledgeBrocadeWorkspacePage = ({
           item?._id === dragCurrent.nodeId
             ? {
               ...item,
-              position: {
-                x: Math.round(
-                  Math.min(
-                    Math.max(minNodeX, dragCurrent.originX + dx / zoomScale),
-                    Math.max(minNodeX, maxNodeX)
-                  )
-                ),
-                y: Math.round(
-                  Math.min(
-                    Math.max(minNodeY, dragCurrent.originY + dy / zoomScale),
-                    Math.max(minNodeY, maxNodeY)
-                  )
-                )
-              }
+              position: cloneNodePosition(nextPosition)
             }
             : item
         )));
@@ -2022,7 +2657,59 @@ const KnowledgeBrocadeWorkspacePage = ({
     event.preventDefault();
   }, [closeNodeInspector]);
 
+  const startNodeDrag = useCallback((event, node) => {
+    if (event.button !== 0 || !node?._id || !scrollRef.current) return;
+    event.preventDefault();
+    event.stopPropagation();
+    if (typeof window !== 'undefined' && typeof window.getSelection === 'function') {
+      const selection = window.getSelection();
+      if (selection && selection.rangeCount > 0) {
+        selection.removeAllRanges();
+      }
+    }
+    const container = scrollRef.current;
+    const zoomScale = zoomRef.current || ZOOM_DEFAULT;
+    const pointerCanvasPoint = getCanvasPointFromClientPoint(
+      event.clientX,
+      event.clientY,
+      container,
+      stageOffsetX,
+      stageOffsetY,
+      zoomScale
+    );
+    const originX = Number(node?.position?.x) || 0;
+    const originY = Number(node?.position?.y) || 0;
+    dragRef.current = {
+      nodeId: node._id,
+      startX: event.clientX,
+      startY: event.clientY,
+      originX,
+      originY,
+      pointerOffsetX: pointerCanvasPoint
+        ? pointerCanvasPoint.x - (Number(canvasMetrics.originX) || 0) - originX
+        : 0,
+      pointerOffsetY: pointerCanvasPoint
+        ? pointerCanvasPoint.y - (Number(canvasMetrics.originY) || 0) - originY
+        : 0,
+      originParentNodeId: node?.parentNodeId || '',
+      previewParentNodeId: '',
+      originScrollLeft: container.scrollLeft || 0,
+      originScrollTop: container.scrollTop || 0,
+      lastScrollLeft: container.scrollLeft || 0,
+      lastScrollTop: container.scrollTop || 0,
+      pointerId: event.pointerId,
+      target: event.currentTarget
+    };
+    setDraggingNodeId(node._id);
+    setDragReparentPreview(null);
+    event.currentTarget.setPointerCapture?.(event.pointerId);
+  }, [canvasMetrics.originX, canvasMetrics.originY, stageOffsetX, stageOffsetY]);
+
   const startNodeResize = useCallback((event, node, nodeSize, direction) => {
+    if (node?._id !== selectedNodeId) {
+      startNodeDrag(event, node);
+      return;
+    }
     if (event.button !== 0 || !node?._id) return;
     event.preventDefault();
     event.stopPropagation();
@@ -2041,12 +2728,12 @@ const KnowledgeBrocadeWorkspacePage = ({
       target: event.currentTarget
     };
     event.currentTarget.setPointerCapture?.(event.pointerId);
-  }, []);
+  }, [selectedNodeId, startNodeDrag]);
 
   const handleOpenEditor = useCallback(() => {
-    if (!selectedNode) return;
-    setEditorOpen(true);
-  }, [selectedNode]);
+    if (!selectedNode?._id) return;
+    openNodeEditor(selectedNode._id);
+  }, [openNodeEditor, selectedNode?._id]);
 
   const persistNodeContent = useCallback(async (nodeId, contentText, options = {}) => {
     if (!nodeId || !activeBrocadeId) return null;
@@ -2161,6 +2848,304 @@ const KnowledgeBrocadeWorkspacePage = ({
     setCreateParentNode(node);
   }, []);
 
+  const handleStartOutlineTitleEdit = useCallback((nodeId) => {
+    const node = nodesById.get(nodeId);
+    if (!node?._id) return;
+    setSelectedNodeId(node._id);
+    setOutlineSelectedNodeIds(new Set([node._id]));
+    setEditingOutlineNodeId(node._id);
+    setOutlineTitleDraft(normalizeNodeTitle(node.title, ''));
+    setInspectorAnchor(null);
+  }, [nodesById]);
+
+  const handleCancelOutlineTitleEdit = useCallback((nodeId = '') => {
+    setEditingOutlineNodeId((currentEditingNodeId) => {
+      if (nodeId && currentEditingNodeId !== nodeId) return currentEditingNodeId;
+      setOutlineTitleDraft('');
+      return '';
+    });
+  }, []);
+
+  const handleCommitOutlineTitle = useCallback(async (nodeId = editingOutlineNodeId, draft = outlineTitleDraft) => {
+    if (!nodeId || !activeBrocadeId || outlineTitleCommitRef.current) return false;
+    const node = nodesById.get(nodeId);
+    if (!node?._id) {
+      handleCancelOutlineTitleEdit(nodeId);
+      return false;
+    }
+    const nextTitle = normalizeNodeTitle(draft, '').trim();
+    if (!nextTitle) {
+      handleCancelOutlineTitleEdit(nodeId);
+      return false;
+    }
+    const currentTitle = normalizeNodeTitle(node.title, '').trim();
+    if (nextTitle === currentTitle) {
+      handleCancelOutlineTitleEdit(nodeId);
+      return true;
+    }
+
+    outlineTitleCommitRef.current = true;
+    setActionId(`rename:${nodeId}`);
+    setErrorText('');
+    try {
+      const data = await updateKnowledgeBrocadeNodeContent(activeBrocadeId, nodeId, {
+        contentText: buildNodeContentWithTitle(node, nextTitle)
+      });
+      const nextNode = data?.node || null;
+      const nextBrocade = data?.brocade || null;
+      if (nextNode?._id) {
+        setNodes((prev) => prev.map((item) => (item?._id === nextNode._id ? nextNode : item)));
+      }
+      if (nextBrocade?._id) {
+        setBrocade(nextBrocade);
+        setBrocadeTitleDraft(nextBrocade.name || '');
+        onBrocadeMetaChange?.(nextBrocade);
+      }
+      setEditingOutlineNodeId((currentEditingNodeId) => {
+        if (currentEditingNodeId !== nodeId) return currentEditingNodeId;
+        setOutlineTitleDraft('');
+        return '';
+      });
+      return true;
+    } catch (error) {
+      setErrorText(error.message || '更新节点标题失败');
+      return false;
+    } finally {
+      setActionId('');
+      outlineTitleCommitRef.current = false;
+    }
+  }, [activeBrocadeId, editingOutlineNodeId, handleCancelOutlineTitleEdit, nodesById, onBrocadeMetaChange, outlineTitleDraft]);
+
+  const handleMoveOutlineNode = useCallback(async ({ nodeId = '', targetNodeId = '', placement = '' } = {}) => {
+    const draggedNode = nodesById.get(nodeId);
+    const targetNode = nodesById.get(targetNodeId);
+    if (!draggedNode?._id || !targetNode?._id || draggedNode.isRoot || draggedNode._id === targetNode._id) return;
+
+    const nextParentNodeId = placement === 'child'
+      ? targetNode._id
+      : targetNode.parentNodeId || '';
+    if (!canMoveBrocadeNodeToParent(nodes, draggedNode._id, nextParentNodeId)) return;
+    const nextPosition = placement === 'child'
+      ? resolveReparentNodePosition(targetNode, draggedNode._id, nodes)
+      : resolveOutlineSiblingDropPosition(nodes, draggedNode._id, targetNode, placement);
+    if (!nextPosition) return;
+
+    const previousPosition = cloneNodePosition(draggedNode.position);
+    const previousParentNodeId = draggedNode.parentNodeId || '';
+    const didMovePosition = !arePositionsEqual(previousPosition, nextPosition);
+    const didReparent = previousParentNodeId !== nextParentNodeId;
+    if (!didMovePosition && !didReparent) return;
+
+    setSelectedNodeId(draggedNode._id);
+    setOutlineSelectedNodeIds(new Set([draggedNode._id]));
+    setActionId(`outline-move:${draggedNode._id}`);
+    setErrorText('');
+    setNodes((prev) => prev.map((item) => (
+      item?._id === draggedNode._id
+        ? { ...item, parentNodeId: nextParentNodeId, position: nextPosition }
+        : item
+    )));
+    try {
+      const data = await updateKnowledgeBrocadeNode(activeBrocadeId, draggedNode._id, {
+        position: nextPosition,
+        ...(didReparent ? { parentNodeId: nextParentNodeId } : {})
+      });
+      const nextNode = data?.node || null;
+      if (nextNode?._id) {
+        setNodes((prev) => prev.map((item) => (item?._id === nextNode._id ? nextNode : item)));
+      }
+      pushHistoryEntry({
+        kind: 'move',
+        nodeId: draggedNode._id,
+        beforePosition: previousPosition,
+        afterPosition: nextPosition,
+        beforeParentNodeId: previousParentNodeId,
+        afterParentNodeId: nextParentNodeId
+      });
+    } catch (error) {
+      setErrorText(error.message || '保存大纲节点位置失败');
+      loadGraph();
+    } finally {
+      setActionId('');
+    }
+  }, [activeBrocadeId, loadGraph, nodes, nodesById, pushHistoryEntry]);
+
+  const handleCreateOutlineSibling = useCallback(async (sourceNodeId = '') => {
+    const siblingNode = (sourceNodeId ? nodesById.get(sourceNodeId) : null) || selectedNode;
+    if (!siblingNode?._id) return;
+    if (!siblingNode.parentNodeId) {
+      setErrorText('');
+      showWorkspaceToast('根节点没有兄弟节点');
+      return;
+    }
+    const parentNode = nodesById.get(siblingNode.parentNodeId);
+    if (!parentNode?._id) return;
+    const siblingInsertion = resolveOutlineSiblingInsertion(siblingNode, nodes);
+    setActionId(`outline-create:${siblingNode._id}`);
+    setErrorText('');
+    try {
+      const data = await createKnowledgeBrocadeNode(activeBrocadeId, {
+        contentText: '',
+        parentNodeId: parentNode._id,
+        position: siblingInsertion.position
+      });
+      const nextNode = data?.node || null;
+      const nextBrocade = data?.brocade || null;
+      if (nextNode?._id) {
+        setNodes((prev) => [
+          ...prev.map((item) => {
+            const move = siblingInsertion.moves.find((entry) => entry.nodeId === item?._id);
+            return move ? { ...item, position: move.afterPosition } : item;
+          }),
+          nextNode
+        ]);
+        if (siblingInsertion.moves.length > 0) {
+          const movedResponses = await Promise.all(
+            siblingInsertion.moves.map((move) => updateKnowledgeBrocadeNode(activeBrocadeId, move.nodeId, {
+              position: move.afterPosition
+            }))
+          );
+          const savedMovedNodes = movedResponses.map((response) => response?.node).filter((node) => node?._id);
+          if (savedMovedNodes.length > 0) {
+            setNodes((prev) => prev.map((item) => savedMovedNodes.find((node) => node._id === item?._id) || item));
+          }
+        }
+        setSelectedNodeId(nextNode._id);
+        setOutlineSelectedNodeIds(new Set([nextNode._id]));
+        setViewMode(VIEW_MODE.OUTLINE);
+        setEditingOutlineNodeId(nextNode._id);
+        setOutlineTitleDraft(normalizeNodeTitle(nextNode.title, ''));
+        pushHistoryEntry({
+          kind: 'create',
+          nodeSnapshot: snapshotNodeForHistory(nextNode)
+        });
+        if (siblingInsertion.moves.length > 0) {
+          pushHistoryEntry({
+            kind: 'move',
+            moves: siblingInsertion.moves
+          });
+        }
+      }
+      if (nextBrocade?._id) {
+        setBrocade(nextBrocade);
+        onBrocadeMetaChange?.(nextBrocade);
+      }
+    } catch (error) {
+      setErrorText(error.message || '创建兄弟节点失败');
+    } finally {
+      setActionId('');
+    }
+  }, [activeBrocadeId, nodes, nodesById, onBrocadeMetaChange, pushHistoryEntry, selectedNode, showWorkspaceToast]);
+
+  const handleConfirmOutlineTitleAndCreateSibling = useCallback(async (nodeId, draft) => {
+    const node = nodesById.get(nodeId);
+    if (!node?._id) return;
+    const nextTitle = normalizeNodeTitle(draft, '').trim();
+    if (nextTitle) {
+      const didCommit = await handleCommitOutlineTitle(nodeId, nextTitle);
+      if (didCommit === false) return;
+    } else {
+      handleCancelOutlineTitleEdit(nodeId);
+    }
+    await handleCreateOutlineSibling(nodeId);
+  }, [handleCancelOutlineTitleEdit, handleCommitOutlineTitle, handleCreateOutlineSibling, nodesById]);
+
+  const handleOutlineLevelChange = useCallback(async (direction) => {
+    const selectedIds = outlineSelectedNodeIds.size > 0
+      ? Array.from(outlineSelectedNodeIds)
+      : (selectedNodeId ? [selectedNodeId] : []);
+    const selectedRoots = getOutlineSelectionRoots(nodes, selectedIds)
+      .filter((node) => node?._id && !node?.isRoot);
+    if (selectedRoots.length < 1) return;
+
+    const parentIds = new Set(selectedRoots.map((node) => node?.parentNodeId || ''));
+    if (parentIds.size !== 1) {
+      setErrorText('批量调整层级时，请先选择同级节点');
+      return;
+    }
+    const currentParentId = selectedRoots[0]?.parentNodeId || '';
+    const siblingNodes = sortBrocadeNodesByPosition(
+      nodes.filter((node) => (node?.parentNodeId || '') === currentParentId)
+    );
+    const selectedRootIds = new Set(selectedRoots.map((node) => node._id));
+    let targetParentId = '';
+    if (direction === 'indent') {
+      const firstSelectedIndex = siblingNodes.findIndex((node) => selectedRootIds.has(node?._id));
+      const previousSibling = siblingNodes
+        .slice(0, firstSelectedIndex)
+        .reverse()
+        .find((node) => !selectedRootIds.has(node?._id));
+      if (!previousSibling?._id) {
+        setErrorText('当前节点已经是同级最前面，无法向下缩进');
+        return;
+      }
+      targetParentId = previousSibling._id;
+    } else {
+      const currentParent = nodesById.get(currentParentId);
+      targetParentId = currentParent?.parentNodeId || '';
+      if (!targetParentId) {
+        setErrorText('当前节点已在根节点下，无法继续提升层级');
+        return;
+      }
+    }
+
+    const targetParent = nodesById.get(targetParentId);
+    if (!targetParent?._id || selectedRootIds.has(targetParentId)) return;
+    const orderedRoots = selectedRoots.sort((left, right) => (
+      (Number(left?.position?.y) || 0) - (Number(right?.position?.y) || 0)
+      || (Number(left?.position?.x) || 0) - (Number(right?.position?.x) || 0)
+    ));
+    const workingNodes = [...nodes];
+    const moves = [];
+    orderedRoots.forEach((node) => {
+      if (!canPreviewBrocadeReparent(workingNodes, node._id, targetParentId)) return;
+      const nextPosition = resolveReparentNodePosition(targetParent, node._id, workingNodes);
+      moves.push({
+        nodeId: node._id,
+        beforePosition: cloneNodePosition(node.position),
+        afterPosition: nextPosition,
+        beforeParentNodeId: node.parentNodeId || '',
+        afterParentNodeId: targetParentId
+      });
+      const index = workingNodes.findIndex((item) => item?._id === node._id);
+      if (index >= 0) {
+        workingNodes[index] = {
+          ...workingNodes[index],
+          parentNodeId: targetParentId,
+          position: nextPosition
+        };
+      }
+    });
+    if (moves.length < 1) return;
+
+    setActionId(`outline-level:${direction}`);
+    setErrorText('');
+    setNodes((prev) => prev.map((item) => {
+      const move = moves.find((entry) => entry.nodeId === item?._id);
+      return move
+        ? { ...item, parentNodeId: move.afterParentNodeId, position: move.afterPosition }
+        : item;
+    }));
+    try {
+      const responses = await Promise.all(
+        moves.map((move) => updateKnowledgeBrocadeNode(activeBrocadeId, move.nodeId, {
+          parentNodeId: move.afterParentNodeId,
+          position: move.afterPosition
+        }))
+      );
+      const savedNodes = responses.map((response) => response?.node).filter((node) => node?._id);
+      if (savedNodes.length > 0) {
+        setNodes((prev) => prev.map((item) => savedNodes.find((node) => node._id === item?._id) || item));
+      }
+      pushHistoryEntry({ kind: 'move', moves });
+    } catch (error) {
+      setErrorText(error.message || '调整节点层级失败');
+      loadGraph();
+    } finally {
+      setActionId('');
+    }
+  }, [activeBrocadeId, loadGraph, nodes, nodesById, outlineSelectedNodeIds, pushHistoryEntry, selectedNodeId]);
+
   const handleToggleNodeCollapse = useCallback((nodeId) => {
     if (!nodeId) return;
     setCollapsedNodeIds((prev) => {
@@ -2223,23 +3208,144 @@ const KnowledgeBrocadeWorkspacePage = ({
     };
   }, [commitBrocadeTitle, isEditingBrocadeTitle]);
 
-  const handleJumpToOutlineNode = useCallback((nodeId) => {
-    const targetNode = nodesById.get(nodeId);
-    if (!targetNode) return;
-    setOutlineOpen(false);
+  const handleSelectOutlineNode = useCallback((nodeId, event = null) => {
+    if (!nodeId || !nodesById.has(nodeId)) return;
+    if (editingOutlineNodeId && editingOutlineNodeId !== nodeId) {
+      handleCancelOutlineTitleEdit(editingOutlineNodeId);
+    }
+    const isToggleSelection = !!(event?.metaKey || event?.ctrlKey);
+    if (isToggleSelection && outlineSelectedNodeIds.has(nodeId) && outlineSelectedNodeIds.size > 1) {
+      const nextActiveNodeId = Array.from(outlineSelectedNodeIds).find((item) => item !== nodeId) || nodeId;
+      setSelectedNodeId(nextActiveNodeId);
+      setOutlineSelectedNodeIds((prev) => {
+        const next = new Set(prev);
+        next.delete(nodeId);
+        return next;
+      });
+    } else if (isToggleSelection) {
+      setSelectedNodeId(nodeId);
+      setOutlineSelectedNodeIds((prev) => new Set([...prev, nodeId]));
+    } else {
+      setSelectedNodeId(nodeId);
+      setOutlineSelectedNodeIds(new Set([nodeId]));
+    }
     setInspectorAnchor(null);
-    setSelectedNodeId(nodeId);
-    centerNodeInViewport(scrollRef, targetNode, canvasMetrics, zoomRef.current);
-    lastAutoCenteredNodeIdRef.current = nodeId;
-  }, [canvasMetrics, nodesById]);
+  }, [editingOutlineNodeId, handleCancelOutlineTitleEdit, nodesById, outlineSelectedNodeIds]);
+
+  const handleLassoOutlineSelection = useCallback((nodeIds = [], activeNodeId = '') => {
+    const validIds = nodeIds.filter((nodeId) => nodesById.has(nodeId));
+    if (validIds.length < 1) return;
+    const nextActiveNodeId = nodesById.has(activeNodeId) ? activeNodeId : validIds[0];
+    if (editingOutlineNodeId && editingOutlineNodeId !== nextActiveNodeId) {
+      handleCancelOutlineTitleEdit(editingOutlineNodeId);
+    }
+    setOutlineSelectedNodeIds(new Set(validIds));
+    setSelectedNodeId(nextActiveNodeId);
+    setInspectorAnchor(null);
+  }, [editingOutlineNodeId, handleCancelOutlineTitleEdit, nodesById]);
+
+  const handleOpenOutlineDeleteDialog = useCallback((nodeIds = []) => {
+    const selectedNodes = Array.from(new Set(nodeIds))
+      .map((nodeId) => nodesById.get(nodeId))
+      .filter((node) => node?._id);
+    const deletableNodes = selectedNodes.filter((node) => !node.isRoot);
+    if (deletableNodes.length < 2 || deletableNodes.length !== selectedNodes.length) return;
+    setOutlineDeleteDialog({
+      nodeIds: deletableNodes.map((node) => node._id)
+    });
+    setEditingOutlineNodeId('');
+    setOutlineTitleDraft('');
+    setInspectorAnchor(null);
+  }, [nodesById]);
+
+  const handleConfirmOutlineDelete = useCallback(async () => {
+    const selectedIds = outlineDeleteDialog?.nodeIds || [];
+    if (!activeBrocadeId || selectedIds.length < 1 || actionId) return;
+    const deleteRoots = getOutlineSelectionRoots(nodes, selectedIds)
+      .filter((node) => node?._id && !node.isRoot);
+    if (deleteRoots.length < 1) {
+      setOutlineDeleteDialog(null);
+      return;
+    }
+
+    const deletedSnapshots = [];
+    const deletedSnapshotIds = new Set();
+    deleteRoots.forEach((node) => {
+      collectNodeSubtreeSnapshots(nodes, node._id).forEach((snapshot) => {
+        if (!deletedSnapshotIds.has(snapshot._id)) {
+          deletedSnapshotIds.add(snapshot._id);
+          deletedSnapshots.push(snapshot);
+        }
+      });
+    });
+
+    setOutlineDeleteDialog(null);
+    setActionId('delete:outline');
+    setErrorText('');
+    try {
+      const deletedNodeIds = new Set();
+      let nextBrocade = null;
+      for (const node of deleteRoots) {
+        const data = await deleteKnowledgeBrocadeNode(activeBrocadeId, node._id);
+        (Array.isArray(data?.deletedNodeIds) ? data.deletedNodeIds : []).forEach((nodeId) => {
+          deletedNodeIds.add(nodeId);
+        });
+        if (data?.brocade?._id) nextBrocade = data.brocade;
+      }
+      setNodes((prev) => prev.filter((item) => !deletedNodeIds.has(item?._id)));
+      setSelectedNodeId((prev) => (prev && !deletedNodeIds.has(prev) ? prev : ''));
+      setOutlineSelectedNodeIds((prev) => new Set(Array.from(prev).filter((nodeId) => !deletedNodeIds.has(nodeId))));
+      if (editingOutlineNodeId && deletedNodeIds.has(editingOutlineNodeId)) {
+        handleCancelOutlineTitleEdit();
+      }
+      if (deletedSnapshots.length > 0) {
+        const rootNodeIds = deleteRoots.map((node) => node._id);
+        pushHistoryEntry({
+          kind: 'delete',
+          rootNodeId: rootNodeIds[0] || '',
+          rootNodeIds,
+          deletedSnapshots
+        });
+      }
+      if (nextBrocade?._id) {
+        setBrocade(nextBrocade);
+        onBrocadeMetaChange?.(nextBrocade);
+      }
+    } catch (error) {
+      setErrorText(error.message || '删除选中的节点失败');
+      loadGraph();
+    } finally {
+      setActionId('');
+    }
+  }, [actionId, activeBrocadeId, editingOutlineNodeId, handleCancelOutlineTitleEdit, loadGraph, nodes, onBrocadeMetaChange, outlineDeleteDialog, pushHistoryEntry]);
+
+  const handleSetViewMode = useCallback((nextViewMode) => {
+    setViewMode(nextViewMode);
+    setInspectorAnchor(null);
+    setEditingOutlineNodeId('');
+    setOutlineTitleDraft('');
+    setOutlineDeleteDialog(null);
+    if (nextViewMode === VIEW_MODE.OUTLINE) {
+      const nextNodeId = selectedNodeId || rootNode?._id || nodes[0]?._id || '';
+      if (nextNodeId) {
+        setSelectedNodeId(nextNodeId);
+        setOutlineSelectedNodeIds(new Set([nextNodeId]));
+      }
+    } else {
+      setOutlineSelectedNodeIds(new Set());
+    }
+  }, [nodes, rootNode?._id, selectedNodeId]);
 
   const handleJumpToNode = useCallback((nodeId) => {
     const targetNode = nodesById.get(nodeId);
     if (!targetNode) return;
+    setOutlineSelectedNodeIds(viewMode === VIEW_MODE.OUTLINE ? new Set([nodeId]) : new Set());
     setSelectedNodeId(nodeId);
-    centerNodeInViewport(scrollRef, targetNode, canvasMetrics, zoomRef.current);
-    lastAutoCenteredNodeIdRef.current = nodeId;
-  }, [canvasMetrics, nodesById, scrollRef]);
+    if (viewMode === VIEW_MODE.TREE) {
+      centerNodeInViewport(scrollRef, targetNode, canvasMetrics, zoomRef.current);
+      lastAutoCenteredNodeIdRef.current = nodeId;
+    }
+  }, [canvasMetrics, nodesById, viewMode]);
 
   const submitCreateChild = async ({ contentText, isStarred }) => {
     const parentNode = createParentNode;
@@ -2259,6 +3365,7 @@ const KnowledgeBrocadeWorkspacePage = ({
       if (nextNode?._id) {
         setNodes((prev) => [...prev, nextNode]);
         setSelectedNodeId(nextNode._id);
+        setOutlineSelectedNodeIds(viewMode === VIEW_MODE.OUTLINE ? new Set([nextNode._id]) : new Set());
         setCreateParentNode(null);
         pushHistoryEntry({
           kind: 'create',
@@ -2276,9 +3383,9 @@ const KnowledgeBrocadeWorkspacePage = ({
     }
   };
 
-  const handleDeleteNode = async (node) => {
+  const handleDeleteNode = useCallback(async (node) => {
     if (!node?._id || node?.isRoot) return;
-    const confirmed = window.confirm(`确认删除节点「${node.title || '未命名节点'}」？这会一并删除它的全部子节点。`);
+    const confirmed = window.confirm(`确认删除节点「${String(node.title || '').trim() || '该节点'}」？这会一并删除它的全部子节点。`);
     if (!confirmed) return;
     const deletedSnapshots = collectNodeSubtreeSnapshots(nodes, node._id);
     setActionId(`delete:${node._id}`);
@@ -2289,6 +3396,10 @@ const KnowledgeBrocadeWorkspacePage = ({
       const nextBrocade = data?.brocade || null;
       setNodes((prev) => prev.filter((item) => !deletedIds.includes(item?._id)));
       setSelectedNodeId((prev) => (prev && !deletedIds.includes(prev) ? prev : ''));
+      setOutlineSelectedNodeIds((prev) => new Set(Array.from(prev).filter((nodeId) => !deletedIds.includes(nodeId))));
+      if (deletedIds.includes(editingOutlineNodeId)) {
+        handleCancelOutlineTitleEdit();
+      }
       if (deletedSnapshots.length > 0) {
         pushHistoryEntry({
           kind: 'delete',
@@ -2305,7 +3416,7 @@ const KnowledgeBrocadeWorkspacePage = ({
     } finally {
       setActionId('');
     }
-  };
+  }, [activeBrocadeId, editingOutlineNodeId, handleCancelOutlineTitleEdit, nodes, onBrocadeMetaChange, pushHistoryEntry]);
 
   const handleUndo = useCallback(async () => {
     const entry = historyState.undoStack[historyState.undoStack.length - 1];
@@ -2314,23 +3425,26 @@ const KnowledgeBrocadeWorkspacePage = ({
     setErrorText('');
     try {
       if (entry.kind === 'move') {
+        const moveEntries = Array.isArray(entry.moves) && entry.moves.length > 0 ? entry.moves : [entry];
         setNodes((prev) => prev.map((item) => (
-          item?._id === entry.nodeId
-            ? {
-              ...item,
-              position: cloneNodePosition(entry.beforePosition),
-              parentNodeId: Object.prototype.hasOwnProperty.call(entry, 'beforeParentNodeId')
-                ? (entry.beforeParentNodeId || '')
-                : (item?.parentNodeId || '')
-            }
-            : item
+          moveEntries.reduce((currentItem, move) => (
+            currentItem?._id === move.nodeId
+              ? {
+                ...currentItem,
+                position: cloneNodePosition(move.beforePosition),
+                parentNodeId: Object.prototype.hasOwnProperty.call(move, 'beforeParentNodeId')
+                  ? (move.beforeParentNodeId || '')
+                  : (currentItem?.parentNodeId || '')
+              }
+              : currentItem
+          ), item)
         )));
-        await updateKnowledgeBrocadeNode(activeBrocadeId, entry.nodeId, {
-          position: cloneNodePosition(entry.beforePosition),
-          ...(Object.prototype.hasOwnProperty.call(entry, 'beforeParentNodeId')
-            ? { parentNodeId: entry.beforeParentNodeId || '' }
+        await Promise.all(moveEntries.map((move) => updateKnowledgeBrocadeNode(activeBrocadeId, move.nodeId, {
+          position: cloneNodePosition(move.beforePosition),
+          ...(Object.prototype.hasOwnProperty.call(move, 'beforeParentNodeId')
+            ? { parentNodeId: move.beforeParentNodeId || '' }
             : {})
-        });
+        })));
       } else if (entry.kind === 'create') {
         const data = await deleteKnowledgeBrocadeNode(activeBrocadeId, entry.nodeSnapshot._id);
         setNodes((prev) => prev.filter((item) => item?._id !== entry.nodeSnapshot._id));
@@ -2341,7 +3455,11 @@ const KnowledgeBrocadeWorkspacePage = ({
         }
       } else if (entry.kind === 'delete') {
         await restoreNodeSnapshots(entry.deletedSnapshots);
-        setSelectedNodeId(entry.rootNodeId || '');
+        const restoredRootIds = Array.isArray(entry.rootNodeIds) && entry.rootNodeIds.length > 0
+          ? entry.rootNodeIds
+          : [entry.rootNodeId].filter(Boolean);
+        setSelectedNodeId(restoredRootIds[0] || '');
+        setOutlineSelectedNodeIds(new Set(restoredRootIds));
       }
       setHistoryState((prev) => ({
         undoStack: prev.undoStack.slice(0, -1),
@@ -2362,34 +3480,45 @@ const KnowledgeBrocadeWorkspacePage = ({
     setErrorText('');
     try {
       if (entry.kind === 'move') {
+        const moveEntries = Array.isArray(entry.moves) && entry.moves.length > 0 ? entry.moves : [entry];
         setNodes((prev) => prev.map((item) => (
-          item?._id === entry.nodeId
-            ? {
-              ...item,
-              position: cloneNodePosition(entry.afterPosition),
-              parentNodeId: Object.prototype.hasOwnProperty.call(entry, 'afterParentNodeId')
-                ? (entry.afterParentNodeId || '')
-                : (item?.parentNodeId || '')
-            }
-            : item
+          moveEntries.reduce((currentItem, move) => (
+            currentItem?._id === move.nodeId
+              ? {
+                ...currentItem,
+                position: cloneNodePosition(move.afterPosition),
+                parentNodeId: Object.prototype.hasOwnProperty.call(move, 'afterParentNodeId')
+                  ? (move.afterParentNodeId || '')
+                  : (currentItem?.parentNodeId || '')
+              }
+              : currentItem
+          ), item)
         )));
-        await updateKnowledgeBrocadeNode(activeBrocadeId, entry.nodeId, {
-          position: cloneNodePosition(entry.afterPosition),
-          ...(Object.prototype.hasOwnProperty.call(entry, 'afterParentNodeId')
-            ? { parentNodeId: entry.afterParentNodeId || '' }
+        await Promise.all(moveEntries.map((move) => updateKnowledgeBrocadeNode(activeBrocadeId, move.nodeId, {
+          position: cloneNodePosition(move.afterPosition),
+          ...(Object.prototype.hasOwnProperty.call(move, 'afterParentNodeId')
+            ? { parentNodeId: move.afterParentNodeId || '' }
             : {})
-        });
+        })));
       } else if (entry.kind === 'create') {
         await restoreNodeSnapshots([entry.nodeSnapshot]);
         setSelectedNodeId(entry.nodeSnapshot._id || '');
       } else if (entry.kind === 'delete') {
-        const data = await deleteKnowledgeBrocadeNode(activeBrocadeId, entry.rootNodeId);
+        const deleteRootIds = Array.isArray(entry.rootNodeIds) && entry.rootNodeIds.length > 0
+          ? entry.rootNodeIds
+          : [entry.rootNodeId].filter(Boolean);
         const deletedIdSet = new Set(entry.deletedSnapshots.map((item) => item?._id).filter(Boolean));
+        let nextBrocade = null;
+        for (const rootNodeId of deleteRootIds) {
+          const data = await deleteKnowledgeBrocadeNode(activeBrocadeId, rootNodeId);
+          if (data?.brocade?._id) nextBrocade = data.brocade;
+        }
         setNodes((prev) => prev.filter((item) => !deletedIdSet.has(item?._id)));
         setSelectedNodeId((prev) => (prev && !deletedIdSet.has(prev) ? prev : ''));
-        if (data?.brocade?._id) {
-          setBrocade(data.brocade);
-          onBrocadeMetaChange?.(data.brocade);
+        setOutlineSelectedNodeIds((prev) => new Set(Array.from(prev).filter((nodeId) => !deletedIdSet.has(nodeId))));
+        if (nextBrocade?._id) {
+          setBrocade(nextBrocade);
+          onBrocadeMetaChange?.(nextBrocade);
         }
       }
       setHistoryState((prev) => ({
@@ -2403,6 +3532,118 @@ const KnowledgeBrocadeWorkspacePage = ({
       setHistoryActionId('');
     }
   }, [activeBrocadeId, historyActionId, historyState.redoStack, loadGraph, onBrocadeMetaChange, restoreNodeSnapshots]);
+
+  const handleOutlineKeyDown = useCallback((event) => {
+    if (viewMode !== VIEW_MODE.OUTLINE || editorOpen || createParentNode) return;
+    if (event.target?.closest?.('input, textarea')) return;
+    if (event.key === 'Enter' && !event.shiftKey) {
+      event.preventDefault();
+      event.stopPropagation();
+      void handleCreateOutlineSibling();
+      return;
+    }
+    if (event.key === 'Tab') {
+      event.preventDefault();
+      event.stopPropagation();
+      void handleOutlineLevelChange(event.shiftKey ? 'outdent' : 'indent');
+      return;
+    }
+    if (event.key === 'e' || event.key === 'E') {
+      event.preventDefault();
+      event.stopPropagation();
+      openNodeEditor(selectedNodeId);
+      return;
+    }
+    if (event.key === 'Delete' || event.key === 'Backspace') {
+      if (selectedNode && !selectedNode.isRoot) {
+        event.preventDefault();
+        event.stopPropagation();
+        void handleDeleteNode(selectedNode);
+      }
+      return;
+    }
+    if (event.key === 'Escape') {
+      event.preventDefault();
+      event.stopPropagation();
+      handleSetViewMode(VIEW_MODE.TREE);
+    }
+  }, [createParentNode, editorOpen, handleCreateOutlineSibling, handleDeleteNode, handleOutlineLevelChange, handleSetViewMode, openNodeEditor, selectedNode, selectedNodeId, viewMode]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return undefined;
+
+    const handleKeyDown = (event) => {
+      if (event.target.tagName === 'TEXTAREA' || event.target.tagName === 'INPUT') {
+        return;
+      }
+      if (viewMode === VIEW_MODE.OUTLINE) {
+        return;
+      }
+
+      const isMac = navigator.platform.toUpperCase().indexOf('MAC') >= 0;
+      const cmdKey = isMac ? event.metaKey : event.ctrlKey;
+      if (cmdKey && event.key === 'f') {
+        event.preventDefault();
+        setSearchOpen(true);
+        return;
+      }
+      if (cmdKey && !event.shiftKey && event.key === 'z') {
+        event.preventDefault();
+        if (canUndo) handleUndo();
+        return;
+      }
+      if ((cmdKey && event.shiftKey && event.key === 'z') || (cmdKey && event.key === 'y')) {
+        event.preventDefault();
+        if (canRedo) handleRedo();
+        return;
+      }
+      if (event.key === 'Tab' || (event.key === 'Enter' && !event.shiftKey)) {
+        if (selectedNodeId && !createParentNode) {
+          event.preventDefault();
+          const nodeToAddChild = nodesById.get(selectedNodeId);
+          if (nodeToAddChild) setCreateParentNode(nodeToAddChild);
+        }
+        return;
+      }
+      if (event.key === 'e' || event.key === 'E') {
+        if (selectedNodeId && !editorOpen) {
+          event.preventDefault();
+          setEditorOpen(true);
+        }
+        return;
+      }
+      if (event.key === 'Delete' || event.key === 'Backspace') {
+        if (selectedNodeId && selectedNode && !selectedNode.isRoot) {
+          event.preventDefault();
+          void handleDeleteNode(selectedNode);
+        }
+        return;
+      }
+      if (event.key === ' ') {
+        if (selectedNodeId && childCountByNodeId.get(selectedNodeId) > 0) {
+          event.preventDefault();
+          setCollapsedNodeIds((prev) => {
+            const next = new Set(prev);
+            if (next.has(selectedNodeId)) next.delete(selectedNodeId);
+            else next.add(selectedNodeId);
+            return next;
+          });
+        }
+        return;
+      }
+      if (event.key === 'Escape') {
+        if (searchOpen) { setSearchOpen(false); return; }
+        if (shortcutsOpen) { setShortcutsOpen(false); return; }
+        if (editorOpen) { setEditorOpen(false); return; }
+        if (textPreviewOpen) { setTextPreviewOpen(false); return; }
+        if (createParentNode) { setCreateParentNode(null); return; }
+        if (selectedNodeId) { setSelectedNodeId(''); return; }
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [canRedo, canUndo, childCountByNodeId, createParentNode, editorOpen, handleDeleteNode, handleRedo, handleUndo, nodesById, searchOpen, selectedNode, selectedNodeId, shortcutsOpen, textPreviewOpen, viewMode]);
 
   if (!activeBrocadeId) {
     return (
@@ -2418,6 +3659,11 @@ const KnowledgeBrocadeWorkspacePage = ({
 
   return (
     <div className={`jinzhi-workspace-page theme-${canvasTheme}`}>
+      {toastText ? (
+        <div className="jinzhi-workspace-page__toast" role="status" aria-live="polite">
+          {toastText}
+        </div>
+      ) : null}
       <header className="jinzhi-workspace-page__header">
         <div className="jinzhi-workspace-page__title">
           <button type="button" className="jinzhi-back-btn" onClick={onBack}>
@@ -2621,14 +3867,24 @@ const KnowledgeBrocadeWorkspacePage = ({
               )}
             </div>
             <div className="jinzhi-workspace-page__canvas-toolbar-actions">
-              <button
-                type="button"
-                className="jinzhi-canvas-toolbar-btn"
-                onClick={() => setOutlineOpen(true)}
-              >
-                <Network size={14} />
-                大纲视图
-              </button>
+              <div className="jinzhi-view-mode-switch" role="group" aria-label="知识锦视图模式">
+                <button
+                  type="button"
+                  className={`jinzhi-canvas-toolbar-btn${viewMode === VIEW_MODE.TREE ? ' is-active' : ''}`}
+                  onClick={() => handleSetViewMode(VIEW_MODE.TREE)}
+                >
+                  <Network size={14} />
+                  树视图
+                </button>
+                <button
+                  type="button"
+                  className={`jinzhi-canvas-toolbar-btn${viewMode === VIEW_MODE.OUTLINE ? ' is-active' : ''}`}
+                  onClick={() => handleSetViewMode(VIEW_MODE.OUTLINE)}
+                >
+                  <FileText size={14} />
+                  大纲视图
+                </button>
+              </div>
               <button
                 type="button"
                 className="jinzhi-canvas-toolbar-btn"
@@ -2643,16 +3899,55 @@ const KnowledgeBrocadeWorkspacePage = ({
             </div>
           </div>
 
-          <div
-            ref={scrollRef}
-            className={`jinzhi-graph-scroll${isPanning ? ' is-panning' : ''}`}
-            onPointerDown={handleCanvasPointerDown}
-            onWheel={handleGraphWheel}
-            onTouchStart={handleGraphTouchStart}
-            onTouchMove={handleGraphTouchMove}
-            onTouchEnd={handleGraphTouchEnd}
-            onTouchCancel={handleGraphTouchEnd}
-          >
+          {viewMode === VIEW_MODE.OUTLINE ? (
+            <div className="jinzhi-outline-view" onKeyDown={handleOutlineKeyDown}>
+              <section className="jinzhi-outline-view__tree-panel">
+                <div className="jinzhi-outline-view__panel-header">
+                  <div>
+                    <div className="jinzhi-outline-view__eyebrow">Outline</div>
+                    <h2>节点大纲</h2>
+                  </div>
+                  <div className="jinzhi-outline-view__panel-count">{nodes.length} 个节点</div>
+                </div>
+                <div className="jinzhi-outline-view__hint">单击切换选中 · 单击标题改名 · ↑ / ↓ 切换节点 · 拖拽右侧手柄移动或改归属 · Enter 新建兄弟</div>
+                <BrocadeOutlineTreeView
+                  nodes={nodes}
+                  activeNodeId={selectedNodeId}
+                  selectedNodeIds={outlineSelectedNodeIds}
+                  onSelect={handleSelectOutlineNode}
+                  onLassoSelect={handleLassoOutlineSelection}
+                  editingNodeId={editingOutlineNodeId}
+                  editingTitle={outlineTitleDraft}
+                  onStartTitleEdit={handleStartOutlineTitleEdit}
+                  onChangeTitle={setOutlineTitleDraft}
+                  onCommitTitle={handleCommitOutlineTitle}
+                  onCancelTitle={handleCancelOutlineTitleEdit}
+                  onConfirmTitleAndCreateSibling={handleConfirmOutlineTitleAndCreateSibling}
+                  onNavigate={handleSelectOutlineNode}
+                  onCreateSibling={handleCreateOutlineSibling}
+                  onRequestDelete={handleOpenOutlineDeleteDialog}
+                  onMoveNode={handleMoveOutlineNode}
+                />
+              </section>
+              <BrocadeOutlineContentPanel
+                node={selectedNode}
+                selectedCount={outlineSelectedNodeIds.size}
+                childCount={selectedNode ? (childCountByNodeId.get(selectedNode._id) || 0) : 0}
+                onDelete={() => handleDeleteNode(selectedNode)}
+              />
+            </div>
+          ) : (
+            <>
+            <div
+              ref={scrollRef}
+              className={`jinzhi-graph-scroll${isPanning ? ' is-panning' : ''}`}
+              onPointerDown={handleCanvasPointerDown}
+              onWheel={handleGraphWheel}
+              onTouchStart={handleGraphTouchStart}
+              onTouchMove={handleGraphTouchMove}
+              onTouchEnd={handleGraphTouchEnd}
+              onTouchCancel={handleGraphTouchEnd}
+            >
             <div
               className="jinzhi-graph-stage-shell"
               style={{
@@ -2781,6 +4076,7 @@ const KnowledgeBrocadeWorkspacePage = ({
                   const nodeShape = normalizeNodeShape(node?.shape);
                   const childCount = childCountByNodeId.get(node?._id) || 0;
                   const isCollapsed = collapsedNodeIds.has(node?._id);
+                  const nodeTitleText = normalizeNodeTitle(node?.title, '');
                   const nodeBodyText = getNodeBodyContentText(node);
                   return (
                     <article
@@ -2793,68 +4089,45 @@ const KnowledgeBrocadeWorkspacePage = ({
                         height: `${nodeSize.height}px`
                       }}
                       onClick={(event) => {
+                        if (Date.now() < suppressInspectorOpenUntilRef.current) return;
+                        setOutlineSelectedNodeIds(new Set());
                         openNodeInspector(node?._id || '', event);
-                        // 单击时自动聚焦到节点位置
                         if (node?._id && node?._id !== selectedNodeId) {
                           centerNodeInViewport(scrollRef, node, canvasMetrics, zoomRef.current);
                           lastAutoCenteredNodeIdRef.current = node?._id;
                         }
                       }}
                       onDoubleClick={(event) => {
-                        openNodeInspector(node?._id || '', event);
-                        setEditorOpen(true);
+                        event.preventDefault();
+                        event.stopPropagation();
+                        openNodeEditor(node?._id || '');
                       }}
                     >
                       <div
                         className="jinzhi-node-card__drag"
-                        onPointerDown={(event) => {
-                          if (event.button !== 0) return;
-                          event.preventDefault();
-                          event.stopPropagation();
-                          if (typeof window !== 'undefined' && typeof window.getSelection === 'function') {
-                            const selection = window.getSelection();
-                            if (selection && selection.rangeCount > 0) {
-                              selection.removeAllRanges();
-                            }
-                          }
-                          dragRef.current = {
-                            nodeId: node?._id,
-                            startX: event.clientX,
-                            startY: event.clientY,
-                            originX: Number(node?.position?.x) || 0,
-                            originY: Number(node?.position?.y) || 0,
-                            originParentNodeId: node?.parentNodeId || '',
-                            nodeSize,
-                            previewParentNodeId: '',
-                            originScrollLeft: scrollRef.current?.scrollLeft || 0,
-                            originScrollTop: scrollRef.current?.scrollTop || 0,
-                            lastScrollLeft: scrollRef.current?.scrollLeft || 0,
-                            lastScrollTop: scrollRef.current?.scrollTop || 0,
-                            pointerId: event.pointerId,
-                            target: event.currentTarget
-                          };
-                          setDraggingNodeId(node?._id || '');
-                          setDragReparentPreview(null);
-                          event.currentTarget.setPointerCapture?.(event.pointerId);
-                        }}
+                        onPointerDown={(event) => startNodeDrag(event, node)}
                       >
-                        <div
-                          className="jinzhi-node-card__title"
-                          style={{
-                            fontSize: `${Math.min(1.52, textCounterScale * 1.1)}rem`,
-                            lineHeight: 1.18
-                          }}
-                        >
-                          {node?.title || '未命名节点'}
-                        </div>
-                        <div
-                          className="jinzhi-node-card__preview"
-                          style={{
-                            fontSize: `${0.84 * previewCounterScale}rem`
-                          }}
-                        >
-                          {nodeBodyText.trim() ? nodeBodyText : '点击编辑，写下你的知识内容。'}
-                        </div>
+                        {nodeTitleText ? (
+                          <div
+                            className="jinzhi-node-card__title"
+                            style={{
+                              fontSize: `${Math.min(1.52, textCounterScale * 1.1)}rem`,
+                              lineHeight: 1.18
+                            }}
+                          >
+                            {nodeTitleText}
+                          </div>
+                        ) : null}
+                        {nodeBodyText.trim() ? (
+                          <div
+                            className="jinzhi-node-card__preview"
+                            style={{
+                              fontSize: `${0.84 * previewCounterScale}rem`
+                            }}
+                          >
+                            {nodeBodyText}
+                          </div>
+                        ) : null}
                       </div>
                       <div className="jinzhi-node-card__actions">
                         {/* 底部工具栏 - hover 时显示 */}
@@ -2920,9 +4193,9 @@ const KnowledgeBrocadeWorkspacePage = ({
                         <button
                           type="button"
                           key={`${node?._id || 'node'}-${direction}`}
-                          className={`jinzhi-node-card__resize-zone jinzhi-node-card__resize-zone--${direction}`}
+                          className={`jinzhi-node-card__resize-zone jinzhi-node-card__resize-zone--${direction}${isSelected ? '' : ' is-move-zone'}`}
                           tabIndex={-1}
-                          aria-label="拖拽调整卡片大小"
+                          aria-label={isSelected ? '拖拽调整卡片大小' : '拖拽移动卡片'}
                           onClick={(event) => event.stopPropagation()}
                           onDoubleClick={(event) => event.stopPropagation()}
                           onPointerDown={(event) => startNodeResize(event, node, nodeSize, direction)}
@@ -2952,7 +4225,7 @@ const KnowledgeBrocadeWorkspacePage = ({
               <div className="jinzhi-floating-inspector__header">
                 <div>
                   <div className="jinzhi-inspector__eyebrow">Node Inspector</div>
-                  <h2>{selectedNode?.title || '未命名节点'}</h2>
+                  <h2>{normalizeNodeTitle(selectedNode?.title, '')}</h2>
                 </div>
                 <button
                   type="button"
@@ -2990,10 +4263,12 @@ const KnowledgeBrocadeWorkspacePage = ({
               </div>
               <div className="jinzhi-inspector__tip">移动节点时直接拖拽卡片即可。创建的节点和已有节点都支持单独星标。</div>
               <div className="jinzhi-inspector__content">
-                {selectedNode?.contentText || '当前节点还没有内容。'}
+                {getNodeBodyContentText(selectedNode) || null}
               </div>
             </div>
           ) : null}
+          </>
+          )}
         </section>
       </div>
 
@@ -3008,18 +4283,16 @@ const KnowledgeBrocadeWorkspacePage = ({
       <NodeCreateModal
         open={Boolean(createParentNode)}
         parentNode={createParentNode}
-        nodes={nodes}
         saving={Boolean(createParentNode?._id) && actionId === `create:${createParentNode._id}`}
         onClose={() => setCreateParentNode(null)}
         onSubmit={submitCreateChild}
       />
-      <BrocadeOutlineModal
-        open={outlineOpen}
-        brocadeName={brocade?.name || initialBrocadeName || '知识锦大纲'}
-        nodes={nodes}
-        activeNodeId={selectedNodeId}
-        onClose={() => setOutlineOpen(false)}
-        onJump={handleJumpToOutlineNode}
+      <BrocadeOutlineDeleteConfirmModal
+        open={Boolean(outlineDeleteDialog)}
+        nodes={outlineDeleteDialogNodes}
+        saving={actionId === 'delete:outline'}
+        onClose={() => setOutlineDeleteDialog(null)}
+        onConfirm={handleConfirmOutlineDelete}
       />
       <BrocadeTextPreviewModal
         open={textPreviewOpen}

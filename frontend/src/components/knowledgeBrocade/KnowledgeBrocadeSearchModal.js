@@ -194,7 +194,7 @@ const SearchModal = ({
                 >
                   <div className="jinzhi-search-result-item__title">
                     {node.isRoot && <span className="jinzhi-search-result-item__root-badge">根</span>}
-                    {highlightMatch(node.title || '未命名节点', query)}
+                    {highlightMatch(node.title || '', query)}
                   </div>
                   {node.previewText && (
                     <div className="jinzhi-search-result-item__preview">

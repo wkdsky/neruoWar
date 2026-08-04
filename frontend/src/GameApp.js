@@ -55,6 +55,7 @@ import {
 import useNotificationCenter from './hooks/useNotificationCenter';
 import useAppShellState from './hooks/useAppShellState';
 import useChatCenter from './hooks/useChatCenter';
+import { areJsonValuesEqual } from './hooks/app/visibilityPolling';
 import { UserCardProvider } from './components/social/UserCardContext';
 import {
     DEFAULT_STAR_MAP_LIMIT,
@@ -655,7 +656,9 @@ const App = () => {
       const normalizedTravel = (nextTravel && typeof nextTravel === 'object')
         ? nextTravel
         : { isTraveling: false };
-      setTravelStatus(normalizedTravel);
+      setTravelStatus((previous) => (
+        areJsonValuesEqual(previous, normalizedTravel) ? previous : normalizedTravel
+      ));
       travelStatusRef.current = {
         isTraveling: !!normalizedTravel.isTraveling,
         isStopping: !!normalizedTravel.isStopping
@@ -964,6 +967,11 @@ const App = () => {
         if (!sceneManagerRef.current || !isWebGLReady) return;
         sceneManagerRef.current.setUserState(userLocation, travelStatus);
     }, [isWebGLReady, userLocation, travelStatus]);
+
+    useEffect(() => {
+        if (!sceneManagerRef.current || !isWebGLReady) return;
+        sceneManagerRef.current.setRenderEnabled(!(showKnowledgeDomain && !isTransitioningToDomain));
+    }, [isTransitioningToDomain, isWebGLReady, showKnowledgeDomain]);
 
   const parseApiResponse = useCallback(async (response) => {
     const rawText = await response.text();

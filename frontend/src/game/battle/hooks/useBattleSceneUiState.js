@@ -52,7 +52,6 @@ const useBattleSceneUiState = () => {
   const [templateFillPreview, setTemplateFillPreview] = useState(createDefaultTemplateFillPreview);
   const [showMidlineDebug, setShowMidlineDebug] = useState(true);
   const [isPanning, setIsPanning] = useState(false);
-  const [mapDialCommand, setMapDialCommand] = useState('');
 
   const deployDraggingGroupId = String(deployDraggingGroup?.groupId || '');
   const deployDraggingTeam = deployDraggingGroup?.team === TEAM_DEFENDER ? TEAM_DEFENDER : TEAM_ATTACKER;
@@ -130,8 +129,6 @@ const useBattleSceneUiState = () => {
     setShowMidlineDebug,
     isPanning,
     setIsPanning,
-    mapDialCommand,
-    setMapDialCommand,
     deployDraggingGroupId,
     deployDraggingTeam
   };

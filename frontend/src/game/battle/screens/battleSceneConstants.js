@@ -7,7 +7,7 @@ export const SPEED_MODE_C = 'C_PER_TYPE';
 export const SPEED_MODE_AUTO = 'AUTO';
 
 export const CAMERA_ZOOM_STEP = 72;
-export const CAMERA_DISTANCE_MIN = 360;
+export const CAMERA_DISTANCE_MIN = 420;
 export const CAMERA_DISTANCE_MAX = 980;
 
 export const DEPLOY_ROTATE_SENSITIVITY = 0.28;
@@ -18,7 +18,7 @@ export const DEPLOY_DEFAULT_YAW_DEG = 0;
 export const DEPLOY_DEFAULT_WORLD_YAW_DEG = 0;
 export const DEPLOY_PITCH_DEG = 40;
 
-export const BATTLE_PITCH_LOW_DEG = 40;
+export const BATTLE_PITCH_LOW_DEG = 32;
 export const BATTLE_PITCH_HIGH_DEG = 90;
 export const BATTLE_FOLLOW_YAW_DEG = 0;
 export const BATTLE_FOLLOW_WORLD_YAW_DEG = 0;
