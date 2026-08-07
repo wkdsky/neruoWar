@@ -134,6 +134,7 @@ export default class BattleSnapshotBuilder {
       let previewCount = 0;
       const fillPreviewGroup = (group, teamTag, selected) => {
         if (!group) return;
+        if (group.placed === false && !group.placementActive) return;
         runtime.hydrateDeployGroupFormation(group, teamTag);
         const unitsMap = normalizeUnitsMap(group.units || {});
         const total = Math.max(1, sumUnitsMap(unitsMap));
@@ -141,7 +142,9 @@ export default class BattleSnapshotBuilder {
           .map(([unitTypeId, count]) => ({ unitTypeId, count: Math.max(0, Number(count) || 0) }))
           .filter((row) => row.unitTypeId && row.count > 0);
         if (typeRows.length <= 0) return;
-        const slots = Array.isArray(group.deploySlots) && group.deploySlots.length > 0
+
+        const showFullFormation = group.placed !== false || runtime.canDeployGroupFitAt?.(group.id, group, teamTag) === true;
+        const slots = showFullFormation && Array.isArray(group.deploySlots) && group.deploySlots.length > 0
           ? group.deploySlots
           : [{ side: 0, front: 0 }];
         const slotCount = Math.max(1, slots.length);
@@ -161,12 +164,14 @@ export default class BattleSnapshotBuilder {
           const visual = runtime.visualConfig(pickedTypeId, classTag);
           const isFlying = !!runtime.unitTypeMap.get(pickedTypeId)?.isFlying;
           const world = rotateFormationSlot(group, slot);
-          const representedWeight = Math.max(1, total / slotCount);
+          const representedWeight = showFullFormation ? Math.max(1, total / slotCount) : total;
           const base = previewCount * unitsSchema.stride;
           units.data[base + 0] = Number(world.x) || 0;
           units.data[base + 1] = Number(world.y) || 0;
           units.data[base + 2] = isFlying ? 8.5 : 0;
-          units.data[base + 3] = Math.max(2.5, Math.min(9.5, Math.sqrt(representedWeight) * 0.82));
+          units.data[base + 3] = showFullFormation
+            ? Math.max(2.5, Math.min(9.5, Math.sqrt(representedWeight) * 0.82))
+            : Math.max(5.5, Math.min(11.5, 3.8 + (Math.sqrt(representedWeight) * 0.52)));
           units.data[base + 4] = Number(world.yaw) || (teamTag === TEAM_ATTACKER ? 0 : Math.PI);
           units.data[base + 5] = teamTag === TEAM_ATTACKER ? 0 : 1;
           units.data[base + 6] = 1;
@@ -176,7 +181,7 @@ export default class BattleSnapshotBuilder {
           units.data[base + 10] = visual.silhouetteIndex || 0;
           units.data[base + 11] = Number.isFinite(Number(visual.tint)) ? Number(visual.tint) : 1;
           units.data[base + 12] = selected ? 1 : 0;
-          units.data[base + 13] = slotIndex === 0 ? 1 : 0;
+          units.data[base + 13] = !showFullFormation || slotIndex === 0 ? 1 : 0;
           units.data[base + 14] = 1;
           units.data[base + 15] = 0;
           units.data[base + 16] = visual.bodyTopIndex;

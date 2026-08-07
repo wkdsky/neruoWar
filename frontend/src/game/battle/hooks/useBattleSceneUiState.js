@@ -6,9 +6,7 @@ import {
   createDefaultAimState,
   createDefaultConfirmDeletePos,
   createDefaultDeployDraggingGroup,
-  createDefaultDeployEditorDraft,
   createDefaultDeployInfoState,
-  createDefaultDeployQuantityDialog,
   createDefaultPopupPos,
   createDefaultQuickDeployRandomForm,
   createDefaultResultState,
@@ -31,15 +29,9 @@ const useBattleSceneUiState = () => {
   const [marchPopupPos, setMarchPopupPos] = useState(createDefaultPopupPos);
   const [selectedSquadId, setSelectedSquadId] = useState('');
   const [resultState, setResultState] = useState(createDefaultResultState);
-  const [deployEditorOpen, setDeployEditorOpen] = useState(false);
-  const [deployEditingGroupId, setDeployEditingGroupId] = useState('');
-  const [deployEditorDraft, setDeployEditorDraft] = useState(createDefaultDeployEditorDraft);
-  const [deployQuantityDialog, setDeployQuantityDialog] = useState(createDefaultDeployQuantityDialog);
   const [deployDraggingGroup, setDeployDraggingGroup] = useState(createDefaultDeployDraggingGroup);
   const [deployActionAnchorMode, setDeployActionAnchorMode] = useState('');
   const [deployNotice, setDeployNotice] = useState('');
-  const [deployEditorDragUnitId, setDeployEditorDragUnitId] = useState('');
-  const [deployEditorTeam, setDeployEditorTeam] = useState(TEAM_ATTACKER);
   const [selectedPaletteItemId, setSelectedPaletteItemId] = useState('');
   const [confirmDeleteGroupId, setConfirmDeleteGroupId] = useState('');
   const [confirmDeletePos, setConfirmDeletePos] = useState(createDefaultConfirmDeletePos);
@@ -87,24 +79,12 @@ const useBattleSceneUiState = () => {
     setSelectedSquadId,
     resultState,
     setResultState,
-    deployEditorOpen,
-    setDeployEditorOpen,
-    deployEditingGroupId,
-    setDeployEditingGroupId,
-    deployEditorDraft,
-    setDeployEditorDraft,
-    deployQuantityDialog,
-    setDeployQuantityDialog,
     deployDraggingGroup,
     setDeployDraggingGroup,
     deployActionAnchorMode,
     setDeployActionAnchorMode,
     deployNotice,
     setDeployNotice,
-    deployEditorDragUnitId,
-    setDeployEditorDragUnitId,
-    deployEditorTeam,
-    setDeployEditorTeam,
     selectedPaletteItemId,
     setSelectedPaletteItemId,
     confirmDeleteGroupId,

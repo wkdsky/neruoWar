@@ -4,6 +4,8 @@ const buildBattleEndpoint = (path = '') => `${API_BASE}${path}`;
 
 const ENDPOINTS = {
   armyTemplates: () => buildBattleEndpoint('/army/templates'),
+  armyTemplate: (templateId) => buildBattleEndpoint(`/army/templates/${encodeURIComponent(templateId)}`),
+  trainingArmies: () => buildBattleEndpoint('/army/training/armies'),
   pveBattleInit: ({ nodeId, gateKey }) => buildBattleEndpoint(`/nodes/${encodeURIComponent(nodeId)}/siege/pve/battle-init?gateKey=${encodeURIComponent(gateKey)}`),
   pveBattleResult: ({ nodeId }) => buildBattleEndpoint(`/nodes/${encodeURIComponent(nodeId)}/siege/pve/battle-result`),
   battlefieldLayoutGet: ({ nodeId, gateKey, layoutId = '' }) => {
@@ -69,6 +71,21 @@ const BattleDataService = {
   ENDPOINTS,
   getArmyTemplates: ({ signal } = {}) => (
     requestJson(ENDPOINTS.armyTemplates(), { method: 'GET', signal, auth: true })
+  ),
+  createArmyTemplate: ({ payload, signal } = {}) => (
+    requestJson(ENDPOINTS.armyTemplates(), { method: 'POST', body: payload, signal, auth: true })
+  ),
+  updateArmyTemplate: ({ templateId, payload, signal } = {}) => (
+    requestJson(ENDPOINTS.armyTemplate(templateId), { method: 'PUT', body: payload, signal, auth: true })
+  ),
+  deleteArmyTemplate: ({ templateId, signal } = {}) => (
+    requestJson(ENDPOINTS.armyTemplate(templateId), { method: 'DELETE', signal, auth: true })
+  ),
+  getTrainingArmies: ({ signal } = {}) => (
+    requestJson(ENDPOINTS.trainingArmies(), { method: 'GET', signal, auth: true })
+  ),
+  saveTrainingArmies: ({ armies, signal } = {}) => (
+    requestJson(ENDPOINTS.trainingArmies(), { method: 'PUT', body: { armies }, signal, auth: true })
   ),
   getPveBattleInit: ({ nodeId, gateKey, signal } = {}) => (
     requestJson(ENDPOINTS.pveBattleInit({ nodeId, gateKey }), { method: 'GET', signal, auth: true })

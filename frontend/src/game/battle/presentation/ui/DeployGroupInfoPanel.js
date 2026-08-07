@@ -1,5 +1,11 @@
 import React, { useEffect, useMemo, useState } from 'react';
+import { Ban } from 'lucide-react';
 import useDraggablePanel from './useDraggablePanel';
+import {
+  resolveEffectiveSkillSlots,
+  SKILL_TREE_CATEGORY_LABELS,
+  getSkillById
+} from '../../../../components/game/skillTree/skillTreeData';
 
 const formatNumber = (value, digits = 1) => {
   const safe = Number(value);
@@ -11,6 +17,7 @@ const DeployGroupInfoPanel = ({
   open = false,
   info = null,
   position = { x: 0, y: 0 },
+  isTrainingMode = false,
   onClose = null
 }) => {
   const [selectedSkillTag, setSelectedSkillTag] = useState('');
@@ -20,11 +27,19 @@ const DeployGroupInfoPanel = ({
       setSelectedSkillTag('');
       return;
     }
+    if (isTrainingMode) {
+      const slots = resolveEffectiveSkillSlots(info.skillSlots || []);
+      const hasSelectedSlot = slots.some((slot) => `slot-${slot.slotIndex}` === selectedSkillTag);
+      if (hasSelectedSlot) return;
+      const firstSlot = slots.find((slot) => slot.skillId) || slots[0];
+      setSelectedSkillTag(firstSlot ? `slot-${firstSlot.slotIndex}` : '');
+      return;
+    }
     const hasSelected = (Array.isArray(info.skills) ? info.skills : []).some((skill) => skill?.classTag === selectedSkillTag);
     if (hasSelected) return;
     const firstSkillTag = info.skills?.[0]?.classTag || '';
     setSelectedSkillTag(firstSkillTag);
-  }, [info, open, selectedSkillTag]);
+  }, [info, isTrainingMode, open, selectedSkillTag]);
 
   useEffect(() => {
     if (!open) return undefined;
@@ -45,6 +60,18 @@ const DeployGroupInfoPanel = ({
     if (!info || !Array.isArray(info.skills)) return null;
     return info.skills.find((skill) => skill?.classTag === selectedSkillTag) || info.skills[0] || null;
   }, [info, selectedSkillTag]);
+
+  const configuredSkillSlots = useMemo(
+    () => resolveEffectiveSkillSlots(info?.skillSlots || []),
+    [info?.skillSlots]
+  );
+  const selectedConfiguredSlot = configuredSkillSlots.find((slot) => `slot-${slot.slotIndex}` === selectedSkillTag)
+    || configuredSkillSlots.find((slot) => slot.skillId)
+    || configuredSkillSlots[0]
+    || null;
+  const selectedConfiguredSkill = selectedConfiguredSlot?.skillId
+    ? getSkillById(selectedConfiguredSlot.treeCategory, selectedConfiguredSlot.skillId)
+    : null;
 
   const initialPanelPosition = useMemo(() => ({
     x: (Number(position?.x) || 120) + 14,
@@ -85,7 +112,8 @@ const DeployGroupInfoPanel = ({
         </button>
       </div>
 
-      <div className="pve2-deploy-info-section">
+      <div className="pve2-deploy-info-body">
+        <div className="pve2-deploy-info-section">
         <h4>兵种占比</h4>
         <div className="pve2-deploy-info-rows">
           {(Array.isArray(info.composition) ? info.composition : []).map((row) => (
@@ -95,40 +123,72 @@ const DeployGroupInfoPanel = ({
             </div>
           ))}
         </div>
-      </div>
-
-      <div className="pve2-deploy-info-section">
-        <h4>可发动技能</h4>
-        <div className="pve2-deploy-skill-list">
-          {(Array.isArray(info.skills) ? info.skills : []).map((skill) => (
-            <button
-              key={skill.id}
-              type="button"
-              className={`pve2-deploy-skill-btn ${selectedSkill?.classTag === skill.classTag ? 'is-active' : ''}`}
-              onClick={() => setSelectedSkillTag(skill.classTag)}
-            >
-              <strong>{skill.name || '技能'}</strong>
-              <span>{`${Math.max(0, Math.floor(Number(skill.count) || 0))}人`}</span>
-            </button>
-          ))}
         </div>
-        {selectedSkill ? (
-          <div className="pve2-deploy-skill-detail">
-            <p>{selectedSkill.description || '暂无描述'}</p>
-            <div className="pve2-deploy-skill-power">{`当前威力：${formatNumber(selectedSkill?.power?.score, 1)}（${selectedSkill?.power?.unit || '估值'}）`}</div>
-            <div className="pve2-deploy-skill-meta">{`公式：${selectedSkill?.power?.formula || '-'}`}</div>
-            {(Array.isArray(selectedSkill?.power?.details) ? selectedSkill.power.details : []).map((detail, index) => (
-              <div key={`${selectedSkill.id}-detail-${index}`} className="pve2-deploy-skill-meta">{detail}</div>
-            ))}
-          </div>
-        ) : (
-          <div className="pve2-deploy-skill-detail">
-            <p>当前无可发动技能</p>
-          </div>
-        )}
-      </div>
 
-      <div className="pve2-deploy-info-section">
+        <div className="pve2-deploy-info-section">
+        <h4>{isTrainingMode ? '已配置技能' : '可发动技能'}</h4>
+        {isTrainingMode ? (
+          <>
+            <div className="pve2-deploy-skill-list">
+              {configuredSkillSlots.map((slot) => {
+                const skill = slot.skillId ? getSkillById(slot.treeCategory, slot.skillId) : null;
+                return (
+                  <button
+                    key={`configured-info-skill-${slot.slotIndex}`}
+                    type="button"
+                    className={`pve2-deploy-skill-btn ${selectedConfiguredSlot?.slotIndex === slot.slotIndex ? 'is-active' : ''}`}
+                    onClick={() => setSelectedSkillTag(`slot-${slot.slotIndex}`)}
+                  >
+                    <strong>{slot.conflict ? <><Ban size={13} aria-hidden="true" /> 技能冲突</> : (skill?.name || '空白技能位')}</strong>
+                    <span>{SKILL_TREE_CATEGORY_LABELS[slot.treeCategory] || '未选择技能树'}</span>
+                  </button>
+                );
+              })}
+            </div>
+            <div className="pve2-deploy-skill-detail">
+              <p>{selectedConfiguredSkill?.description || '该槽位尚未配置技能。'}</p>
+              {selectedConfiguredSkill ? (
+                <>
+                  <div className="pve2-deploy-skill-power">{`${selectedConfiguredSkill.powerLabel}：${selectedConfiguredSkill.power}`}</div>
+                  <div className="pve2-deploy-skill-meta">{`冷却 ${selectedConfiguredSkill.cooldown} ｜ 范围 ${selectedConfiguredSkill.range} ｜ 持续 ${selectedConfiguredSkill.duration}`}</div>
+                </>
+              ) : null}
+            </div>
+          </>
+        ) : (
+          <>
+            <div className="pve2-deploy-skill-list">
+              {(Array.isArray(info.skills) ? info.skills : []).map((skill) => (
+                <button
+                  key={skill.id}
+                  type="button"
+                  className={`pve2-deploy-skill-btn ${selectedSkill?.classTag === skill.classTag ? 'is-active' : ''}`}
+                  onClick={() => setSelectedSkillTag(skill.classTag)}
+                >
+                  <strong>{skill.name || '技能'}</strong>
+                  <span>{`${Math.max(0, Math.floor(Number(skill.count) || 0))}人`}</span>
+                </button>
+              ))}
+            </div>
+            {selectedSkill ? (
+              <div className="pve2-deploy-skill-detail">
+                <p>{selectedSkill.description || '暂无描述'}</p>
+                <div className="pve2-deploy-skill-power">{`当前威力：${formatNumber(selectedSkill?.power?.score, 1)}（${selectedSkill?.power?.unit || '估值'}）`}</div>
+                <div className="pve2-deploy-skill-meta">{`公式：${selectedSkill?.power?.formula || '-'}`}</div>
+                {(Array.isArray(selectedSkill?.power?.details) ? selectedSkill.power.details : []).map((detail, index) => (
+                  <div key={`${selectedSkill.id}-detail-${index}`} className="pve2-deploy-skill-meta">{detail}</div>
+                ))}
+              </div>
+            ) : (
+              <div className="pve2-deploy-skill-detail">
+                <p>当前无可发动技能</p>
+              </div>
+            )}
+          </>
+        )}
+        </div>
+
+        <div className="pve2-deploy-info-section">
         <h4>部队属性</h4>
         <div className="pve2-deploy-info-rows">
           <div className="pve2-deploy-info-row">
@@ -151,6 +211,7 @@ const DeployGroupInfoPanel = ({
             <span>攻击方式</span>
             <em>{Array.isArray(info?.attack?.modes) && info.attack.modes.length > 0 ? info.attack.modes.join(' / ') : '近'}</em>
           </div>
+        </div>
         </div>
       </div>
     </div>

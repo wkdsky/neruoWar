@@ -84,7 +84,7 @@
   - 注册/登录/布局读写时懒初始化补齐缺失项
   - 默认 `count=5`
 - `backend/routes/nodes.js`：保存布局按用户库存校验数量
-- `backend/routes/army.js`：训练场继续使用无限（`MAX_TEMPLATE_UNIT_COUNT`）
+- `backend/routes/army.js`：训练场兵种库存使用 `TRAINING_MAX_GROUP_TOTAL`；设置物库存仍按设置物目录配置
 
 ## 6. catalog 截断
 

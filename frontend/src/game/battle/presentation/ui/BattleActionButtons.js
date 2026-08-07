@@ -19,7 +19,8 @@ const BattleActionButtons = ({
   mode = 'world',
   skills = [],
   showSkills = false,
-  onSkillPick = null
+  onSkillPick = null,
+  isTrainingMode = false
 }) => {
   const anchorPos = useMemo(() => {
     if (mode !== 'world') return null;
@@ -61,7 +62,7 @@ const BattleActionButtons = ({
             ))}
           </div>
         ) : null}
-        {BATTLE_ACTION_IDS.map((actionId) => (
+        {BATTLE_ACTION_IDS.filter((actionId) => !(isTrainingMode && actionId === 'skills')).map((actionId) => (
           <button
             key={actionId}
             type="button"
@@ -113,7 +114,7 @@ const BattleActionButtons = ({
           ))}
         </div>
       ) : null}
-      {BATTLE_ACTION_IDS.map((actionId) => (
+      {BATTLE_ACTION_IDS.filter((actionId) => !(isTrainingMode && actionId === 'skills')).map((actionId) => (
         <button
           key={actionId}
           type="button"

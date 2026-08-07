@@ -14,10 +14,14 @@ const BattleHUD = ({
   onTogglePause,
   onTogglePitch,
   onExit,
+  onReset,
   onStart,
   canStart,
   debugEnabled,
   onToggleDebug,
+  onOpenSettings,
+  isTrainingMode = false,
+  trainingSessionActive = false,
   pitchLabel = '40°',
   startLabel = '开战',
   speedModeLabel = '',
@@ -43,7 +47,7 @@ const BattleHUD = ({
       ) : (
         <>
           <button type="button" className="btn btn-secondary" onClick={onTogglePause} disabled={interactionLocked}>{paused ? '继续' : '暂停'}</button>
-          {typeof onCycleSpeedMode === 'function' ? (
+          {!isTrainingMode && typeof onCycleSpeedMode === 'function' ? (
             <button type="button" className="btn btn-secondary btn-small" onClick={onCycleSpeedMode} disabled={interactionLocked}>
               {`速度 ${speedModeLabel || '-'}`}
             </button>
@@ -51,8 +55,16 @@ const BattleHUD = ({
         </>
       )}
       <button type="button" className="btn btn-secondary" onClick={onTogglePitch}>视角 {pitchLabel}</button>
-      <button type="button" className="btn btn-secondary" onClick={onToggleDebug} disabled={interactionLocked}>{debugEnabled ? '关闭调试' : '调试'}</button>
-      <button type="button" className="btn btn-danger" onClick={onExit} disabled={interactionLocked}>退出</button>
+      {isTrainingMode ? (
+        <button type="button" className="btn btn-secondary" onClick={onOpenSettings} disabled={interactionLocked}>设置</button>
+      ) : (
+        <button type="button" className="btn btn-secondary" onClick={onToggleDebug} disabled={interactionLocked}>{debugEnabled ? '关闭调试' : '调试'}</button>
+      )}
+      {isTrainingMode && trainingSessionActive ? (
+        <button type="button" className="btn btn-danger" onClick={onReset} disabled={interactionLocked}>重置</button>
+      ) : (
+        <button type="button" className="btn btn-danger" onClick={onExit} disabled={interactionLocked}>退出</button>
+      )}
     </div>
   </div>
 );

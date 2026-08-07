@@ -96,6 +96,65 @@ export const normalizeTemplateUnits = (units = []) => (
     .filter((entry) => entry.unitTypeId && entry.count > 0)
 );
 
+export const normalizeTemplatePercentages = (units = []) => {
+  const source = normalizeTemplateUnits(units);
+  if (source.length <= 0) return [];
+  const total = source.reduce((sum, entry) => sum + entry.count, 0);
+  if (total <= 0) return [];
+  const rows = source.map((entry, index) => {
+    const exact = (entry.count * 100) / total;
+    return {
+      ...entry,
+      count: Math.floor(exact),
+      remainder: exact - Math.floor(exact),
+      index
+    };
+  });
+  let remaining = 100 - rows.reduce((sum, entry) => sum + entry.count, 0);
+  rows
+    .slice()
+    .sort((left, right) => right.remainder - left.remainder || left.index - right.index)
+    .forEach((entry) => {
+      if (remaining <= 0) return;
+      entry.count += 1;
+      remaining -= 1;
+    });
+  if (remaining > 0) {
+    rows[0].count += remaining;
+  }
+  return rows
+    .sort((left, right) => left.index - right.index)
+    .map(({ remainder, index, ...entry }) => entry)
+    .filter((entry) => entry.count > 0);
+};
+
+export const allocateTemplateUnits = (units = [], totalCount = 0) => {
+  const percentages = normalizeTemplatePercentages(units);
+  const total = Math.max(0, Math.floor(Number(totalCount) || 0));
+  if (percentages.length <= 0 || total <= 0) return [];
+  const rows = percentages.map((entry, index) => {
+    const exact = (entry.count * total) / 100;
+    return {
+      ...entry,
+      count: Math.floor(exact),
+      remainder: exact - Math.floor(exact),
+      index
+    };
+  });
+  let remaining = total - rows.reduce((sum, entry) => sum + entry.count, 0);
+  rows
+    .slice()
+    .sort((left, right) => right.remainder - left.remainder || left.index - right.index)
+    .forEach((entry) => {
+      if (remaining <= 0) return;
+      entry.count += 1;
+      remaining -= 1;
+    });
+  return rows
+    .sort((left, right) => left.index - right.index)
+    .map(({ remainder, index, ...entry }) => entry);
+};
+
 export const parseQuickDeployNumber = (input) => {
   if (typeof input === 'number' && Number.isFinite(input)) return Math.floor(input);
   if (typeof input !== 'string') return NaN;

@@ -9,16 +9,14 @@ import {
   createDefaultAimState,
   createDefaultConfirmDeletePos,
   createDefaultDeployDraggingGroup,
-  createDefaultDeployInfoState,
-  createDefaultDeployQuantityDialog
+  createDefaultDeployInfoState
 } from '../screens/battleSceneConstants';
 
 export default function useBattleEscapeHandler({
   confirmDeleteGroupId = '',
-  deployQuantityDialogOpen = false,
   deployInfoOpen = false,
   quickDeployOpen = false,
-  deployEditorOpen = false,
+  templateFillPreviewOpen = false,
   deployDraggingGroupId = '',
   deployDraggingTeam = '',
   deployRectDragRef,
@@ -27,10 +25,9 @@ export default function useBattleEscapeHandler({
   aimStateActive = false,
   setConfirmDeleteGroupId,
   setConfirmDeletePos,
-  setDeployQuantityDialog,
   setDeployInfoState,
   handleCloseQuickDeploy,
-  closeDeployEditor,
+  handleCloseTemplateFillPreview,
   setDeployDraggingGroup,
   setDeployNotice,
   onRecallDeployDraggingGroup,
@@ -50,10 +47,6 @@ export default function useBattleEscapeHandler({
       setConfirmDeletePos(createDefaultConfirmDeletePos());
       return;
     }
-    if (deployQuantityDialogOpen) {
-      setDeployQuantityDialog(createDefaultDeployQuantityDialog());
-      return;
-    }
     if (deployInfoOpen) {
       setDeployInfoState(createDefaultDeployInfoState());
       return;
@@ -62,8 +55,8 @@ export default function useBattleEscapeHandler({
       handleCloseQuickDeploy();
       return;
     }
-    if (deployEditorOpen) {
-      closeDeployEditor();
+    if (templateFillPreviewOpen) {
+      handleCloseTemplateFillPreview();
       return;
     }
     if (deployDraggingGroupId) {
@@ -106,18 +99,16 @@ export default function useBattleEscapeHandler({
   }, [
     aimStateActive,
     battleUiMode,
-    closeDeployEditor,
     closeModal,
     closeSkillConfirm,
     commitPathPlanning,
     confirmDeleteGroupId,
     deployDraggingGroupId,
     deployDraggingTeam,
-    deployEditorOpen,
     deployInfoOpen,
-    deployQuantityDialogOpen,
     deployRectDragRef,
     handleCloseQuickDeploy,
+    handleCloseTemplateFillPreview,
     quickDeployOpen,
     setAimState,
     setBattleUiMode,
@@ -127,11 +118,11 @@ export default function useBattleEscapeHandler({
     setDeployNotice,
     setDeployDraggingGroup,
     setDeployInfoState,
-    setDeployQuantityDialog,
     setMarchModePickOpen,
     setSkillPopupSquadId,
     setWorldActionsVisibleForSquadId,
     onRecallDeployDraggingGroup,
+    templateFillPreviewOpen,
     worldActionsVisibleForSquadId
   ]);
 

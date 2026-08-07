@@ -1,6 +1,6 @@
 /**
  * UnitType normalization is the frontend compatibility boundary.
- * - Primary contract: backend UnitTypeDTO v1 (`schemaVersion: 1`).
+ * - Primary contract: backend UnitTypeDTO v2 (`schemaVersion: 2`).
  * - Compatibility contract: legacy payloads still accepted (`id/level`).
  * - Keep defaults centralized here; runtime should consume normalized rows.
  * - `id`/`level` are retained only for backward compatibility and mirror
@@ -12,6 +12,7 @@ import {
   normalizeRarity,
   normalizeRoleTag,
   normalizeRpsType,
+  resolveUnitClassification,
   toInt,
   toStringId
 } from './types';
@@ -21,6 +22,11 @@ const CLASS_TAG_SET = new Set(['infantry', 'cavalry', 'archer', 'artillery']);
 const normalizeClassTag = (value, fallbackUnit = {}) => {
   const explicit = toStringId(value).toLowerCase();
   if (CLASS_TAG_SET.has(explicit)) return explicit;
+  const unitCategory = toStringId(fallbackUnit?.unitCategory || fallbackUnit?.rpsType).toLowerCase();
+  const unitSubtype = toStringId(fallbackUnit?.unitSubtype).toLowerCase();
+  if (unitCategory === 'melee') return unitSubtype === 'mobility' ? 'cavalry' : 'infantry';
+  if (unitCategory === 'ranged') return unitSubtype === 'defense' ? 'artillery' : 'archer';
+  if (unitCategory === 'support') return 'archer';
   const name = toStringId(fallbackUnit?.name);
   const roleTag = fallbackUnit?.roleTag === '远程' ? '远程' : '近战';
   const speed = Number(fallbackUnit?.speed) || 0;
@@ -66,20 +72,17 @@ const normalizeComponents = (components = {}) => {
   const bodyId = toStringId(source.bodyId) || null;
   const weaponIds = ensureStringArray(source.weaponIds);
   const vehicleId = toStringId(source.vehicleId) || null;
-  const abilityIds = ensureStringArray(source.abilityIds);
   const behaviorProfileId = toStringId(source.behaviorProfileId) || null;
   const stabilityProfileId = toStringId(source.stabilityProfileId) || null;
   return {
     bodyId,
     weaponIds,
     vehicleId,
-    abilityIds,
     behaviorProfileId,
     stabilityProfileId,
     body: source.body && typeof source.body === 'object' ? source.body : null,
     weapon: Array.isArray(source.weapon) ? source.weapon.filter((item) => item && typeof item === 'object') : [],
     vehicle: source.vehicle && typeof source.vehicle === 'object' ? source.vehicle : null,
-    ability: Array.isArray(source.ability) ? source.ability.filter((item) => item && typeof item === 'object') : [],
     behaviorProfile: source.behaviorProfile && typeof source.behaviorProfile === 'object' ? source.behaviorProfile : null,
     stabilityProfile: source.stabilityProfile && typeof source.stabilityProfile === 'object' ? source.stabilityProfile : null,
     interactionRule: source.interactionRule && typeof source.interactionRule === 'object' ? source.interactionRule : null
@@ -91,6 +94,7 @@ export const normalizeUnitType = (unit = {}) => {
   const tier = Math.max(1, toInt(unit?.tier, toInt(unit?.level, 1, 1, 4), 1, 4));
   const range = clampNumber(unit?.range, 1, 1, 9999);
   const roleTag = normalizeRoleTag(unit?.roleTag, range);
+  const { unitCategory, unitSubtype } = resolveUnitClassification(unit);
   const enabled = unit?.enabled !== false;
   const bodyId = toStringId(unit?.bodyId) || null;
   const vehicleId = toStringId(unit?.vehicleId) || null;
@@ -110,7 +114,9 @@ export const normalizeUnitType = (unit = {}) => {
     enabled,
     classTag,
     roleTag,
-    rpsType: normalizeRpsType(unit?.rpsType),
+    unitCategory,
+    unitSubtype,
+    rpsType: normalizeRpsType(unit?.rpsType || unitCategory),
     professionId: toStringId(unit?.professionId),
     tier,
     level: tier,
@@ -131,7 +137,6 @@ export const normalizeUnitType = (unit = {}) => {
     bodyId: components.bodyId || bodyId,
     weaponIds: components.weaponIds.length > 0 ? components.weaponIds : ensureStringArray(unit?.weaponIds),
     vehicleId: components.vehicleId || vehicleId,
-    abilityIds: components.abilityIds.length > 0 ? components.abilityIds : ensureStringArray(unit?.abilityIds),
     behaviorProfileId: components.behaviorProfileId || behaviorProfileId,
     stabilityProfileId: components.stabilityProfileId || stabilityProfileId,
     visuals: normalizeVisuals(unit?.visuals || {}),

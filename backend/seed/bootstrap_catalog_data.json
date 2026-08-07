@@ -1,8 +1,8 @@
 {
   "unitComponents": [],
   "unitTypesPatch": {
-    "version": 1,
-    "strategy": "generated_rps_36"
+    "version": 2,
+    "strategy": "unit_classes_9_v1"
   },
   "armyUnitTypes": [],
   "battlefieldItems": [
@@ -445,9 +445,9 @@
           "kind": "concealment",
           "selector": {
             "rpsType": [
-              "mobility",
+              "melee",
               "ranged",
-              "defense"
+              "support"
             ],
             "classTag": [
               "infantry",
@@ -530,9 +530,9 @@
           "kind": "trap",
           "selector": {
             "rpsType": [
-              "mobility",
+              "melee",
               "ranged",
-              "defense"
+              "support"
             ],
             "classTag": [
               "infantry",
@@ -609,9 +609,9 @@
           "kind": "trap",
           "selector": {
             "rpsType": [
-              "mobility",
+              "melee",
               "ranged",
-              "defense"
+              "support"
             ],
             "classTag": [
               "infantry",
@@ -716,9 +716,9 @@
           "kind": "contactDot",
           "selector": {
             "rpsType": [
-              "mobility",
+              "melee",
               "ranged",
-              "defense"
+              "support"
             ],
             "classTag": [
               "infantry",
@@ -736,7 +736,7 @@
               "cavalry": 2
             },
             "rpsMultiplier": {
-              "mobility": 2
+              "melee": 2
             }
           }
         }
@@ -846,9 +846,9 @@
           "kind": "contactDot",
           "selector": {
             "rpsType": [
-              "mobility",
+              "melee",
               "ranged",
-              "defense"
+              "support"
             ],
             "classTag": [
               "infantry",
@@ -934,9 +934,9 @@
           "kind": "auraReveal",
           "selector": {
             "rpsType": [
-              "mobility",
+              "melee",
               "ranged",
-              "defense"
+              "support"
             ],
             "classTag": [
               "infantry",

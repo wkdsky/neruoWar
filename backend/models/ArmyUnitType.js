@@ -1,7 +1,9 @@
 const mongoose = require('mongoose');
 
-const RpsTypeEnum = ['mobility', 'ranged', 'defense'];
+const RpsTypeEnum = ['melee', 'ranged', 'support'];
 const RarityEnum = ['common', 'rare', 'epic', 'legend'];
+const UnitCategoryEnum = ['melee', 'ranged', 'support'];
+const UnitSubtypeEnum = ['mobility', 'defense', 'balance', 'combination', 'comprehensive', 'intervention'];
 
 const VisualBattleSchema = new mongoose.Schema({
   bodyLayer: {
@@ -59,6 +61,18 @@ const ArmyUnitTypeSchema = new mongoose.Schema({
     enum: ['近战', '远程'],
     required: true
   },
+  unitCategory: {
+    type: String,
+    enum: UnitCategoryEnum,
+    required: true,
+    default: 'melee'
+  },
+  unitSubtype: {
+    type: String,
+    enum: UnitSubtypeEnum,
+    required: true,
+    default: 'balance'
+  },
   speed: {
     type: Number,
     required: true,
@@ -114,7 +128,7 @@ const ArmyUnitTypeSchema = new mongoose.Schema({
   rpsType: {
     type: String,
     enum: RpsTypeEnum,
-    default: 'mobility'
+    default: 'melee'
   },
   professionId: {
     type: String,
@@ -150,10 +164,6 @@ const ArmyUnitTypeSchema = new mongoose.Schema({
   vehicleId: {
     type: String,
     default: null
-  },
-  abilityIds: {
-    type: [String],
-    default: []
   },
   behaviorProfileId: {
     type: String,

@@ -200,7 +200,7 @@ const buildPseudoAttacker = (squad = {}, item = {}, params = {}) => ({
   id: `item_source_${item?.id || 'env'}`,
   team: squad?.team === 'attacker' ? 'defender' : 'attacker',
   classTag: typeof params?.sourceClassTag === 'string' ? params.sourceClassTag : 'infantry',
-  rpsType: typeof params?.sourceRpsType === 'string' ? params.sourceRpsType : 'mobility',
+  rpsType: typeof params?.sourceRpsType === 'string' ? params.sourceRpsType : 'melee',
   stats: {
     atk: Math.max(6, Number(params?.sourceAtk) || 14)
   }

@@ -687,7 +687,7 @@ const emitGroundSkillWave = (sim, crowd, squad, activeSkill, waveIndex = 0) => {
 const updateActiveGroundSkill = (sim, crowd, squad, dt) => {
   const active = squad?.activeSkill;
   if (!active) return;
-  if ((Number(squad?.remain) || 0) <= 0 || (Number(squad?.morale) || 0) <= 0) {
+  if ((Number(squad?.remain) || 0) <= 0) {
     squad.activeSkill = null;
     return;
   }
@@ -866,7 +866,7 @@ const updateSquadBehaviorPlan = (squad, sim, nowSec = 0) => {
     return;
   }
 
-  const playerExplicitOnly = squad.team === TEAM_ATTACKER && !guard && orderType !== ORDER_ATTACK_MOVE && !chargeCommitted;
+  const playerExplicitOnly = squad.controlMode === 'USER' && !guard && orderType !== ORDER_ATTACK_MOVE && !chargeCommitted;
   if (playerExplicitOnly && !hasWaypoint) {
     squad.targetSquadId = '';
     squad.action = squad.behavior === 'defend' ? '防御' : '待命';
@@ -1073,7 +1073,6 @@ const createAgentsForSquad = (squad, crowd) => {
 const leaderMoveStep = (squad, sim, crowd, dt, forwardVec, steeringWeights = DEFAULT_STEERING_WEIGHTS) => {
   const actionState = ensureSquadActionState(squad);
   const actionKind = typeof actionState.kind === 'string' ? actionState.kind : 'none';
-  const moralePenalty = squad.morale <= 0 ? (2 / 3) : (squad.morale < 20 ? 0.82 : 1);
   const fatiguePenalty = squad.fatigueTimer > 0 ? 0.72 : 1;
   const buffSpeed = squad.effectBuff?.speedMul ? Number(squad.effectBuff.speedMul) : 1;
   const rushSpeed = squad.skillRush?.ttl > 0 ? 1.45 : 1;
@@ -1089,7 +1088,7 @@ const leaderMoveStep = (squad, sim, crowd, dt, forwardVec, steeringWeights = DEF
     ? 1.08
     : (speedPolicy === SPEED_POLICY_REFORM ? 0.82 : 1);
   const speedBase = Math.max(9, baseGroupSpeed * 18);
-  const speedTargetMax = speedBase * moralePenalty * fatiguePenalty * buffSpeed * rushSpeed * policyMul * (chargingCommitted ? 1.15 : 1);
+  const speedTargetMax = speedBase * fatiguePenalty * buffSpeed * rushSpeed * policyMul * (chargingCommitted ? 1.15 : 1);
   const walls = Array.isArray(sim?.buildings) ? sim.buildings.filter((row) => !row?.destroyed) : [];
   let target = null;
   const activeSkillClass = typeof squad?.activeSkill?.classTag === 'string' ? squad.activeSkill.classTag : '';
@@ -1493,9 +1492,6 @@ const applyCavalryRushImpact = (sim, crowd, squad, agents = [], fromPoint, toPoi
       enemyAgent.x = (Number(enemyAgent.x) || 0) + (dir.x * 1.8);
       enemyAgent.y = (Number(enemyAgent.y) || 0) + (dir.y * 1.8);
       enemySquad.underAttackTimer = 1.2;
-      enemySquad.morale = clamp((Number(enemySquad.morale) || 0) - (impactDamage * 0.32), 0, 100);
-      squad.morale = clamp((Number(squad.morale) || 0) + (impactDamage * 0.2), 0, 100);
-
       acquireHitEffect(crowd.effectsPool, {
         type: 'slash',
         x: enemyAgent.x,
@@ -1589,7 +1585,6 @@ const updateAttackCooldownFromSkills = (squad) => {
 export const triggerCrowdSkill = (sim, crowd, squadId, targetInput) => {
   const squad = (sim?.squads || []).find((row) => row.id === squadId);
   if (!squad || squad.remain <= 0) return { ok: false, reason: '部队不可用' };
-  if ((Number(squad.morale) || 0) <= 0) return { ok: false, reason: '士气归零，无法发动兵种攻击' };
   const agents = getCrowdAgentsForSquad(crowd, squad.id);
   if (agents.length <= 0) return { ok: false, reason: '无可用士兵' };
   const inputKind = typeof targetInput?.kind === 'string' ? targetInput.kind.trim() : '';
@@ -1836,7 +1831,7 @@ export const updateCrowdSim = (crowd, sim, dt) => {
     updateSquadBehaviorPlan(squad, sim, Number(sim?.timeElapsed) || 0);
     squad._aiSkillCd = Math.max(0, Number(squad._aiSkillCd) || 0);
 
-    if (squad.team === TEAM_DEFENDER && (Number(squad.morale) || 0) > 0) {
+    if (squad.team === TEAM_DEFENDER) {
       squad._aiSkillCd = Math.max(0, squad._aiSkillCd - safeDt);
       if (squad._aiSkillCd <= 0) {
         const nearestEnemy = pickNearestEnemySquad(squad, sim?.squads || []);
@@ -1932,14 +1927,13 @@ export const updateCrowdSim = (crowd, sim, dt) => {
       const desiredY = (Number(squad.y) || 0) + (side.y * slot.side) - (forward.y * slot.back);
       const toDesired = normalizeVec(desiredX - (agent.x || 0), desiredY - (agent.y || 0));
       const stationaryHold = !leaderMoving && (squad.behavior === 'idle' || squad.behavior === 'move' || squad.behavior === 'standby');
-      const moraleMul = squad.morale <= 0 ? (2 / 3) : (squad.morale < 20 ? 0.82 : 1);
       const fatigueMul = squad.fatigueTimer > 0 ? 0.72 : 1;
       const weightSlow = bottlenecked
         ? 1 / (1 + (WEIGHT_BOTTLENECK_ALPHA * Math.max(0, Math.min(40, (agent.weight || 1)) - 1)))
         : 1;
       const speedMul = (squad.effectBuff?.speedMul ? Number(squad.effectBuff.speedMul) : 1) * ((squad.skillRush?.ttl || 0) > 0 ? 1.45 : 1);
       const modeSpeedMul = resolveAgentModeSpeedMul(agent, squad, crowd);
-      const speed = Math.max(6, (Number(squad._groupSpeedScalar) || Number(squad.stats?.speed) || 1) * 20 * moraleMul * fatigueMul * weightSlow * speedMul * modeSpeedMul);
+      const speed = Math.max(6, (Number(squad._groupSpeedScalar) || Number(squad.stats?.speed) || 1) * 20 * fatigueMul * weightSlow * speedMul * modeSpeedMul);
       const engagementCfg = crowd?.engagement?.config || {};
       const engagementEnabled = !!crowd?.engagement?.enabled;
       const isMelee = isMeleeAgent(agent);

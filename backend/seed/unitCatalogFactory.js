@@ -1,232 +1,160 @@
-const RPS_TYPES = ['mobility', 'ranged', 'defense'];
-const TIER_POWER = [1.0, 1.35, 1.8, 2.4];
+const RPS_TYPES = ['melee', 'ranged', 'support'];
 
 const RPS_ADVANTAGE = {
-  mobility: 'ranged',
-  ranged: 'defense',
-  defense: 'mobility'
+  melee: 'ranged',
+  ranged: 'support',
+  support: 'melee'
+};
+
+// 知识点按“每名真实士兵”结算。T1 兵种保持 3 - 5 点的低门槛：
+// 机动型 3 点、均衡/专精型 4 点、重装/全能型 5 点。
+const UNIT_KNOWLEDGE_COST_KP = Object.freeze({
+  melee_mobility: 3,
+  melee_defense: 5,
+  melee_balance: 4,
+  ranged_mobility: 3,
+  ranged_defense: 5,
+  ranged_balance: 4,
+  support_combination: 4,
+  support_comprehensive: 5,
+  support_intervention: 4
+});
+
+const UNIT_PALETTE_TONE_BY_SUBTYPE = Object.freeze({
+  mobility: 'light',
+  balance: 'base',
+  defense: 'dark',
+  combination: 'light',
+  comprehensive: 'base',
+  intervention: 'dark'
+});
+
+const UNIT_CATEGORY_PALETTES = Object.freeze({
+  melee: Object.freeze({
+    light: Object.freeze({ primary: '#ef9a9a', secondary: '#ffebee', accent: '#ef5350' }),
+    base: Object.freeze({ primary: '#e53935', secondary: '#ffcdd2', accent: '#ef5350' }),
+    dark: Object.freeze({ primary: '#b71c1c', secondary: '#ff8a80', accent: '#d32f2f' })
+  }),
+  ranged: Object.freeze({
+    light: Object.freeze({ primary: '#90caf9', secondary: '#e3f2fd', accent: '#42a5f5' }),
+    base: Object.freeze({ primary: '#1e88e5', secondary: '#bbdefb', accent: '#42a5f5' }),
+    dark: Object.freeze({ primary: '#0d47a1', secondary: '#82b1ff', accent: '#1565c0' })
+  }),
+  support: Object.freeze({
+    light: Object.freeze({ primary: '#a5d6a7', secondary: '#e8f5e9', accent: '#66bb6a' }),
+    base: Object.freeze({ primary: '#43a047', secondary: '#c8e6c9', accent: '#66bb6a' }),
+    dark: Object.freeze({ primary: '#1b5e20', secondary: '#b9f6ca', accent: '#2e7d32' })
+  })
+});
+
+const resolveUnitPalette = (unitCategory, unitSubtype) => {
+  const categoryPalette = UNIT_CATEGORY_PALETTES[unitCategory] || UNIT_CATEGORY_PALETTES.melee;
+  const tone = UNIT_PALETTE_TONE_BY_SUBTYPE[unitSubtype] || 'base';
+  return categoryPalette[tone] || categoryPalette.base;
 };
 
 const PROFESSION_CONFIG = [
   {
-    rpsType: 'mobility',
-    professionKey: 'rider',
-    professionId: 'mob.rider',
-    professionName: '轻骑突袭',
+    unitCategory: 'melee',
+    unitSubtype: 'mobility',
+    professionKey: 'melee_mobility',
+    professionId: 'melee.mobility',
+    professionName: '迅击游骑',
     roleTag: '近战',
-    speedGrowth: 0.026,
-    rangeGrowth: 0,
-    base: { hp: 130, atk: 22, def: 6, speed: 4.8, range: 1, costKP: 14, cooldown: 1.05, accuracy: 0.85, impactPoise: 10, impactTransition: 12 },
-    nameKeys: ['horse_raider', 'storm_lancer', 'iron_dragoon', 'sky_raider'],
-    vehicles: ['veh_steed_horse', 'veh_moto_raid', 'veh_hover_bike', 'veh_flying_skiff']
+    base: { hp: 115, atk: 26, def: 5, speed: 5.2, range: 1, costKP: UNIT_KNOWLEDGE_COST_KP.melee_mobility, cooldown: 0.9, accuracy: 0.84, impactPoise: 10, impactTransition: 12 },
+    vehicleId: 'veh_hover_bike',
+    description: '以高速切入、绕后和追击为核心的近战单位，牺牲部分防御换取战场机动性。'
   },
   {
-    rpsType: 'mobility',
-    professionKey: 'assault',
-    professionId: 'mob.assault',
-    professionName: '突击散兵',
+    unitCategory: 'melee',
+    unitSubtype: 'defense',
+    professionKey: 'melee_defense',
+    professionId: 'melee.defense',
+    professionName: '壁垒卫士',
     roleTag: '近战',
-    speedGrowth: 0.023,
-    rangeGrowth: 0.25,
-    base: { hp: 110, atk: 24, def: 5, speed: 4.4, range: 2, costKP: 14, cooldown: 0.9, accuracy: 0.8, impactPoise: 12, impactTransition: 10 },
-    nameKeys: ['rush_skirmisher', 'shock_reaver', 'blade_vanguard', 'jet_reaver'],
-    vehicles: ['veh_jeep_top', 'veh_hover_skiff', 'veh_halftrack', 'veh_flying_skiff']
+    base: { hp: 220, atk: 18, def: 16, speed: 2.7, range: 1, costKP: UNIT_KNOWLEDGE_COST_KP.melee_defense, cooldown: 1.2, accuracy: 0.86, impactPoise: 14, impactTransition: 15 },
+    vehicleId: 'veh_turtle_apc',
+    description: '承担正面承伤和阵线稳固的近战单位，拥有九类兵种中最高的生存能力。'
   },
   {
-    rpsType: 'mobility',
-    professionKey: 'skimmer',
-    professionId: 'mob.skimmer',
-    professionName: '快反轻车',
-    roleTag: '远程',
-    speedGrowth: 0.028,
-    rangeGrowth: 0.6,
-    base: { hp: 160, atk: 20, def: 8, speed: 5.1, range: 6, costKP: 16, cooldown: 0.75, accuracy: 0.65, impactPoise: 8, impactTransition: 8 },
-    nameKeys: ['rapid_buggy', 'vector_skimmer', 'ion_skimmer', 'cyclone_skimmer'],
-    vehicles: ['veh_buggy_inside', 'veh_hover_skiff', 'veh_missile_platform', 'veh_flying_skiff']
-  },
-  {
-    rpsType: 'ranged',
-    professionKey: 'marksman',
-    professionId: 'rng.marksman',
-    professionName: '精确射手',
-    roleTag: '远程',
-    speedGrowth: 0.018,
-    rangeGrowth: 1,
-    base: { hp: 95, atk: 18, def: 4, speed: 3.3, range: 11, costKP: 14, cooldown: 1.25, accuracy: 0.78, movePenaltyK: 0.3, impactPoise: 6, impactTransition: 10 },
-    nameKeys: ['longshot', 'eagle_eye', 'wind_marksman', 'sky_marksman'],
-    vehicles: ['veh_moto_raid', 'veh_jeep_top', 'veh_hover_skiff', 'veh_flying_skiff']
-  },
-  {
-    rpsType: 'ranged',
-    professionKey: 'support',
-    professionId: 'rng.support',
-    professionName: '压制支援',
-    roleTag: '远程',
-    speedGrowth: 0.017,
-    rangeGrowth: 0.55,
-    base: { hp: 115, atk: 16, def: 6, speed: 3.0, range: 9, costKP: 16, cooldown: 0.7, accuracy: 0.6, impactPoise: 14, impactTransition: 12 },
-    nameKeys: ['suppressor', 'thunder_support', 'iron_support', 'nova_support'],
-    vehicles: ['veh_halftrack', 'veh_mortar_car', 'veh_spg', 'veh_missile_platform']
-  },
-  {
-    rpsType: 'ranged',
-    professionKey: 'siege',
-    professionId: 'rng.siege',
-    professionName: '攻城火力',
-    roleTag: '远程',
-    speedGrowth: 0.015,
-    rangeGrowth: 2,
-    base: { hp: 140, atk: 14, def: 5, speed: 2.6, range: 15, costKP: 18, cooldown: 2.2, accuracy: 0.9, aoeRadius: 2.8, impactPoise: 10, impactTransition: 6 },
-    nameKeys: ['stone_bomber', 'fort_breaker', 'thunder_siege', 'star_siege'],
-    vehicles: ['veh_catapult', 'veh_mortar_car', 'veh_spg', 'veh_missile_platform']
-  },
-  {
-    rpsType: 'defense',
-    professionKey: 'shield',
-    professionId: 'def.shield',
-    professionName: '盾墙卫队',
+    unitCategory: 'melee',
+    unitSubtype: 'balance',
+    professionKey: 'melee_balance',
+    professionId: 'melee.balance',
+    professionName: '均衡战士',
     roleTag: '近战',
-    speedGrowth: 0.012,
-    rangeGrowth: 0,
-    base: { hp: 170, atk: 18, def: 12, speed: 3.0, range: 1, costKP: 15, cooldown: 1.1, accuracy: 0.88, impactPoise: 10, impactTransition: 10 },
-    nameKeys: ['shield_guard', 'iron_guard', 'tower_guard', 'aegis_guard'],
-    vehicles: ['veh_steed_horse', 'veh_turtle_apc', 'veh_halftrack', 'veh_siege_walker']
+    base: { hp: 165, atk: 23, def: 10, speed: 3.8, range: 1, costKP: UNIT_KNOWLEDGE_COST_KP.melee_balance, cooldown: 1.0, accuracy: 0.85, impactPoise: 11, impactTransition: 12 },
+    vehicleId: 'veh_jeep_top',
+    description: '攻防、速度和持续作战能力均衡的近战单位，适合承担部队的通用前排。'
   },
   {
-    rpsType: 'defense',
-    professionKey: 'pike',
-    professionId: 'def.pike',
-    professionName: '反机动长柄',
-    roleTag: '近战',
-    speedGrowth: 0.013,
-    rangeGrowth: 0.35,
-    base: { hp: 155, atk: 20, def: 10, speed: 3.1, range: 2, costKP: 15, cooldown: 1.0, accuracy: 0.86, impactPoise: 16, impactTransition: 14 },
-    nameKeys: ['pike_line', 'steel_pike', 'fort_pike', 'sky_pike'],
-    vehicles: ['veh_shield_cart', 'veh_turtle_apc', 'veh_halftrack', 'veh_bastion_drone']
-  },
-  {
-    rpsType: 'defense',
-    professionKey: 'bastion',
-    professionId: 'def.bastion',
-    professionName: '堡垒装甲',
+    unitCategory: 'ranged',
+    unitSubtype: 'mobility',
+    professionKey: 'ranged_mobility',
+    professionId: 'ranged.mobility',
+    professionName: '游击射手',
     roleTag: '远程',
-    speedGrowth: 0.011,
-    rangeGrowth: 0.4,
-    base: { hp: 220, atk: 16, def: 14, speed: 2.7, range: 5, costKP: 18, cooldown: 1.6, accuracy: 0.7, impactPoise: 12, impactTransition: 8 },
-    nameKeys: ['fort_plating', 'iron_bastion', 'siege_plate', 'siege_walker'],
-    vehicles: ['veh_turtle_apc', 'veh_halftrack', 'veh_siege_walker', 'veh_bastion_drone']
+    base: { hp: 105, atk: 19, def: 5, speed: 4.3, range: 8, costKP: UNIT_KNOWLEDGE_COST_KP.ranged_mobility, cooldown: 0.8, accuracy: 0.68, movePenaltyK: 0.22, impactPoise: 7, impactTransition: 8 },
+    vehicleId: 'veh_hover_skiff',
+    description: '强调边移动边输出和快速换位的远程单位，适合拉扯和侧翼火力。'
+  },
+  {
+    unitCategory: 'ranged',
+    unitSubtype: 'defense',
+    professionKey: 'ranged_defense',
+    professionId: 'ranged.defense',
+    professionName: '守望炮手',
+    roleTag: '远程',
+    base: { hp: 155, atk: 22, def: 10, speed: 2.6, range: 12, costKP: UNIT_KNOWLEDGE_COST_KP.ranged_defense, cooldown: 1.4, accuracy: 0.86, movePenaltyK: 0.18, impactPoise: 10, impactTransition: 12 },
+    vehicleId: 'veh_spg',
+    description: '依靠射程、命中和阵地稳定性进行远程防守的单位，适合守住关键区域。'
+  },
+  {
+    unitCategory: 'ranged',
+    unitSubtype: 'balance',
+    professionKey: 'ranged_balance',
+    professionId: 'ranged.balance',
+    professionName: '精锐射手',
+    roleTag: '远程',
+    base: { hp: 125, atk: 21, def: 7, speed: 3.4, range: 10, costKP: UNIT_KNOWLEDGE_COST_KP.ranged_balance, cooldown: 1.05, accuracy: 0.8, movePenaltyK: 0.22, impactPoise: 8, impactTransition: 10 },
+    vehicleId: 'veh_mortar_car',
+    description: '各项远程能力均衡的通用输出单位，能在多数战场环境保持稳定贡献。'
+  },
+  {
+    unitCategory: 'support',
+    unitSubtype: 'combination',
+    professionKey: 'support_combination',
+    professionId: 'support.combination',
+    professionName: '专精增幅师',
+    roleTag: '远程',
+    base: { hp: 115, atk: 10, def: 7, speed: 3.2, range: 7, costKP: UNIT_KNOWLEDGE_COST_KP.support_combination, cooldown: 1.25, accuracy: 0.7, movePenaltyK: 0.18, impactPoise: 5, impactTransition: 9 },
+    vehicleId: 'veh_support_relay',
+    description: '未来技能树中的组合型辅助，倾向于集中强化部队的某一组关键属性。'
+  },
+  {
+    unitCategory: 'support',
+    unitSubtype: 'comprehensive',
+    professionKey: 'support_comprehensive',
+    professionId: 'support.comprehensive',
+    professionName: '全域协调师',
+    roleTag: '远程',
+    base: { hp: 145, atk: 9, def: 9, speed: 2.9, range: 6, costKP: UNIT_KNOWLEDGE_COST_KP.support_comprehensive, cooldown: 1.4, accuracy: 0.72, movePenaltyK: 0.16, impactPoise: 6, impactTransition: 10 },
+    vehicleId: 'veh_command_car',
+    description: '未来技能树中的全面型辅助，提供覆盖攻击、防御、速度和稳定性的综合增益。'
+  },
+  {
+    unitCategory: 'support',
+    unitSubtype: 'intervention',
+    professionKey: 'support_intervention',
+    professionId: 'support.intervention',
+    professionName: '战术干预师',
+    roleTag: '远程',
+    base: { hp: 105, atk: 13, def: 5, speed: 3.6, range: 9, costKP: UNIT_KNOWLEDGE_COST_KP.support_intervention, cooldown: 1.1, accuracy: 0.76, movePenaltyK: 0.16, impactPoise: 7, impactTransition: 11 },
+    vehicleId: 'veh_intervention_skiff',
+    description: '未来技能树中的干预型辅助，围绕解除控制、清除负面效果和施加敌方减益展开。'
   }
 ];
 
-const RARITY_BY_TIER = ['common', 'rare', 'epic', 'legend'];
-
-const PREVIEW_PALETTE_BY_RPS = {
-  mobility: { primary: '#4cb3ff', secondary: '#96def6', accent: '#ffd166' },
-  ranged: { primary: '#8f7bff', secondary: '#c4b7ff', accent: '#70e4ff' },
-  defense: { primary: '#4ca878', secondary: '#88d9b5', accent: '#f4d35e' }
-};
-
-const ABILITY_BY_PROFESSION = {
-  'mob.rider': {
-    id: 'ability_charge_line',
-    name: '冲锋突刺',
-    data: {
-      cooldownSec: 8,
-      targeting: 'line',
-      delivery: 'dash',
-      effects: { damageMul: 1.35, poiseDamageMul: 1.5, knockback: 1.2 },
-      vfx: { kind: 'charge_arrow', color: '#ffd166' }
-    }
-  },
-  'mob.assault': {
-    id: 'ability_smoke_dash',
-    name: '烟幕突进',
-    data: {
-      cooldownSec: 9.5,
-      targeting: 'self',
-      delivery: 'buff',
-      effects: { evadeMul: 1.18, hitMulVsRanged: 1.12, speedMul: 1.24, durationSec: 5.5 },
-      vfx: { kind: 'smoke_trail', color: '#b7c0cc' }
-    }
-  },
-  'mob.skimmer': {
-    id: 'ability_flank_boost',
-    name: '侧翼推进',
-    data: {
-      cooldownSec: 8.2,
-      targeting: 'self',
-      delivery: 'buff',
-      effects: { speedMul: 1.28, damageMulVsRanged: 1.16, durationSec: 6.2 },
-      vfx: { kind: 'speed_ring', color: '#70e4ff' }
-    }
-  },
-  'rng.marksman': {
-    id: 'ability_focus_shot',
-    name: '聚焦射击',
-    data: {
-      cooldownSec: 10,
-      targeting: 'single',
-      delivery: 'projectile',
-      effects: { damageMul: 1.65, hitMul: 1.18, poiseDamageMul: 1.1 },
-      vfx: { kind: 'focus_line', color: '#fef3c7' }
-    }
-  },
-  'rng.support': {
-    id: 'ability_suppress_fire',
-    name: '压制火力',
-    data: {
-      cooldownSec: 11,
-      targeting: 'cone',
-      delivery: 'burst',
-      effects: { poiseDamageMul: 1.4, transitionDamageMul: 1.35, speedMulDebuff: 0.8, durationSec: 4 },
-      vfx: { kind: 'suppression_haze', color: '#dbeafe' }
-    }
-  },
-  'rng.siege': {
-    id: 'ability_barrage_aoe',
-    name: '弹幕轰击',
-    data: {
-      cooldownSec: 14,
-      targeting: 'ground_aoe',
-      delivery: 'artillery',
-      effects: { damageMul: 1.35, aoeRadius: 3.4, buildingDamageMul: 1.45 },
-      vfx: { kind: 'barrage_circle', color: '#fb923c' }
-    }
-  },
-  'def.shield': {
-    id: 'ability_shieldwall',
-    name: '盾墙',
-    data: {
-      cooldownSec: 12,
-      targeting: 'self',
-      delivery: 'stance',
-      effects: { projectileBlockMul: 0.38, allyRearHitMul: 0.88, poiseMul: 1.2, durationSec: 6 },
-      vfx: { kind: 'shield_arc', color: '#6ee7b7' }
-    }
-  },
-  'def.pike': {
-    id: 'ability_brace_vs_charge',
-    name: '拒马列阵',
-    data: {
-      cooldownSec: 9,
-      targeting: 'self',
-      delivery: 'stance',
-      effects: { poiseDamageVsMobilityMul: 1.45, poiseDamageVsChargeMul: 1.6, durationSec: 5.8 },
-      vfx: { kind: 'brace_lines', color: '#93c5fd' }
-    }
-  },
-  'def.bastion': {
-    id: 'ability_bastion_stance',
-    name: '堡垒姿态',
-    data: {
-      cooldownSec: 13,
-      targeting: 'self',
-      delivery: 'stance',
-      effects: { defMul: 1.32, poiseMul: 1.35, turnRateMul: 0.72, transitionSpeedMul: 0.8, durationSec: 6.5 },
-      vfx: { kind: 'bastion_aura', color: '#86efac' }
-    }
-  }
-};
 
 const clamp = (value, min, max) => Math.max(min, Math.min(max, value));
 
@@ -246,7 +174,7 @@ const buildRpsRuleComponent = () => ({
   tags: ['global', 'rps'],
   version: 1,
   data: {
-    order: ['mobility', 'ranged', 'defense'],
+    order: ['melee', 'ranged', 'support'],
     multipliers: {
       advantage: { damageMul: 1.2, poiseDamageMul: 1.25, hitMul: 1.08 },
       disadvantage: { damageMul: 0.85, poiseDamageMul: 0.85, hitMul: 0.92 }
@@ -259,12 +187,12 @@ const buildStaticComponents = () => {
     componentId: `body_${cfg.professionKey}`,
     kind: 'body',
     name: `${cfg.professionName}体型`,
-    tags: [cfg.rpsType, cfg.professionId],
+    tags: [cfg.unitCategory, cfg.unitSubtype, cfg.professionId],
     version: 1,
     data: {
       silhouette: cfg.professionKey,
-      baseScale: cfg.rpsType === 'defense' ? 1.06 : (cfg.rpsType === 'mobility' ? 0.94 : 1),
-      defaultPose: cfg.rpsType === 'ranged' ? 'aim' : 'combat'
+      baseScale: cfg.unitSubtype === 'defense' ? 1.06 : (cfg.unitSubtype === 'mobility' ? 0.94 : 1),
+      defaultPose: cfg.unitCategory === 'melee' ? 'combat' : 'aim'
     }
   }));
 
@@ -272,7 +200,7 @@ const buildStaticComponents = () => {
     componentId: `weapon_${cfg.professionKey}`,
     kind: 'weapon',
     name: `${cfg.professionName}主武器`,
-    tags: [cfg.rpsType, cfg.professionId],
+    tags: [cfg.unitCategory, cfg.unitSubtype, cfg.professionId],
     version: 1,
     data: {
       cooldownSec: Number(cfg.base.cooldown) || 1,
@@ -303,7 +231,10 @@ const buildStaticComponents = () => {
     { id: 'veh_halftrack', name: '半履带装甲车', seatMode: 'inside', isFlying: false, hasWeapon: true },
     { id: 'veh_siege_walker', name: '攻城步行机', seatMode: 'top', isFlying: false, hasWeapon: true },
     { id: 'veh_flying_skiff', name: '低空突击艇', seatMode: 'inside', isFlying: true, hasWeapon: true },
-    { id: 'veh_bastion_drone', name: '堡垒浮空台', seatMode: 'top', isFlying: true, hasWeapon: true }
+    { id: 'veh_bastion_drone', name: '堡垒浮空台', seatMode: 'top', isFlying: true, hasWeapon: true },
+    { id: 'veh_support_relay', name: '前线增幅中继车', seatMode: 'inside', isFlying: false, hasWeapon: false },
+    { id: 'veh_command_car', name: '全域指挥车', seatMode: 'inside', isFlying: false, hasWeapon: false },
+    { id: 'veh_intervention_skiff', name: '干预信标艇', seatMode: 'inside', isFlying: true, hasWeapon: false }
   ].map((item) => ({
     componentId: item.id,
     kind: 'vehicle',
@@ -317,31 +248,22 @@ const buildStaticComponents = () => {
     }
   }));
 
-  const abilityComponents = Object.entries(ABILITY_BY_PROFESSION).map(([professionId, ability]) => ({
-    componentId: ability.id,
-    kind: 'ability',
-    name: ability.name,
-    tags: [professionId, 'active_skill'],
-    version: 1,
-    data: ability.data
-  }));
-
   const behaviorProfiles = PROFESSION_CONFIG.map((cfg) => ({
     componentId: `behavior_${cfg.professionKey}`,
     kind: 'behaviorProfile',
     name: `${cfg.professionName}行为模板`,
-    tags: [cfg.rpsType, cfg.professionId],
+    tags: [cfg.unitCategory, cfg.unitSubtype, cfg.professionId],
     version: 1,
     data: {
       transitionSec: {
-        moveToAttack: cfg.rpsType === 'mobility' ? 0.24 : 0.32,
-        attackToMove: cfg.rpsType === 'mobility' ? 0.2 : 0.3,
-        forwardToRetreat: cfg.rpsType === 'defense' ? 0.46 : 0.35,
-        retreatToForward: cfg.rpsType === 'defense' ? 0.48 : 0.36
+        moveToAttack: cfg.unitSubtype === 'mobility' ? 0.24 : 0.32,
+        attackToMove: cfg.unitSubtype === 'mobility' ? 0.2 : 0.3,
+        forwardToRetreat: cfg.unitSubtype === 'defense' ? 0.46 : 0.35,
+        retreatToForward: cfg.unitSubtype === 'defense' ? 0.48 : 0.36
       },
-      guardRadiusMul: cfg.rpsType === 'ranged' ? 1.25 : 1,
-      chaseRadiusMul: cfg.rpsType === 'mobility' ? 1.35 : 1.05,
-      turnRateMul: cfg.rpsType === 'defense' ? 0.86 : 1.08
+      guardRadiusMul: cfg.unitCategory === 'ranged' || cfg.unitCategory === 'support' ? 1.25 : 1,
+      chaseRadiusMul: cfg.unitSubtype === 'mobility' ? 1.35 : 1.05,
+      turnRateMul: cfg.unitSubtype === 'defense' ? 0.86 : 1.08
     }
   }));
 
@@ -370,7 +292,6 @@ const buildStaticComponents = () => {
     ...bodyComponents,
     ...weaponComponents,
     ...vehicleComponents,
-    ...abilityComponents,
     ...behaviorProfiles,
     ...staggerReactions,
     buildRpsRuleComponent()
@@ -378,132 +299,87 @@ const buildStaticComponents = () => {
 };
 
 const buildStabilityProfiles = () => {
-  const rows = [];
-  RPS_TYPES.forEach((rpsType) => {
-    for (let tier = 1; tier <= 4; tier += 1) {
-      const p = TIER_POWER[tier - 1];
-      const poiseBase = rpsType === 'defense' ? 120 : (rpsType === 'mobility' ? 96 : 84);
-      const transitionBase = rpsType === 'defense' ? 95 : (rpsType === 'mobility' ? 88 : 82);
-      const chargeBase = rpsType === 'mobility' ? 150 : (rpsType === 'defense' ? 128 : 108);
-      rows.push({
-        componentId: `stable_${rpsType}_t${tier}`,
-        kind: 'stabilityProfile',
-        name: `${rpsType} T${tier}稳定性`,
-        tags: [rpsType, `tier_${tier}`],
-        version: 1,
-        data: {
-          poiseMax: Math.round(poiseBase * p),
-          chargePoise: Math.round(chargeBase * p),
-          transitionMax: Math.round(transitionBase * p),
-          poiseRegenPerSec: roundTo(6 + (tier * 0.9), 2),
-          transitionDecayPerSec: roundTo(3.8 + (tier * 0.45), 2),
-          transitionRegenPerSec: roundTo(2.2 + (tier * 0.3), 2)
-        }
-      });
-    }
+  return PROFESSION_CONFIG.map((cfg) => {
+    const hp = Math.max(1, Number(cfg.base.hp) || 1);
+    const def = Math.max(0, Number(cfg.base.def) || 0);
+    const mobilityFactor = cfg.unitSubtype === 'mobility' ? 1.1 : 1;
+    const defenseFactor = cfg.unitSubtype === 'defense' ? 1.16 : 1;
+    return {
+      componentId: `stability_${cfg.professionKey}`,
+      kind: 'stabilityProfile',
+      name: `${cfg.professionName}稳定性`,
+      tags: [cfg.unitCategory, cfg.unitSubtype, 'tier_1'],
+      version: 1,
+      data: {
+        poiseMax: Math.round(((hp * 0.42) + (def * 4.5)) * defenseFactor),
+        chargePoise: Math.round(((hp * 0.52) + (def * 3.2)) * mobilityFactor),
+        transitionMax: Math.round((hp * 0.34) + (def * 3.6)),
+        poiseRegenPerSec: roundTo(5.8 + (def * 0.08), 2),
+        transitionDecayPerSec: roundTo(3.8 + (cfg.unitSubtype === 'defense' ? 0.6 : 0), 2),
+        transitionRegenPerSec: roundTo(2.4 + (cfg.unitSubtype === 'balance' ? 0.35 : 0), 2)
+      }
+    };
   });
-  return rows;
 };
 
 const buildUnitTypes = () => {
-  const unitTypes = [];
-  PROFESSION_CONFIG.forEach((cfg, professionIndex) => {
-    for (let tier = 1; tier <= 4; tier += 1) {
-      const tierIdx = tier - 1;
-      const p = TIER_POWER[tierIdx];
-      const idName = cfg.nameKeys[tierIdx] || `${cfg.professionKey}_${tier}`;
-      const unitTypeId = `u_${cfg.rpsType.slice(0, 3)}_${cfg.professionKey}_t${tier}_${idName}`;
-      const hp = Math.round(cfg.base.hp * p);
-      const atk = Math.round(cfg.base.atk * p);
-      const def = Math.round(cfg.base.def * p);
-      const speedGrowth = Number.isFinite(cfg.speedGrowth) ? cfg.speedGrowth : 0.02;
-      const speed = roundTo(cfg.base.speed * (1 + (speedGrowth * tierIdx)), 2);
-      const rangeGrowth = Number.isFinite(cfg.rangeGrowth) ? cfg.rangeGrowth : 0;
-      const rawRange = cfg.base.range + (rangeGrowth * tierIdx);
-      const rangeCap = cfg.professionKey === 'siege' ? 22 : (cfg.professionKey === 'marksman' ? 16 : 10);
-      const range = roundTo(clamp(rawRange, 1, rangeCap), 2);
-      let cost = Math.round(cfg.base.costKP * p);
-      if (cfg.professionKey === 'siege' || cfg.professionKey === 'bastion') {
-        cost = Math.round(cost * 1.05);
-      }
-
-      const ability = ABILITY_BY_PROFESSION[cfg.professionId];
-      const sortOrder = (professionIndex * 4) + tierIdx;
-      const layerSeed = sortOrder;
-      const bodyLayer = layerSeed % 64;
-      const gearLayer = (layerSeed + 16) % 64;
-      const vehicleLayer = (layerSeed + 32) % 64;
-      const silhouetteLayer = (layerSeed + 48) % 64;
-      const palette = PREVIEW_PALETTE_BY_RPS[cfg.rpsType] || PREVIEW_PALETTE_BY_RPS.mobility;
-      const rpsTag = cfg.rpsType;
-      const tags = [
-        'unit_type',
-        rpsTag,
-        cfg.professionId,
-        `tier_${tier}`,
-        RPS_ADVANTAGE[rpsTag] ? `counter_${RPS_ADVANTAGE[rpsTag]}` : ''
-      ].filter(Boolean);
-      unitTypes.push({
-        unitTypeId,
-        name: `${cfg.professionName}·${tier}阶`,
-        roleTag: cfg.roleTag,
-        speed,
-        hp,
-        atk,
-        def,
-        range,
-        costKP: cost,
-        level: tier,
-        tier,
-        enabled: true,
-        rpsType: cfg.rpsType,
-        professionId: cfg.professionId,
-        rarity: RARITY_BY_TIER[tierIdx] || 'common',
-        tags,
-        description: `${cfg.professionName}（${cfg.rpsType}）第${tier}阶单位。机动:${speed} 射程:${range}。`,
-        bodyId: `body_${cfg.professionKey}`,
-        weaponIds: [`weapon_${cfg.professionKey}`],
-        vehicleId: cfg.vehicles[tierIdx] || null,
-        abilityIds: ability ? [ability.id] : [],
-        behaviorProfileId: `behavior_${cfg.professionKey}`,
-        stabilityProfileId: `stable_${cfg.rpsType}_t${tier}`,
-        nextUnitTypeId: null,
-        upgradeCostKP: null,
-        sortOrder,
-        visuals: {
-          battle: {
-            bodyLayer,
-            gearLayer,
-            vehicleLayer,
-            tint: roundTo(0.82 + (tierIdx * 0.07), 2),
-            silhouetteLayer
-          },
-          preview: {
-            style: 'procedural',
-            palette
-          }
+  return PROFESSION_CONFIG.map((cfg, professionIndex) => {
+    const tier = 1;
+    const sortOrder = professionIndex;
+    const layerSeed = sortOrder;
+    const unitTypeId = `u_${cfg.unitCategory}_${cfg.unitSubtype}`;
+    const rpsTag = cfg.unitCategory;
+    const tags = [
+      'unit_type',
+      cfg.unitCategory,
+      cfg.unitSubtype,
+      cfg.professionId,
+      'tier_1',
+      RPS_ADVANTAGE[rpsTag] ? `counter_${RPS_ADVANTAGE[rpsTag]}` : ''
+    ].filter(Boolean);
+    return {
+      unitTypeId,
+      name: cfg.professionName,
+      roleTag: cfg.roleTag,
+      unitCategory: cfg.unitCategory,
+      unitSubtype: cfg.unitSubtype,
+      speed: roundTo(cfg.base.speed, 2),
+      hp: Math.round(cfg.base.hp),
+      atk: Math.round(cfg.base.atk),
+      def: Math.round(cfg.base.def),
+      range: roundTo(clamp(cfg.base.range, 1, 22), 2),
+      costKP: Math.max(1, Math.round(cfg.base.costKP)),
+      level: tier,
+      tier,
+      enabled: true,
+      rpsType: rpsTag,
+      professionId: cfg.professionId,
+      rarity: 'common',
+      tags,
+      description: cfg.description,
+      bodyId: `body_${cfg.professionKey}`,
+      weaponIds: [`weapon_${cfg.professionKey}`],
+      vehicleId: cfg.vehicleId || null,
+      behaviorProfileId: `behavior_${cfg.professionKey}`,
+      stabilityProfileId: `stability_${cfg.professionKey}`,
+      nextUnitTypeId: null,
+      upgradeCostKP: null,
+      sortOrder,
+      visuals: {
+        battle: {
+          bodyLayer: layerSeed % 64,
+          gearLayer: (layerSeed + 16) % 64,
+          vehicleLayer: (layerSeed + 32) % 64,
+          tint: roundTo(0.9 + (professionIndex * 0.02), 2),
+          silhouetteLayer: (layerSeed + 48) % 64
+        },
+        preview: {
+          style: 'procedural',
+          palette: resolveUnitPalette(cfg.unitCategory, cfg.unitSubtype)
         }
-      });
-    }
+      }
+    };
   });
-
-  const byProfession = new Map();
-  unitTypes.forEach((item) => {
-    const list = byProfession.get(item.professionId) || [];
-    list.push(item);
-    byProfession.set(item.professionId, list);
-  });
-  byProfession.forEach((rows) => {
-    rows.sort((a, b) => a.tier - b.tier);
-    for (let i = 0; i < rows.length; i += 1) {
-      const current = rows[i];
-      const next = rows[i + 1];
-      current.nextUnitTypeId = next ? next.unitTypeId : null;
-      current.upgradeCostKP = next ? Math.max(1, next.costKP - current.costKP) : null;
-    }
-  });
-
-  return unitTypes;
 };
 
 const dedupeByKey = (rows = [], keyName = '') => {
@@ -578,8 +454,11 @@ const buildUnitCatalog = (seedPatch = {}) => {
 
 module.exports = {
   RPS_TYPES,
-  TIER_POWER,
   RPS_ADVANTAGE,
+  UNIT_PALETTE_TONE_BY_SUBTYPE,
+  UNIT_CATEGORY_PALETTES,
+  UNIT_KNOWLEDGE_COST_KP,
+  resolveUnitPalette,
   PROFESSION_CONFIG,
   buildUnitCatalog
 };

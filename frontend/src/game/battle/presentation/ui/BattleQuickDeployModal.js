@@ -74,28 +74,29 @@ const BattleQuickDeployModal = ({
           </button>
         </div>
 
-        {quickDeployTab === 'standard' ? (
-          <div className="pve2-quick-standard-list">
-            {QUICK_DEPLOY_STANDARD_PRESETS.map((preset) => (
-              <div key={preset.id} className="pve2-quick-standard-item">
-                <div className="pve2-quick-standard-meta">
-                  <strong>{preset.label}</strong>
-                  <span>{preset.desc}</span>
-                  <em>{`我方 ${preset.attackerTeamCount} 支 / ${preset.attackerTotal} 人 ｜ 敌方 ${preset.defenderTeamCount} 支 / ${preset.defenderTotal} 人`}</em>
+        <div className="pve2-quick-deploy-content">
+          {quickDeployTab === 'standard' ? (
+            <div className="pve2-quick-standard-list">
+              {QUICK_DEPLOY_STANDARD_PRESETS.map((preset) => (
+                <div key={preset.id} className="pve2-quick-standard-item">
+                  <div className="pve2-quick-standard-meta">
+                    <strong>{preset.label}</strong>
+                    <span>{preset.desc}</span>
+                    <em>{`我方 ${preset.attackerTeamCount} 支 / ${preset.attackerTotal} 人 ｜ 敌方 ${preset.defenderTeamCount} 支 / ${preset.defenderTotal} 人`}</em>
+                  </div>
+                  <button
+                    type="button"
+                    className="btn btn-primary btn-small"
+                    disabled={quickDeployApplying}
+                    onClick={() => onApplyStandardPreset?.(preset)}
+                  >
+                    应用
+                  </button>
                 </div>
-                <button
-                  type="button"
-                  className="btn btn-primary btn-small"
-                  disabled={quickDeployApplying}
-                  onClick={() => onApplyStandardPreset?.(preset)}
-                >
-                  应用
-                </button>
-              </div>
-            ))}
-          </div>
-        ) : (
-          <div className="pve2-quick-random-form">
+              ))}
+            </div>
+          ) : (
+            <div className="pve2-quick-random-form">
             <div className="pve2-quick-form-block">
               <h5>我方</h5>
               <label>
@@ -199,10 +200,11 @@ const BattleQuickDeployModal = ({
                 </div>
               </label>
             </div>
-          </div>
-        )}
+            </div>
+          )}
 
-        {quickDeployError ? <p className="pve2-quick-error">{quickDeployError}</p> : null}
+          {quickDeployError ? <p className="pve2-quick-error">{quickDeployError}</p> : null}
+        </div>
 
         <div className="pve2-quick-deploy-actions">
           <button

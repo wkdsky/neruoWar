@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import './ArmyPanel.css';
 import { API_BASE } from '../../runtimeConfig';
 import normalizeUnitTypes from '../../game/unit/normalizeUnitTypes';
@@ -6,9 +7,14 @@ import {
   ArmyUnitCloseupCanvasPreview,
   ArmyUnitBattleCanvasPreview
 } from './unit/ArmyUnitPreviewCanvases';
-import { resolveUnitClassMeta } from './unit/unitClassMeta';
+import { formatUnitClassLabel, resolveUnitClassMeta } from './unit/unitClassMeta';
+import SkillTreePanel from './skillTree/SkillTreePanel';
+import BattleTemplateFillModal from '../../game/battle/presentation/ui/BattleTemplateFillModal';
+import {
+  allocateTemplateUnits,
+  normalizeTemplatePercentages
+} from '../../game/battle/screens/battleSceneUtils';
 import ArmyFormationThreeEditor, {
-  ARMY_FORMATION_MAX_CELLS,
   expandUnitsToFormationPlacements,
   getFormationOccupancyMetrics,
   normalizeFormationPlacements,
@@ -38,6 +44,7 @@ const getApiErrorMessage = (parsed, fallback) => {
 
 const ARMY_EDITOR_STEPS = ['units', 'formations', 'preview'];
 const ARMY_MAX_UNIT_BASIS = 100;
+const MAX_COMBAT_ARMY_UNIT_COUNT = 1000000;
 
 const getUnitId = (unit) => {
   const id = typeof unit?.id === 'string' ? unit.id.trim() : '';
@@ -58,6 +65,11 @@ const createFormationPlacementId = () => `formation_${Date.now()}_${Math.random(
 const createFormationSlotId = () => `formation_slot_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
 
 const getTemplateId = (template) => (typeof template?.templateId === 'string' ? template.templateId.trim() : '');
+const getCombatArmyId = (army) => {
+  const armyId = typeof army?.armyId === 'string' ? army.armyId.trim() : '';
+  if (armyId) return armyId;
+  return typeof army?.id === 'string' ? army.id.trim() : '';
+};
 const getFormationSlotId = (formation) => {
   const id = typeof formation?.id === 'string' ? formation.id.trim() : '';
   if (id) return id;
@@ -72,22 +84,167 @@ const getTroopDisplayName = (template) => {
 const buildUnitIntro = (unit = {}) => {
   const explicit = typeof unit?.description === 'string' ? unit.description.trim() : '';
   if (explicit) return explicit;
-  const role = unit?.roleTag === '远程' ? '远程压制' : '近战突击';
-  const rpsType = typeof unit?.rpsType === 'string' ? unit.rpsType : 'mobility';
+  const classMeta = resolveUnitClassMeta(unit);
+  const categoryLabel = classMeta.categoryLabel || '近战';
+  const classLabel = classMeta.label || `${categoryLabel}-${classMeta.subtypeLabel || '通用型'}`;
   const professionId = typeof unit?.professionId === 'string' ? unit.professionId : '';
   const speed = Number(unit?.speed) || 0;
   const range = Number(unit?.range) || 0;
-  if (role === '远程压制') {
-    return `该兵种定位为${role}（${rpsType}/${professionId}），擅长在中远距离持续输出。当前射程 ${range}，机动 ${speed}。`;
+  if (categoryLabel === '辅助') {
+    return `该兵种定位为${classLabel}（${professionId}），用于为部队提供战术增益或干预效果。当前射程 ${range}，机动 ${speed}。`;
   }
-  return `该兵种定位为${role}（${rpsType}/${professionId}），擅长正面接战与阵线压迫。当前射程 ${range}，机动 ${speed}。`;
+  return `该兵种定位为${classLabel}（${professionId}），当前射程 ${range}，机动 ${speed}。`;
 };
 
 const unitsToSummaryText = (units = [], unitNameById = new Map()) => (
   normalizeTemplateUnits(units)
-    .map((entry) => `${unitNameById.get(entry.unitTypeId) || entry.unitTypeId}x${entry.count}`)
+    .map((entry) => `${unitNameById.get(entry.unitTypeId) || entry.unitTypeId} ${entry.count}%`)
     .join(' / ')
 );
+
+const combatUnitsToSummaryText = (units = [], unitNameById = new Map()) => (
+  (Array.isArray(units) ? units : [])
+    .map((entry) => {
+      const unitTypeId = typeof entry?.unitTypeId === 'string' ? entry.unitTypeId.trim() : '';
+      const count = Math.max(0, Math.floor(Number(entry?.count) || 0));
+      if (!unitTypeId || count <= 0) return '';
+      return `${unitNameById.get(unitTypeId) || entry.unitName || unitTypeId} ${count}`;
+    })
+    .filter(Boolean)
+    .join(' / ')
+);
+
+const getUnitKnowledgeCost = (unit = {}) => (
+  Math.max(1, Math.floor(Number(unit?.costKP) || 1))
+);
+
+const formatUnitKnowledgeCost = (unit = {}) => `${getUnitKnowledgeCost(unit)} 知识点/人`;
+
+const buildTemplatePurchaseQuote = (template = {}, totalCount = 0, unitTypeMap = {}) => {
+  const total = Math.max(0, Math.floor(Number(totalCount) || 0));
+  const units = allocateTemplateUnits(template?.units || [], total);
+  const breakdown = units.map((entry) => {
+    const unit = unitTypeMap?.[entry.unitTypeId] || {};
+    const unitCost = getUnitKnowledgeCost(unit);
+    return {
+      ...entry,
+      unitCost,
+      subtotal: entry.count * unitCost
+    };
+  });
+  return {
+    totalCount: total,
+    units,
+    breakdown,
+    totalCost: breakdown.reduce((sum, entry) => sum + entry.subtotal, 0)
+  };
+};
+
+const getTemplateCapacityByKnowledgeBalance = (template = {}, unitTypeMap = {}, knowledgeBalance = 0) => {
+  const balance = Math.max(0, Math.floor(Number(knowledgeBalance) || 0));
+  const percentages = normalizeTemplatePercentages(template?.units || []);
+  if (balance <= 0 || percentages.length <= 0) return 0;
+
+  const minUnitCost = percentages.reduce((minimum, entry) => (
+    Math.min(minimum, getUnitKnowledgeCost(unitTypeMap?.[entry.unitTypeId]))
+  ), Number.POSITIVE_INFINITY);
+  if (!Number.isFinite(minUnitCost) || minUnitCost <= 0) return 0;
+
+  let low = 0;
+  let high = Math.min(MAX_COMBAT_ARMY_UNIT_COUNT, Math.floor(balance / minUnitCost));
+  while (low < high) {
+    const mid = Math.ceil((low + high) / 2);
+    if (buildTemplatePurchaseQuote(template, mid, unitTypeMap).totalCost <= balance) {
+      low = mid;
+    } else {
+      high = mid - 1;
+    }
+  }
+  return low;
+};
+
+const createDefaultCombatArmyCreatePanel = () => ({
+  open: false,
+  mode: 'create',
+  team: 'attacker',
+  knowledgeCostEnabled: true,
+  template: null,
+  name: '',
+  rows: [],
+  totalRequested: 0,
+  totalFilled: 0,
+  maxTotal: 0,
+  stats: null
+});
+
+const buildCombatArmyComposerStats = (units = [], unitTypeMap = {}) => {
+  let totalCount = 0;
+  let totalHp = 0;
+  let totalAtk = 0;
+  let totalDef = 0;
+  let totalRange = 0;
+  let speedReciprocalSum = 0;
+  (Array.isArray(units) ? units : []).forEach((entry) => {
+    const unitTypeId = typeof entry?.unitTypeId === 'string' ? entry.unitTypeId.trim() : '';
+    const count = Math.max(0, Math.floor(Number(entry?.count) || 0));
+    const unit = unitTypeMap?.[unitTypeId] || {};
+    if (!unitTypeId || count <= 0) return;
+    const hp = Math.max(0, Number(unit?.hp) || 0);
+    const atk = Math.max(0, Number(unit?.atk) || 0);
+    const def = Math.max(0, Number(unit?.def) || 0);
+    const speed = Math.max(0.2, Number(unit?.speed) || 1);
+    const range = Math.max(1, Number(unit?.range) || 1);
+    totalCount += count;
+    totalHp += hp * count;
+    totalAtk += atk * count;
+    totalDef += def * count;
+    totalRange += range * count;
+    speedReciprocalSum += count / speed;
+  });
+  return {
+    totalCount,
+    totalHp,
+    totalAtk,
+    totalDef,
+    cohesiveSpeed: totalCount > 0 && speedReciprocalSum > 0 ? totalCount / speedReciprocalSum : 0,
+    range: totalCount > 0 ? totalRange / totalCount : 0
+  };
+};
+
+const buildCombatArmyCreateSnapshot = (template = {}, totalCount = 0, unitTypeMap = {}, knowledgeBalance = 0) => {
+  const percentages = normalizeTemplatePercentages(template?.units || []);
+  const maxTotal = getTemplateCapacityByKnowledgeBalance(template, unitTypeMap, knowledgeBalance);
+  const requestedTotal = Math.max(0, Math.min(maxTotal, Math.floor(Number(totalCount) || 0)));
+  const allocatedUnits = allocateTemplateUnits(template?.units || [], requestedTotal);
+  const maximumUnits = allocateTemplateUnits(template?.units || [], maxTotal);
+  const quote = buildTemplatePurchaseQuote(template, requestedTotal, unitTypeMap);
+  const allocatedByUnitTypeId = new Map(allocatedUnits.map((entry) => [entry.unitTypeId, entry.count]));
+  const maximumByUnitTypeId = new Map(maximumUnits.map((entry) => [entry.unitTypeId, entry.count]));
+  const costByUnitTypeId = new Map(quote.breakdown.map((entry) => [entry.unitTypeId, entry]));
+  const rows = percentages.map((entry) => {
+    const requested = Math.max(0, Math.floor(Number(allocatedByUnitTypeId.get(entry.unitTypeId)) || 0));
+    const available = Math.max(0, Math.floor(Number(maximumByUnitTypeId.get(entry.unitTypeId)) || 0));
+    const cost = costByUnitTypeId.get(entry.unitTypeId) || {};
+    return {
+      unitTypeId: entry.unitTypeId,
+      unitName: unitTypeMap?.[entry.unitTypeId]?.name || entry.unitName || entry.unitTypeId,
+      percent: entry.count,
+      requested,
+      available,
+      filled: requested,
+      unitCost: Math.max(0, Math.floor(Number(cost.unitCost) || 0)),
+      totalCost: Math.max(0, Math.floor(Number(cost.subtotal) || 0))
+    };
+  });
+  return {
+    rows,
+    totalRequested: rows.reduce((sum, row) => sum + row.requested, 0),
+    totalFilled: rows.reduce((sum, row) => sum + row.filled, 0),
+    maxTotal,
+    stats: buildCombatArmyComposerStats(allocatedUnits, unitTypeMap),
+    totalCost: quote.totalCost
+  };
+};
 
 const clampUnitBasisValue = (value) => (
   Math.max(1, Math.min(ARMY_MAX_UNIT_BASIS, Math.floor(Number(value) || 1)))
@@ -109,17 +266,32 @@ const normalizeUnitBasisEntryRows = (entries = []) => {
 };
 
 const normalizeUnitBasisEntries = (entries = []) => {
-  const byId = normalizeUnitBasisEntryRows(entries);
-  let total = 0;
-  const normalized = [];
-  byId.forEach((entry) => {
-    const remaining = ARMY_MAX_UNIT_BASIS - total;
-    if (remaining <= 0) return;
-    const basis = Math.min(remaining, entry.basis);
-    if (basis <= 0) return;
-    total += basis;
-    normalized.push({ ...entry, basis });
-  });
+  const normalized = normalizeUnitBasisEntryRows(entries).slice(0, ARMY_MAX_UNIT_BASIS);
+  if (normalized.length <= 0) return [];
+  let total = normalized.reduce((sum, entry) => sum + entry.basis, 0);
+  if (total < ARMY_MAX_UNIT_BASIS) {
+    normalized[0] = {
+      ...normalized[0],
+      basis: normalized[0].basis + (ARMY_MAX_UNIT_BASIS - total)
+    };
+    return normalized;
+  }
+  let overflow = total - ARMY_MAX_UNIT_BASIS;
+  for (let index = 0; index < normalized.length && overflow > 0; index += 1) {
+    const reduction = Math.min(Math.max(0, normalized[index].basis - 1), overflow);
+    normalized[index] = {
+      ...normalized[index],
+      basis: normalized[index].basis - reduction
+    };
+    overflow -= reduction;
+  }
+  total = normalized.reduce((sum, entry) => sum + entry.basis, 0);
+  if (total < ARMY_MAX_UNIT_BASIS) {
+    normalized[0] = {
+      ...normalized[0],
+      basis: normalized[0].basis + (ARMY_MAX_UNIT_BASIS - total)
+    };
+  }
   return normalized;
 };
 
@@ -128,52 +300,43 @@ const rebalanceUnitBasisOnChange = (entries = [], unitTypeId = '', nextBasisRaw 
   const source = normalizeUnitBasisEntryRows(entries);
   const activeIndex = source.findIndex((entry) => entry.unitTypeId === safeId);
   if (!safeId || activeIndex < 0) return normalizeUnitBasisEntries(source);
-
   const otherCount = Math.max(0, source.length - 1);
   const maxActiveBasis = otherCount > 0
     ? Math.max(1, ARMY_MAX_UNIT_BASIS - otherCount)
     : ARMY_MAX_UNIT_BASIS;
   const requested = Math.min(clampUnitBasisValue(nextBasisRaw), maxActiveBasis);
-  const nextEntries = source.map((entry, index) => (
-    index === activeIndex ? { ...entry, basis: requested } : { ...entry }
-  ));
-  let overflow = nextEntries.reduce((sum, entry) => sum + entry.basis, 0) - ARMY_MAX_UNIT_BASIS;
-  if (overflow <= 0) return normalizeUnitBasisEntries(nextEntries);
-
-  const otherIndexes = nextEntries
-    .map((entry, index) => (index === activeIndex ? -1 : index))
-    .filter((index) => index >= 0);
-  while (overflow > 0) {
-    const adjustableIndexes = [];
-    for (let otherIndexIndex = 0; otherIndexIndex < otherIndexes.length; otherIndexIndex += 1) {
-      const index = otherIndexes[otherIndexIndex];
-      if (nextEntries[index].basis > 1) adjustableIndexes.push(index);
-    }
-    if (adjustableIndexes.length <= 0) break;
-    for (let sortIndex = 0; sortIndex < adjustableIndexes.length - 1; sortIndex += 1) {
-      for (let compareIndex = sortIndex + 1; compareIndex < adjustableIndexes.length; compareIndex += 1) {
-        const leftIndex = adjustableIndexes[sortIndex];
-        const rightIndex = adjustableIndexes[compareIndex];
-        const shouldSwap = nextEntries[rightIndex].basis > nextEntries[leftIndex].basis
-          || (nextEntries[rightIndex].basis === nextEntries[leftIndex].basis && rightIndex < leftIndex);
-        if (shouldSwap) {
-          adjustableIndexes[sortIndex] = rightIndex;
-          adjustableIndexes[compareIndex] = leftIndex;
-        }
-      }
-    }
-    const share = Math.max(1, Math.floor(overflow / adjustableIndexes.length));
-    for (let indexIndex = 0; indexIndex < adjustableIndexes.length && overflow > 0; indexIndex += 1) {
-      const index = adjustableIndexes[indexIndex];
-      const reduction = Math.min(nextEntries[index].basis - 1, share, overflow);
-      nextEntries[index] = {
-        ...nextEntries[index],
-        basis: nextEntries[index].basis - reduction
-      };
-      overflow -= reduction;
-    }
+  if (otherCount <= 0) {
+    return [{ ...source[activeIndex], basis: ARMY_MAX_UNIT_BASIS }];
   }
-  return normalizeUnitBasisEntries(nextEntries);
+
+  const otherRows = source.filter((entry, index) => index !== activeIndex);
+  const remaining = ARMY_MAX_UNIT_BASIS - requested;
+  const minimumRemaining = otherRows.length;
+  const extra = Math.max(0, remaining - minimumRemaining);
+  const weightTotal = otherRows.reduce((sum, entry) => sum + Math.max(1, entry.basis), 0);
+  const distributed = otherRows.map((entry, index) => {
+    const exact = (extra * Math.max(1, entry.basis)) / weightTotal;
+    return {
+      ...entry,
+      basis: 1 + Math.floor(exact),
+      remainder: exact - Math.floor(exact),
+      index
+    };
+  });
+  let remainingExtra = extra - distributed.reduce((sum, entry) => sum + (entry.basis - 1), 0);
+  distributed
+    .slice()
+    .sort((left, right) => right.remainder - left.remainder || left.index - right.index)
+    .forEach((entry) => {
+      if (remainingExtra <= 0) return;
+      entry.basis += 1;
+      remainingExtra -= 1;
+    });
+  const nextById = new Map([
+    [safeId, { ...source[activeIndex], basis: requested }],
+    ...distributed.map(({ remainder, index, ...entry }) => [entry.unitTypeId, entry])
+  ]);
+  return source.map((entry) => nextById.get(entry.unitTypeId) || entry);
 };
 
 const getUnitBasisTotal = (entries = []) => (
@@ -221,14 +384,14 @@ const getNextTemplateDraftName = (templates = []) => {
   const usedNumbers = new Set(
     (Array.isArray(templates) ? templates : [])
       .map((template) => {
-        const match = String(template?.name || '').trim().match(/^新建部队(\d+)$/);
+        const match = String(template?.name || '').trim().match(/^创建部队模板(\d+)$/);
         return match ? Math.max(0, Math.floor(Number(match[1]) || 0)) : 0;
       })
       .filter((value) => value > 0)
   );
   let nextNumber = 1;
   while (usedNumbers.has(nextNumber)) nextNumber += 1;
-  return `新建部队${nextNumber}`;
+  return `创建部队模板${nextNumber}`;
 };
 
 const createTemplateEditorDraft = (name = '') => ({
@@ -237,7 +400,7 @@ const createTemplateEditorDraft = (name = '') => ({
   formations: [createFormationSlot(0)]
 });
 
-const buildUnitBasisRows = (entries = [], unitTypeMap = {}) => {
+const buildUnitBasisRows = (entries = [], unitTypeMap = {}, unitClassMetaById = {}) => {
   const normalized = normalizeUnitBasisEntries(entries).filter((entry) => unitTypeMap[entry.unitTypeId]);
   const percentMap = buildPercentTenthsByUnitId(normalized);
   return normalized.map((entry) => {
@@ -246,7 +409,7 @@ const buildUnitBasisRows = (entries = [], unitTypeMap = {}) => {
       ...entry,
       unit,
       unitName: unit.name || entry.unitTypeId,
-      classMeta: resolveUnitClassMeta(unit),
+      classMeta: unitClassMetaById[entry.unitTypeId] || resolveUnitClassMeta(unit),
       percentTenths: percentMap.get(entry.unitTypeId) || 0
     };
   });
@@ -374,7 +537,7 @@ const buildFormationMiniPreviewTileStyle = (placement = {}, geometry = {}) => {
   };
 };
 
-const FormationMiniPreview = ({ formation = {}, unitTypeMap = {}, className = '' }) => {
+const FormationMiniPreview = ({ formation = {}, unitTypeMap = {}, unitClassMetaById = {}, className = '' }) => {
   const placements = normalizeFormationPlacements(formation.placements);
   const geometry = buildFormationMiniPreviewGeometry(formation.occupancyMetrics);
   const classes = ['army-formation-mini-preview', className].filter(Boolean).join(' ');
@@ -386,12 +549,13 @@ const FormationMiniPreview = ({ formation = {}, unitTypeMap = {}, className = ''
           <span className="army-formation-mini-empty" />
         ) : placements.map((placement) => {
           const unit = unitTypeMap[placement.unitTypeId] || {};
+          const classMeta = unitClassMetaById[placement.unitTypeId] || resolveUnitClassMeta(unit);
           return (
             <span
               key={`mini-${formation.id}-${placement.id}`}
               className="army-formation-mini-tile"
               style={{
-                background: resolveUnitClassMeta(unit).color,
+                background: classMeta.color,
                 ...buildFormationMiniPreviewTileStyle(placement, geometry)
               }}
             />
@@ -402,21 +566,21 @@ const FormationMiniPreview = ({ formation = {}, unitTypeMap = {}, className = ''
   );
 };
 
-const buildTroopCompositionRows = (units = [], unitTypeMap = {}) => (
-  normalizeTemplateUnits(units)
+const buildTroopCompositionRows = (units = [], unitTypeMap = {}, unitClassMetaById = {}) => (
+  normalizeTemplatePercentages(units)
     .map((entry) => {
       const unit = unitTypeMap[entry.unitTypeId] || {};
       return {
         ...entry,
         unit,
         unitName: unit.name || entry.unitName || entry.unitTypeId,
-        classMeta: resolveUnitClassMeta(unit)
+        classMeta: unitClassMetaById[entry.unitTypeId] || resolveUnitClassMeta(unit)
       };
     })
 );
 
-const buildTroopAggregateStats = (units = [], unitTypeMap = {}) => {
-  const rows = buildTroopCompositionRows(units, unitTypeMap);
+const buildTroopAggregateStats = (units = [], unitTypeMap = {}, unitClassMetaById = {}) => {
+  const rows = buildTroopCompositionRows(units, unitTypeMap, unitClassMetaById);
   const total = rows.reduce((sum, row) => sum + row.count, 0);
   const weighted = (key) => {
     if (total <= 0) return 0;
@@ -498,8 +662,15 @@ const getBattlefieldItemStyleEntries = (style = {}) => (
     .filter((entry) => entry.value !== '')
 );
 
-const ArmyPanel = ({ initialLibraryTab = 'units', mode = 'barracks' }) => {
+const ArmyPanel = ({
+  initialLibraryTab = 'units',
+  mode = 'barracks',
+  templateToEdit = null,
+  onTemplateSaved = null,
+  onClose = null
+}) => {
   const isLibraryMode = mode === 'library';
+  const isTemplateEditorMode = mode === 'templateEditor';
   const safeInitialLibraryTab = initialLibraryTab === 'equipment' ? 'equipment' : 'units';
   const [activeBarracksTab, setActiveBarracksTab] = useState('troops');
   const [libraryTab, setLibraryTab] = useState(safeInitialLibraryTab);
@@ -507,6 +678,7 @@ const ArmyPanel = ({ initialLibraryTab = 'units', mode = 'barracks' }) => {
   const [knowledgeBalance, setKnowledgeBalance] = useState(0);
   const [roster, setRoster] = useState([]);
   const [templates, setTemplates] = useState([]);
+  const [combatArmies, setCombatArmies] = useState([]);
   const [battlefieldItems, setBattlefieldItems] = useState([]);
   const [battlefieldItemsError, setBattlefieldItemsError] = useState('');
   const [styleModalItemId, setStyleModalItemId] = useState('');
@@ -516,6 +688,9 @@ const ArmyPanel = ({ initialLibraryTab = 'units', mode = 'barracks' }) => {
   const [templateActionId, setTemplateActionId] = useState('');
   const [hoveredTemplateId, setHoveredTemplateId] = useState('');
   const [selectedTemplateId, setSelectedTemplateId] = useState('');
+  const [selectedCombatArmyId, setSelectedCombatArmyId] = useState('');
+  const [combatArmyActionId, setCombatArmyActionId] = useState('');
+  const [combatArmyCreatePanel, setCombatArmyCreatePanel] = useState(createDefaultCombatArmyCreatePanel);
   const [detailUnitId, setDetailUnitId] = useState('');
   const [detailRotation, setDetailRotation] = useState({ closeup: 0, battle: 0 });
   const [detailDragTarget, setDetailDragTarget] = useState('');
@@ -536,6 +711,8 @@ const ArmyPanel = ({ initialLibraryTab = 'units', mode = 'barracks' }) => {
   const [templateEditorSelectedPlacementIds, setTemplateEditorSelectedPlacementIds] = useState([]);
   const [templateEditorMoveSelectionIds, setTemplateEditorMoveSelectionIds] = useState([]);
   const [armyToasts, setArmyToasts] = useState([]);
+  const templateEditorAutoOpenedRef = useRef(false);
+  const combatArmyCreateInFlightRef = useRef(false);
 
   const token = localStorage.getItem('token');
 
@@ -552,6 +729,14 @@ const ArmyPanel = ({ initialLibraryTab = 'units', mode = 'barracks' }) => {
       return acc;
     }, {});
   }, [unitTypes]);
+
+  const unitClassMetaById = useMemo(() => (
+    unitTypes.reduce((acc, unit) => {
+      const unitId = getUnitId(unit);
+      if (unitId) acc[unitId] = resolveUnitClassMeta(unit);
+      return acc;
+    }, {})
+  ), [unitTypes]);
 
   const unitNameByTypeId = useMemo(() => (
     new Map(
@@ -603,52 +788,30 @@ const ArmyPanel = ({ initialLibraryTab = 'units', mode = 'barracks' }) => {
     return templates.find((template) => getTemplateId(template) === preferredId) || templates[0] || null;
   }, [hoveredTemplateId, selectedTemplateId, templates]);
 
-  const activeTemplateCompositionRows = useMemo(
-    () => buildTroopCompositionRows(activeTemplate?.units || [], unitTypeMap),
-    [activeTemplate, unitTypeMap]
-  );
+  const selectedCombatArmy = useMemo(() => {
+    const preferredId = selectedCombatArmyId || getCombatArmyId(combatArmies[0]);
+    return combatArmies.find((army) => getCombatArmyId(army) === preferredId) || combatArmies[0] || null;
+  }, [combatArmies, selectedCombatArmyId]);
 
-  const activeTemplateStats = useMemo(
-    () => buildTroopAggregateStats(activeTemplate?.units || [], unitTypeMap),
-    [activeTemplate, unitTypeMap]
+  const availableRosterTotal = useMemo(
+    () => roster.reduce((sum, entry) => sum + Math.max(0, Math.floor(Number(entry?.count) || 0)), 0),
+    [roster]
   );
-
-  const activeTemplateBasisRows = useMemo(
-    () => activeTemplateCompositionRows.map((row) => ({ ...row, basis: row.count })),
-    [activeTemplateCompositionRows]
-  );
-
-  const activeTemplateFormationSummaries = useMemo(() => {
-    if (!activeTemplate) return [];
-    return (Array.isArray(activeTemplate.formations) ? activeTemplate.formations : []).map((formation, index) => {
-      const placements = normalizeFormationPlacements(formation?.placements || []);
-      const legal = formation?.legal === true || isFormationLegal({ placements }, activeTemplateBasisRows);
-      return {
-        id: getFormationSlotId(formation) || `formation_${index}`,
-        name: (typeof formation?.name === 'string' && formation.name.trim())
-          ? formation.name.trim()
-          : (index <= 0 ? '默认阵型' : `新建阵型${index}`),
-        placements,
-        occupancyMetrics: getFormationOccupancyMetrics(placements),
-        legal,
-        totalPlaced: Math.max(0, Math.floor(Number(formation?.totalPlaced) || placements.length))
-      };
-    });
-  }, [activeTemplate, activeTemplateBasisRows]);
 
   const templateEditorAvailableRows = useMemo(() => (
     unitsWithCount
       .map((unit) => ({
         unitTypeId: unit.id,
         unitName: unit.name || unit.id,
-        unit
+        unit,
+        classMeta: unitClassMetaById[unit.id] || resolveUnitClassMeta(unit)
       }))
       .sort((a, b) => a.unitName.localeCompare(b.unitName, 'zh-Hans-CN'))
-  ), [unitsWithCount]);
+  ), [unitClassMetaById, unitsWithCount]);
 
   const templateEditorBasisRows = useMemo(
-    () => buildUnitBasisRows(templateEditorDraft.unitBasis, unitTypeMap),
-    [templateEditorDraft.unitBasis, unitTypeMap]
+    () => buildUnitBasisRows(templateEditorDraft.unitBasis, unitTypeMap, unitClassMetaById),
+    [templateEditorDraft.unitBasis, unitClassMetaById, unitTypeMap]
   );
 
   const templateEditorUnits = useMemo(
@@ -712,8 +875,8 @@ const ArmyPanel = ({ initialLibraryTab = 'units', mode = 'barracks' }) => {
   );
 
   const templateEditorPreviewStats = useMemo(
-    () => buildTroopAggregateStats(templateEditorUnits, unitTypeMap),
-    [templateEditorUnits, unitTypeMap]
+    () => buildTroopAggregateStats(templateEditorUnits, unitTypeMap, unitClassMetaById),
+    [templateEditorUnits, unitClassMetaById, unitTypeMap]
   );
 
   const templateEditorActiveUnitRows = useMemo(
@@ -754,8 +917,10 @@ const ArmyPanel = ({ initialLibraryTab = 'units', mode = 'barracks' }) => {
   }, [templateEditorMoveSelectionIds, templateEditorPlacements, templateEditorSelectedPlacementIds]);
 
   const templateEditorDetailClassMeta = useMemo(
-    () => (templateEditorDetailUnit ? resolveUnitClassMeta(templateEditorDetailUnit) : null),
-    [templateEditorDetailUnit]
+    () => (templateEditorDetailUnit
+      ? unitClassMetaById[templateEditorHoverUnitId] || resolveUnitClassMeta(templateEditorDetailUnit)
+      : null),
+    [templateEditorDetailUnit, templateEditorHoverUnitId, unitClassMetaById]
   );
 
   const updateTemplateEditorUnitHover = useCallback((unitTypeId, event = null) => {
@@ -854,6 +1019,7 @@ const ArmyPanel = ({ initialLibraryTab = 'units', mode = 'barracks' }) => {
       const nextRoster = Array.isArray(meParsed.data?.roster) ? meParsed.data.roster : [];
       const nextBalance = Number.isFinite(meParsed.data?.knowledgeBalance) ? meParsed.data.knowledgeBalance : 0;
       const nextTemplates = Array.isArray(templatesParsed.data?.templates) ? templatesParsed.data.templates : [];
+      const nextCombatArmies = Array.isArray(meParsed.data?.combatArmies) ? meParsed.data.combatArmies : [];
       const nextBattlefieldItems = trainingInitResponse?.ok
         ? normalizeBattlefieldItemCatalog(trainingInitParsed?.data?.battlefield?.itemCatalog)
         : [];
@@ -862,10 +1028,16 @@ const ArmyPanel = ({ initialLibraryTab = 'units', mode = 'barracks' }) => {
       setRoster(nextRoster);
       setKnowledgeBalance(nextBalance);
       setTemplates(nextTemplates);
+      setCombatArmies(nextCombatArmies);
       setSelectedTemplateId((prev) => (
         prev && nextTemplates.some((template) => getTemplateId(template) === prev)
           ? prev
           : getTemplateId(nextTemplates[0])
+      ));
+      setSelectedCombatArmyId((prev) => (
+        prev && nextCombatArmies.some((army) => getCombatArmyId(army) === prev)
+          ? prev
+          : getCombatArmyId(nextCombatArmies[0])
       ));
       setBattlefieldItems(nextBattlefieldItems);
       setBattlefieldItemsError(
@@ -1030,9 +1202,10 @@ const ArmyPanel = ({ initialLibraryTab = 'units', mode = 'barracks' }) => {
     setTemplateEditorSelectedPlacementId('');
     setTemplateEditorSelectedPlacementIds([]);
     setTemplateEditorMoveSelectionIds([]);
+    if (isTemplateEditorMode) onClose?.();
   };
 
-  const openTemplateCreate = () => {
+  const openTemplateCreate = useCallback(() => {
     setTemplateNotice('');
     const nextDraft = createTemplateEditorDraft(getNextTemplateDraftName(templates));
     setTemplateEditorOpen(true);
@@ -1045,13 +1218,13 @@ const ArmyPanel = ({ initialLibraryTab = 'units', mode = 'barracks' }) => {
     setTemplateEditorSelectedPlacementId('');
     setTemplateEditorSelectedPlacementIds([]);
     setTemplateEditorMoveSelectionIds([]);
-  };
+  }, [templates]);
 
-  const openTemplateEdit = (template) => {
+  const openTemplateEdit = useCallback((template) => {
     if (!template) return;
     setTemplateNotice('');
     const units = normalizeTemplateUnits(template.units).slice(0, ARMY_MAX_UNIT_BASIS);
-    const unitBasis = normalizeUnitBasisEntries(units.map((entry) => ({
+    const unitBasis = normalizeUnitBasisEntries(normalizeTemplatePercentages(units).map((entry) => ({
       unitTypeId: entry.unitTypeId,
       basis: entry.count
     })));
@@ -1077,7 +1250,21 @@ const ArmyPanel = ({ initialLibraryTab = 'units', mode = 'barracks' }) => {
     setTemplateEditorSelectedPlacementId('');
     setTemplateEditorSelectedPlacementIds([]);
     setTemplateEditorMoveSelectionIds([]);
-  };
+  }, []);
+
+  useEffect(() => {
+    if (!isTemplateEditorMode) {
+      templateEditorAutoOpenedRef.current = false;
+      return;
+    }
+    if (loading || templateEditorAutoOpenedRef.current) return;
+    templateEditorAutoOpenedRef.current = true;
+    if (templateToEdit) {
+      openTemplateEdit(templateToEdit);
+    } else {
+      openTemplateCreate();
+    }
+  }, [isTemplateEditorMode, loading, openTemplateCreate, openTemplateEdit, templateToEdit]);
 
   const sanitizeDraftFormations = useCallback((unitBasis, formations) => (
     normalizeFormationSlots(formations, unitBasis)
@@ -1091,14 +1278,9 @@ const ArmyPanel = ({ initialLibraryTab = 'units', mode = 'barracks' }) => {
       pushArmyToast('该兵种已在部队中', 'error');
       return;
     }
-    if (getUnitBasisTotal(currentDraftBasis) >= ARMY_MAX_UNIT_BASIS) {
-      pushArmyToast('基础数已达上限', 'error');
-      return;
-    }
     setTemplateEditorDraft((prev) => {
       const current = normalizeUnitBasisEntries(prev.unitBasis);
       if (current.some((entry) => entry.unitTypeId === safeId)) return prev;
-      if (getUnitBasisTotal(current) >= ARMY_MAX_UNIT_BASIS) return prev;
       const nextBasis = normalizeUnitBasisEntries([...current, { unitTypeId: safeId, basis: 1 }]);
       return {
         ...prev,
@@ -1378,12 +1560,8 @@ const ArmyPanel = ({ initialLibraryTab = 'units', mode = 'barracks' }) => {
     const currentIndex = ARMY_EDITOR_STEPS.indexOf(templateEditorStep);
     if (direction > 0) {
       if (templateEditorStep === 'units') {
-        if (templateEditorTotal < 1) {
-          pushArmyToast('至少选择 1 个兵种', 'error');
-          return;
-        }
-        if (templateEditorTotal > ARMY_MAX_UNIT_BASIS) {
-          pushArmyToast(`部队基础数最多 ${ARMY_MAX_UNIT_BASIS}`, 'error');
+        if (templateEditorTotal !== ARMY_MAX_UNIT_BASIS) {
+          pushArmyToast('兵种占比总和必须为100%', 'error');
           return;
         }
       }
@@ -1398,7 +1576,7 @@ const ArmyPanel = ({ initialLibraryTab = 'units', mode = 'barracks' }) => {
 
   const submitTemplateEditor = async () => {
     if (!token) {
-      setTemplateNotice('未登录，无法保存部队');
+      setTemplateNotice('未登录，无法保存创建部队模板');
       return;
     }
     const units = normalizeTemplateUnits(templateEditorUnits);
@@ -1406,17 +1584,17 @@ const ArmyPanel = ({ initialLibraryTab = 'units', mode = 'barracks' }) => {
       setTemplateNotice('请至少配置一个士兵单位');
       return;
     }
-    if (templateEditorTotal > ARMY_MAX_UNIT_BASIS) {
-      setTemplateNotice(`部队基础数最多 ${ARMY_MAX_UNIT_BASIS}`);
+    if (templateEditorTotal !== ARMY_MAX_UNIT_BASIS) {
+      setTemplateNotice('兵种占比总和必须为100%');
       return;
     }
     if (templateEditorLegalFormationCount <= 0) {
-      setTemplateNotice('至少需要一个合法阵型才能保存部队');
+      setTemplateNotice('至少需要一个合法阵型才能保存创建部队模板');
       return;
     }
     const legalFormationPayload = buildLegalFormationPayload(templateEditorFormations, templateEditorDraft.unitBasis);
     if (legalFormationPayload.length <= 0) {
-      setTemplateNotice('至少需要一个合法阵型才能保存部队');
+      setTemplateNotice('至少需要一个合法阵型才能保存创建部队模板');
       return;
     }
     const ignoredFormationCount = Math.max(0, templateEditorFormations.length - legalFormationPayload.length);
@@ -1446,7 +1624,7 @@ const ArmyPanel = ({ initialLibraryTab = 'units', mode = 'barracks' }) => {
       );
       const parsed = await parseApiResponse(response);
       if (!response.ok) {
-        setTemplateNotice(getApiErrorMessage(parsed, isEditing ? '更新部队失败' : '创建部队失败'));
+        setTemplateNotice(getApiErrorMessage(parsed, isEditing ? '更新创建部队模板失败' : '创建部队模板失败'));
         return;
       }
       let nextTemplates = Array.isArray(parsed.data?.templates) ? parsed.data.templates : templates;
@@ -1464,22 +1642,169 @@ const ArmyPanel = ({ initialLibraryTab = 'units', mode = 'barracks' }) => {
         // The save already succeeded; keep the save response if the follow-up refresh fails.
       }
       setTemplates(nextTemplates);
-      const nextActiveId = getTemplateId(parsed.data?.template) || getTemplateId(nextTemplates[0]);
+      const savedTemplate = parsed.data?.template
+        || nextTemplates.find((template) => getTemplateId(template) === templateEditingId)
+        || nextTemplates[0]
+        || null;
+      const nextActiveId = getTemplateId(savedTemplate) || getTemplateId(nextTemplates[0]);
       setSelectedTemplateId(nextActiveId);
+      onTemplateSaved?.(savedTemplate, { editing: isEditing });
       closeTemplateEditor();
-      const successMessage = `${isEditing ? '编辑' : '创建'}部队成功${ignoredFormationCount > 0 ? `，已忽略 ${ignoredFormationCount} 个未完成阵型` : ''}`;
+      const successMessage = `${isEditing ? '编辑' : '创建'}部队模板成功${ignoredFormationCount > 0 ? `，已忽略 ${ignoredFormationCount} 个未完成阵型` : ''}`;
       pushArmyToast(successMessage, 'info');
     } catch (requestError) {
-      setTemplateNotice(`${isEditing ? '更新部队' : '创建部队'}失败: ${requestError.message}`);
+      setTemplateNotice(`${isEditing ? '更新创建部队模板' : '创建部队模板'}失败: ${requestError.message}`);
     } finally {
       setTemplateActionId('');
     }
   };
 
+  const openCombatArmyCreate = useCallback((template) => {
+    const templateId = getTemplateId(template);
+    if (!templateId) return;
+    if (!token) {
+      pushArmyToast('未登录，无法创建实际参战部队', 'error');
+      return;
+    }
+    const maxTotal = getTemplateCapacityByKnowledgeBalance(template, unitTypeMap, knowledgeBalance);
+    if (maxTotal <= 0) {
+      const singleQuote = buildTemplatePurchaseQuote(template, 1, unitTypeMap);
+      if (singleQuote.totalCost <= 0) {
+        pushArmyToast('该模板没有可创建的兵种，请先检查模板配比', 'error');
+        return;
+      }
+      pushArmyToast(
+        `知识点不足：创建该模板至少需要 ${singleQuote.totalCost} 点，当前余额 ${Math.max(0, Math.floor(Number(knowledgeBalance) || 0))} 点`,
+        'error'
+      );
+      return;
+    }
+    const snapshot = buildCombatArmyCreateSnapshot(template, 0, unitTypeMap, knowledgeBalance);
+    setCombatArmyCreatePanel({
+      ...createDefaultCombatArmyCreatePanel(),
+      open: true,
+      template,
+      name: getTroopDisplayName(template),
+      ...snapshot
+    });
+  }, [knowledgeBalance, pushArmyToast, token, unitTypeMap]);
+
+  const closeCombatArmyCreate = useCallback(() => {
+    if (combatArmyActionId === '__create__') return;
+    setCombatArmyCreatePanel(createDefaultCombatArmyCreatePanel());
+  }, [combatArmyActionId]);
+
+  const handleChangeCombatArmyCreateTotal = useCallback((totalCount) => {
+    setCombatArmyCreatePanel((previous) => {
+      if (!previous?.template) return previous;
+      const snapshot = buildCombatArmyCreateSnapshot(
+        previous.template,
+        totalCount,
+        unitTypeMap,
+        knowledgeBalance
+      );
+      return { ...previous, ...snapshot };
+    });
+  }, [knowledgeBalance, unitTypeMap]);
+
+  const handleChangeCombatArmyCreateName = useCallback((name) => {
+    const safeName = typeof name === 'string' ? name.slice(0, 32) : '';
+    setCombatArmyCreatePanel((previous) => ({ ...previous, name: safeName }));
+  }, []);
+
+  const createCombatArmyFromTemplate = useCallback(async () => {
+    if (combatArmyActionId === '__create__' || combatArmyCreateInFlightRef.current) return;
+    const template = combatArmyCreatePanel.template;
+    const templateId = getTemplateId(template);
+    const maxTotal = Math.max(0, Math.floor(Number(combatArmyCreatePanel.maxTotal) || 0));
+    const safeTotal = Math.max(0, Math.min(maxTotal, Math.floor(Number(combatArmyCreatePanel.totalRequested) || 0)));
+    if (!templateId || maxTotal <= 0 || !token) {
+      setCombatArmyCreatePanel(createDefaultCombatArmyCreatePanel());
+      return;
+    }
+    if (safeTotal <= 0) {
+      pushArmyToast('请先设置要创建的部队总兵力', 'error');
+      return;
+    }
+
+    combatArmyCreateInFlightRef.current = true;
+    setCombatArmyActionId('__create__');
+    try {
+      const response = await fetch(`${API_BASE}/army/combat-armies`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`
+        },
+        body: JSON.stringify({
+          templateId,
+          totalCount: safeTotal,
+          name: String(combatArmyCreatePanel.name || '').trim()
+        })
+      });
+      const parsed = await parseApiResponse(response);
+      if (!response.ok) {
+        pushArmyToast(getApiErrorMessage(parsed, '创建实际参战部队失败'), 'error');
+        return;
+      }
+      const nextCombatArmies = Array.isArray(parsed.data?.combatArmies) ? parsed.data.combatArmies : [];
+      const nextRoster = Array.isArray(parsed.data?.roster) ? parsed.data.roster : roster;
+      setCombatArmies(nextCombatArmies);
+      setRoster(nextRoster);
+      if (Number.isFinite(parsed.data?.knowledgeBalance)) setKnowledgeBalance(parsed.data.knowledgeBalance);
+      const createdId = getCombatArmyId(parsed.data?.combatArmy);
+      setSelectedCombatArmyId(createdId || getCombatArmyId(nextCombatArmies[0]));
+      setCombatArmyCreatePanel(createDefaultCombatArmyCreatePanel());
+      const totalCost = Math.max(0, Math.floor(Number(parsed.data?.totalCost) || 0));
+      pushArmyToast(
+        totalCost > 0
+          ? `实际参战部队已创建，已消耗 ${totalCost} 知识点`
+          : '实际参战部队已创建，并已登记真实士兵',
+        'info'
+      );
+    } catch (requestError) {
+      pushArmyToast(`创建实际参战部队失败: ${requestError.message}`, 'error');
+    } finally {
+      combatArmyCreateInFlightRef.current = false;
+      setCombatArmyActionId('');
+    }
+  }, [combatArmyActionId, combatArmyCreatePanel, pushArmyToast, roster, token]);
+
+  const deleteCombatArmy = useCallback(async (army) => {
+    const armyId = getCombatArmyId(army);
+    if (!armyId || !token) return;
+    const armyName = getTroopDisplayName(army);
+    if (!window.confirm(`确认解散实际参战部队「${armyName}」？已购买的真实士兵会回到未分配库存，知识点不返还。`)) return;
+
+    setCombatArmyActionId(armyId);
+    try {
+      const response = await fetch(`${API_BASE}/army/combat-armies/${encodeURIComponent(armyId)}`, {
+        method: 'DELETE',
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      const parsed = await parseApiResponse(response);
+      if (!response.ok) {
+        pushArmyToast(getApiErrorMessage(parsed, '解散实际参战部队失败'), 'error');
+        return;
+      }
+      const nextCombatArmies = Array.isArray(parsed.data?.combatArmies) ? parsed.data.combatArmies : [];
+      setCombatArmies(nextCombatArmies);
+      if (Array.isArray(parsed.data?.roster)) setRoster(parsed.data.roster);
+      setSelectedCombatArmyId((previous) => (
+        previous === armyId ? getCombatArmyId(nextCombatArmies[0]) : previous
+      ));
+      pushArmyToast('实际参战部队已解散，真实士兵已回到未分配库存', 'info');
+    } catch (requestError) {
+      pushArmyToast(`解散实际参战部队失败: ${requestError.message}`, 'error');
+    } finally {
+      setCombatArmyActionId('');
+    }
+  }, [pushArmyToast, token]);
+
   const deleteTemplate = async (template) => {
     const templateId = typeof template?.templateId === 'string' ? template.templateId.trim() : '';
     if (!templateId || !token) return;
-    if (!window.confirm(`确认删除部队「${getTroopDisplayName(template)}」？`)) return;
+    if (!window.confirm(`确认删除部队模板「${getTroopDisplayName(template)}」？`)) return;
 
     setTemplateActionId(templateId);
     setTemplateNotice('');
@@ -1511,7 +1836,7 @@ const ArmyPanel = ({ initialLibraryTab = 'units', mode = 'barracks' }) => {
   };
 
   return (
-    <div className="army-panel">
+    <div className={`army-panel ${isTemplateEditorMode ? 'army-template-editor-only' : ''}`}>
       <div className="army-panel-header">
         <h2>{isLibraryMode ? '军事资料库' : '军团编制'}</h2>
         {!isLibraryMode ? (
@@ -1556,6 +1881,15 @@ const ArmyPanel = ({ initialLibraryTab = 'units', mode = 'barracks' }) => {
             onClick={() => setActiveBarracksTab('units')}
           >
             兵种一览
+          </button>
+          <button
+            type="button"
+            role="tab"
+            aria-selected={activeBarracksTab === 'skills'}
+            className={`army-barracks-tab ${activeBarracksTab === 'skills' ? 'active' : ''}`}
+            onClick={() => setActiveBarracksTab('skills')}
+          >
+            技能树
           </button>
         </div>
       ) : null}
@@ -1634,54 +1968,60 @@ const ArmyPanel = ({ initialLibraryTab = 'units', mode = 'barracks' }) => {
               <div className="army-preview-empty">暂无可用兵种数据</div>
             ) : (
               <div className="army-unit-grid army-unit-grid-library">
-                {unitsWithCount.map((unit) => (
-                  <article className="army-unit-card army-unit-card-library" key={`library-${unit.id}`}>
-                    <div className="army-unit-head">
-                      <h3>{unit.name}</h3>
-                      <div className="army-unit-head-right">
-                        <span>{unit.roleTag}</span>
-                        <button
-                          type="button"
-                          className="btn btn-secondary btn-small"
-                          onClick={() => {
-                            setDetailUnitId(unit.id);
-                            setDetailRotation({ closeup: 0, battle: 0 });
-                            setDetailDragTarget('');
-                          }}
-                        >
-                          详情
-                        </button>
+                {unitsWithCount.map((unit) => {
+                  const classMeta = unitClassMetaById[unit.id] || resolveUnitClassMeta(unit);
+                  return (
+                    <article className="army-unit-card army-unit-card-library" key={`library-${unit.id}`}>
+                      <div className="army-unit-head">
+                        <h3>{unit.name}</h3>
+                        <div className="army-unit-head-right">
+                          <span style={{ color: classMeta.color }}>{classMeta.label}</span>
+                          <button
+                            type="button"
+                            className="btn btn-secondary btn-small"
+                            onClick={() => {
+                              setDetailUnitId(unit.id);
+                              setDetailRotation({ closeup: 0, battle: 0 });
+                              setDetailDragTarget('');
+                            }}
+                          >
+                            详情
+                          </button>
+                        </div>
                       </div>
-                    </div>
-                    <div className="army-unit-stats">
-                      <span>速度 {unit.speed}</span>
-                      <span>生命 {unit.hp}</span>
-                      <span>攻击 {unit.atk}</span>
-                      <span>防御 {unit.def}</span>
-                      <span>射程 {unit.range}</span>
-                      <span>{`职业 ${unit.professionId || '-'}`}</span>
-                    </div>
-                    <p className="army-equipment-desc">{buildUnitIntro(unit)}</p>
-                  </article>
-                ))}
+                      <div className="army-unit-stats">
+                        <span>速度 {unit.speed}</span>
+                        <span>生命 {unit.hp}</span>
+                        <span>攻击 {unit.atk}</span>
+                        <span>防御 {unit.def}</span>
+                        <span>射程 {unit.range}</span>
+                        <span>{formatUnitKnowledgeCost(unit)}</span>
+                        <span>{`职业 ${unit.professionId || '-'}`}</span>
+                      </div>
+                      <p className="army-equipment-desc">{buildUnitIntro(unit)}</p>
+                    </article>
+                  );
+                })}
               </div>
             )}
           </section>
         </div>
+      ) : activeBarracksTab === 'skills' ? (
+        <SkillTreePanel />
       ) : activeBarracksTab === 'troops' ? (
         <div className="army-troop-workspace">
-          <section className="army-troop-section">
+          <section className="army-troop-section army-template-column">
             <div className="army-troop-toolbar">
               <div className="army-troop-title">
-                <h3>我的部队</h3>
-                <span>{`已编组 ${templates.length} 支`}</span>
+                <h3>部队模板</h3>
+                <span>{`已有 ${templates.length} 个模板；模板本身不占用士兵`}</span>
               </div>
               <button type="button" className="btn btn-primary btn-small" onClick={openTemplateCreate}>
-                新增部队
+                创建部队模板
               </button>
             </div>
             {templates.length <= 0 ? (
-              <div className="army-preview-empty">暂无部队</div>
+              <div className="army-preview-empty">暂无部队模板</div>
             ) : (
               <div className="army-troop-grid">
                 {templates.map((template) => {
@@ -1689,6 +2029,7 @@ const ArmyPanel = ({ initialLibraryTab = 'units', mode = 'barracks' }) => {
                   const summary = unitsToSummaryText(template?.units || [], unitNameByTypeId);
                   const rowBusy = templateActionId === templateId || templateActionId === '__create__';
                   const active = activeTemplate && getTemplateId(activeTemplate) === templateId;
+                  const maxTotal = getTemplateCapacityByKnowledgeBalance(template, unitTypeMap, knowledgeBalance);
                   return (
                     <article
                       key={templateId || getTroopDisplayName(template)}
@@ -1703,7 +2044,7 @@ const ArmyPanel = ({ initialLibraryTab = 'units', mode = 'barracks' }) => {
                       <div className="army-troop-card-head">
                         <div>
                           <h4>{getTroopDisplayName(template)}</h4>
-                          <span>{`总兵力 ${Math.max(0, Math.floor(Number(template?.totalCount) || 0))}`}</span>
+                          <span>模板占比合计 100%</span>
                         </div>
                         <div className="army-template-actions">
                           <button
@@ -1725,6 +2066,21 @@ const ArmyPanel = ({ initialLibraryTab = 'units', mode = 'barracks' }) => {
                         </div>
                       </div>
                       <p>{summary || '无兵种配置'}</p>
+                      <div className="army-template-create-row">
+                        <span>
+                          {maxTotal > 0
+                            ? `按当前知识点最多可创建 ${maxTotal} 人`
+                            : '知识点不足，点击查看创建成本'}
+                        </span>
+                        <button
+                          type="button"
+                          className="btn btn-primary btn-small"
+                          disabled={rowBusy || combatArmyActionId === '__create__'}
+                          onClick={() => openCombatArmyCreate(template)}
+                        >
+                          创建参战部队
+                        </button>
+                      </div>
                     </article>
                   );
                 })}
@@ -1732,57 +2088,56 @@ const ArmyPanel = ({ initialLibraryTab = 'units', mode = 'barracks' }) => {
             )}
           </section>
 
-          <aside className="army-troop-detail-panel">
-            {activeTemplate ? (
-              <>
-                <div className="army-troop-detail-head">
-                  <div>
-                    <h3>{getTroopDisplayName(activeTemplate)}</h3>
-                    <span>{`总兵力 ${activeTemplateStats.total}`}</span>
-                  </div>
-                  <button type="button" className="btn btn-secondary btn-small" onClick={() => openTemplateEdit(activeTemplate)}>
-                    编辑
-                  </button>
-                </div>
-                <div className="army-troop-stat-grid">
-                  <div><span>速度</span><strong>{activeTemplateStats.speed}</strong></div>
-                  <div><span>生命</span><strong>{activeTemplateStats.hp}</strong></div>
-                  <div><span>攻击</span><strong>{activeTemplateStats.atk}</strong></div>
-                  <div><span>防御</span><strong>{activeTemplateStats.def}</strong></div>
-                  <div><span>射程</span><strong>{activeTemplateStats.range}</strong></div>
-                </div>
-                <div className="army-troop-composition">
-                  {activeTemplateCompositionRows.length <= 0 ? (
-                    <div className="army-preview-empty">无兵种配置</div>
-                  ) : activeTemplateCompositionRows.map((row) => (
-                    <div key={`detail-${row.unitTypeId}`} className="army-troop-composition-row">
-                      <i style={{ background: row.classMeta.color }} />
-                      <span>{row.unitName}</span>
-                      <em>{row.classMeta.label}</em>
-                      <strong>{row.count}</strong>
-                    </div>
-                  ))}
-                </div>
-                <div className="army-troop-formation-list">
-                  <div className="army-formation-panel-title">阵型</div>
-                  {activeTemplateFormationSummaries.length <= 0 ? (
-                    <div className="army-preview-empty">无阵型</div>
-                  ) : activeTemplateFormationSummaries.map((formation) => (
-                    <div key={`detail-formation-${formation.id}`} className={`army-template-preview-formation ${formation.legal ? 'is-legal' : ''}`}>
-                      <strong>{formation.name}</strong>
-                      <span>{formation.legal ? '合法' : '未完成'}</span>
-                      <em>{`${formation.totalPlaced}/${activeTemplateStats.total}`}</em>
-                      <FormationMiniPreview
-                        formation={formation}
-                        unitTypeMap={unitTypeMap}
-                        className="is-static is-compact"
-                      />
-                    </div>
-                  ))}
-                </div>
-              </>
+          <aside className="army-troop-detail-panel army-combat-army-panel">
+            <div className="army-troop-detail-head">
+              <div>
+                <h3>实际可参战部队</h3>
+                <span>{`已编成 ${combatArmies.length} 支 ｜ 未分配真实士兵 ${availableRosterTotal}`}</span>
+              </div>
+            </div>
+            <div className="army-combat-army-note">
+              这里的部队才会进入围城战；创建时按模板购入真实士兵，解散后回到未分配库存但不返还知识点。训练营部队不会显示在这里。
+            </div>
+            {combatArmies.length <= 0 ? (
+              <div className="army-preview-empty">从左侧模板创建部队后，会在这里成为可参战编组。</div>
             ) : (
-              <div className="army-preview-empty">暂无部队</div>
+              <div className="army-combat-army-list">
+                {combatArmies.map((army) => {
+                  const armyId = getCombatArmyId(army);
+                  const selected = selectedCombatArmy && getCombatArmyId(selectedCombatArmy) === armyId;
+                  const summary = combatUnitsToSummaryText(army.units, unitNameByTypeId);
+                  const busy = combatArmyActionId === armyId || combatArmyActionId === '__create__';
+                  return (
+                    <article
+                      key={armyId || army.name}
+                      className={`army-combat-army-card ${selected ? 'is-selected' : ''}`}
+                      tabIndex={0}
+                      onClick={() => setSelectedCombatArmyId(armyId)}
+                      onFocus={() => setSelectedCombatArmyId(armyId)}
+                    >
+                      <div className="army-troop-card-head">
+                        <div>
+                          <h4>{getTroopDisplayName(army)}</h4>
+                          <span>{`${Math.max(0, Math.floor(Number(army.totalCount) || 0))} 人 ｜ 可参战`}</span>
+                        </div>
+                        <button
+                          type="button"
+                          className="btn btn-warning btn-small"
+                          disabled={busy}
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            deleteCombatArmy(army);
+                          }}
+                        >
+                          解散
+                        </button>
+                      </div>
+                      <p>{summary || '无兵种配置'}</p>
+                      <em>{`来源模板：${army.templateName || army.templateId || '独立编组'}`}</em>
+                    </article>
+                  );
+                })}
+              </div>
             )}
           </aside>
         </div>
@@ -1798,7 +2153,7 @@ const ArmyPanel = ({ initialLibraryTab = 'units', mode = 'barracks' }) => {
             ) : (
               <div className="army-unit-grid army-unit-grid-library">
                 {unitsWithCount.map((unit) => {
-                  const classMeta = resolveUnitClassMeta(unit);
+                  const classMeta = unitClassMetaById[unit.id] || resolveUnitClassMeta(unit);
                   return (
                     <article className="army-unit-card army-unit-card-library" key={`barracks-${unit.id}`}>
                       <div className="army-unit-head">
@@ -1824,7 +2179,8 @@ const ArmyPanel = ({ initialLibraryTab = 'units', mode = 'barracks' }) => {
                         <span>攻击 {unit.atk}</span>
                         <span>防御 {unit.def}</span>
                         <span>射程 {unit.range}</span>
-                        <span>{`库存 ${unit.count}`}</span>
+                        <span>{formatUnitKnowledgeCost(unit)}</span>
+                        <span>{`未分配 ${unit.count}`}</span>
                       </div>
                       <p className="army-equipment-desc">{buildUnitIntro(unit)}</p>
                     </article>
@@ -1854,7 +2210,7 @@ const ArmyPanel = ({ initialLibraryTab = 'units', mode = 'barracks' }) => {
               <div>
                 <h4>{detailUnit.name || detailUnit.id}</h4>
                 <span>
-                  {`${detailUnit.roleTag || '未知'} ｜ ${detailUnit.rpsType || '-'} ｜ ${detailUnit.professionId || '-'} ｜ T${Math.max(1, Number(detailUnit.tier) || 1)}`}
+                  {`${formatUnitClassLabel(detailUnit)} ｜ ${detailUnit.professionId || '-'} ｜ T${Math.max(1, Number(detailUnit.tier) || 1)}`}
                 </span>
               </div>
               <button
@@ -1881,15 +2237,15 @@ const ArmyPanel = ({ initialLibraryTab = 'units', mode = 'barracks' }) => {
               <div><span>攻击</span><strong>{Number(detailUnit.atk) || 0}</strong></div>
               <div><span>防御</span><strong>{Number(detailUnit.def) || 0}</strong></div>
               <div><span>射程</span><strong>{Number(detailUnit.range) || 0}</strong></div>
-              <div><span>单价</span><strong>{Number(detailUnit.costKP) || 0}</strong></div>
-              <div><span>库存</span><strong>{Number(detailUnit.count) || 0}</strong></div>
+              <div><span>每名知识点</span><strong>{`${getUnitKnowledgeCost(detailUnit)} 点`}</strong></div>
+              <div><span>未分配</span><strong>{Number(detailUnit.count) || 0}</strong></div>
               <div><span>升级到</span><strong>{detailUnit.nextUnitTypeId || '无'}</strong></div>
             </div>
 
             <div className="army-unit-detail-intro">
               <strong>组件装配</strong>
               <p>
-                {`body=${detailUnit.bodyId || '-'} ｜ weapon=${(detailUnit.weaponIds || []).join(', ') || '-'} ｜ vehicle=${detailUnit.vehicleId || '-'} ｜ ability=${(detailUnit.abilityIds || []).join(', ') || '-'} ｜ behavior=${detailUnit.behaviorProfileId || '-'} ｜ stability=${detailUnit.stabilityProfileId || '-'}`}
+                {`body=${detailUnit.bodyId || '-'} ｜ weapon=${(detailUnit.weaponIds || []).join(', ') || '-'} ｜ vehicle=${detailUnit.vehicleId || '-'} ｜ behavior=${detailUnit.behaviorProfileId || '-'} ｜ stability=${detailUnit.stabilityProfileId || '-'} ｜ skill=部队技能系统`}
               </p>
             </div>
 
@@ -2098,8 +2454,8 @@ const ArmyPanel = ({ initialLibraryTab = 'units', mode = 'barracks' }) => {
           >
             <div className="army-template-editor-head">
               <div>
-                <h4>{templateEditingId ? '编辑部队' : '新建部队'}</h4>
-                <span>{`基础数 ${templateEditorTotal}/${ARMY_FORMATION_MAX_CELLS} ｜ 合法阵型 ${templateEditorLegalFormationCount}/${templateEditorFormations.length}`}</span>
+                <h4>创建部队模板</h4>
+                <span>{`兵种占比 ${templateEditorTotal}% ｜ 合法阵型 ${templateEditorLegalFormationCount}/${templateEditorFormations.length}`}</span>
               </div>
               <button
                 type="button"
@@ -2110,7 +2466,7 @@ const ArmyPanel = ({ initialLibraryTab = 'units', mode = 'barracks' }) => {
                 关闭
               </button>
             </div>
-            <div className="army-template-stepper" role="tablist" aria-label="新建部队步骤">
+            <div className="army-template-stepper" role="tablist" aria-label="创建部队模板步骤">
               {ARMY_EDITOR_STEPS.map((step, index) => {
                 const label = step === 'units' ? '兵种' : (step === 'formations' ? '阵型' : '预览');
                 const active = templateEditorStep === step;
@@ -2134,12 +2490,12 @@ const ArmyPanel = ({ initialLibraryTab = 'units', mode = 'barracks' }) => {
               })}
             </div>
             <label>
-              <span>部队名称</span>
+              <span>模板名称</span>
               <input
                 type="text"
                 maxLength={32}
                 value={templateEditorDraft.name || ''}
-                placeholder="新建部队1"
+                placeholder="创建部队模板1"
                 onChange={(event) => setTemplateEditorDraft((prev) => ({ ...prev, name: event.target.value || '' }))}
               />
             </label>
@@ -2149,8 +2505,8 @@ const ArmyPanel = ({ initialLibraryTab = 'units', mode = 'barracks' }) => {
                   <div className="army-formation-panel-title">可选兵种</div>
                   {templateEditorAvailableRows.map((row) => {
                     const picked = templateEditorBasisRows.some((item) => item.unitTypeId === row.unitTypeId);
-                    const classMeta = resolveUnitClassMeta(row.unit);
-                    const addBlocked = !picked && templateEditorTotal >= ARMY_MAX_UNIT_BASIS;
+                    const classMeta = row.classMeta;
+                    const addBlocked = false;
                     return (
                       <button
                         key={`unit-stage-${row.unitTypeId}`}
@@ -2179,7 +2535,7 @@ const ArmyPanel = ({ initialLibraryTab = 'units', mode = 'barracks' }) => {
                         <i style={{ background: classMeta.color }} />
                         <span>
                           <strong>{row.unitName}</strong>
-                          <em>{picked ? '已选择' : classMeta.label}</em>
+                          <em>{classMeta.label}</em>
                         </span>
                       </button>
                     );
@@ -2190,7 +2546,7 @@ const ArmyPanel = ({ initialLibraryTab = 'units', mode = 'barracks' }) => {
                   onDragOver={(event) => event.preventDefault()}
                   onDrop={handleUnitStageDrop}
                 >
-                  <div className="army-formation-panel-title">上阵兵种</div>
+                  <div className="army-formation-panel-title">模板兵种占比</div>
                   {templateEditorBasisRows.length <= 0 ? (
                     <div className="army-unit-selection-empty">拖拽左侧兵种到这里</div>
                   ) : (
@@ -2223,7 +2579,7 @@ const ArmyPanel = ({ initialLibraryTab = 'units', mode = 'barracks' }) => {
                           </div>
                           <div className="army-unit-basis-percent">{formatPercentTenths(row.percentTenths)}</div>
                           <label className="army-unit-basis-input">
-                            <span>基础数</span>
+                            <span>占比</span>
                             <div className="army-unit-basis-range-control">
                               <input
                                 type="range"
@@ -2231,10 +2587,10 @@ const ArmyPanel = ({ initialLibraryTab = 'units', mode = 'barracks' }) => {
                                 max={ARMY_MAX_UNIT_BASIS}
                                 step={1}
                                 value={row.basis}
-                                aria-label={`${row.unitName}基础数`}
+                                aria-label={`${row.unitName}占比`}
                                 onChange={(event) => handleChangeEditorUnitBasis(row.unitTypeId, event.target.value)}
                               />
-                              <output>{row.basis}</output>
+                              <output>{`${row.basis}%`}</output>
                             </div>
                           </label>
                         </article>
@@ -2243,13 +2599,13 @@ const ArmyPanel = ({ initialLibraryTab = 'units', mode = 'barracks' }) => {
                   )}
                 </section>
                 <aside className="army-template-troop-info-panel">
-                  <div className="army-formation-panel-title">部队信息</div>
+                  <div className="army-formation-panel-title">模板信息</div>
                   <div className="army-template-troop-info-head">
-                    <strong>{templateEditorDraft.name || '新建部队'}</strong>
+                    <strong>{templateEditorDraft.name || '创建部队模板'}</strong>
                     <span>{templateEditorSummary || '尚未配置兵种'}</span>
                   </div>
                   <div className="army-template-troop-info-stats">
-                    <div><span>基础数</span><strong>{`${templateEditorTotal}/${ARMY_FORMATION_MAX_CELLS}`}</strong></div>
+                    <div><span>占比合计</span><strong>{`${templateEditorTotal}%`}</strong></div>
                     <div><span>兵种</span><strong>{templateEditorBasisRows.length}</strong></div>
                     <div><span>合法阵型</span><strong>{`${templateEditorLegalFormationCount}/${templateEditorFormations.length}`}</strong></div>
                     <div><span>平均速度</span><strong>{templateEditorPreviewStats.speed}</strong></div>
@@ -2266,13 +2622,13 @@ const ArmyPanel = ({ initialLibraryTab = 'units', mode = 'barracks' }) => {
                         <i style={{ background: row.classMeta.color }} />
                         <span>{row.unitName}</span>
                         <em>{formatPercentTenths(row.percentTenths)}</em>
-                        <strong>{row.basis}</strong>
+                        <strong>{`${row.basis}%`}</strong>
                       </div>
                     ))}
                   </div>
                   <div className="army-template-skill-placeholder">
                     <strong>部队技能树</strong>
-                    <span>预留区域</span>
+                    <span>请在兵营「技能树」选项卡中学习与查看技能</span>
                   </div>
                 </aside>
                 {templateEditorDetailUnit && templateEditorHoverPoint ? (
@@ -2337,8 +2693,8 @@ const ArmyPanel = ({ initialLibraryTab = 'units', mode = 'barracks' }) => {
                     >
                       <i style={{ background: row.classMeta.color }} />
                       <strong>{row.unitName}</strong>
-                      <span>{formatPercentTenths(row.percentTenths)}</span>
-                      <em>{row.remaining}</em>
+                        <span>{formatPercentTenths(row.percentTenths)}</span>
+                        <em>{row.remaining}</em>
                     </button>
                   ))}
                 </div>
@@ -2368,7 +2724,11 @@ const ArmyPanel = ({ initialLibraryTab = 'units', mode = 'barracks' }) => {
                             onClick={(event) => event.stopPropagation()}
                           />
                           <span>{`${formation.totalPlaced}/${templateEditorTotal}`}</span>
-                          <FormationMiniPreview formation={formation} unitTypeMap={unitTypeMap} />
+                        <FormationMiniPreview
+                          formation={formation}
+                          unitTypeMap={unitTypeMap}
+                          unitClassMetaById={unitClassMetaById}
+                        />
                           <button
                             type="button"
                             className="btn btn-warning btn-small"
@@ -2426,7 +2786,7 @@ const ArmyPanel = ({ initialLibraryTab = 'units', mode = 'barracks' }) => {
                       <button type="button" className="btn btn-secondary btn-small" onClick={handleClearFormation}>
                         清空
                       </button>
-                      <span>{templateEditorSelectedPlacements.length > 0 ? `选区 ${templateEditorSelectedPlacements.length} 个` : '合法阵型需要把上方所有剩余基础数用光。'}</span>
+                      <span>{templateEditorSelectedPlacements.length > 0 ? `选区 ${templateEditorSelectedPlacements.length} 个` : '合法阵型需要把上方所有占比样本用光。'}</span>
                     </div>
                   </section>
                 </div>
@@ -2443,7 +2803,7 @@ const ArmyPanel = ({ initialLibraryTab = 'units', mode = 'barracks' }) => {
                         <i style={{ background: row.classMeta.color }} />
                         <span>{row.unitName}</span>
                         <em>{formatPercentTenths(row.percentTenths)}</em>
-                        <strong>{row.basis}</strong>
+                        <strong>{`${row.basis}%`}</strong>
                       </div>
                     ))}
                   </div>
@@ -2469,6 +2829,7 @@ const ArmyPanel = ({ initialLibraryTab = 'units', mode = 'barracks' }) => {
                         <FormationMiniPreview
                           formation={formation}
                           unitTypeMap={unitTypeMap}
+                          unitClassMetaById={unitClassMetaById}
                           className="is-static"
                         />
                       </div>
@@ -2478,7 +2839,7 @@ const ArmyPanel = ({ initialLibraryTab = 'units', mode = 'barracks' }) => {
               </div>
             ) : null}
             <div className="army-template-editor-summary">
-              {`基础数 ${templateEditorTotal}/${ARMY_MAX_UNIT_BASIS}${templateEditorSummary ? ` ｜ ${templateEditorSummary}` : ''}`}
+              {`兵种占比合计 ${templateEditorTotal}%${templateEditorSummary ? ` ｜ ${templateEditorSummary}` : ''}`}
             </div>
             <div className="army-template-editor-actions">
               <button
@@ -2507,21 +2868,33 @@ const ArmyPanel = ({ initialLibraryTab = 'units', mode = 'barracks' }) => {
                 }}
                 disabled={templateEditorTotal <= 0 || Boolean(templateActionId)}
               >
-                {templateActionId ? '保存中...' : (templateEditorStep === 'preview' ? (templateEditingId ? '保存部队' : '创建部队') : '下一步')}
+                {templateActionId ? '保存中...' : (templateEditorStep === 'preview' ? '保存创建部队模板' : '下一步')}
               </button>
             </div>
           </div>
         </div>
       )}
-      {armyToasts.length > 0 ? (
-        <div className="army-toast-stack" aria-live="polite">
-          {armyToasts.map((toast) => (
-            <div key={toast.id} className={`army-toast army-toast-${toast.type}`}>
-              {toast.message}
-            </div>
-          ))}
-        </div>
-      ) : null}
+      <BattleTemplateFillModal
+        open={combatArmyCreatePanel.open}
+        preview={combatArmyCreatePanel}
+        isTrainingMode={false}
+        onClose={closeCombatArmyCreate}
+        onChangeTotal={handleChangeCombatArmyCreateTotal}
+        onChangeName={handleChangeCombatArmyCreateName}
+        onConfirm={createCombatArmyFromTemplate}
+      />
+      {armyToasts.length > 0 && typeof document !== 'undefined'
+        ? createPortal(
+          <div className="army-toast-stack" aria-live="polite" role="status">
+            {armyToasts.map((toast) => (
+              <div key={toast.id} className={`army-toast army-toast-${toast.type}`}>
+                {toast.message}
+              </div>
+            ))}
+          </div>,
+          document.body
+        )
+        : null}
     </div>
   );
 };

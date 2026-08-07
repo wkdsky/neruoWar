@@ -1,6 +1,7 @@
 import { normalizeDeg } from '../shared/angle';
 
 const clamp = (value, min, max) => Math.min(max, Math.max(min, value));
+const PAN_DRAG_THRESHOLD_PX = 4;
 
 export const createBattleInputController = ({
   open = false,
@@ -30,17 +31,29 @@ export const createBattleInputController = ({
     return world;
   };
 
-  const beginPanDrag = (event, buttonMask = 1) => {
+  const beginPanDrag = (event, buttonMask = 1, primaryAction = '') => {
     const canvas = canvasRef?.current;
     if (!canvas) return;
     const rect = canvas.getBoundingClientRect();
     if (!rect.width || !rect.height) return;
+    const clientX = Number(event.clientX) || 0;
+    const clientY = Number(event.clientY) || 0;
     const px = ((event.clientX - rect.left) / Math.max(1, rect.width)) * canvas.width;
     const py = ((event.clientY - rect.top) / Math.max(1, rect.height)) * canvas.height;
     panDragRef.current = {
       prevPx: px,
       prevPy: py,
+      startClientX: clientX,
+      startClientY: clientY,
       buttonMask,
+      moved: false,
+      primaryAction,
+      primaryEvent: primaryAction ? {
+        button: 0,
+        clientX,
+        clientY,
+        shiftKey: !!event.shiftKey
+      } : null,
       startDistance: Number(cameraControllerRef.current.distance) || constants.CAMERA_DISTANCE_MIN || 360,
       startPitch: Number(cameraControllerRef.current.currentPitch) || constants.DEPLOY_PITCH_DEG || 30
     };
@@ -78,36 +91,17 @@ export const createBattleInputController = ({
     const deployDraggingGroupId = getters.getDeployDraggingGroupId?.() || '';
     const deployDraggingTeam = getters.getDeployDraggingTeam?.() || 'attacker';
     if (deployDraggingGroupId) {
-      let targetGroupId = deployDraggingGroupId;
-      let targetTeam = deployDraggingTeam;
-      if (getters.isTrainingMode?.()) {
-        const desiredTeam = callbacks.resolveDeployPlacementTeam?.(world, targetTeam);
-        const switchResult = callbacks.switchDeployGroupTeamForTraining?.(targetGroupId, desiredTeam);
-        if (!switchResult?.ok) {
-          callbacks.setDeployNotice?.(switchResult?.reason || '切换部队阵营失败');
-          return;
-        }
-        if (switchResult.switched && switchResult.groupId && switchResult.groupId !== targetGroupId) {
-          callbacks.onDeployGroupTeamSwitched?.({
-            prevGroupId: targetGroupId,
-            nextGroupId: switchResult.groupId,
-            nextTeam: switchResult.team
-          });
-        }
-        targetGroupId = switchResult.groupId || targetGroupId;
-        targetTeam = switchResult.team === 'defender' ? 'defender' : 'attacker';
-      }
-      if (!runtime.canDeployGroupFitAt(targetGroupId, world, targetTeam)) {
-        callbacks.setDeployNotice?.(targetTeam === 'defender'
+      if (!runtime.canDeployGroupFitAt(deployDraggingGroupId, world, deployDraggingTeam)) {
+        callbacks.setDeployNotice?.(deployDraggingTeam === 'defender'
           ? '当前阵型超出右侧红色部署区，请调整位置或切换阵型'
           : '当前阵型超出左侧蓝色部署区，请调整位置或切换阵型');
         return;
       }
-      runtime.moveDeployGroup(targetGroupId, world, targetTeam);
-      runtime.setDeployGroupPlaced(targetTeam, targetGroupId, true);
-      runtime.setSelectedDeployGroup(targetGroupId);
-      runtime.setFocusSquad(targetGroupId);
-      callbacks.setSelectedSquadId?.(targetGroupId);
+      runtime.moveDeployGroup(deployDraggingGroupId, world, deployDraggingTeam);
+      runtime.setDeployGroupPlaced(deployDraggingTeam, deployDraggingGroupId, true);
+      runtime.setSelectedDeployGroup(deployDraggingGroupId);
+      runtime.setFocusSquad(deployDraggingGroupId);
+      callbacks.setSelectedSquadId?.(deployDraggingGroupId);
       callbacks.setDeployDraggingGroup?.({ groupId: '', team: 'attacker' });
       callbacks.setDeployActionAnchorMode?.('world');
       callbacks.setDeployNotice?.(`部队已放置，可继续编辑或${getters.isTrainingMode?.() ? '开始训练' : '开战'}`);
@@ -140,63 +134,16 @@ export const createBattleInputController = ({
       callbacks.setCards?.(runtime.getCardRows?.() || []);
       return;
     }
+    runtime.clearSelection?.();
+    callbacks.setSelectedSquadId?.('');
     callbacks.setDeployActionAnchorMode?.('');
     callbacks.setCards?.(runtime.getCardRows?.() || []);
   };
 
-  const onMouseDown = (event) => {
-    const target = event.target;
-    if (
-      target
-      && typeof target.closest === 'function'
-      && target.closest('.pve2-world-actions, .pve2-battle-actions, .pve2-card-actions, .pve2-deploy-creator, .pve2-deploy-sidebar, .pve2-minimap-wrap, .pve2-action-pad, .pve2-skill-float, .pve2-march-float, .pve2-path-confirm-btn, .pve2-hud, .pve2-confirm, .pve2-quick-deploy-backdrop, .pve2-quick-deploy-panel, .pve2-formation-wheel, .number-pad-dialog-overlay, .number-pad-dialog')
-    ) {
-      return;
-    }
+  const handleBattlePrimaryAction = (event) => {
+    if (event.button !== 0) return;
     const runtime = runtimeRef.current;
-    if (!runtime) return;
-    const currentPhase = runtime.getPhase();
-    if (currentPhase === 'deploy') {
-      const deployDraggingGroupId = getters.getDeployDraggingGroupId?.() || '';
-      const deployDraggingTeam = getters.getDeployDraggingTeam?.() || 'attacker';
-      if (deployDraggingGroupId && event.button === 2) {
-        event.preventDefault();
-        const recallResult = callbacks.recallDeployDraggingGroup?.(deployDraggingGroupId, deployDraggingTeam);
-        if (!recallResult?.ok) {
-          callbacks.setDeployNotice?.(recallResult?.reason || '撤回待部署部队失败');
-        }
-        return;
-      }
-      if (deployDraggingGroupId && event.button !== 0) {
-        event.preventDefault();
-        return;
-      }
-      if (deployDraggingGroupId && event.button === 0 && spacePressedRef.current) {
-        event.preventDefault();
-        return;
-      }
-      if (event.button === 2) {
-        deployYawDragRef.current = {
-          startX: Number(event.clientX) || 0,
-          startWorldYawDeg: Number(cameraControllerRef.current.worldYawDeg) || 0,
-          moved: false
-        };
-        event.preventDefault();
-        return;
-      }
-      if (event.button === 1) {
-        beginPanDrag(event, 4);
-        return;
-      }
-      if (event.button === 0 && spacePressedRef.current) {
-        beginPanDrag(event, 1);
-        return;
-      }
-    }
-    if (currentPhase !== 'battle') {
-      handleMapCommand(event);
-      return;
-    }
+    if (!runtime || runtime.getPhase?.() !== 'battle') return;
     const world = resolveEventWorldPoint(event);
     if (!world) return;
     const selected = runtime.getSquadById(getters.getSelectedSquadId?.());
@@ -207,35 +154,6 @@ export const createBattleInputController = ({
       callbacks.closeMarchModePick?.();
       return;
     }
-
-    if (event.button === 2) {
-      event.preventDefault();
-      if (battleUiMode === constants.BATTLE_UI_MODE_SKILL_CONFIRM) {
-        callbacks.closeSkillConfirm?.(true);
-        return;
-      }
-      if (battleUiMode === constants.BATTLE_UI_MODE_PATH) {
-        callbacks.setPendingPathPoints?.((prev) => {
-          if (prev.length > 0) return prev.slice(0, prev.length - 1);
-          callbacks.setBattleUiMode?.(constants.BATTLE_UI_MODE_NONE);
-          callbacks.setPlanningHoverPoint?.(null);
-          callbacks.setClockPaused?.(false);
-          return prev;
-        });
-        return;
-      }
-      if (battleUiMode === constants.BATTLE_UI_MODE_SKILL_PICK) {
-        callbacks.closeSkillPick?.();
-        return;
-      }
-      if (selected && selected.team === 'attacker' && selected.remain > 0) {
-        runtime.commandMove(selected.id, world, { append: false, replace: true, orderType: constants.ORDER_MOVE, inputType: 'battle_rmb_move' });
-        callbacks.syncBattleCards?.();
-      }
-      return;
-    }
-    if (event.button !== 0) return;
-
     if (battleUiMode === constants.BATTLE_UI_MODE_SKILL_PICK) {
       callbacks.closeSkillPick?.();
     }
@@ -276,15 +194,111 @@ export const createBattleInputController = ({
       return;
     }
 
-    const pickedSquadId = runtime.pickSquadAtPoint(world.x, world.y, { team: 'attacker', maxDist: 34 });
+    const pickedSquadId = runtime.pickSquadAtPoint(world.x, world.y, {
+      team: 'any',
+      controllable: true,
+      maxDist: 34
+    });
     if (pickedSquadId) {
       callbacks.selectBattleSquad?.(pickedSquadId, true);
       return;
     }
+    runtime.clearSelection?.();
+    callbacks.setSelectedSquadId?.('');
+    callbacks.syncBattleCards?.();
     callbacks.setWorldActionsVisibleForSquadId?.('');
     if (battleUiMode !== constants.BATTLE_UI_MODE_NONE) {
       callbacks.setBattleUiMode?.(constants.BATTLE_UI_MODE_NONE);
       callbacks.setSkillPopupSquadId?.('');
+    }
+  };
+
+  const onMouseDown = (event) => {
+    const target = event.target;
+    if (
+      target
+      && typeof target.closest === 'function'
+      && target.closest('.pve2-world-actions, .pve2-battle-actions, .pve2-card-actions, .pve2-card-strip, .pve2-card-wrap, .pve2-card, .pve2-training-card-controls, .pve2-template-strip, .pve2-template-card-wrap, .pve2-template-fill-backdrop, .pve2-template-fill-panel, .pve2-minimap-wrap, .pve2-action-pad, .pve2-skill-float, .pve2-march-float, .pve2-path-confirm-btn, .pve2-hud, .pve2-confirm, .pve2-quick-deploy-backdrop, .pve2-quick-deploy-panel, .pve2-formation-wheel, .number-pad-dialog-overlay, .number-pad-dialog')
+    ) {
+      return;
+    }
+    const runtime = runtimeRef.current;
+    if (!runtime) return;
+    const currentPhase = runtime.getPhase();
+    if (currentPhase === 'deploy') {
+      const deployDraggingGroupId = getters.getDeployDraggingGroupId?.() || '';
+      const deployDraggingTeam = getters.getDeployDraggingTeam?.() || 'attacker';
+      if (deployDraggingGroupId && event.button === 2) {
+        event.preventDefault();
+        const recallResult = callbacks.recallDeployDraggingGroup?.(deployDraggingGroupId, deployDraggingTeam);
+        if (!recallResult?.ok) {
+          callbacks.setDeployNotice?.(recallResult?.reason || '撤回待部署部队失败');
+        }
+        return;
+      }
+      if (deployDraggingGroupId && event.button !== 0) {
+        event.preventDefault();
+        return;
+      }
+      if (event.button === 2) {
+        deployYawDragRef.current = {
+          startX: Number(event.clientX) || 0,
+          startWorldYawDeg: Number(cameraControllerRef.current.worldYawDeg) || 0,
+          moved: false
+        };
+        event.preventDefault();
+        return;
+      }
+      if (event.button === 1) {
+        beginPanDrag(event, 4);
+        return;
+      }
+      if (event.button === 0) {
+        beginPanDrag(event, 1, spacePressedRef.current ? '' : 'map');
+        return;
+      }
+    }
+    if (currentPhase !== 'battle') {
+      handleMapCommand(event);
+      return;
+    }
+
+    const battleUiMode = getters.getBattleUiMode?.();
+    if (battleUiMode === constants.BATTLE_UI_MODE_MARCH_PICK) {
+      callbacks.closeMarchModePick?.();
+      return;
+    }
+    if (event.button === 0) {
+      beginPanDrag(event, 1, 'battle');
+      return;
+    }
+    if (event.button !== 2) return;
+
+    const world = resolveEventWorldPoint(event);
+    if (!world) return;
+    const selected = runtime.getSquadById(getters.getSelectedSquadId?.());
+    event.preventDefault();
+    if (battleUiMode === constants.BATTLE_UI_MODE_SKILL_CONFIRM) {
+      callbacks.closeSkillConfirm?.(true);
+      return;
+    }
+    if (battleUiMode === constants.BATTLE_UI_MODE_PATH) {
+      callbacks.setPendingPathPoints?.((prev) => {
+        if (prev.length > 0) return prev.slice(0, prev.length - 1);
+        callbacks.setBattleUiMode?.(constants.BATTLE_UI_MODE_NONE);
+        callbacks.setPlanningHoverPoint?.(null);
+        callbacks.setClockPaused?.(false);
+        return prev;
+      });
+      return;
+    }
+    if (battleUiMode === constants.BATTLE_UI_MODE_SKILL_PICK) {
+      callbacks.closeSkillPick?.();
+      return;
+    }
+    if (selected && runtime.canControlSquad?.(selected) && selected.remain > 0) {
+      runtime.commandMove(selected.id, world, { append: false, replace: true, orderType: constants.ORDER_MOVE, inputType: 'battle_rmb_move' });
+      callbacks.syncBattleCards?.();
     }
   };
 
@@ -329,7 +343,7 @@ export const createBattleInputController = ({
     if (
       target
       && typeof target.closest === 'function'
-      && target.closest('.pve2-world-actions, .pve2-battle-actions, .pve2-card-actions, .pve2-deploy-sidebar, .pve2-minimap-wrap, .pve2-action-pad, .pve2-skill-float, .pve2-march-float, .pve2-hud, .pve2-confirm, .pve2-quick-deploy-backdrop, .pve2-quick-deploy-panel, .pve2-formation-wheel, .number-pad-dialog-overlay, .number-pad-dialog')
+      && target.closest('.pve2-world-actions, .pve2-battle-actions, .pve2-card-actions, .pve2-card-strip, .pve2-card-wrap, .pve2-card, .pve2-training-card-controls, .pve2-template-strip, .pve2-template-card-wrap, .pve2-template-fill-backdrop, .pve2-template-fill-panel, .pve2-minimap-wrap, .pve2-action-pad, .pve2-skill-float, .pve2-march-float, .pve2-hud, .pve2-confirm, .pve2-quick-deploy-backdrop, .pve2-quick-deploy-panel, .pve2-formation-wheel, .number-pad-dialog-overlay, .number-pad-dialog')
     ) {
       return;
     }
@@ -343,39 +357,14 @@ export const createBattleInputController = ({
     const deployDraggingGroupId = getters.getDeployDraggingGroupId?.() || '';
     const deployDraggingTeam = getters.getDeployDraggingTeam?.() || 'attacker';
     if (runtime.getPhase() === 'deploy' && deployDraggingGroupId) {
-      let targetGroupId = deployDraggingGroupId;
-      let targetTeam = deployDraggingTeam;
-      if (getters.isTrainingMode?.()) {
-        const desiredTeam = callbacks.resolveDeployPlacementTeam?.(world, targetTeam);
-        const switchResult = callbacks.switchDeployGroupTeamForTraining?.(targetGroupId, desiredTeam);
-        if (!switchResult?.ok) return;
-        if (switchResult.switched && switchResult.groupId && switchResult.groupId !== targetGroupId) {
-          callbacks.onDeployGroupTeamSwitched?.({
-            prevGroupId: targetGroupId,
-            nextGroupId: switchResult.groupId,
-            nextTeam: switchResult.team
-          });
-        }
-        targetGroupId = switchResult.groupId || targetGroupId;
-        targetTeam = switchResult.team === 'defender' ? 'defender' : 'attacker';
-      }
-      runtime.moveDeployGroup(targetGroupId, world, targetTeam);
+      runtime.moveDeployGroup(deployDraggingGroupId, world, deployDraggingTeam);
       syncCardsAndMinimap();
       return;
     }
 
     if (runtime.getPhase() === 'deploy') {
-      const picked = runtime.pickDeployGroup(world, getters.isTrainingMode?.() ? 'any' : 'attacker');
-      if (picked?.id && picked.placed !== false) {
-        if (!getters.isTrainingMode?.() && picked.team === 'defender') return;
-        runtime.setSelectedDeployGroup(picked.id);
-        runtime.setFocusSquad(picked.id);
-        callbacks.setSelectedSquadId?.(picked.id);
-        callbacks.setDeployActionAnchorMode?.('world');
-        callbacks.setCards?.(runtime.getCardRows?.() || []);
-      } else {
-        callbacks.setDeployActionAnchorMode?.('');
-      }
+      // Hovering the battlefield must not change the selected card. Selection
+      // is committed only by a click in handleMapCommand.
       return;
     }
 
@@ -443,21 +432,21 @@ export const createBattleInputController = ({
       const rect = canvas.getBoundingClientRect();
       if (!rect.width || !rect.height) return;
       const runtime = runtimeRef.current;
-      const isDeploy = runtime?.getPhase() === 'deploy';
-      if (!isDeploy) {
+      const phase = runtime?.getPhase?.();
+      const isDeploy = phase === 'deploy';
+      const canPan = isDeploy || phase === 'battle';
+      if (!canPan) {
         clearPanDrag();
         clearDeployYawDrag();
         clearDeployRectDrag();
         return;
       }
-      if (getters.getDeployDraggingGroupId?.()) {
-        clearPanDrag();
+      if (!isDeploy) {
         clearDeployYawDrag();
         clearDeployRectDrag();
       }
-
       const rectDrag = deployRectDragRef.current;
-      if (rectDrag && runtime) {
+      if (isDeploy && rectDrag && runtime) {
         if ((event.buttons & 1) !== 1) {
           clearDeployRectDrag();
           return;
@@ -477,7 +466,7 @@ export const createBattleInputController = ({
       }
 
       const rotate = deployYawDragRef.current;
-      if (rotate) {
+      if (isDeploy && rotate) {
         if ((event.buttons & 2) !== 2) {
           clearDeployYawDrag();
         } else {
@@ -493,6 +482,12 @@ export const createBattleInputController = ({
         clearPanDrag();
         return;
       }
+      const dragDistance = Math.hypot(
+        (Number(event.clientX) || 0) - pan.startClientX,
+        (Number(event.clientY) || 0) - pan.startClientY
+      );
+      if (!pan.moved && dragDistance < PAN_DRAG_THRESHOLD_PX) return;
+      pan.moved = true;
       const px = ((event.clientX - rect.left) / Math.max(1, rect.width)) * canvas.width;
       const py = ((event.clientY - rect.top) / Math.max(1, rect.height)) * canvas.height;
       cameraControllerRef.current.distance = Number(pan.startDistance) || cameraControllerRef.current.distance;
@@ -504,13 +499,14 @@ export const createBattleInputController = ({
       const dyPx = py - pan.prevPy;
       const viewW = Math.max(1, Number(cameraViewRectRef.current?.widthWorld) || 1);
       const viewH = Math.max(1, Number(cameraViewRectRef.current?.heightWorld) || 1);
-      cameraControllerRef.current.centerX += (dxPx / Math.max(1, canvas.width)) * viewW;
-      cameraControllerRef.current.centerY -= (dyPx / Math.max(1, canvas.height)) * viewH;
+      cameraControllerRef.current.centerX -= (dxPx / Math.max(1, canvas.width)) * viewW;
+      cameraControllerRef.current.centerY += (dyPx / Math.max(1, canvas.height)) * viewH;
       pan.prevPx = px;
       pan.prevPy = py;
     };
 
     const handleWindowMouseUp = (event) => {
+      const pan = panDragRef.current;
       const rotate = deployYawDragRef.current;
       if (rotate && !rotate.moved && runtimeRef.current?.getPhase() === 'deploy') {
         handleMapCommand({
@@ -523,6 +519,12 @@ export const createBattleInputController = ({
       clearPanDrag();
       clearDeployYawDrag();
       clearDeployRectDrag();
+      if (!pan?.primaryAction || pan.moved || event.button !== 0) return;
+      if (pan.primaryAction === 'map') {
+        handleMapCommand(pan.primaryEvent);
+      } else if (pan.primaryAction === 'battle') {
+        handleBattlePrimaryAction(pan.primaryEvent);
+      }
     };
     const handleWindowBlur = () => {
       clearPanDrag();

@@ -105,16 +105,6 @@ export const createDefaultResultState = () => ({
   recorded: false
 });
 
-export const createDefaultDeployEditorDraft = () => ({ name: '', units: [] });
-
-export const createDefaultDeployQuantityDialog = () => ({
-  open: false,
-  unitTypeId: '',
-  unitName: '',
-  max: 0,
-  current: 1
-});
-
 export const createDefaultDeployDraggingGroup = () => ({
   groupId: '',
   team: TEAM_ATTACKER
@@ -122,11 +112,17 @@ export const createDefaultDeployDraggingGroup = () => ({
 
 export const createDefaultTemplateFillPreview = () => ({
   open: false,
+  mode: 'create',
+  editingGroupId: '',
   team: TEAM_ATTACKER,
+  controlMode: 'USER',
   template: null,
+  name: '',
   rows: [],
   totalRequested: 0,
-  totalFilled: 0
+  totalFilled: 0,
+  maxTotal: 0,
+  stats: null
 });
 
 export const createDefaultQuickDeployRandomForm = () => ({ ...QUICK_DEPLOY_RANDOM_DEFAULT });

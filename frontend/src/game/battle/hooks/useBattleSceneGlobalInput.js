@@ -11,6 +11,7 @@ const useBattleSceneGlobalInput = ({
   onTogglePitch,
   onMapKeyCommand,
   onFormationKey,
+  onSkillHotkey,
   onCloseMarchModePick,
   onCloseSkillPick
 } = {}) => {
@@ -50,6 +51,17 @@ const useBattleSceneGlobalInput = ({
           onFormationKey?.();
           return;
         }
+        if (
+          runtimeRef.current?.getPhase?.() === 'battle'
+          && !event.ctrlKey
+          && !event.metaKey
+          && !event.altKey
+          && ['1', '2', '3'].includes(String(event.key || ''))
+        ) {
+          event.preventDefault();
+          onSkillHotkey?.(Math.max(0, Number(event.key) - 1));
+          return;
+        }
       }
       if (event.code === 'Space') {
         event.preventDefault();
@@ -67,7 +79,7 @@ const useBattleSceneGlobalInput = ({
     };
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [open, onEscape, onFormationKey, onMapKeyCommand, onTogglePause, onTogglePitch, runtimeRef, spacePressedRef]);
+  }, [open, onEscape, onFormationKey, onMapKeyCommand, onSkillHotkey, onTogglePause, onTogglePitch, runtimeRef, spacePressedRef]);
 
   useEffect(() => {
     if (!open) return undefined;

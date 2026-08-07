@@ -515,6 +515,17 @@ const resolveTypeLookup = (unitTypes = []) => {
 
 const resolveTypeMeta = (countsByType = {}, unitTypes = [], collapsedMap = {}) => {
   const lookup = resolveTypeLookup(unitTypes);
+  const resolvePreviewPalette = (unitType = {}) => {
+    const palette = unitType?.visuals?.preview?.palette;
+    if (!palette || typeof palette !== 'object') return null;
+    const primary = typeof palette.primary === 'string' ? palette.primary.trim() : '';
+    if (!primary) return null;
+    return {
+      primary,
+      secondary: typeof palette.secondary === 'string' ? palette.secondary.trim() : primary,
+      accent: typeof palette.accent === 'string' ? palette.accent.trim() : primary
+    };
+  };
   const meta = {};
   Object.keys(countsByType || {}).forEach((typeId) => {
     if (typeId === OTHER_TYPE_ID) {
@@ -531,7 +542,8 @@ const resolveTypeMeta = (countsByType = {}, unitTypes = [], collapsedMap = {}) =
       roleTag: raw?.roleTag === '远程' ? '远程' : '近战',
       speed: Number(raw?.speed) || 1,
       range: Number(raw?.range) || 1,
-      category: inferTroopCategory(raw)
+      category: inferTroopCategory(raw),
+      palette: resolvePreviewPalette(raw)
     };
   });
   if (collapsedMap?.[OTHER_TYPE_ID]) {
@@ -569,7 +581,14 @@ const buildDeltaCounts = (prevCounts = {}, nextCounts = {}) => {
   return delta;
 };
 
-const getTypeStyle = (category = 'infantry', teamId = '') => {
+const getTypeStyle = (category = 'infantry', teamId = '', palette = null) => {
+  if (palette?.primary) {
+    return {
+      body: palette.primary,
+      accent: palette.accent || palette.secondary || palette.primary,
+      flag: palette.accent || palette.primary
+    };
+  }
   const attacker = teamId === 'attacker';
   if (category === 'cavalry') {
     return attacker
@@ -877,7 +896,7 @@ const buildRenderableInstances = (state, options = {}) => {
       category: 'other',
       name: typeId
     };
-    const style = getTypeStyle(meta.category, state.teamId);
+    const style = getTypeStyle(meta.category, state.teamId, meta.palette);
     const spacingFactor = categorySpacingFactor(meta.category);
     for (let i = 0; i < visibleSlotIndices.length; i += 1) {
       const slot = state.slots?.[visibleSlotIndices[i]];

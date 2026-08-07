@@ -8,8 +8,7 @@ import {
   BATTLE_UI_MODE_SKILL_PICK,
   SPEED_MODE_AUTO,
   SPEED_MODE_B,
-  SPEED_MODE_CYCLE,
-  TEAM_ATTACKER
+  SPEED_MODE_CYCLE
 } from '../screens/battleSceneConstants';
 import { clamp, skillAoeRadiusByClass } from '../screens/battleSceneUtils';
 
@@ -204,7 +203,7 @@ export default function useBattleActions({
     const runtime = runtimeRef.current;
     if (!runtime || runtime.getPhase() !== 'battle') return;
     const selected = runtime.getSquadById(selectedSquadId);
-    if (!selected || selected.team !== TEAM_ATTACKER || selected.remain <= 0) return;
+    if (!selected || !runtime.canControlSquad?.(selected)) return;
     runtime.commandSpeedMode([selected.id], mode, 'USER');
     setCards(runtime.getCardRows());
   }, [runtimeRef, selectedSquadId, setCards]);
@@ -232,7 +231,7 @@ export default function useBattleActions({
       ? meta.squadId
       : selectedSquadId;
     const selected = runtime.getSquadById(candidateSquadId);
-    if (!selected || selected.team !== TEAM_ATTACKER || selected.remain <= 0) return;
+    if (!selected || !runtime.canControlSquad?.(selected)) return;
     if (selected.id !== selectedSquadId) {
       selectBattleSquad(selected.id, true);
     }

@@ -5,9 +5,7 @@ import {
   TEAM_ATTACKER,
   TEAM_DEFENDER,
   createDefaultConfirmDeletePos,
-  createDefaultDeployDraggingGroup,
-  createDefaultDeployEditorDraft,
-  createDefaultDeployQuantityDialog
+  createDefaultDeployDraggingGroup
 } from '../screens/battleSceneConstants';
 import {
   buildRandomGroups,
@@ -31,12 +29,6 @@ export default function useBattleQuickDeploy({
   setQuickDeployApplying,
   setDeployDraggingGroup,
   setDeployActionAnchorMode,
-  setDeployEditorOpen,
-  setDeployEditingGroupId,
-  setDeployEditorTeam,
-  setDeployEditorDraft,
-  setDeployEditorDragUnitId,
-  setDeployQuantityDialog,
   setConfirmDeleteGroupId,
   setConfirmDeletePos,
   setSelectedPaletteItemId,
@@ -158,6 +150,14 @@ export default function useBattleQuickDeploy({
             rosterRows: defenderRosterRows
           });
 
+      const maxGroupTotal = Math.max(1, Math.floor(Number(runtime.maxDeployGroupTotal) || 10000));
+      const oversizedPlan = [...attackerPlans, ...defenderPlans].find((plan) => (
+        Object.values(plan?.units || {}).reduce((sum, count) => sum + (Number(count) || 0), 0) > maxGroupTotal
+      ));
+      if (oversizedPlan) {
+        throw new Error(`训练场单支部队最多 ${maxGroupTotal} 人，请增加部队数量`);
+      }
+
       const attackerPositions = buildTeamPositions({
         team: TEAM_ATTACKER,
         count: attackerPlans.length,
@@ -175,12 +175,6 @@ export default function useBattleQuickDeploy({
 
       setDeployDraggingGroup(createDefaultDeployDraggingGroup());
       setDeployActionAnchorMode('');
-      setDeployEditorOpen(false);
-      setDeployEditingGroupId('');
-      setDeployEditorTeam(TEAM_ATTACKER);
-      setDeployEditorDraft(createDefaultDeployEditorDraft());
-      setDeployEditorDragUnitId('');
-      setDeployQuantityDialog(createDefaultDeployQuantityDialog());
       setConfirmDeleteGroupId('');
       setConfirmDeletePos(createDefaultConfirmDeletePos());
       setSelectedPaletteItemId('');
@@ -199,7 +193,9 @@ export default function useBattleQuickDeploy({
           units: plan.units,
           x: pos.x,
           y: pos.y,
-          placed: true
+          placed: true,
+          controlMode: 'USER',
+          sortOrder: idx
         });
         if (!result?.ok) throw new Error(result?.reason || '创建我方部队失败');
         if (!firstGroupId) firstGroupId = result.groupId || '';
@@ -211,7 +207,9 @@ export default function useBattleQuickDeploy({
           units: plan.units,
           x: pos.x,
           y: pos.y,
-          placed: true
+          placed: true,
+          controlMode: 'AI',
+          sortOrder: idx
         });
         if (!result?.ok) throw new Error(result?.reason || '创建敌方部队失败');
       });
@@ -235,13 +233,7 @@ export default function useBattleQuickDeploy({
     setConfirmDeletePos,
     setDeployActionAnchorMode,
     setDeployDraggingGroup,
-    setDeployEditorDraft,
-    setDeployEditorDragUnitId,
-    setDeployEditorOpen,
-    setDeployEditorTeam,
-    setDeployEditingGroupId,
     setDeployNotice,
-    setDeployQuantityDialog,
     setQuickDeployError,
     setQuickDeployOpen,
     setSelectedPaletteItemId,

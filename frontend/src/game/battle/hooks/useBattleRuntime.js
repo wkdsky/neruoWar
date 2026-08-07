@@ -11,11 +11,13 @@ export default function useBattleRuntime({
   const runtimeRef = useRef(null);
   const [phase, setPhase] = useState('deploy');
   const [runtimeVersion, setRuntimeVersion] = useState(0);
+  const [trainingSessionActive, setTrainingSessionActive] = useState(false);
 
   const disposeRuntime = useCallback(() => {
     runtimeRef.current = null;
     setPhase('deploy');
     setRuntimeVersion(0);
+    setTrainingSessionActive(false);
   }, []);
 
   useEffect(() => {
@@ -40,6 +42,7 @@ export default function useBattleRuntime({
       rules: mode === 'training' ? { allowCrossMidline: true } : undefined
     });
     runtimeRef.current = runtime;
+    setTrainingSessionActive(false);
     setRuntimeVersion((prev) => prev + 1);
     const cardsRows = runtime.getCardRows();
     const initialSelected = runtime.getDeployGroups()?.selectedId || cardsRows.find((row) => row.team === 'attacker')?.id || '';
@@ -57,16 +60,30 @@ export default function useBattleRuntime({
     if (!runtime) return { ok: false, reason: 'runtime 未初始化' };
     const result = runtime.startBattle();
     setPhase(runtime.getPhase());
+    if (result?.ok && mode === 'training') setTrainingSessionActive(true);
     return result;
-  }, []);
+  }, [mode]);
+
+  const resetTraining = useCallback(() => {
+    const runtime = runtimeRef.current;
+    if (!runtime || mode !== 'training') return { ok: false, reason: '训练场未初始化' };
+    const result = runtime.resetTraining?.() || { ok: false, reason: '当前运行时不支持重置' };
+    if (result?.ok) {
+      setPhase(runtime.getPhase());
+      setTrainingSessionActive(false);
+    }
+    return result;
+  }, [mode]);
 
   return {
     runtimeRef,
     phase,
     runtimeVersion,
+    trainingSessionActive,
     setPhase,
     api: {
-      startBattle
+      startBattle,
+      resetTraining
     }
   };
 }

@@ -42,7 +42,9 @@ const DeployActionButtons = ({
   onMove,
   onEdit,
   onFormation,
-  onDelete
+  onDelete,
+  deleteTitle = '删除',
+  deleteAriaLabel = deleteTitle
 }) => (
   <div
     className={`pve2-deploy-actions pve2-deploy-actions-${layout}`}
@@ -112,8 +114,8 @@ const DeployActionButtons = ({
     <button
       type="button"
       className="pve2-icon-btn delete"
-      title="删除"
-      aria-label="删除"
+      title={deleteTitle}
+      aria-label={deleteAriaLabel}
       onMouseDown={(event) => event.stopPropagation()}
       onMouseUp={(event) => event.stopPropagation()}
       onClick={(event) => {

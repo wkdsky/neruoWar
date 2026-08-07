@@ -8,6 +8,13 @@
 - 关键限制：战斗技能/行为/UI 图标大量依赖固定四类 `infantry/cavalry/archer/artillery`；未知扩展字段在前端 normalize 时会被丢弃；渲染层存在 64 layer 上限。
 - 运维风险：目录初始化与 registry “兜底生成”包含全量替换/重置逻辑，不是纯增量迁移。
 
+## 当前兵种体系更新
+
+- 当前生成目录已切换为 9 个兵种：近战、远程、辅助各 3 个小类，运行时就绪检查要求目录精确匹配这 9 个 ID。
+- 正式分类字段为 `unitCategory` + `unitSubtype`；`rpsType` 仅作为现有三角克制逻辑的兼容字段，并与大类保持一致。
+- 技能不再通过 `abilityIds` 绑定到兵种；后续技能树应保存在部队配置中，并按部队内的大类兵种施放。
+- 士气字段、士气衰减、士气归零撤退和士气 UI 已移除。
+
 ## Capability Matrix (A1~C3)
 | ID | 结论 | 证据路径 |
 |---|---|---|
@@ -124,8 +131,8 @@ Battle
 - 若要“马上能参战”：更新 `users.armyRoster`（给新 `unitTypeId` 数量）或对应守军布置数据。
 
 2. `ArmyUnitType` 最小字段（建议）：
-- `unitTypeId`, `name`, `roleTag`, `speed`, `hp`, `atk`, `def`, `range`, `costKP`, `enabled`
-- 建议同时给：`rpsType`, `tier/level`, `sortOrder`, `professionId`, `rarity`
+- `unitTypeId`, `name`, `roleTag`, `unitCategory`, `unitSubtype`, `speed`, `hp`, `atk`, `def`, `range`, `costKP`, `enabled`
+- 建议同时给：`rpsType`, `tier/level`, `sortOrder`, `professionId`, `rarity`, `visuals.preview.palette`
 
 3. 缺字段风险：
 - 缺 `enabled:true`（尤其绕过 Mongoose 默认直接插入）会被 `enabled` 过滤挡掉。
@@ -192,7 +199,9 @@ Battle
   "def": 12,
   "range": 1,
   "costKP": 18,
-  "rpsType": "mobility",
+  "unitCategory": "melee",
+  "unitSubtype": "balance",
+  "rpsType": "melee",
   "tier": 1,
   "enabled": true,
   "sortOrder": 999
@@ -205,8 +214,8 @@ Battle
 
 5. 前台页面可见性：
 - API 写入后，兵营/训练/战场按各自 init 请求刷新即可。
-- 注：当前 `AdminPanel` 的 unitType 表单未提供 `rpsType/enabled/components` 等字段，且 create payload 未带 `rpsType`，可能导致“页面新增失败但 API 可用”。
-  - 证据：`AdminPanel.js:684-704` + `admin.js:159-161`
+- 注：后台 API 已为 `unitCategory/unitSubtype/rpsType` 提供默认值；AdminPanel 仍未提供完整的分类和组件编辑控件，新增复杂自定义兵种时建议直接使用 API。
+  - 证据：`AdminPanel.js:684-704` + `admin.js:129-193`
 
 ## 3) Gaps & Minimal Patch Plan（建议，不改代码）
 1. 缺口：catalog 自动兜底会触发“重置式覆盖”
@@ -217,12 +226,12 @@ Battle
   - 建议：改为一次性 migration 标记，不在运行时自动 delete+insert。
 - 风险：影响目录初始化流程，需处理首次部署。
 
-2. 缺口：admin 页面创建兵种与后端校验不一致
-- 描述：后端创建要求 `rpsType`，页面 payload 未提交该字段。
+2. 缺口：admin 页面创建兵种的分类编辑能力不足
+- 描述：后端已支持 `unitCategory/unitSubtype`，页面表单尚未提供完整编辑入口。
 - 建议修改：
   - `frontend/src/components/admin/AdminPanel.js`
   - 函数：`createEmptyUnitTypeForm`, `buildUnitTypePayload`, `validateUnitTypeForm`, unitTypes 表单 UI
-  - 建议：补 `rpsType/enabled/tier/professionId/rarity/component refs/visuals` 字段。
+  - 建议：补 `unitCategory/unitSubtype/enabled/tier/professionId/rarity/component refs/visuals` 字段。
 - 风险：需与现有接口字段兼容验证。
 
 3. 缺口：缺少 unitType 版本化与软下线优先策略
@@ -295,7 +304,7 @@ Battle
 | 22 | `backend/routes/admin.js:803` | `POST /army/unit-types` | admin 新增兵种 |
 | 23 | `backend/routes/admin.js:830` | `PUT /army/unit-types/:unitTypeId` | admin 更新兵种 |
 | 24 | `backend/routes/admin.js:867` | `DELETE /army/unit-types/:unitTypeId` | admin 删除兵种 |
-| 25 | `backend/routes/admin.js:159` | `缺少字段：rpsType` | 创建校验要求 |
+| 25 | `backend/routes/admin.js:129-193` | `unitCategory/unitSubtype/rpsType` | 新分类校验与默认值 |
 | 26 | `frontend/src/components/game/ArmyPanel.js:205` | `fetch('/army/unit-types')` | 兵营数据来源 |
 | 27 | `frontend/src/components/game/TrainingGroundPanel.js:33` | `fetch('/army/training/init')` | 训练营数据来源 |
 | 28 | `frontend/src/App.js:3165` | `fetch('/nodes/.../battle-init')` | 战场数据来源 |

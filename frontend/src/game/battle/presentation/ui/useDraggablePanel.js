@@ -7,28 +7,38 @@ const isInteractiveTarget = (target) => {
   return !!target.closest('button, input, textarea, select, a, [data-no-drag]');
 };
 
-const resolveViewport = () => ({
-  width: Math.max(320, Number(window?.innerWidth) || 0),
-  height: Math.max(240, Number(window?.innerHeight) || 0)
-});
+const resolveViewport = () => {
+  if (typeof window === 'undefined') {
+    return { left: 0, top: 0, width: 320, height: 240 };
+  }
+  const visualViewport = window.visualViewport;
+  return {
+    left: Math.max(0, Number(visualViewport?.offsetLeft) || 0),
+    top: Math.max(0, Number(visualViewport?.offsetTop) || 0),
+    width: Math.max(1, Number(visualViewport?.width) || Number(window.innerWidth) || 0),
+    height: Math.max(1, Number(visualViewport?.height) || Number(window.innerHeight) || 0)
+  };
+};
 
 const clampToViewport = (x, y, panelWidth, panelHeight, margin = 8) => {
   const viewport = resolveViewport();
   const safeMargin = Math.max(0, Number(margin) || 0);
   const width = Math.max(120, Number(panelWidth) || 120);
   const height = Math.max(80, Number(panelHeight) || 80);
-  const maxX = Math.max(safeMargin, viewport.width - width - safeMargin);
-  const maxY = Math.max(safeMargin, viewport.height - height - safeMargin);
+  const minX = viewport.left + safeMargin;
+  const minY = viewport.top + safeMargin;
+  const maxX = Math.max(minX, viewport.left + viewport.width - width - safeMargin);
+  const maxY = Math.max(minY, viewport.top + viewport.height - height - safeMargin);
   return {
-    x: clamp(Number(x) || 0, safeMargin, maxX),
-    y: clamp(Number(y) || 0, safeMargin, maxY)
+    x: clamp(Number(x) || 0, minX, maxX),
+    y: clamp(Number(y) || 0, minY, maxY)
   };
 };
 
 export default function useDraggablePanel({
   open = false,
   initialPosition = null,
-  margin = 8,
+  margin = 16,
   defaultSize = { width: 420, height: 320 }
 } = {}) {
   const panelRef = useRef(null);
@@ -75,8 +85,8 @@ export default function useDraggablePanel({
       const height = panelRect?.height || fallbackH;
       const viewport = resolveViewport();
       placeAt(
-        (viewport.width - width) * 0.5,
-        Math.max(margin, (viewport.height - height) * 0.5)
+        viewport.left + ((viewport.width - width) * 0.5),
+        viewport.top + ((viewport.height - height) * 0.5)
       );
     });
     return () => cancelAnimationFrame(rafId);
@@ -84,14 +94,35 @@ export default function useDraggablePanel({
 
   useEffect(() => {
     if (!open) return undefined;
-    const onResize = () => {
+    const clampCurrentPosition = () => {
       setPosition((prev) => {
         if (!prev) return prev;
-        return clampPosition(prev.x, prev.y);
+        const next = clampPosition(prev.x, prev.y);
+        return next.x === prev.x && next.y === prev.y ? prev : next;
       });
     };
-    window.addEventListener('resize', onResize);
-    return () => window.removeEventListener('resize', onResize);
+    const visualViewport = window.visualViewport;
+    window.addEventListener('resize', clampCurrentPosition);
+    visualViewport?.addEventListener('resize', clampCurrentPosition);
+    visualViewport?.addEventListener('scroll', clampCurrentPosition);
+    return () => {
+      window.removeEventListener('resize', clampCurrentPosition);
+      visualViewport?.removeEventListener('resize', clampCurrentPosition);
+      visualViewport?.removeEventListener('scroll', clampCurrentPosition);
+    };
+  }, [clampPosition, open]);
+
+  useEffect(() => {
+    if (!open || !panelRef.current || typeof ResizeObserver === 'undefined') return undefined;
+    const observer = new ResizeObserver(() => {
+      setPosition((prev) => {
+        if (!prev) return prev;
+        const next = clampPosition(prev.x, prev.y);
+        return next.x === prev.x && next.y === prev.y ? prev : next;
+      });
+    });
+    observer.observe(panelRef.current);
+    return () => observer.disconnect();
   }, [clampPosition, open]);
 
   const handleHeaderPointerDown = useCallback((event) => {

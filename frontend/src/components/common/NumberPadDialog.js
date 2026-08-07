@@ -65,6 +65,9 @@ const NumberPadDialog = ({
   const displayValue = hasNumericValue
     ? clampInteger(numericValue, safeMin, safeMax)
     : safeMin;
+  const resolvedDescription = typeof description === 'function'
+    ? description(displayValue)
+    : description;
 
   const handleConfirm = () => {
     if (!hasNumericValue || numericValue < safeMin || numericValue > safeMax) {
@@ -104,7 +107,7 @@ const NumberPadDialog = ({
         <div className="number-pad-dialog-header">
           <strong>{title}</strong>
         </div>
-        {!!description && <div className="number-pad-dialog-desc">{description}</div>}
+        {!!resolvedDescription && <div className="number-pad-dialog-desc">{resolvedDescription}</div>}
         <div className="number-pad-value-row">
           <input
             type="text"

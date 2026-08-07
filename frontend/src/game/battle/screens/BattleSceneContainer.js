@@ -24,18 +24,18 @@ import BattleActionButtons from '../presentation/ui/BattleActionButtons';
 import Minimap from '../presentation/ui/Minimap';
 import AimOverlayCanvas from '../presentation/ui/AimOverlayCanvas';
 import BattleDebugPanel from '../presentation/ui/BattleDebugPanel';
-import BattleDeploySidebar from '../presentation/ui/BattleDeploySidebar';
 import BattleQuickDeployModal from '../presentation/ui/BattleQuickDeployModal';
 import BattleTemplateFillModal from '../presentation/ui/BattleTemplateFillModal';
-import BattleDeployEditorPanel from '../presentation/ui/BattleDeployEditorPanel';
 import BattleMarchModeFloat from '../presentation/ui/BattleMarchModeFloat';
 import BattleSkillPickFloat from '../presentation/ui/BattleSkillPickFloat';
 import DeployGroupInfoPanel from '../presentation/ui/DeployGroupInfoPanel';
 import BattleFormationWheel from '../presentation/ui/BattleFormationWheel';
+import TrainingSkillTreeModal from '../presentation/ui/TrainingSkillTreeModal';
+import TrainingSettingsModal from '../presentation/ui/TrainingSettingsModal';
 import useDraggablePanel from '../presentation/ui/useDraggablePanel';
 import unitVisualConfig from '../presentation/assets/UnitVisualConfig.example.json';
-import NumberPadDialog from '../../../components/common/NumberPadDialog';
 import BattleDataService from '../data/BattleDataService';
+import { getSkillTreeById, normalizeSkillSlots } from '../../../components/game/skillTree/skillTreeData';
 import {
   BATTLE_FOLLOW_MIRROR_X,
   BATTLE_FOLLOW_WORLD_YAW_DEG,
@@ -60,7 +60,6 @@ import {
   createDefaultConfirmDeletePos,
   createDefaultDeployInfoState,
   createDefaultResultState,
-  createDefaultDeployQuantityDialog,
   speedModeLabel
 } from './battleSceneConstants';
 import {
@@ -72,33 +71,63 @@ import {
   toCardsByTeam
 } from './battleSceneUtils';
 
-const EDGE_SCROLL_ZONE_PX = 42;
-const EDGE_SCROLL_CURVE = 1.55;
-
-const isBattleDocumentActive = () => (
-  typeof document === 'undefined'
-    || (
-      document.visibilityState === 'visible'
-      && (typeof document.hasFocus !== 'function' || document.hasFocus())
-    )
-);
-
-const resolveEdgeScrollAxis = (position, start, end) => {
-  const axisLength = Math.max(1, end - start);
-  const edgeZone = Math.min(EDGE_SCROLL_ZONE_PX, axisLength * 0.25);
-  const leadingDepth = (start + edgeZone) - position;
-  const trailingDepth = position - (end - edgeZone);
-  if (leadingDepth <= 0 && trailingDepth <= 0) return 0;
-  const direction = leadingDepth > trailingDepth ? -1 : 1;
-  const depth = Math.max(leadingDepth, trailingDepth);
-  const normalizedDepth = clamp(depth / Math.max(1, edgeZone), 0, 1);
-  return direction * (normalizedDepth ** EDGE_SCROLL_CURVE);
+const serializeTrainingArmyGroup = (group = {}) => {
+  const armyId = String(group?.armyId || group?.id || '').trim();
+  const units = Object.entries(group?.units || {})
+    .map(([unitTypeId, count]) => ({
+      unitTypeId: String(unitTypeId || '').trim(),
+      count: Math.max(0, Math.floor(Number(count) || 0))
+    }))
+    .filter((entry) => entry.unitTypeId && entry.count > 0);
+  if (!armyId || units.length <= 0) return null;
+  return {
+    armyId,
+    team: group?.team === TEAM_DEFENDER ? TEAM_DEFENDER : TEAM_ATTACKER,
+    controlMode: group?.controlMode === 'AI' ? 'AI' : 'USER',
+    sortOrder: Math.max(0, Math.floor(Number(group?.sortOrder) || 0)),
+    name: String(group?.name || '').trim(),
+    templateId: String(group?.templateId || '').trim(),
+    templateName: String(group?.templateName || '').trim(),
+    units,
+    templateFormations: Array.isArray(group?.templateFormations)
+      ? group.templateFormations.map((formation) => ({
+        formationId: String(formation?.formationId || formation?.id || '').trim(),
+        name: String(formation?.name || '').trim(),
+        placements: Array.isArray(formation?.placements)
+          ? formation.placements.map((placement) => ({
+            unitTypeId: String(placement?.unitTypeId || '').trim(),
+            x: Math.floor(Number(placement?.x) || 0),
+            y: Math.floor(Number(placement?.y) || 0)
+          })).filter((placement) => placement.unitTypeId)
+          : []
+      })).filter((formation) => formation.formationId)
+      : [],
+    activeFormationId: String(group?.activeFormationId || group?.formationRect?.formationId || '').trim(),
+    formationRect: group?.formationRect && typeof group.formationRect === 'object'
+      ? { ...group.formationRect }
+      : null,
+    deploySlots: Array.isArray(group?.deploySlots) ? group.deploySlots.map((slot) => ({ ...slot })) : [],
+    skillSlots: Array.isArray(group?.skillSlots) ? group.skillSlots.map((slot) => ({ ...slot })) : [],
+    x: Number(group?.x) || 0,
+    y: Number(group?.y) || 0,
+    placed: group?.placed !== false
+  };
 };
 
-const resolveEdgeScrollVector = (pointer, rect) => ({
-  x: resolveEdgeScrollAxis(pointer.clientX, rect.left, rect.right),
-  y: -resolveEdgeScrollAxis(pointer.clientY, rect.top, rect.bottom)
-});
+const buildTrainingArmiesSnapshot = (runtime) => {
+  const deployGroups = runtime?.getDeployGroups?.();
+  if (!deployGroups) return [];
+  return [
+    ...(Array.isArray(deployGroups.attacker) ? deployGroups.attacker : []),
+    ...(Array.isArray(deployGroups.defender) ? deployGroups.defender : [])
+  ]
+    .map(serializeTrainingArmyGroup)
+    .filter(Boolean)
+    .sort((left, right) => (
+      (Number(left.sortOrder) || 0) - (Number(right.sortOrder) || 0)
+      || left.armyId.localeCompare(right.armyId)
+    ));
+};
 
 const BattleSceneContainer = ({
   open = false,
@@ -127,10 +156,10 @@ const BattleSceneContainer = ({
   const deployRectDragRef = useRef(null);
   const spacePressedRef = useRef(false);
   const mapKeyCommandsRef = useRef(new Set());
-  const edgeScrollPointerRef = useRef({ active: false, clientX: 0, clientY: 0 });
-  const edgeScrollMotionRef = useRef({ intensity: 0, directionKey: '', carrying: false });
   const runtimeInitRef = useRef(null);
   const reportBattleResultRef = useRef(() => {});
+  const lastTrainingArmySnapshotRef = useRef('');
+  const trainingArmySaveInFlightRef = useRef(null);
   const [mapKeyCommand, setMapKeyCommand] = useState('');
   const [deployFormationLibrary, setDeployFormationLibrary] = useState({});
   const [formationWheelState, setFormationWheelState] = useState({
@@ -138,6 +167,14 @@ const BattleSceneContainer = ({
     groupId: '',
     x: 0,
     y: 0
+  });
+  const [trainingSettingsOpen, setTrainingSettingsOpen] = useState(false);
+  const [skillTreeModal, setSkillTreeModal] = useState({
+    open: false,
+    groupId: '',
+    slotIndex: 0,
+    treeCategory: '',
+    progress: { unlocked: [] }
   });
 
   const {
@@ -171,23 +208,11 @@ const BattleSceneContainer = ({
     setSelectedSquadId,
     resultState,
     setResultState,
-    deployEditorOpen,
-    setDeployEditorOpen,
-    deployEditingGroupId,
-    setDeployEditingGroupId,
-    deployEditorDraft,
-    setDeployEditorDraft,
-    deployQuantityDialog,
-    setDeployQuantityDialog,
     setDeployDraggingGroup,
     deployActionAnchorMode,
     setDeployActionAnchorMode,
     deployNotice,
     setDeployNotice,
-    deployEditorDragUnitId,
-    setDeployEditorDragUnitId,
-    deployEditorTeam,
-    setDeployEditorTeam,
     selectedPaletteItemId,
     setSelectedPaletteItemId,
     confirmDeleteGroupId,
@@ -216,31 +241,88 @@ const BattleSceneContainer = ({
     deployDraggingTeam
   } = useBattleSceneUiState();
 
-  const closeModal = useCallback(() => {
-    if (typeof onClose === 'function') onClose();
-  }, [onClose]);
-
   const {
     runtimeRef,
     phase,
     runtimeVersion,
     setPhase,
-    api: { startBattle }
+    trainingSessionActive,
+    api: { startBattle, resetTraining }
   } = useBattleRuntime({
     open,
     initData: battleInitData,
     mode,
     visualConfig: unitVisualConfig
   });
+
+  const persistTrainingArmies = useCallback(async ({ force = false } = {}) => {
+    if (!isTrainingMode || !open) return { ok: true, skipped: true };
+    const runtime = runtimeRef.current;
+    if (!runtime) return { ok: true, skipped: true };
+
+    if (trainingArmySaveInFlightRef.current) {
+      await trainingArmySaveInFlightRef.current;
+    }
+
+    const armies = buildTrainingArmiesSnapshot(runtime);
+    const snapshot = JSON.stringify(armies);
+    if (!force && snapshot === lastTrainingArmySnapshotRef.current) {
+      return { ok: true, skipped: true };
+    }
+
+    const request = BattleDataService.saveTrainingArmies({ armies });
+    trainingArmySaveInFlightRef.current = request;
+    try {
+      await request;
+      lastTrainingArmySnapshotRef.current = snapshot;
+      return { ok: true };
+    } catch (saveError) {
+      return { ok: false, error: saveError };
+    } finally {
+      if (trainingArmySaveInFlightRef.current === request) {
+        trainingArmySaveInFlightRef.current = null;
+      }
+    }
+  }, [isTrainingMode, open, runtimeRef]);
+
+  const closeModal = useCallback(async () => {
+    if (isTrainingMode) {
+      const saved = await persistTrainingArmies({ force: true });
+      if (!saved.ok) {
+        setDeployNotice(`训练部队保存失败，未退出训练营：${saved.error?.message || '请重试'}`);
+        return;
+      }
+    }
+    if (typeof onClose === 'function') onClose();
+  }, [isTrainingMode, onClose, persistTrainingArmies, setDeployNotice]);
+
+  useEffect(() => {
+    if (!isTrainingMode || !open || !runtimeRef.current) {
+      lastTrainingArmySnapshotRef.current = '';
+      return;
+    }
+    lastTrainingArmySnapshotRef.current = JSON.stringify(buildTrainingArmiesSnapshot(runtimeRef.current));
+  }, [isTrainingMode, open, runtimeRef, runtimeVersion]);
+
+  useEffect(() => {
+    if (!isTrainingMode || !open || runtimeVersion <= 0) return undefined;
+    const timerId = window.setInterval(() => {
+      persistTrainingArmies().catch(() => {});
+    }, 1000);
+    return () => window.clearInterval(timerId);
+  }, [isTrainingMode, open, persistTrainingArmies, runtimeVersion]);
+
   const deployPlacementLocked = phase === 'deploy' && !!deployDraggingGroupId;
 
   const {
     battleStatus,
     cardRows: cards,
     minimapSnapshot,
+    trainingState,
     setBattleStatus,
     setCardRows: setCards,
-    setMinimapSnapshot
+    setMinimapSnapshot,
+    setTrainingState
   } = useBattleUiSync({
     runtimeRef,
     intervalMs: 120,
@@ -330,16 +412,10 @@ const BattleSceneContainer = ({
     setMarchModePickOpen,
     setMarchPopupPos,
     setResultState,
-    setDeployEditorOpen,
-    setDeployEditingGroupId,
-    setDeployEditorDraft,
-    setDeployQuantityDialog,
     setDeployDraggingGroup,
     setDeployInfoState,
     setDeployActionAnchorMode,
     setDeployNotice,
-    setDeployEditorDragUnitId,
-    setDeployEditorTeam,
     setSelectedPaletteItemId,
     setQuickDeployOpen,
     setQuickDeployTab,
@@ -447,25 +523,31 @@ const BattleSceneContainer = ({
     ));
   }, []);
 
-  const handleDeployGroupIdChanged = useCallback((prevGroupId, nextGroupId, nextActiveFormationId = '') => {
-    const safePrevId = String(prevGroupId || '').trim();
-    const safeNextId = String(nextGroupId || '').trim();
-    if (!safePrevId || !safeNextId || safePrevId === safeNextId) return;
-    setDeployFormationLibrary((prev) => {
-      const source = prev[safePrevId];
-      if (!source) return prev;
-      const next = { ...prev };
-      delete next[safePrevId];
-      next[safeNextId] = {
-        ...source,
-        activeFormationId: nextActiveFormationId || source.activeFormationId || ''
+  useEffect(() => {
+    if (!open || runtimeVersion <= 0) {
+      setDeployFormationLibrary({});
+      return;
+    }
+    const runtime = runtimeRef.current;
+    const deployGroups = runtime?.getDeployGroups?.();
+    const allGroups = [
+      ...(Array.isArray(deployGroups?.attacker) ? deployGroups.attacker : []),
+      ...(Array.isArray(deployGroups?.defender) ? deployGroups.defender : [])
+    ];
+    const nextLibrary = allGroups.reduce((library, group) => {
+      const groupId = String(group?.id || '').trim();
+      const formations = (Array.isArray(group?.templateFormations) ? group.templateFormations : [])
+        .filter((formation) => formation && formation.legal !== false && Array.isArray(formation.placements) && formation.placements.length > 0)
+        .slice(0, 15);
+      if (!groupId || formations.length <= 0) return library;
+      library[groupId] = {
+        formations,
+        activeFormationId: String(group?.activeFormationId || group?.formationRect?.formationId || formations[0]?.formationId || formations[0]?.id || '').trim()
       };
-      return next;
-    });
-    setFormationWheelState((prev) => (
-      prev.groupId === safePrevId ? { ...prev, groupId: safeNextId } : prev
-    ));
-  }, []);
+      return library;
+    }, {});
+    setDeployFormationLibrary(nextLibrary);
+  }, [open, runtimeRef, runtimeVersion]);
 
   const getSceneRelativePosition = useCallback((event = null, fallbackWorld = null) => {
     const sceneRect = sceneRef.current?.getBoundingClientRect();
@@ -590,54 +672,6 @@ const BattleSceneContainer = ({
     setSelectedSquadId
   ]);
 
-  const handleDeployGroupTeamSwitched = useCallback(({ prevGroupId = '', nextGroupId = '', nextTeam = TEAM_ATTACKER } = {}) => {
-    const safePrevId = String(prevGroupId || '').trim();
-    const safeNextId = String(nextGroupId || '').trim();
-    if (!safePrevId || !safeNextId || safePrevId === safeNextId) return;
-    const source = deployFormationLibrary[safePrevId];
-    const activeFormationId = String(source?.activeFormationId || '').trim();
-    const activeFormation = Array.isArray(source?.formations)
-      ? source.formations.find((formation) => String(formation?.formationId || formation?.id || '').trim() === activeFormationId)
-      : null;
-    if (activeFormation) {
-      runtimeRef.current?.setDeployGroupFormation?.(safeNextId, activeFormation, nextTeam === TEAM_DEFENDER ? TEAM_DEFENDER : TEAM_ATTACKER);
-    }
-    handleDeployGroupIdChanged(safePrevId, safeNextId, activeFormationId);
-  }, [deployFormationLibrary, handleDeployGroupIdChanged, runtimeRef]);
-
-  useEffect(() => {
-    if (!open) return undefined;
-    const clearEdgeScroll = () => {
-      edgeScrollPointerRef.current.active = false;
-      edgeScrollMotionRef.current = { intensity: 0, directionKey: '', carrying: false };
-    };
-    const handleWindowMouseMove = (event) => {
-      if (!isBattleDocumentActive()) {
-        clearEdgeScroll();
-        return;
-      }
-      const clientX = Number(event.clientX);
-      const clientY = Number(event.clientY);
-      if (!Number.isFinite(clientX) || !Number.isFinite(clientY)) {
-        clearEdgeScroll();
-        return;
-      }
-      edgeScrollPointerRef.current = { active: true, clientX, clientY };
-    };
-    const handleVisibilityChange = () => {
-      if (document.visibilityState !== 'visible') clearEdgeScroll();
-    };
-    window.addEventListener('mousemove', handleWindowMouseMove, true);
-    window.addEventListener('blur', clearEdgeScroll);
-    document.addEventListener('visibilitychange', handleVisibilityChange);
-    return () => {
-      window.removeEventListener('mousemove', handleWindowMouseMove, true);
-      window.removeEventListener('blur', clearEdgeScroll);
-      document.removeEventListener('visibilitychange', handleVisibilityChange);
-      clearEdgeScroll();
-    };
-  }, [open]);
-
   useEffect(() => {
     if (!open) return undefined;
     let rafId = 0;
@@ -703,43 +737,6 @@ const BattleSceneContainer = ({
           nextCenterY += dy * panSpeed * dt;
         }
 
-        const documentActive = isBattleDocumentActive();
-        const edgePointer = edgeScrollPointerRef.current;
-        if (!documentActive) edgePointer.active = false;
-        const sceneRect = sceneRef.current?.getBoundingClientRect?.();
-        const edgeScroll = documentActive
-          && edgePointer.active
-          && !panDragRef.current
-          && sceneRect
-          && (runtime.getPhase?.() === 'deploy' || runtime.getPhase?.() === 'battle')
-          ? resolveEdgeScrollVector(edgePointer, sceneRect)
-          : { x: 0, y: 0 };
-        const rawEdgeIntensity = Math.max(Math.abs(edgeScroll.x), Math.abs(edgeScroll.y));
-        const edgeMotion = edgeScrollMotionRef.current;
-        let edgeIntensity = 0;
-        if (rawEdgeIntensity > 1e-4) {
-          const edgeDirectionKey = `${Math.sign(edgeScroll.x)},${Math.sign(edgeScroll.y)}`;
-          const directionChanged = edgeMotion.directionKey && edgeMotion.directionKey !== edgeDirectionKey;
-          if (directionChanged) edgeMotion.carrying = true;
-          if (!edgeMotion.carrying) {
-            edgeMotion.intensity = rawEdgeIntensity;
-          } else {
-            edgeMotion.intensity = Math.max(edgeMotion.intensity, rawEdgeIntensity);
-          }
-          edgeMotion.directionKey = edgeDirectionKey;
-          edgeIntensity = edgeMotion.intensity;
-        } else {
-          edgeMotion.intensity = 0;
-          edgeMotion.directionKey = '';
-          edgeMotion.carrying = false;
-        }
-        const edgeLength = Math.hypot(edgeScroll.x, edgeScroll.y);
-        if (edgeIntensity > 1e-4 && edgeLength > 1e-4) {
-          const edgeWorldX = ((rightX * edgeScroll.x) + (forwardX * edgeScroll.y)) / edgeLength;
-          const edgeWorldY = ((rightY * edgeScroll.x) + (forwardY * edgeScroll.y)) / edgeLength;
-          nextCenterX += edgeWorldX * panSpeed * edgeIntensity * dt;
-          nextCenterY += edgeWorldY * panSpeed * edgeIntensity * dt;
-        }
         if (rotateDirection !== 0) {
           camera.worldYawDeg += rotateDirection * rotateSpeed * dt;
         }
@@ -749,7 +746,6 @@ const BattleSceneContainer = ({
         camera.centerY = clampedCenter.y;
         hasActiveCameraMotion = (
           moveLen > 1e-4
-          || edgeIntensity > 1e-4
           || rotateDirection !== 0
         );
       }
@@ -784,12 +780,11 @@ const BattleSceneContainer = ({
     handleStartBattle,
     handleCardFocus,
     handleCardSelect,
-    resolveDeployPlacementTeam,
-    switchDeployGroupTeamForTraining,
     isPathPointBlocked
   } = useBattleSceneSelection({
     runtimeRef,
     cameraRef,
+    cameraViewRectRef,
     startBattle,
     isTrainingMode,
     setPhase,
@@ -808,7 +803,6 @@ const BattleSceneContainer = ({
     setMarchPopupPos,
     setDeployDraggingGroup,
     setDeployActionAnchorMode,
-    setDeployEditorOpen,
     setSelectedPaletteItemId,
     setQuickDeployOpen,
     setQuickDeployApplying,
@@ -857,34 +851,20 @@ const BattleSceneContainer = ({
   });
 
   const {
-    closeDeployEditor,
-    handleOpenDeployCreator,
-    handleOpenDeployEditorForGroup,
-    openDeployQuantityDialog,
-    handleDeployEditorDrop,
-    handleConfirmDeployQuantity,
-    handleRemoveDraftUnit,
-    handleSaveDeployEditor,
     handleRecallDeployDraggingGroup,
-    handleCreateTrainingGroupByTemplate,
     handleOpenTemplateFillPreview,
+    handleOpenTemplateFillEditor,
     handleCloseTemplateFillPreview,
-    handleConfirmTemplateFillPreview
+    handleConfirmTemplateFillPreview,
+    handleChangeTemplateFillTotal,
+    handleChangeTemplateFillTeam,
+    handleChangeTemplateFillControlMode,
+    handleChangeTemplateFillName
   } = useBattleDeployEditor({
     runtimeRef,
     pointerWorldRef,
     isTrainingMode,
-    deployEditingGroupId,
-    deployEditorDraft,
-    deployEditorTeam,
-    deployQuantityDialog,
     templateFillPreview,
-    setDeployEditorOpen,
-    setDeployEditingGroupId,
-    setDeployEditorDraft,
-    setDeployQuantityDialog,
-    setDeployEditorDragUnitId,
-    setDeployEditorTeam,
     setDeployNotice,
     setSelectedSquadId,
     setDeployDraggingGroup,
@@ -895,22 +875,6 @@ const BattleSceneContainer = ({
     onDeployGroupFormationsChange: handleDeployGroupFormationsChange,
     onDeployGroupRemoved: handleDeployGroupRemoved
   });
-
-  const handleCreateTrainingTemplateAtPointer = useCallback((template, team = TEAM_ATTACKER, event = null) => {
-    const canvas = glCanvasRef.current;
-    if (canvas && event && Number.isFinite(Number(event.clientX)) && Number.isFinite(Number(event.clientY))) {
-      const rect = canvas.getBoundingClientRect();
-      if (rect.width > 0 && rect.height > 0) {
-        const px = ((Number(event.clientX) - rect.left) / Math.max(1, rect.width)) * canvas.width;
-        const py = ((Number(event.clientY) - rect.top) / Math.max(1, rect.height)) * canvas.height;
-        const world = cameraRef.current.screenToGround(px, py, { width: canvas.width, height: canvas.height });
-        if (Number.isFinite(Number(world?.x)) && Number.isFinite(Number(world?.y))) {
-          pointerWorldRef.current = world;
-        }
-      }
-    }
-    handleCreateTrainingGroupByTemplate(template, team);
-  }, [cameraRef, glCanvasRef, handleCreateTrainingGroupByTemplate, pointerWorldRef]);
 
   const {
     onMouseDown: handleSceneMouseDown,
@@ -938,9 +902,6 @@ const BattleSceneContainer = ({
     deployDraggingTeam,
     selectedPaletteItemId,
     isTrainingMode,
-    resolveDeployPlacementTeam,
-    switchDeployGroupTeamForTraining,
-    onDeployGroupTeamSwitched: handleDeployGroupTeamSwitched,
     isPathPointBlocked,
     syncBattleCards,
     selectBattleSquad,
@@ -983,6 +944,9 @@ const BattleSceneContainer = ({
     syncDeployUiFromRuntime,
     handleDeployMove,
     handleDeployDelete,
+    handleDeployPlacementAction,
+    handleDeployControlModeToggle,
+    handleDeployReorder,
     handleConfirmDeployDelete
   } = useBattleDeployGroupActions({
     runtimeRef,
@@ -1000,6 +964,262 @@ const BattleSceneContainer = ({
     setConfirmDeletePos,
     onDeployGroupRemoved: handleDeployGroupRemoved
   });
+
+  const handleDeployGroupSkillSlotsChange = useCallback((groupId, skillSlots = []) => {
+    const runtime = runtimeRef.current;
+    if (!runtime || runtime.getPhase?.() !== 'deploy') return;
+    const result = runtime.setDeployGroupSkillSlots(groupId, skillSlots, 'any');
+    if (!result?.ok) {
+      setDeployNotice(result?.reason || '技能配置失败');
+      return;
+    }
+    setCards(runtime.getCardRows());
+    setMinimapSnapshot(runtime.getMinimapSnapshot());
+  }, [
+    runtimeRef,
+    setCards,
+    setDeployNotice,
+    setMinimapSnapshot
+  ]);
+
+  const syncTrainingUi = useCallback(() => {
+    const runtime = runtimeRef.current;
+    if (!runtime) return;
+    setBattleStatus(runtime.getBattleStatus());
+    setCards(runtime.getCardRows());
+    setMinimapSnapshot(runtime.getMinimapSnapshot());
+    setTrainingState(runtime.getTrainingState?.() || null);
+  }, [runtimeRef, setBattleStatus, setCards, setMinimapSnapshot, setTrainingState]);
+
+  const handleTrainingBattleControlModeToggle = useCallback((squadId, nextMode) => {
+    const runtime = runtimeRef.current;
+    if (!isTrainingMode || !runtime || phase !== 'battle') return;
+    const result = runtime.setTrainingBattleSquadControlMode?.(squadId, nextMode);
+    if (!result?.ok) {
+      setDeployNotice(result?.reason || '切换控制权失败');
+      return;
+    }
+
+    if (result.controlMode === 'USER') {
+      selectBattleSquad(result.squadId, true);
+    } else {
+      runtime.setFocusSquad(result.squadId);
+      const anchor = runtime.getFocusAnchor();
+      cameraRef.current.beginFocusTransition(anchor);
+      setSelectedSquadId('');
+      setWorldActionsVisibleForSquadId('');
+      setPendingPathPoints([]);
+      setPlanningHoverPoint(null);
+      setSkillConfirmState(null);
+      setSkillPopupSquadId('');
+      setMarchModePickOpen(false);
+      setBattleUiMode(BATTLE_UI_MODE_NONE);
+      if (
+        battleUiMode === BATTLE_UI_MODE_PATH
+        || battleUiMode === BATTLE_UI_MODE_SKILL_CONFIRM
+        || battleUiMode === BATTLE_UI_MODE_MARCH_PICK
+      ) {
+        setClockPaused(false);
+      }
+    }
+
+    setDeployNotice(result.controlMode === 'AI' ? '已切换为 AI 接管' : '已切换为用户操作');
+    syncTrainingUi();
+  }, [
+    battleUiMode,
+    cameraRef,
+    isTrainingMode,
+    phase,
+    runtimeRef,
+    selectBattleSquad,
+    setBattleUiMode,
+    setClockPaused,
+    setDeployNotice,
+    setMarchModePickOpen,
+    setPendingPathPoints,
+    setPlanningHoverPoint,
+    setSelectedSquadId,
+    setSkillConfirmState,
+    setSkillPopupSquadId,
+    setWorldActionsVisibleForSquadId,
+    syncTrainingUi
+  ]);
+
+  const closeTrainingSkillTree = useCallback(() => {
+    setSkillTreeModal((prev) => ({ ...prev, open: false }));
+  }, []);
+
+  const handleOpenTrainingSkillTree = useCallback((groupId, slotIndex = 0, treeCategory = '') => {
+    const runtime = runtimeRef.current;
+    if (!runtime) return;
+    const source = phase === 'battle'
+      ? runtime.getSquadById?.(groupId)
+      : runtime.getDeployGroupById?.(groupId, 'any');
+    if (!source) return;
+    const safeIndex = clamp(Math.floor(Number(slotIndex) || 0), 0, 2);
+    const slot = normalizeSkillSlots(source.skillSlots)[safeIndex];
+    const category = String(treeCategory || slot?.treeCategory || '').trim();
+    setSkillTreeModal({
+      open: true,
+      groupId: String(groupId || ''),
+      slotIndex: safeIndex,
+      treeCategory: category,
+      progress: category ? runtime.getTrainingSkillTreeProgress?.(groupId, category) || { unlocked: [] } : { unlocked: [] }
+    });
+  }, [phase, runtimeRef]);
+
+  const handleTrainingTreeCategoryChange = useCallback((nextCategory = '') => {
+    const runtime = runtimeRef.current;
+    if (!runtime || phase !== 'deploy' || !skillTreeModal.groupId) return;
+    const group = runtime.getDeployGroupById(skillTreeModal.groupId, 'any');
+    if (!group) return;
+    const tree = getSkillTreeById(nextCategory);
+    const slots = normalizeSkillSlots(group.skillSlots);
+    slots[skillTreeModal.slotIndex] = {
+      ...slots[skillTreeModal.slotIndex],
+      treeCategory: tree?.id || '',
+      skillId: tree?.skills?.find((skill) => skill.kind !== 'passive')?.id || '',
+      cooldownRemain: 0
+    };
+    const result = runtime.setDeployGroupSkillSlots(group.id, slots, 'any');
+    if (!result?.ok) {
+      setDeployNotice(result?.reason || '技能树绑定失败');
+      return;
+    }
+    setSkillTreeModal((prev) => ({
+      ...prev,
+      treeCategory: tree?.id || '',
+      progress: tree?.id ? runtime.getTrainingSkillTreeProgress?.(group.id, tree.id) || { unlocked: [] } : { unlocked: [] }
+    }));
+    syncTrainingUi();
+  }, [phase, runtimeRef, setDeployNotice, skillTreeModal.groupId, skillTreeModal.slotIndex, syncTrainingUi]);
+
+  const handleTrainingTreeSkillClick = useCallback((skill, meta = {}) => {
+    const runtime = runtimeRef.current;
+    if (!runtime || !skill || !skillTreeModal.groupId) return;
+    if (skill.kind === 'passive') {
+      setDeployNotice('被动节点会自动生效，不能放入技能栏');
+      return;
+    }
+    if (phase === 'deploy') {
+      const group = runtime.getDeployGroupById(skillTreeModal.groupId, 'any');
+      if (!group) return;
+      const slots = normalizeSkillSlots(group.skillSlots);
+      const current = slots[skillTreeModal.slotIndex] || {};
+      slots[skillTreeModal.slotIndex] = {
+        ...current,
+        treeCategory: skillTreeModal.treeCategory || meta.treeCategory || current.treeCategory,
+        skillId: skill.id,
+        cooldownRemain: 0
+      };
+      const result = runtime.setDeployGroupSkillSlots(group.id, slots, 'any');
+      if (!result?.ok) {
+        setDeployNotice(result?.reason || '技能配置失败');
+        return;
+      }
+      setDeployNotice(`已将 ${skill.name} 装备到槽位 ${skillTreeModal.slotIndex + 1}`);
+      setSkillTreeModal((prev) => ({ ...prev, treeCategory: slots[skillTreeModal.slotIndex].treeCategory }));
+      syncTrainingUi();
+      return;
+    }
+    if (phase !== 'battle') return;
+    const category = skillTreeModal.treeCategory || meta.treeCategory;
+    const result = meta.lit
+      ? runtime.equipTrainingSkill?.(skillTreeModal.groupId, skillTreeModal.slotIndex, skill.id)
+      : runtime.unlockTrainingSkill?.(skillTreeModal.groupId, category, skill.id);
+    if (!result?.ok) {
+      setDeployNotice(result?.reason || '技能操作失败');
+      return;
+    }
+    const progress = runtime.getTrainingSkillTreeProgress?.(skillTreeModal.groupId, category) || { unlocked: [] };
+    setSkillTreeModal((prev) => ({ ...prev, progress }));
+    setDeployNotice(meta.lit
+      ? `已将 ${skill.name} 替换到槽位 ${skillTreeModal.slotIndex + 1}`
+      : `已点亮 ${skill.name}，再次点击该技能即可替换到槽位`);
+    syncTrainingUi();
+  }, [phase, runtimeRef, setDeployNotice, skillTreeModal.groupId, skillTreeModal.slotIndex, skillTreeModal.treeCategory, syncTrainingUi]);
+
+  const handleTrainingTreeUnbind = useCallback(() => {
+    const runtime = runtimeRef.current;
+    if (!runtime || phase !== 'deploy' || !skillTreeModal.groupId) return;
+    const group = runtime.getDeployGroupById(skillTreeModal.groupId, 'any');
+    if (!group) return;
+    const slots = normalizeSkillSlots(group.skillSlots);
+    slots[skillTreeModal.slotIndex] = {
+      ...slots[skillTreeModal.slotIndex],
+      treeCategory: '',
+      skillId: '',
+      cooldownRemain: 0
+    };
+    const result = runtime.setDeployGroupSkillSlots(group.id, slots, 'any');
+    if (!result?.ok) {
+      setDeployNotice(result?.reason || '解除绑定失败');
+      return;
+    }
+    closeTrainingSkillTree();
+    setDeployNotice(`已清空槽位 ${skillTreeModal.slotIndex + 1}`);
+    syncTrainingUi();
+  }, [closeTrainingSkillTree, phase, runtimeRef, setDeployNotice, skillTreeModal.groupId, skillTreeModal.slotIndex, syncTrainingUi]);
+
+  const handleCastTrainingSkillSlot = useCallback((groupId, slotIndex = 0) => {
+    const runtime = runtimeRef.current;
+    if (!runtime || phase !== 'battle') return;
+    const result = runtime.commandSkillSlot?.(groupId, slotIndex, {
+      x: Number(pointerWorldRef.current?.x) || 0,
+      y: Number(pointerWorldRef.current?.y) || 0
+    });
+    if (!result?.ok) {
+      setDeployNotice(result?.reason || '技能施放失败');
+      return;
+    }
+    syncTrainingUi();
+  }, [phase, pointerWorldRef, runtimeRef, setDeployNotice, syncTrainingUi]);
+
+  const handleTrainingSkillHotkey = useCallback((slotIndex = 0) => {
+    if (!isTrainingMode || phase !== 'battle' || !selectedSquadId) return;
+    handleCastTrainingSkillSlot(selectedSquadId, slotIndex);
+  }, [handleCastTrainingSkillSlot, isTrainingMode, phase, selectedSquadId]);
+
+  const handleTrainingAdjustSkillPoints = useCallback((delta) => {
+    const result = runtimeRef.current?.adjustTrainingSkillPoints?.(delta);
+    if (!result?.ok) {
+      if (result?.reason) setDeployNotice(result.reason);
+      return;
+    }
+    setTrainingState(result.state);
+  }, [runtimeRef, setDeployNotice, setTrainingState]);
+
+  const handleTrainingPointIntervalChange = useCallback((intervalSec) => {
+    const result = runtimeRef.current?.setTrainingSkillPointInterval?.(intervalSec);
+    if (!result?.ok) {
+      if (result?.reason) setDeployNotice(result.reason);
+      return;
+    }
+    setTrainingState(result.state);
+  }, [runtimeRef, setDeployNotice, setTrainingState]);
+
+  const handleResetTraining = useCallback(() => {
+    const result = resetTraining();
+    if (!result?.ok) {
+      setDeployNotice(result?.reason || '训练重置失败');
+      return;
+    }
+    setTrainingSettingsOpen(false);
+    closeTrainingSkillTree();
+    setResultState(createDefaultResultState());
+    setBattleUiMode(BATTLE_UI_MODE_NONE);
+    setSelectedSquadId(runtimeRef.current?.getDeployGroups?.()?.selectedId || '');
+    setDeployNotice('已重置到开始训练前的部署状态');
+    syncTrainingUi();
+  }, [closeTrainingSkillTree, resetTraining, runtimeRef, setBattleUiMode, setDeployNotice, setResultState, setSelectedSquadId, syncTrainingUi]);
+
+  const handleTrainingExitRequest = useCallback(() => {
+    if (isTrainingMode && trainingSessionActive) {
+      handleResetTraining();
+      return;
+    }
+    closeModal();
+  }, [closeModal, handleResetTraining, isTrainingMode, trainingSessionActive]);
 
   const closeDeployInfoPanel = useCallback(() => {
     setDeployInfoState(createDefaultDeployInfoState());
@@ -1046,13 +1266,17 @@ const BattleSceneContainer = ({
 
   const handleDeployEditWithInfoClose = useCallback((groupId, event) => {
     closeDeployInfoPanel();
-    handleOpenDeployEditorForGroup(groupId, event);
-  }, [closeDeployInfoPanel, handleOpenDeployEditorForGroup]);
+    handleOpenTemplateFillEditor(groupId, event);
+  }, [closeDeployInfoPanel, handleOpenTemplateFillEditor]);
 
   const handleDeployDeleteWithInfoClose = useCallback((groupId, event) => {
     closeDeployInfoPanel();
+    if (isTrainingMode) {
+      handleDeployPlacementAction(groupId, event);
+      return;
+    }
     handleDeployDelete(groupId, event);
-  }, [closeDeployInfoPanel, handleDeployDelete]);
+  }, [closeDeployInfoPanel, handleDeployDelete, handleDeployPlacementAction, isTrainingMode]);
 
   const handleConfirmDeployDeleteWithInfoClose = useCallback(() => {
     closeDeployInfoPanel();
@@ -1078,12 +1302,6 @@ const BattleSceneContainer = ({
     setQuickDeployApplying,
     setDeployDraggingGroup,
     setDeployActionAnchorMode,
-    setDeployEditorOpen,
-    setDeployEditingGroupId,
-    setDeployEditorTeam,
-    setDeployEditorDraft,
-    setDeployEditorDragUnitId,
-    setDeployQuantityDialog,
     setConfirmDeleteGroupId,
     setConfirmDeletePos,
     setSelectedPaletteItemId,
@@ -1092,10 +1310,9 @@ const BattleSceneContainer = ({
 
   const { handleEscape } = useBattleEscapeHandler({
     confirmDeleteGroupId,
-    deployQuantityDialogOpen: deployQuantityDialog.open,
     deployInfoOpen: deployInfoState.open,
     quickDeployOpen,
-    deployEditorOpen,
+    templateFillPreviewOpen: templateFillPreview.open,
     deployDraggingGroupId,
     deployDraggingTeam,
     deployRectDragRef,
@@ -1104,10 +1321,9 @@ const BattleSceneContainer = ({
     aimStateActive: aimState.active,
     setConfirmDeleteGroupId,
     setConfirmDeletePos,
-    setDeployQuantityDialog,
     setDeployInfoState,
     handleCloseQuickDeploy,
-    closeDeployEditor,
+    handleCloseTemplateFillPreview,
     setDeployDraggingGroup,
     setDeployNotice,
     onRecallDeployDraggingGroup: handleRecallDeployDraggingGroup,
@@ -1119,16 +1335,24 @@ const BattleSceneContainer = ({
     setClockPaused,
     setWorldActionsVisibleForSquadId,
     setAimState,
-    closeModal
+    closeModal: handleTrainingExitRequest
   });
 
   const handleSceneEscape = useCallback(() => {
+    if (trainingSettingsOpen) {
+      setTrainingSettingsOpen(false);
+      return;
+    }
+    if (skillTreeModal.open) {
+      closeTrainingSkillTree();
+      return;
+    }
     if (formationWheelState.open) {
       handleCloseFormationWheel();
       return;
     }
     handleEscape();
-  }, [formationWheelState.open, handleCloseFormationWheel, handleEscape]);
+  }, [closeTrainingSkillTree, formationWheelState.open, handleCloseFormationWheel, handleEscape, skillTreeModal.open, trainingSettingsOpen]);
 
   useBattleSceneGlobalInput({
     open,
@@ -1141,6 +1365,7 @@ const BattleSceneContainer = ({
     onTogglePitch: handleTogglePitch,
     onMapKeyCommand: handleMapKeyCommand,
     onFormationKey: handleFormationKey,
+    onSkillHotkey: handleTrainingSkillHotkey,
     onCloseMarchModePick: closeMarchModePick,
     onCloseSkillPick: closeSkillPick
   });
@@ -1154,10 +1379,6 @@ const BattleSceneContainer = ({
     selectedSpeedModeUi,
     selectedWaypoints,
     pitchLabel,
-    deployEditorAvailableRows,
-    deployEditorDraftSummary,
-    deployEditorTeamLabel,
-    deployEditorTotal,
     selectedDeployFormation,
     selectedDeployFormationLines,
     worldActionGroupId,
@@ -1181,10 +1402,6 @@ const BattleSceneContainer = ({
     battleUiMode,
     skillPopupSquadId,
     cameraRef,
-    isTrainingMode,
-    deployEditingGroupId,
-    deployEditorTeam,
-    deployEditorDraft,
     deployDraggingGroupId,
     worldToDomRef,
     deployActionAnchorMode,
@@ -1196,6 +1413,11 @@ const BattleSceneContainer = ({
     showMidlineDebug,
     debugStats
   });
+
+  const skillTreeModalGroup = useMemo(
+    () => cards.find((row) => row.id === skillTreeModal.groupId) || null,
+    [cards, skillTreeModal.groupId]
+  );
 
   const deployInfoData = (
     phase === 'deploy'
@@ -1294,14 +1516,18 @@ const BattleSceneContainer = ({
             onTogglePause={handleTogglePause}
             onTogglePitch={handleTogglePitch}
             onExit={closeModal}
+            onReset={handleResetTraining}
             onStart={handleStartBattle}
             canStart={runtimeRef.current?.canStartBattle?.()}
             debugEnabled={debugEnabled}
             onToggleDebug={() => setDebugEnabled((prev) => !prev)}
+            onOpenSettings={() => setTrainingSettingsOpen(true)}
+            isTrainingMode={isTrainingMode}
+            trainingSessionActive={trainingSessionActive}
             pitchLabel={pitchLabel}
             startLabel={startLabel}
             speedModeLabel={speedModeLabel(selectedSpeedModeUi)}
-            onCycleSpeedMode={phase === 'battle' ? handleCycleSpeedMode : null}
+            onCycleSpeedMode={!isTrainingMode && phase === 'battle' ? handleCycleSpeedMode : null}
             interactionLocked={deployPlacementLocked}
           />
 
@@ -1361,10 +1587,24 @@ const BattleSceneContainer = ({
               onDeployInfo={handleOpenDeployInfo}
               onDeployMove={handleDeployMoveWithInfoClose}
               onDeployEdit={handleDeployEditWithInfoClose}
+              onDeployFormation={(groupId, event) => openFormationWheelForGroup(groupId, event)}
               onDeployDelete={handleDeployDeleteWithInfoClose}
+              onControlModeToggle={handleDeployControlModeToggle}
+              onBattleControlModeToggle={handleTrainingBattleControlModeToggle}
+              onReorder={handleDeployReorder}
+              onPlacementAction={handleDeployPlacementAction}
+              onSkillSlotsChange={handleDeployGroupSkillSlotsChange}
+              onOpenSkillTree={handleOpenTrainingSkillTree}
+              onCastSkillSlot={handleCastTrainingSkillSlot}
+              trainingState={trainingState}
+              armyTemplates={armyTemplates}
+              armyTemplatesLoading={armyTemplatesLoading}
+              armyTemplatesError={armyTemplatesError}
+              onTemplateFill={handleOpenTemplateFillPreview}
+              isTrainingMode={isTrainingMode}
             />
 
-            {phase === 'battle' ? (
+            {phase === 'battle' && !isTrainingMode ? (
               <div className="pve2-action-pad">
                 <button
                   type="button"
@@ -1375,19 +1615,7 @@ const BattleSceneContainer = ({
                 </button>
                 <span className="pve2-hint">{`交互态：${battleUiMode}`}</span>
               </div>
-            ) : (
-              <BattleDeploySidebar
-                isTrainingMode={isTrainingMode}
-                armyTemplatesLoading={armyTemplatesLoading}
-                armyTemplatesError={armyTemplatesError}
-                armyTemplates={armyTemplates}
-                attackerTeam={TEAM_ATTACKER}
-                disabled={deployPlacementLocked}
-                onCreateDeployGroup={handleOpenDeployCreator}
-                onCreateTemplateGroup={handleCreateTrainingTemplateAtPointer}
-                onOpenTemplateFillPreview={handleOpenTemplateFillPreview}
-              />
-            )}
+            ) : null}
 
             {phase === 'battle' ? (
               <BattleMarchModeFloat
@@ -1397,7 +1625,7 @@ const BattleSceneContainer = ({
               />
             ) : null}
 
-            {phase === 'battle' ? (
+            {phase === 'battle' && !isTrainingMode ? (
               <BattleSkillPickFloat
                 open={battleUiMode === BATTLE_UI_MODE_SKILL_PICK}
                 popupPos={skillPopupPos}
@@ -1407,11 +1635,16 @@ const BattleSceneContainer = ({
               />
             ) : null}
 
-            {phase === 'deploy' && !isTrainingMode && !deployPlacementLocked ? (
+            {phase === 'deploy' && !deployPlacementLocked ? (
               <BattleTemplateFillModal
                 open={templateFillPreview.open}
                 preview={templateFillPreview}
+                isTrainingMode={isTrainingMode}
                 onClose={handleCloseTemplateFillPreview}
+                onChangeTotal={handleChangeTemplateFillTotal}
+                onChangeTeam={handleChangeTemplateFillTeam}
+                onChangeControlMode={handleChangeTemplateFillControlMode}
+                onChangeName={handleChangeTemplateFillName}
                 onConfirm={handleConfirmTemplateFillPreview}
               />
             ) : null}
@@ -1498,6 +1731,7 @@ const BattleSceneContainer = ({
               <BattleActionButtons
                 visible={!!worldActionsVisibleForSquadId}
                 mode="world"
+                isTrainingMode={isTrainingMode}
                 anchorWorldPos={selectedBattleActionSquad ? {
                   x: Number(selectedBattleActionSquad.x) || 0,
                   y: Number(selectedBattleActionSquad.y) || 0,
@@ -1527,6 +1761,12 @@ const BattleSceneContainer = ({
                   onEdit={(event) => handleDeployEditWithInfoClose(worldActionGroupId, event)}
                   onFormation={(event) => openFormationWheelForGroup(worldActionGroupId, event)}
                   onDelete={(event) => handleDeployDeleteWithInfoClose(worldActionGroupId, event)}
+                  deleteTitle={isTrainingMode
+                    ? (selectedCardRow?.placed !== false ? '取消放置' : '删除训练部队')
+                    : '删除'}
+                  deleteAriaLabel={isTrainingMode
+                    ? (selectedCardRow?.placed !== false ? '取消放置' : '删除训练部队')
+                    : '删除'}
                 />
               </div>
             ) : null}
@@ -1547,28 +1787,8 @@ const BattleSceneContainer = ({
                 open
                 info={deployInfoData}
                 position={deployInfoState}
+                isTrainingMode={isTrainingMode}
                 onClose={closeDeployInfoPanel}
-              />
-            ) : null}
-
-            {phase === 'deploy' && !deployPlacementLocked ? (
-              <BattleDeployEditorPanel
-                open={deployEditorOpen}
-                deployEditingGroupId={deployEditingGroupId}
-                deployEditorTeamLabel={deployEditorTeamLabel}
-                deployEditorDraft={deployEditorDraft}
-                deployEditorTeam={deployEditorTeam}
-                deployEditorAvailableRows={deployEditorAvailableRows}
-                deployEditorDragUnitId={deployEditorDragUnitId}
-                deployEditorTotal={deployEditorTotal}
-                deployEditorDraftSummary={deployEditorDraftSummary}
-                onChangeDraftName={(name) => setDeployEditorDraft((prev) => ({ ...prev, name }))}
-                onSetDragUnitId={setDeployEditorDragUnitId}
-                onOpenQuantityDialog={openDeployQuantityDialog}
-                onDropUnit={handleDeployEditorDrop}
-                onRemoveDraftUnit={handleRemoveDraftUnit}
-                onCancel={closeDeployEditor}
-                onConfirm={handleSaveDeployEditor}
               />
             ) : null}
 
@@ -1616,6 +1836,32 @@ const BattleSceneContainer = ({
             ) : null}
           </div>
 
+          {isTrainingMode ? (
+            <TrainingSkillTreeModal
+              open={skillTreeModal.open && !!skillTreeModalGroup}
+              group={skillTreeModalGroup}
+              slotIndex={skillTreeModal.slotIndex}
+              treeCategory={skillTreeModal.treeCategory}
+              phase={phase}
+              progress={skillTreeModal.progress}
+              trainingState={trainingState}
+              onClose={closeTrainingSkillTree}
+              onTreeChange={handleTrainingTreeCategoryChange}
+              onSkillClick={handleTrainingTreeSkillClick}
+              onUnbind={handleTrainingTreeUnbind}
+            />
+          ) : null}
+
+          {isTrainingMode ? (
+            <TrainingSettingsModal
+              open={trainingSettingsOpen}
+              state={trainingState}
+              onClose={() => setTrainingSettingsOpen(false)}
+              onAdjustPoints={handleTrainingAdjustSkillPoints}
+              onChangeInterval={handleTrainingPointIntervalChange}
+            />
+          ) : null}
+
           {resultState.open ? (
             <div
               ref={resultPanelRef}
@@ -1627,46 +1873,35 @@ const BattleSceneContainer = ({
               onClick={(event) => event.stopPropagation()}
             >
               <h3 className="pve2-drag-handle" onPointerDown={handleResultHeaderPointerDown}>{isTrainingMode ? '训练结算' : '战斗结算'}</h3>
-              {resultState.summary ? (
-                <>
-                  <p>{resultState.summary.endReason || (isTrainingMode ? '训练结束' : '战斗结束')}</p>
-                  <div className="pve2-result-grid">
-                    <div>
-                      <strong>我方</strong>
-                      <span>{resultState.summary.attacker?.remain || 0}/{resultState.summary.attacker?.start || 0}</span>
-                      <span>击杀 {resultState.summary.attacker?.kills || 0}</span>
+              <div className="pve2-result-body">
+                {resultState.summary ? (
+                  <>
+                    <p>{resultState.summary.endReason || (isTrainingMode ? '训练结束' : '战斗结束')}</p>
+                    <div className="pve2-result-grid">
+                      <div>
+                        <strong>我方</strong>
+                        <span>{resultState.summary.attacker?.remain || 0}/{resultState.summary.attacker?.start || 0}</span>
+                        <span>击杀 {resultState.summary.attacker?.kills || 0}</span>
+                      </div>
+                      <div>
+                        <strong>{isTrainingMode ? '敌方' : '守军'}</strong>
+                        <span>{resultState.summary.defender?.remain || 0}/{resultState.summary.defender?.start || 0}</span>
+                        <span>击杀 {resultState.summary.defender?.kills || 0}</span>
+                      </div>
                     </div>
-                    <div>
-                      <strong>{isTrainingMode ? '敌方' : '守军'}</strong>
-                      <span>{resultState.summary.defender?.remain || 0}/{resultState.summary.defender?.start || 0}</span>
-                      <span>击杀 {resultState.summary.defender?.kills || 0}</span>
-                    </div>
-                  </div>
-                </>
-              ) : null}
-              {requireResultReport && resultState.submitting ? <p>正在上报战斗结果...</p> : null}
-              {resultState.error ? <p className="error">{resultState.error}</p> : null}
-              {requireResultReport && resultState.recorded ? <p className="ok">战报已记录</p> : null}
+                  </>
+                ) : null}
+                {requireResultReport && resultState.submitting ? <p>正在上报战斗结果...</p> : null}
+                {resultState.error ? <p className="error">{resultState.error}</p> : null}
+                {requireResultReport && resultState.recorded ? <p className="ok">战报已记录</p> : null}
+              </div>
               <div className="pve2-result-actions">
-                <button type="button" className="btn btn-secondary" onClick={closeModal}>{isTrainingMode ? '返回训练场' : '返回围城'}</button>
+                <button type="button" className="btn btn-secondary" onClick={isTrainingMode ? handleResetTraining : closeModal}>{isTrainingMode ? '重置训练' : '返回围城'}</button>
               </div>
             </div>
           ) : null}
         </div>
       ) : null}
-      <NumberPadDialog
-        open={phase === 'deploy' && deployQuantityDialog.open}
-        title={`设置兵力：${deployQuantityDialog.unitName || deployQuantityDialog.unitTypeId}`}
-        description="可滑动或直接输入数量"
-        min={1}
-        max={Math.max(1, Math.floor(Number(deployQuantityDialog.max) || 1))}
-        initialValue={Math.max(1, Math.floor(Number(deployQuantityDialog.current) || 1))}
-        zIndex={36010}
-        confirmLabel="确定"
-        cancelLabel="取消"
-        onCancel={() => setDeployQuantityDialog(createDefaultDeployQuantityDialog())}
-        onConfirm={handleConfirmDeployQuantity}
-      />
     </div>
   );
 };

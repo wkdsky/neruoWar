@@ -2,10 +2,12 @@ const fs = require('fs');
 const path = require('path');
 const ArmyUnitType = require('../models/ArmyUnitType');
 const UnitComponent = require('../models/UnitComponent');
-const { toUnitTypeDtoV1 } = require('./unitTypeDtoService');
+const {
+  toUnitTypeDtoV2,
+  resolveUnitClassification
+} = require('./unitTypeDtoService');
 const { buildUnitCatalog } = require('../seed/unitCatalogFactory');
 
-const RPS_TYPES = new Set(['mobility', 'ranged', 'defense']);
 const DATA_FILE_PATH = path.resolve(__dirname, '../seed/bootstrap_catalog_data.json');
 
 let ensurePromise = null;
@@ -28,12 +30,81 @@ const readBootstrapPatch = () => {
   }
 };
 
+const matchesExpectedUnitClassifications = (actualRows = [], expectedRows = []) => {
+  const actualById = new Map(
+    (Array.isArray(actualRows) ? actualRows : [])
+      .map((row) => [typeof row?.unitTypeId === 'string' ? row.unitTypeId.trim() : '', row])
+      .filter(([unitTypeId]) => Boolean(unitTypeId))
+  );
+  return Array.isArray(expectedRows)
+    && actualById.size === expectedRows.length
+    && expectedRows.every((expected) => {
+      const unitTypeId = typeof expected?.unitTypeId === 'string' ? expected.unitTypeId.trim() : '';
+      const actual = actualById.get(unitTypeId);
+      if (!actual || actual.enabled === false) return false;
+      const expectedClassification = resolveUnitClassification(expected);
+      return actual.unitCategory === expectedClassification.unitCategory
+        && actual.unitSubtype === expectedClassification.unitSubtype;
+    });
+};
+
+const matchesExpectedUnitPalettes = (actualRows = [], expectedRows = []) => {
+  const actualById = new Map(
+    (Array.isArray(actualRows) ? actualRows : [])
+      .map((row) => [typeof row?.unitTypeId === 'string' ? row.unitTypeId.trim() : '', row])
+      .filter(([unitTypeId]) => Boolean(unitTypeId))
+  );
+  return Array.isArray(expectedRows)
+    && actualById.size === expectedRows.length
+    && expectedRows.every((expected) => {
+      const unitTypeId = typeof expected?.unitTypeId === 'string' ? expected.unitTypeId.trim() : '';
+      const actualPalette = actualById.get(unitTypeId)?.visuals?.preview?.palette;
+      const expectedPalette = expected?.visuals?.preview?.palette;
+      return typeof actualPalette?.primary === 'string'
+        && typeof actualPalette?.secondary === 'string'
+        && typeof actualPalette?.accent === 'string'
+        && actualPalette.primary === expectedPalette?.primary
+        && actualPalette.secondary === expectedPalette?.secondary
+        && actualPalette.accent === expectedPalette?.accent;
+    });
+};
+
+const normalizeCostKP = (value) => Math.max(1, Math.floor(Number(value) || 1));
+
+const matchesExpectedUnitCosts = (actualRows = [], expectedRows = []) => {
+  const actualById = new Map(
+    (Array.isArray(actualRows) ? actualRows : [])
+      .map((row) => [typeof row?.unitTypeId === 'string' ? row.unitTypeId.trim() : '', row])
+      .filter(([unitTypeId]) => Boolean(unitTypeId))
+  );
+  return Array.isArray(expectedRows)
+    && actualById.size === expectedRows.length
+    && expectedRows.every((expected) => {
+      const unitTypeId = typeof expected?.unitTypeId === 'string' ? expected.unitTypeId.trim() : '';
+      const actual = actualById.get(unitTypeId);
+      return Boolean(actual)
+        && normalizeCostKP(actual.costKP) === normalizeCostKP(expected?.costKP);
+    });
+};
+
 const isNewCatalogReady = async () => {
-  const [typedCount, enabledCount] = await Promise.all([
-    ArmyUnitType.countDocuments({ rpsType: { $in: Array.from(RPS_TYPES) }, tier: { $gte: 1, $lte: 4 } }),
-    ArmyUnitType.countDocuments({ enabled: true })
+  const expectedUnitTypes = buildUnitCatalog(readBootstrapPatch()).unitTypes;
+  const expectedIds = expectedUnitTypes
+    .map((row) => (typeof row?.unitTypeId === 'string' ? row.unitTypeId.trim() : ''))
+    .filter(Boolean);
+  const [totalCount, enabledCount, actualRows] = await Promise.all([
+    ArmyUnitType.countDocuments({}),
+    ArmyUnitType.countDocuments({ enabled: true }),
+    ArmyUnitType.find({ unitTypeId: { $in: expectedIds } })
+      .select('unitTypeId unitCategory unitSubtype enabled costKP visuals.preview.palette')
+      .lean()
   ]);
-  return typedCount >= 36 && enabledCount >= 36;
+  return expectedIds.length === 9
+    && totalCount === expectedIds.length
+    && enabledCount === expectedIds.length
+    && matchesExpectedUnitClassifications(actualRows, expectedUnitTypes)
+    && matchesExpectedUnitPalettes(actualRows, expectedUnitTypes)
+    && matchesExpectedUnitCosts(actualRows, expectedUnitTypes);
 };
 
 const resetToGeneratedCatalog = async () => {
@@ -77,10 +148,6 @@ const buildComponentRefSet = (unitTypes = []) => {
       const key = typeof id === 'string' ? id.trim() : '';
       if (key) refs.add(key);
     });
-    (Array.isArray(row?.abilityIds) ? row.abilityIds : []).forEach((id) => {
-      const key = typeof id === 'string' ? id.trim() : '';
-      if (key) refs.add(key);
-    });
   });
   return refs;
 };
@@ -110,7 +177,7 @@ const fetchUnitTypesWithComponents = async ({ enabledOnly = true } = {}) => {
     : [];
   const unitComponents = componentDocs.map(serializeUnitComponent);
   const componentMap = new Map(unitComponents.map((item) => [item.componentId, item]));
-  const unitTypes = docs.map((doc) => toUnitTypeDtoV1(doc, componentMap));
+  const unitTypes = docs.map((doc) => toUnitTypeDtoV2(doc, componentMap));
 
   const logSignature = `${enabledOnly ? 'enabled' : 'all'}:${unitTypes.length}:${unitComponents.length}`;
   if (logSignature !== lastLoggedSignature) {
@@ -125,6 +192,10 @@ const fetchUnitTypesWithComponents = async ({ enabledOnly = true } = {}) => {
 };
 
 module.exports = {
+  ensureGeneratedCatalog,
+  matchesExpectedUnitClassifications,
+  matchesExpectedUnitPalettes,
+  matchesExpectedUnitCosts,
   fetchUnitTypesWithComponents,
   serializeUnitComponent
 };

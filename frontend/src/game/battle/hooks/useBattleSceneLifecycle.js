@@ -10,9 +10,7 @@ import {
   TEAM_ATTACKER,
   createDefaultAimState,
   createDefaultDeployDraggingGroup,
-  createDefaultDeployEditorDraft,
   createDefaultDeployInfoState,
-  createDefaultDeployQuantityDialog,
   createDefaultPopupPos,
   createDefaultQuickDeployRandomForm,
   createDefaultResultState,
@@ -46,16 +44,10 @@ export default function useBattleSceneLifecycle({
   setMarchModePickOpen,
   setMarchPopupPos,
   setResultState,
-  setDeployEditorOpen,
-  setDeployEditingGroupId,
-  setDeployEditorDraft,
-  setDeployQuantityDialog,
   setDeployDraggingGroup,
   setDeployInfoState,
   setDeployActionAnchorMode,
   setDeployNotice,
-  setDeployEditorDragUnitId,
-  setDeployEditorTeam,
   setSelectedPaletteItemId,
   setQuickDeployOpen,
   setQuickDeployTab,
@@ -109,16 +101,10 @@ export default function useBattleSceneLifecycle({
     setMarchModePickOpen(false);
     setMarchPopupPos(createDefaultPopupPos());
     setResultState(createDefaultResultState());
-    setDeployEditorOpen(false);
-    setDeployEditingGroupId('');
-    setDeployEditorDraft(createDefaultDeployEditorDraft());
-    setDeployQuantityDialog(createDefaultDeployQuantityDialog());
     setDeployDraggingGroup(createDefaultDeployDraggingGroup());
     setDeployInfoState(createDefaultDeployInfoState());
     setDeployActionAnchorMode('');
     setDeployNotice('');
-    setDeployEditorDragUnitId('');
-    setDeployEditorTeam(TEAM_ATTACKER);
     setSelectedPaletteItemId('');
     setQuickDeployOpen(false);
     setQuickDeployTab('standard');
@@ -151,16 +137,10 @@ export default function useBattleSceneLifecycle({
     setMarchModePickOpen,
     setMarchPopupPos,
     setResultState,
-    setDeployEditorOpen,
-    setDeployEditingGroupId,
-    setDeployEditorDraft,
-    setDeployQuantityDialog,
     setDeployDraggingGroup,
     setDeployInfoState,
     setDeployActionAnchorMode,
     setDeployNotice,
-    setDeployEditorDragUnitId,
-    setDeployEditorTeam,
     setSelectedPaletteItemId,
     setQuickDeployOpen,
     setQuickDeployTab,

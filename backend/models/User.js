@@ -206,6 +206,130 @@ const ArmyTemplateSchema = new mongoose.Schema({
   }
 }, { _id: false });
 
+// A template describes a composition, while an army instance records soldiers that
+// belong to one player.  Keep the two concepts separate so a template can be
+// edited without changing an already-created combat or training army.
+const ArmyInstanceUnitSchema = new mongoose.Schema({
+  unitTypeId: {
+    type: String,
+    required: true
+  },
+  count: {
+    type: Number,
+    required: true,
+    min: 1
+  }
+}, { _id: false });
+
+const ArmyInstanceFormationRectSchema = new mongoose.Schema({
+  area: { type: Number, default: 0, min: 0 },
+  width: { type: Number, default: 0, min: 0 },
+  depth: { type: Number, default: 0, min: 0 },
+  spacing: { type: Number, default: 0, min: 0 },
+  facingRad: { type: Number, default: 0 },
+  slotCount: { type: Number, default: 0, min: 0 },
+  formationId: { type: String, default: '' },
+  formationName: { type: String, default: '' }
+}, { _id: false });
+
+const ArmyInstanceDeploySlotSchema = new mongoose.Schema({
+  side: { type: Number, default: 0 },
+  front: { type: Number, default: 0 },
+  row: { type: Number, default: 0, min: 0 },
+  col: { type: Number, default: 0, min: 0 },
+  unitTypeId: { type: String, default: '' },
+  templateIndex: { type: Number, default: 0, min: 0 }
+}, { _id: false });
+
+const ArmyInstanceSkillSlotSchema = new mongoose.Schema({
+  slotIndex: { type: Number, required: true, min: 0 },
+  treeCategory: { type: String, default: '' },
+  skillId: { type: String, default: '' },
+  cooldownRemain: { type: Number, default: 0, min: 0 }
+}, { _id: false });
+
+const ArmyInstanceSchema = new mongoose.Schema({
+  armyId: {
+    type: String,
+    required: true
+  },
+  // Training cards keep an explicit order in storage.
+  sortOrder: {
+    type: Number,
+    default: 0,
+    min: 0
+  },
+  controlMode: {
+    type: String,
+    enum: ['USER', 'AI']
+  },
+  templateId: {
+    type: String,
+    default: ''
+  },
+  templateName: {
+    type: String,
+    default: ''
+  },
+  name: {
+    type: String,
+    default: ''
+  },
+  units: {
+    type: [ArmyInstanceUnitSchema],
+    default: []
+  },
+  templateFormations: {
+    type: [ArmyTemplateFormationSchema],
+    default: []
+  },
+  activeFormationId: {
+    type: String,
+    default: ''
+  },
+  formationRect: {
+    type: ArmyInstanceFormationRectSchema,
+    default: null
+  },
+  deploySlots: {
+    type: [ArmyInstanceDeploySlotSchema],
+    default: []
+  },
+  skillSlots: {
+    type: [ArmyInstanceSkillSlotSchema],
+    default: []
+  },
+  x: {
+    type: Number,
+    default: 0
+  },
+  y: {
+    type: Number,
+    default: 0
+  },
+  placed: {
+    type: Boolean,
+    default: true
+  },
+  createdAt: {
+    type: Date,
+    default: Date.now
+  },
+  updatedAt: {
+    type: Date,
+    default: Date.now
+  }
+}, { _id: false });
+
+const TrainingArmySchema = new mongoose.Schema({
+  ...ArmyInstanceSchema.obj,
+  team: {
+    type: String,
+    enum: ['attacker', 'defender'],
+    default: 'attacker'
+  }
+}, { _id: false });
+
 const BattlefieldItemInventoryEntrySchema = new mongoose.Schema({
   itemId: {
     type: String,
@@ -435,6 +559,17 @@ const userSchema = new mongoose.Schema({
   },
   armyTemplates: {
     type: [ArmyTemplateSchema],
+    default: []
+  },
+  // `armyRoster` is the account-owned total. Creating a combat army purchases
+  // its soldiers with knowledge points, then `combatArmies` reserve them for battle.
+  combatArmies: {
+    type: [ArmyInstanceSchema],
+    default: []
+  },
+  // Training armies are intentionally isolated from account-owned soldiers.
+  trainingArmies: {
+    type: [TrainingArmySchema],
     default: []
   },
   battlefieldItemInventory: {

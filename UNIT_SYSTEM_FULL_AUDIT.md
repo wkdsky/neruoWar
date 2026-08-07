@@ -281,7 +281,7 @@ const fetchArmyData = useCallback(async () => {
 - 当前“训练营”不是异步训练队列；是即时战场沙盘。
 
 ### 与单位数据关系
-- 后端 `GET /api/army/training/init` 返回 `unitTypes` + `attacker/defender rosterUnits`，并把 `count` 设为超大值（近似无限）。
+- 后端 `GET /api/army/training/init` 返回 `unitTypes` + `attacker/defender rosterUnits`，每类训练兵种库存为 10000，单支实际部队总兵数上限为 10000。
 - 前端再在部署阶段按部队编辑器/模板生成 squad。
 
 ### 实现状态
@@ -567,7 +567,7 @@ const buildSkillMetaFromSquad = (squad = null, unitTypeMap = new Map()) => {
       cooldownTotal,
       cooldownRemain,
       anchor: center ? { x: Number(center.x) || Number(squad.x) || 0, y: Number(center.y) || Number(squad.y) || 0 } : { x: Number(squad.x) || 0, y: Number(squad.y) || 0 },
-      available: cooldownRemain <= 0.01 && (Number(squad.morale) || 0) > 0
+      available: cooldownRemain <= 0.01
     });
   });
 ```
@@ -625,7 +625,7 @@ connectDB();
 - `POST /api/army/templates` / `PUT /api/army/templates/:templateId` / `DELETE /api/army/templates/:templateId`
 - `POST /api/army/recruit` / `POST /api/army/recruit/checkout`
 - `GET /api/army/training/init`（需 token）
-  - 返回训练场 battleInitData（含 unitTypes + 无限 roster）
+  - 返回训练场 battleInitData（含 unitTypes + 10000 人训练 roster）
   - 调用端：`TrainingGroundPanel`
 
 ### 围城战斗 API（`backend/routes/nodes.js`）
@@ -664,7 +664,7 @@ router.get('/training/init', authenticateToken, async (req, res) => {
         return {
           unitTypeId,
           unitName: unit?.name || unitTypeId,
-          count: MAX_TEMPLATE_UNIT_COUNT
+          count: TRAINING_MAX_GROUP_TOTAL
         };
       })
       .filter(Boolean);

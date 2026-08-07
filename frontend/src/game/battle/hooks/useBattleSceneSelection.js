@@ -15,11 +15,62 @@ import {
   createDefaultDeployDraggingGroup,
   createDefaultPopupPos
 } from '../screens/battleSceneConstants';
-import { normalizeUnitsMapCounts } from '../screens/battleSceneUtils';
+
+export const focusDeployZoneIfOffscreen = ({
+  runtime,
+  camera,
+  cameraViewRectRef,
+  team = TEAM_ATTACKER
+} = {}) => {
+  if (team !== TEAM_DEFENDER || !runtime || !camera) return false;
+  const deployRange = runtime.getDeployRange?.() || {};
+  const zoneMinX = Number(deployRange.defenderMinX);
+  const zoneMaxX = Number(deployRange.maxX);
+  if (!Number.isFinite(zoneMinX) || !Number.isFinite(zoneMaxX) || zoneMaxX < zoneMinX) return false;
+
+  const viewportWidth = Number(cameraViewRectRef?.current?.widthWorld);
+  if (Number.isFinite(viewportWidth) && viewportWidth > 0) {
+    const halfViewportWidth = viewportWidth * 0.5;
+    const viewMinX = (Number(camera.centerX) || 0) - halfViewportWidth;
+    const viewMaxX = (Number(camera.centerX) || 0) + halfViewportWidth;
+    if (viewMaxX >= zoneMinX && viewMinX <= zoneMaxX) return false;
+  }
+
+  camera.centerX = (zoneMinX + zoneMaxX) * 0.5;
+  camera.centerY = 0;
+  return true;
+};
+
+export const activateUnplacedTrainingGroup = ({
+  runtime,
+  squadId,
+  camera,
+  cameraViewRectRef,
+  setSelectedSquadId,
+  setDeployDraggingGroup,
+  setDeployActionAnchorMode,
+  setCards,
+  setMinimapSnapshot
+} = {}) => {
+  const group = runtime?.getDeployGroupById?.(squadId, 'any');
+  if (!group || group.placed !== false) return false;
+  const team = group.team === TEAM_DEFENDER ? TEAM_DEFENDER : TEAM_ATTACKER;
+  runtime.setSelectedDeployGroup(squadId);
+  runtime.setFocusSquad(squadId);
+  runtime.setDeployGroupPlaced(team, squadId, false);
+  setSelectedSquadId?.(squadId);
+  focusDeployZoneIfOffscreen({ runtime, camera, cameraViewRectRef, team });
+  setDeployDraggingGroup?.({ groupId: squadId, team });
+  setDeployActionAnchorMode?.('');
+  setCards?.(runtime.getCardRows?.() || []);
+  setMinimapSnapshot?.(runtime.getMinimapSnapshot?.() || null);
+  return true;
+};
 
 export default function useBattleSceneSelection({
   runtimeRef,
   cameraRef,
+  cameraViewRectRef,
   startBattle,
   isTrainingMode = false,
   setPhase,
@@ -38,7 +89,6 @@ export default function useBattleSceneSelection({
   setMarchPopupPos,
   setDeployDraggingGroup,
   setDeployActionAnchorMode,
-  setDeployEditorOpen,
   setSelectedPaletteItemId,
   setQuickDeployOpen,
   setQuickDeployApplying,
@@ -53,11 +103,16 @@ export default function useBattleSceneSelection({
       setResultState((prev) => ({ ...prev, open: true, error: result?.reason || '无法开战', summary: null }));
       return;
     }
-    const attacker = runtime.getCardRows().find((row) => row.team === TEAM_ATTACKER && row.alive);
-    if (attacker) {
-      runtime.setFocusSquad(attacker.id);
-      runtime.setSelectedBattleSquad(attacker.id);
-      setSelectedSquadId(attacker.id);
+    const battleRows = runtime.getCardRows();
+    const firstControllable = battleRows.find((row) => row.alive && runtime.canControlSquad?.(runtime.getSquadById?.(row.id)))
+      || battleRows.find((row) => row.alive && row.team === TEAM_ATTACKER)
+      || battleRows.find((row) => row.alive);
+    if (firstControllable) {
+      runtime.setFocusSquad(firstControllable.id);
+      if (runtime.canControlSquad?.(runtime.getSquadById?.(firstControllable.id))) {
+        runtime.setSelectedBattleSquad(firstControllable.id);
+      }
+      setSelectedSquadId(runtime.canControlSquad?.(runtime.getSquadById?.(firstControllable.id)) ? firstControllable.id : '');
       const anchor = runtime.getFocusAnchor();
       cameraRef.current.centerX = Number(anchor?.x) || 0;
       cameraRef.current.centerY = Number(anchor?.y) || 0;
@@ -76,7 +131,7 @@ export default function useBattleSceneSelection({
     setCards(runtime.getCardRows());
     setAimState(createDefaultAimState());
     setBattleUiMode(BATTLE_UI_MODE_NONE);
-    setWorldActionsVisibleForSquadId(attacker?.id || '');
+    setWorldActionsVisibleForSquadId(runtime.canControlSquad?.(runtime.getSquadById?.(firstControllable?.id)) ? (firstControllable?.id || '') : '');
     setHoverSquadIdOnCard('');
     setPendingPathPoints([]);
     setPlanningHoverPoint(null);
@@ -85,7 +140,6 @@ export default function useBattleSceneSelection({
     setMarchPopupPos(createDefaultPopupPos());
     setDeployDraggingGroup(createDefaultDeployDraggingGroup());
     setDeployActionAnchorMode('');
-    setDeployEditorOpen(false);
     setSelectedPaletteItemId('');
     setQuickDeployOpen(false);
     setQuickDeployApplying(false);
@@ -99,7 +153,6 @@ export default function useBattleSceneSelection({
     setCards,
     setDeployActionAnchorMode,
     setDeployDraggingGroup,
-    setDeployEditorOpen,
     setHoverSquadIdOnCard,
     setMarchModePickOpen,
     setMarchPopupPos,
@@ -120,6 +173,7 @@ export default function useBattleSceneSelection({
   const handleCardFocus = useCallback((squadId) => {
     const runtime = runtimeRef.current;
     if (!runtime) return;
+    if (runtime.getPhase() === 'battle' && !runtime.canControlSquad?.(runtime.getSquadById?.(squadId))) return;
     if (runtime.getPhase() === 'deploy' && !isTrainingMode) {
       const row = runtime.getCardRows().find((item) => item.id === squadId);
       if (row?.team === TEAM_DEFENDER) return;
@@ -136,9 +190,20 @@ export default function useBattleSceneSelection({
     const runtime = runtimeRef.current;
     if (!runtime) return;
     if (runtime.getPhase() === 'deploy') {
-      if (!isTrainingMode) {
-        const row = runtime.getCardRows().find((item) => item.id === squadId);
-        if (row?.team === TEAM_DEFENDER) return;
+      const row = runtime.getCardRows().find((item) => item.id === squadId);
+      if (!isTrainingMode && row?.team === TEAM_DEFENDER) return;
+      if (isTrainingMode && activateUnplacedTrainingGroup({
+        runtime,
+        squadId,
+        camera: cameraRef.current,
+        cameraViewRectRef,
+        setSelectedSquadId,
+        setDeployDraggingGroup,
+        setDeployActionAnchorMode,
+        setCards,
+        setMinimapSnapshot
+      })) {
+        return;
       }
       runtime.setSelectedDeployGroup(squadId);
       runtime.setFocusSquad(squadId);
@@ -147,116 +212,41 @@ export default function useBattleSceneSelection({
       setDeployActionAnchorMode('card');
       return;
     }
-    if (runtime.setSelectedBattleSquad(squadId)) {
-      setSelectedSquadId(squadId);
-      runtime.setFocusSquad(squadId);
-      const anchor = runtime.getFocusAnchor();
-      cameraRef.current.beginFocusTransition(anchor);
-      setWorldActionsVisibleForSquadId(squadId);
-      setBattleUiMode((prev) => (
-        prev === BATTLE_UI_MODE_PATH || prev === BATTLE_UI_MODE_SKILL_CONFIRM || prev === BATTLE_UI_MODE_MARCH_PICK
-          ? prev
-          : BATTLE_UI_MODE_NONE
-      ));
+    const squad = runtime.getSquadById?.(squadId);
+    const canControl = runtime.canControlSquad?.(squad);
+    if (!squad || (!canControl && !isTrainingMode)) return;
+
+    runtime.setFocusSquad(squadId);
+    const anchor = runtime.getFocusAnchor();
+    cameraRef.current.beginFocusTransition(anchor);
+    if (!canControl) {
+      setSelectedSquadId('');
+      setWorldActionsVisibleForSquadId('');
       setCards(runtime.getCardRows());
+      return;
     }
+
+    runtime.setSelectedBattleSquad(squadId);
+    setSelectedSquadId(squadId);
+    setWorldActionsVisibleForSquadId(squadId);
+    setBattleUiMode((prev) => (
+      prev === BATTLE_UI_MODE_PATH || prev === BATTLE_UI_MODE_SKILL_CONFIRM || prev === BATTLE_UI_MODE_MARCH_PICK
+        ? prev
+        : BATTLE_UI_MODE_NONE
+    ));
+    setCards(runtime.getCardRows());
   }, [
     cameraRef,
+    cameraViewRectRef,
     isTrainingMode,
     runtimeRef,
     setBattleUiMode,
     setCards,
     setDeployActionAnchorMode,
-    setSelectedSquadId,
-    setWorldActionsVisibleForSquadId
-  ]);
-
-  const resolveDeployPlacementTeam = useCallback((worldPoint, fallbackTeam = TEAM_ATTACKER) => {
-    const runtime = runtimeRef.current;
-    const safeFallback = fallbackTeam === TEAM_DEFENDER ? TEAM_DEFENDER : TEAM_ATTACKER;
-    if (!runtime) return safeFallback;
-    if (runtime.canDeployAt(worldPoint, TEAM_ATTACKER, 10)) return TEAM_ATTACKER;
-    if (runtime.canDeployAt(worldPoint, TEAM_DEFENDER, 10)) return TEAM_DEFENDER;
-    const x = Number(worldPoint?.x);
-    if (Number.isFinite(x)) return x >= 0 ? TEAM_DEFENDER : TEAM_ATTACKER;
-    return safeFallback;
-  }, [runtimeRef]);
-
-  const switchDeployGroupTeamForTraining = useCallback((groupId, nextTeam) => {
-    const runtime = runtimeRef.current;
-    const targetId = typeof groupId === 'string' ? groupId.trim() : '';
-    const safeNextTeam = nextTeam === TEAM_DEFENDER ? TEAM_DEFENDER : TEAM_ATTACKER;
-    if (!runtime || !targetId) {
-      return { ok: false, reason: '未找到待放置部队', groupId: targetId, team: safeNextTeam, switched: false };
-    }
-    const group = runtime.getDeployGroupById(targetId);
-    if (!group) {
-      return { ok: false, reason: '未找到待放置部队', groupId: targetId, team: safeNextTeam, switched: false };
-    }
-    const prevTeam = group.team === TEAM_DEFENDER ? TEAM_DEFENDER : TEAM_ATTACKER;
-    if (prevTeam === safeNextTeam) {
-      return { ok: true, groupId: targetId, team: prevTeam, switched: false };
-    }
-    if (!isTrainingMode) {
-      return { ok: false, reason: '当前模式不支持切换阵营', groupId: targetId, team: prevTeam, switched: false };
-    }
-    const unitsMap = normalizeUnitsMapCounts(group.units || {});
-    if (Object.keys(unitsMap).length <= 0) {
-      return { ok: false, reason: '部队兵力配置无效', groupId: targetId, team: prevTeam, switched: false };
-    }
-    const snapshot = {
-      name: typeof group.name === 'string' ? group.name : '',
-      units: unitsMap,
-      x: Number(group.x) || 0,
-      y: Number(group.y) || 0,
-      formationRect: group?.formationRect && typeof group.formationRect === 'object'
-        ? { ...group.formationRect }
-        : null,
-      deploySlots: Array.isArray(group?.deploySlots)
-        ? group.deploySlots.map((slot) => ({ ...slot }))
-        : []
-    };
-    const removeResult = runtime.removeDeployGroup(prevTeam, targetId);
-    if (!removeResult?.ok) {
-      return { ok: false, reason: removeResult?.reason || '切换阵营失败', groupId: targetId, team: prevTeam, switched: false };
-    }
-    const createResult = runtime.createDeployGroup(safeNextTeam, {
-      ...snapshot,
-      placed: false
-    });
-    if (!createResult?.ok) {
-      const rollbackResult = runtime.createDeployGroup(prevTeam, {
-        ...snapshot,
-        placed: false
-      });
-      if (rollbackResult?.ok) {
-        const rollbackGroupId = String(rollbackResult.groupId || '');
-        runtime.setSelectedDeployGroup(rollbackGroupId);
-        runtime.setFocusSquad(rollbackGroupId);
-        runtime.setDeployGroupPlaced(prevTeam, rollbackGroupId, false);
-        setSelectedSquadId(rollbackGroupId);
-        setDeployDraggingGroup({ groupId: rollbackGroupId, team: prevTeam });
-        setCards(runtime.getCardRows());
-        setMinimapSnapshot(runtime.getMinimapSnapshot());
-      }
-      return { ok: false, reason: createResult?.reason || '切换阵营失败', groupId: targetId, team: prevTeam, switched: false };
-    }
-    const nextGroupId = String(createResult.groupId || '');
-    runtime.setSelectedDeployGroup(nextGroupId);
-    runtime.setFocusSquad(nextGroupId);
-    runtime.setDeployGroupPlaced(safeNextTeam, nextGroupId, false);
-    setSelectedSquadId(nextGroupId);
-    setDeployDraggingGroup({ groupId: nextGroupId, team: safeNextTeam });
-    setCards(runtime.getCardRows());
-    setMinimapSnapshot(runtime.getMinimapSnapshot());
-    return { ok: true, groupId: nextGroupId, team: safeNextTeam, switched: true };
-  }, [
-    isTrainingMode,
-    runtimeRef,
-    setCards,
     setDeployDraggingGroup,
     setMinimapSnapshot,
-    setSelectedSquadId
+    setSelectedSquadId,
+    setWorldActionsVisibleForSquadId
   ]);
 
   const isPointInsideBattleField = useCallback((point) => {
@@ -283,8 +273,6 @@ export default function useBattleSceneSelection({
     handleStartBattle,
     handleCardFocus,
     handleCardSelect,
-    resolveDeployPlacementTeam,
-    switchDeployGroupTeamForTraining,
     isPathPointBlocked
   };
 }

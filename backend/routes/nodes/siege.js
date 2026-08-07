@@ -1,3 +1,53 @@
+const getCombatArmyDeployments = (rawArmies = [], unitTypeMap = new Map()) => (
+  (Array.isArray(rawArmies) ? rawArmies : [])
+    .map((army, index) => {
+      const armyId = typeof army?.armyId === 'string' && army.armyId.trim()
+        ? army.armyId.trim()
+        : (typeof army?.id === 'string' ? army.id.trim() : `combat_${index + 1}`);
+      const unitMap = new Map();
+      (Array.isArray(army?.units) ? army.units : []).forEach((entry) => {
+        const unitTypeId = typeof entry?.unitTypeId === 'string' ? entry.unitTypeId.trim() : '';
+        const count = Math.max(0, Math.floor(Number(entry?.count) || 0));
+        if (!unitTypeId || !unitTypeMap.has(unitTypeId) || count <= 0) return;
+        unitMap.set(unitTypeId, (unitMap.get(unitTypeId) || 0) + count);
+      });
+      const units = Array.from(unitMap.entries()).map(([unitTypeId, count]) => ({ unitTypeId, count }));
+      const totalCount = units.reduce((sum, entry) => sum + entry.count, 0);
+      if (!armyId || totalCount <= 0) return null;
+      return {
+        id: armyId,
+        armyId,
+        name: typeof army?.name === 'string' && army.name.trim()
+          ? army.name.trim()
+          : (typeof army?.templateName === 'string' && army.templateName.trim() ? army.templateName.trim() : `参战部队${index + 1}`),
+        templateId: typeof army?.templateId === 'string' ? army.templateId.trim() : '',
+        units,
+        templateFormations: Array.isArray(army?.templateFormations)
+          ? army.templateFormations.map((formation) => ({ ...formation }))
+          : [],
+        activeFormationId: typeof army?.activeFormationId === 'string' ? army.activeFormationId.trim() : '',
+        skillSlots: Array.isArray(army?.skillSlots) ? army.skillSlots.map((slot) => ({ ...slot })) : [],
+        formationRect: army?.formationRect && typeof army.formationRect === 'object' ? { ...army.formationRect } : null,
+        deploySlots: Array.isArray(army?.deploySlots) ? army.deploySlots.map((slot) => ({ ...slot })) : [],
+        totalCount
+      };
+    })
+    .filter(Boolean)
+);
+
+const aggregateCombatArmyUnits = (combatArmies = []) => {
+  const units = new Map();
+  (Array.isArray(combatArmies) ? combatArmies : []).forEach((army) => {
+    (Array.isArray(army?.units) ? army.units : []).forEach((entry) => {
+      const unitTypeId = typeof entry?.unitTypeId === 'string' ? entry.unitTypeId.trim() : '';
+      const count = Math.max(0, Math.floor(Number(entry?.count) || 0));
+      if (!unitTypeId || count <= 0) return;
+      units.set(unitTypeId, (units.get(unitTypeId) || 0) + count);
+    });
+  });
+  return units;
+};
+
 module.exports = ({ router, deps }) => {
   const {
     authenticateToken,
@@ -42,7 +92,6 @@ module.exports = ({ router, deps }) => {
     normalizeDefenderDeploymentUnits,
     mapToUnitCountEntries,
     buildUnitCountMap,
-    normalizeUserRoster,
     SIEGE_PVE_TIME_LIMIT_SEC,
     SIEGE_PVE_UNITS_PER_SOLDIER,
     normalizeBattleResultSide,
@@ -76,7 +125,7 @@ module.exports = ({ router, deps }) => {
 
       const [node, user, unitTypes] = await Promise.all([
         Node.findById(nodeId).select('name status domainMaster domainAdmins relatedParentDomains relatedChildDomains'),
-        User.findById(requestUserId).select('username role location allianceId armyRoster intelDomainSnapshots lastArrivedFromNodeId lastArrivedFromNodeName'),
+        User.findById(requestUserId).select('username role location allianceId armyRoster combatArmies intelDomainSnapshots lastArrivedFromNodeId lastArrivedFromNodeName'),
         fetchArmyUnitTypes()
       ]);
 
@@ -297,8 +346,14 @@ module.exports = ({ router, deps }) => {
         });
       });
       const defenderUnits = mapToUnitCountEntries(defenderUnitCountMap, unitTypeMap);
-      const attackerRoster = normalizeUserRoster(user?.armyRoster, unitTypes);
-      const attackerRosterUnits = mapToUnitCountEntries(buildUnitCountMap(attackerRoster), unitTypeMap);
+      const attackerDeployUnits = getCombatArmyDeployments(user?.combatArmies, unitTypeMap);
+      const attackerRosterUnits = mapToUnitCountEntries(
+        aggregateCombatArmyUnits(attackerDeployUnits),
+        unitTypeMap
+      );
+      if (attackerDeployUnits.length <= 0 || attackerRosterUnits.length <= 0) {
+        return res.status(400).json({ error: '请先在兵营中根据部队模板创建至少一支实际参战部队' });
+      }
       const now = new Date();
       return res.json({
         success: true,
@@ -314,9 +369,10 @@ module.exports = ({ router, deps }) => {
         unitTypes,
         attacker: {
           username: typeof user?.username === 'string' ? user.username : '',
-          totalCount: Math.max(0, Math.floor(Number(gateSummary?.totalCount) || 0)),
-          units: Array.isArray(gateSummary?.aggregateUnits) ? gateSummary.aggregateUnits : [],
-          rosterUnits: attackerRosterUnits
+          totalCount: attackerRosterUnits.reduce((sum, entry) => sum + entry.count, 0),
+          units: attackerRosterUnits,
+          rosterUnits: attackerRosterUnits,
+          deployUnits: attackerDeployUnits
         },
         defender: {
           username: typeof domainMasterUser?.username === 'string' ? domainMasterUser.username : '',
@@ -492,7 +548,7 @@ module.exports = ({ router, deps }) => {
 
       const [node, user, unitTypes] = await Promise.all([
         Node.findById(nodeId).select('name status domainMaster domainAdmins relatedParentDomains relatedChildDomains'),
-        User.findById(requestUserId).select('username role location allianceId armyRoster intelDomainSnapshots lastArrivedFromNodeId lastArrivedFromNodeName'),
+        User.findById(requestUserId).select('username role location allianceId armyRoster combatArmies intelDomainSnapshots lastArrivedFromNodeId lastArrivedFromNodeName'),
         fetchArmyUnitTypes()
       ]);
       if (!node || node.status !== 'approved') {
@@ -533,12 +589,12 @@ module.exports = ({ router, deps }) => {
         return res.status(400).json({ error: '该门当前不可用，无法发起围城' });
       }
 
-      const roster = normalizeUserRoster(user.armyRoster, unitTypes);
       const unitMap = buildArmyUnitTypeMap(unitTypes);
-      const ownUnitEntries = mapToUnitCountEntries(buildUnitCountMap(roster), unitMap);
+      const combatArmies = getCombatArmyDeployments(user.combatArmies, unitMap);
+      const ownUnitEntries = mapToUnitCountEntries(aggregateCombatArmyUnits(combatArmies), unitMap);
       const ownTotalCount = ownUnitEntries.reduce((sum, item) => sum + item.count, 0);
       if (ownTotalCount <= 0) {
-        return res.status(400).json({ error: '至少需要拥有一名兵力' });
+        return res.status(400).json({ error: '请先在兵营中创建至少一支实际参战部队' });
       }
 
       const gateState = getNodeGateState(node, gateKey);
@@ -630,7 +686,7 @@ module.exports = ({ router, deps }) => {
 
       const [node, user, unitTypes] = await Promise.all([
         Node.findById(nodeId).select('name status'),
-        User.findById(requestUserId).select('username role allianceId armyRoster intelDomainSnapshots'),
+        User.findById(requestUserId).select('username role allianceId armyRoster combatArmies intelDomainSnapshots'),
         fetchArmyUnitTypes()
       ]);
 
@@ -761,7 +817,7 @@ module.exports = ({ router, deps }) => {
 
       const [node, user, unitTypes] = await Promise.all([
         Node.findById(nodeId).select('name status domainMaster domainAdmins relatedParentDomains relatedChildDomains'),
-        User.findById(requestUserId).select('username role location allianceId armyRoster intelDomainSnapshots'),
+        User.findById(requestUserId).select('username role location allianceId armyRoster combatArmies intelDomainSnapshots'),
         fetchArmyUnitTypes()
       ]);
       if (!node || node.status !== 'approved') {
@@ -827,7 +883,8 @@ module.exports = ({ router, deps }) => {
         return res.status(400).json({ error: '你已在该战场中，不能重复派遣' });
       }
 
-      const roster = normalizeUserRoster(user.armyRoster, unitTypes);
+      const combatArmies = getCombatArmyDeployments(user.combatArmies, unitTypeMap);
+      const roster = mapToUnitCountEntries(aggregateCombatArmyUnits(combatArmies), unitTypeMap);
       const rosterMap = buildUnitCountMap(roster);
       let committedMap = new Map();
       const activeSiegeParticipants = await findUserActiveParticipants({ userId: requestUserId });
@@ -1040,7 +1097,7 @@ module.exports = ({ router, deps }) => {
 
       const [node, user, unitTypes] = await Promise.all([
         Node.findById(nodeId).select('name status'),
-        User.findById(requestUserId).select('username role location allianceId armyRoster intelDomainSnapshots lastArrivedFromNodeId lastArrivedFromNodeName'),
+        User.findById(requestUserId).select('username role location allianceId armyRoster combatArmies intelDomainSnapshots lastArrivedFromNodeId lastArrivedFromNodeName'),
         fetchArmyUnitTypes()
       ]);
       if (!node || node.status !== 'approved') {

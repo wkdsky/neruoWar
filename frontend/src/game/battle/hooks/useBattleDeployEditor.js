@@ -2,18 +2,24 @@ import { useCallback } from 'react';
 import {
   TEAM_ATTACKER,
   TEAM_DEFENDER,
-  createDefaultDeployEditorDraft,
-  createDefaultDeployQuantityDialog,
   createDefaultTemplateFillPreview
 } from '../screens/battleSceneConstants';
 import {
   clamp,
-  normalizeDraftUnits,
-  normalizeTemplateUnits,
-  unitsToMap
+  allocateTemplateUnits,
+  normalizeTemplatePercentages
 } from '../screens/battleSceneUtils';
 
 const MAX_TEMPLATE_FORMATIONS = 15;
+const TRAINING_MAX_GROUP_TOTAL = 10000;
+const EMPTY_TEMPLATE_FILL_STATS = Object.freeze({
+  totalCount: 0,
+  totalHp: 0,
+  totalAtk: 0,
+  totalDef: 0,
+  cohesiveSpeed: 0,
+  range: 0
+});
 
 const getTemplateFormationId = (formation = null, index = 0) => {
   const explicitId = String(formation?.formationId || formation?.id || '').trim();
@@ -30,21 +36,14 @@ const normalizeLegalTemplateFormations = (formations = []) => (
     formationId: getTemplateFormationId(formation, index)
   }));
 
+const getGroupTotal = (units = {}) => Object.values(units || {})
+  .reduce((sum, count) => sum + Math.max(0, Math.floor(Number(count) || 0)), 0);
+
 export default function useBattleDeployEditor({
   runtimeRef,
   pointerWorldRef,
   isTrainingMode = false,
-  deployEditingGroupId = '',
-  deployEditorDraft,
-  deployEditorTeam = TEAM_ATTACKER,
-  deployQuantityDialog,
   templateFillPreview,
-  setDeployEditorOpen,
-  setDeployEditingGroupId,
-  setDeployEditorDraft,
-  setDeployQuantityDialog,
-  setDeployEditorDragUnitId,
-  setDeployEditorTeam,
   setDeployNotice,
   setSelectedSquadId,
   setDeployDraggingGroup,
@@ -61,49 +60,152 @@ export default function useBattleDeployEditor({
     setMinimapSnapshot(runtime.getMinimapSnapshot());
   }, [setCards, setMinimapSnapshot]);
 
-  const closeDeployEditor = useCallback(() => {
-    setDeployEditorOpen(false);
-    setDeployEditingGroupId('');
-    setDeployQuantityDialog(createDefaultDeployQuantityDialog());
-    setDeployEditorDragUnitId('');
-    setDeployEditorTeam(TEAM_ATTACKER);
-  }, [
-    setDeployEditorDragUnitId,
-    setDeployEditorOpen,
-    setDeployEditorTeam,
-    setDeployEditingGroupId,
-    setDeployQuantityDialog
-  ]);
-
-  const handleOpenDeployCreator = useCallback((team = TEAM_ATTACKER) => {
+  const buildTemplateFillSnapshot = useCallback((template, team = TEAM_ATTACKER, totalCount = null, editingGroupId = '') => {
     const runtime = runtimeRef.current;
-    if (!runtime || runtime.getPhase() !== 'deploy') return;
     const safeTeam = team === TEAM_DEFENDER ? TEAM_DEFENDER : TEAM_ATTACKER;
-    const rows = isTrainingMode
-      ? [...runtime.getRosterRows(TEAM_ATTACKER), ...runtime.getRosterRows(TEAM_DEFENDER)]
-      : runtime.getRosterRows(safeTeam);
-    if (rows.length <= 0 || rows.every((row) => row.total <= 0)) {
-      setDeployNotice('当前没有可用兵种库存，无法新建部队');
-      return;
+    if (!runtime) {
+      return { rows: [], totalRequested: 0, totalFilled: 0, maxTotal: 0, stats: EMPTY_TEMPLATE_FILL_STATS };
     }
-    setDeployEditorTeam(safeTeam);
-    setDeployEditingGroupId('');
-    setDeployEditorDraft(createDefaultDeployEditorDraft());
-    setDeployEditorOpen(true);
-    setDeployQuantityDialog(createDefaultDeployQuantityDialog());
-    setDeployNotice('');
-  }, [
-    isTrainingMode,
-    runtimeRef,
-    setDeployEditorDraft,
-    setDeployEditorOpen,
-    setDeployEditorTeam,
-    setDeployEditingGroupId,
-    setDeployNotice,
-    setDeployQuantityDialog
-  ]);
+    const percentages = normalizeTemplatePercentages(template?.units || []);
+    if (percentages.length <= 0) {
+      return { rows: [], totalRequested: 0, totalFilled: 0, maxTotal: 0, stats: EMPTY_TEMPLATE_FILL_STATS };
+    }
+    const editingGroup = editingGroupId
+      ? runtime.getDeployGroupById?.(editingGroupId, safeTeam)
+      : null;
+    const editingUnits = editingGroup?.units || {};
+    const rosterRows = runtime.getRosterRows(safeTeam);
+    const rosterMap = new Map(
+      (Array.isArray(rosterRows) ? rosterRows : []).map((row) => {
+        const unitTypeId = row.unitTypeId;
+        const available = Math.max(0, Math.floor(Number(row?.available) || 0));
+        const retained = Math.max(0, Math.floor(Number(editingUnits?.[unitTypeId]) || 0));
+        return [unitTypeId, {
+          available: available + retained,
+          unitName: row?.unitName || unitTypeId || ''
+        }];
+      })
+    );
+    const capacityByTemplate = percentages.reduce((maxTotal, entry) => {
+      const available = rosterMap.get(entry.unitTypeId)?.available || 0;
+      if (entry.count <= 0) return maxTotal;
+      return Math.min(maxTotal, Math.floor((available * 100) / entry.count));
+    }, Number.POSITIVE_INFINITY);
+    const trainingLimit = Math.max(
+      1,
+      Math.floor(Number(runtime.maxDeployGroupTotal) || TRAINING_MAX_GROUP_TOTAL)
+    );
+    const maxTotal = Math.max(0, Math.min(
+      isTrainingMode ? trainingLimit : Math.max(0, Math.floor(capacityByTemplate)),
+      Math.max(0, Math.floor(capacityByTemplate))
+    ));
+    const selectedTotal = maxTotal <= 0
+      ? 0
+      : clamp(
+        totalCount === null || totalCount === undefined ? 0 : Math.floor(Number(totalCount) || 0),
+        0,
+        maxTotal
+      );
+    const allocatedByUnitTypeId = new Map(
+      allocateTemplateUnits(percentages, selectedTotal)
+        .map((entry) => [entry.unitTypeId, Math.max(0, Math.floor(Number(entry.count) || 0))])
+    );
+    const rows = percentages.map((entry) => {
+      const rosterInfo = rosterMap.get(entry.unitTypeId) || { available: 0, unitName: entry.unitTypeId };
+      const requested = allocatedByUnitTypeId.get(entry.unitTypeId) || 0;
+      const filled = Math.max(0, Math.min(requested, rosterInfo.available));
+      const fillPercent = requested > 0 ? Math.max(0, Math.min(100, (filled / requested) * 100)) : 0;
+      return {
+        unitTypeId: entry.unitTypeId,
+        unitName: entry.unitName || rosterInfo.unitName || entry.unitTypeId,
+        percent: entry.count || 0,
+        requested,
+        available: rosterInfo.available,
+        filled,
+        fillPercent
+      };
+    });
+    const totalRequested = rows.reduce((sum, row) => sum + row.requested, 0);
+    const totalFilled = rows.reduce((sum, row) => sum + row.filled, 0);
+    const requestedUnits = rows.reduce((result, row) => {
+      if (row.requested > 0) result[row.unitTypeId] = row.requested;
+      return result;
+    }, {});
+    const stats = runtime.getCompositionMetrics?.(requestedUnits) || EMPTY_TEMPLATE_FILL_STATS;
+    return { rows, totalRequested, totalFilled, maxTotal, stats };
+  }, [isTrainingMode, runtimeRef]);
 
-  const handleOpenDeployEditorForGroup = useCallback((groupId) => {
+  const stageDeployGroupForPlacement = useCallback((runtime, groupId, team) => {
+    const safeTeam = team === TEAM_DEFENDER ? TEAM_DEFENDER : TEAM_ATTACKER;
+    runtime.setSelectedDeployGroup(groupId);
+    runtime.setFocusSquad(groupId);
+    runtime.setDeployGroupPlaced(safeTeam, groupId, false);
+    setSelectedSquadId(groupId);
+    setDeployDraggingGroup({ groupId, team: safeTeam });
+    setDeployActionAnchorMode('');
+    syncCardsAndMinimap(runtime);
+  }, [setDeployActionAnchorMode, setDeployDraggingGroup, setSelectedSquadId, syncCardsAndMinimap]);
+
+  const createDeployGroupFromTemplateUnits = useCallback((team, unitsMap, template = null, name = '', controlMode = '') => {
+    const runtime = runtimeRef.current;
+    if (!runtime || runtime.getPhase() !== 'deploy') return false;
+    const safeTeam = team === TEAM_DEFENDER ? TEAM_DEFENDER : TEAM_ATTACKER;
+    const result = runtime.createDeployGroup(safeTeam, {
+      name: typeof name === 'string' ? name.trim() : '',
+      units: unitsMap,
+      controlMode: controlMode === 'AI' || controlMode === 'USER'
+        ? controlMode
+        : (safeTeam === TEAM_DEFENDER ? 'AI' : 'USER'),
+      templateId: typeof template?.templateId === 'string' ? template.templateId.trim() : '',
+      templateName: typeof template?.name === 'string' ? template.name.trim() : '',
+      templateFormations: normalizeLegalTemplateFormations(template?.formations),
+      skillSlots: [],
+      x: pointerWorldRef.current.x,
+      y: pointerWorldRef.current.y,
+      placed: false
+    });
+    if (!result?.ok) {
+      setDeployNotice(result?.reason || '按模板创建部队失败');
+      return false;
+    }
+    const targetGroupId = result.groupId;
+    const legalFormations = normalizeLegalTemplateFormations(template?.formations);
+    const defaultFormation = legalFormations[0] || null;
+    let activeFormationId = '';
+    if (defaultFormation) {
+      const formationResult = runtime.setDeployGroupFormation(targetGroupId, defaultFormation, safeTeam);
+      if (formationResult?.ok) {
+        activeFormationId = getTemplateFormationId(defaultFormation, 0);
+      }
+    }
+    onDeployGroupFormationsChange?.(targetGroupId, legalFormations, activeFormationId);
+    stageDeployGroupForPlacement(runtime, targetGroupId, safeTeam);
+    setDeployNotice(defaultFormation
+      ? `模板部队已创建，默认阵型为「${defaultFormation.name || '阵型1'}」，移动鼠标并点击地图放置`
+      : `模板部队已创建，移动鼠标并点击地图放置到${safeTeam === TEAM_DEFENDER ? '右侧红色' : '左侧蓝色'}部署区`);
+    return true;
+  }, [onDeployGroupFormationsChange, pointerWorldRef, runtimeRef, setDeployNotice, stageDeployGroupForPlacement]);
+
+  const handleOpenTemplateFillPreview = useCallback((template, team = TEAM_ATTACKER) => {
+    const safeTeam = team === TEAM_DEFENDER ? TEAM_DEFENDER : TEAM_ATTACKER;
+    const snapshot = buildTemplateFillSnapshot(template, safeTeam);
+    setTemplateFillPreview({
+      ...createDefaultTemplateFillPreview(),
+      open: true,
+      mode: 'create',
+      team: safeTeam,
+      controlMode: safeTeam === TEAM_DEFENDER ? 'AI' : 'USER',
+      template,
+      name: String(template?.name || '').trim(),
+      rows: snapshot.rows,
+      totalRequested: snapshot.totalRequested,
+      totalFilled: snapshot.totalFilled,
+      maxTotal: snapshot.maxTotal,
+      stats: snapshot.stats
+    });
+  }, [buildTemplateFillSnapshot, setTemplateFillPreview]);
+
+  const handleOpenTemplateFillEditor = useCallback((groupId) => {
     const runtime = runtimeRef.current;
     if (!runtime || runtime.getPhase() !== 'deploy') return;
     const group = runtime.getDeployGroupById(groupId);
@@ -115,205 +217,146 @@ export default function useBattleDeployEditor({
       setDeployNotice('当前模式不可编辑敌方部队');
       return;
     }
-    const draftUnits = Object.entries(group.units || {}).map(([unitTypeId, count]) => ({
-      unitTypeId,
-      count: Math.max(1, Math.floor(Number(count) || 1))
-    }));
-    setDeployEditorTeam(group.team === TEAM_DEFENDER ? TEAM_DEFENDER : TEAM_ATTACKER);
-    setDeployEditingGroupId(group.id);
-    setDeployEditorDraft({
-      name: group.name || '',
-      units: normalizeDraftUnits(draftUnits)
-    });
-    setDeployEditorOpen(true);
-    setDeployQuantityDialog(createDefaultDeployQuantityDialog());
-    setDeployNotice('');
-  }, [
-    isTrainingMode,
-    runtimeRef,
-    setDeployEditorDraft,
-    setDeployEditorOpen,
-    setDeployEditorTeam,
-    setDeployEditingGroupId,
-    setDeployNotice,
-    setDeployQuantityDialog
-  ]);
-
-  const resolveDeployUnitMax = useCallback((unitTypeId) => {
-    const runtime = runtimeRef.current;
-    if (!runtime) return 0;
-    const safeId = typeof unitTypeId === 'string' ? unitTypeId.trim() : '';
-    if (!safeId) return 0;
-    if (isTrainingMode && !deployEditingGroupId) {
-      const attackerAvailable = Math.max(
-        0,
-        Math.floor(Number(runtime.getRosterRows(TEAM_ATTACKER).find((row) => row.unitTypeId === safeId)?.available) || 0)
-      );
-      const defenderAvailable = Math.max(
-        0,
-        Math.floor(Number(runtime.getRosterRows(TEAM_DEFENDER).find((row) => row.unitTypeId === safeId)?.available) || 0)
-      );
-      return Math.max(attackerAvailable, defenderAvailable);
-    }
-    const rosterRow = runtime.getRosterRows(deployEditorTeam).find((row) => row.unitTypeId === safeId);
-    const baseAvailable = Math.max(0, Math.floor(Number(rosterRow?.available) || 0));
-    if (!deployEditingGroupId) return baseAvailable;
-    const editingGroup = runtime.getDeployGroupById(deployEditingGroupId, deployEditorTeam);
-    const existing = Math.max(0, Math.floor(Number(editingGroup?.units?.[safeId]) || 0));
-    return baseAvailable + existing;
-  }, [deployEditingGroupId, deployEditorTeam, isTrainingMode, runtimeRef]);
-
-  const openDeployQuantityDialog = useCallback((unitTypeId) => {
-    const runtime = runtimeRef.current;
-    if (!runtime) return;
-    const safeId = typeof unitTypeId === 'string' ? unitTypeId.trim() : '';
-    if (!safeId) return;
-    const max = resolveDeployUnitMax(safeId);
-    if (max <= 0) {
-      setDeployNotice('该兵种没有可分配数量');
+    const safeTeam = group.team === TEAM_DEFENDER ? TEAM_DEFENDER : TEAM_ATTACKER;
+    const rosterNames = new Map(runtime.getRosterRows(safeTeam).map((row) => [row.unitTypeId, row.unitName]));
+    const units = Object.entries(group.units || {})
+      .map(([unitTypeId, count]) => ({
+        unitTypeId: String(unitTypeId || '').trim(),
+        unitName: rosterNames.get(unitTypeId) || unitTypeId,
+        count: Math.max(0, Math.floor(Number(count) || 0))
+      }))
+      .filter((entry) => entry.unitTypeId && entry.count > 0);
+    if (units.length <= 0) {
+      setDeployNotice('当前部队没有可编辑兵力');
       return;
     }
-    const attackerName = runtime.getRosterRows(TEAM_ATTACKER).find((row) => row.unitTypeId === safeId)?.unitName || '';
-    const defenderName = runtime.getRosterRows(TEAM_DEFENDER).find((row) => row.unitTypeId === safeId)?.unitName || '';
-    const unitName = attackerName || defenderName || runtime.getRosterRows(deployEditorTeam).find((row) => row.unitTypeId === safeId)?.unitName || safeId;
-    const current = normalizeDraftUnits(deployEditorDraft.units).find((entry) => entry.unitTypeId === safeId)?.count || 1;
-    setDeployQuantityDialog({
-      open: true,
-      unitTypeId: safeId,
-      unitName,
-      max,
-      current: clamp(current, 1, max)
-    });
-  }, [
-    deployEditorDraft.units,
-    deployEditorTeam,
-    resolveDeployUnitMax,
-    runtimeRef,
-    setDeployNotice,
-    setDeployQuantityDialog
-  ]);
-
-  const handleDeployEditorDrop = useCallback((event) => {
-    event.preventDefault();
-    const droppedUnitTypeId = event.dataTransfer?.getData('application/x-deploy-unit-id')
-      || event.dataTransfer?.getData('text/plain')
-      || '';
-    setDeployEditorDragUnitId('');
-    openDeployQuantityDialog(droppedUnitTypeId);
-  }, [openDeployQuantityDialog, setDeployEditorDragUnitId]);
-
-  const handleConfirmDeployQuantity = useCallback((qty) => {
-    const safeId = typeof deployQuantityDialog?.unitTypeId === 'string' ? deployQuantityDialog.unitTypeId.trim() : '';
-    if (!safeId) {
-      setDeployQuantityDialog(createDefaultDeployQuantityDialog());
-      return;
-    }
-    const max = Math.max(1, Math.floor(Number(deployQuantityDialog.max) || 1));
-    const safeQty = clamp(Math.floor(Number(qty) || 1), 1, max);
-    setDeployEditorDraft((prev) => {
-      const source = normalizeDraftUnits(prev?.units || []);
-      const idx = source.findIndex((entry) => entry.unitTypeId === safeId);
-      if (idx >= 0) {
-        source[idx] = { ...source[idx], count: safeQty };
-      } else {
-        source.push({ unitTypeId: safeId, count: safeQty });
-      }
-      return { ...prev, units: normalizeDraftUnits(source) };
-    });
-    setDeployQuantityDialog(createDefaultDeployQuantityDialog());
-  }, [deployQuantityDialog, setDeployEditorDraft, setDeployQuantityDialog]);
-
-  const handleRemoveDraftUnit = useCallback((unitTypeId) => {
-    const safeId = typeof unitTypeId === 'string' ? unitTypeId.trim() : '';
-    if (!safeId) return;
-    setDeployEditorDraft((prev) => ({
-      ...prev,
-      units: normalizeDraftUnits(prev?.units || []).filter((entry) => entry.unitTypeId !== safeId)
-    }));
-  }, [setDeployEditorDraft]);
-
-  const handleSaveDeployEditor = useCallback(() => {
-    const runtime = runtimeRef.current;
-    if (!runtime || runtime.getPhase() !== 'deploy') return;
-    const draftUnits = normalizeDraftUnits(deployEditorDraft.units);
-    if (draftUnits.length <= 0) {
-      setDeployNotice('请至少添加一个兵种到部队编组');
-      return;
-    }
-    const unitsMap = unitsToMap(draftUnits);
-    let targetGroupId = '';
-    const safeTeam = deployEditorTeam === TEAM_DEFENDER ? TEAM_DEFENDER : TEAM_ATTACKER;
-    const canCreateForTeam = (team) => {
-      const rows = runtime.getRosterRows(team);
-      return Object.entries(unitsMap).every(([unitTypeId, count]) => {
-        const row = rows.find((item) => item.unitTypeId === unitTypeId);
-        const available = Math.max(0, Math.floor(Number(row?.available) || 0));
-        return Math.max(0, Math.floor(Number(count) || 0)) <= available;
-      });
+    const template = {
+      templateId: String(group.templateId || '').trim(),
+      name: String(group.templateName || group.name || '').trim(),
+      units,
+      formations: Array.isArray(group.templateFormations) ? group.templateFormations : []
     };
-    const createTeam = (!deployEditingGroupId && isTrainingMode)
-      ? (canCreateForTeam(TEAM_ATTACKER) ? TEAM_ATTACKER : TEAM_DEFENDER)
-      : safeTeam;
-    if (!deployEditingGroupId && isTrainingMode && !canCreateForTeam(TEAM_ATTACKER) && !canCreateForTeam(TEAM_DEFENDER)) {
-      setDeployNotice('当前编组在我方与敌方库存都不足，请调整兵种数量');
+    const snapshot = buildTemplateFillSnapshot(template, safeTeam, getGroupTotal(group.units), group.id);
+    setTemplateFillPreview({
+      ...createDefaultTemplateFillPreview(),
+      open: true,
+      mode: 'edit',
+      editingGroupId: group.id,
+      team: safeTeam,
+      template,
+      name: String(group.name || '').trim(),
+      rows: snapshot.rows,
+      totalRequested: snapshot.totalRequested,
+      totalFilled: snapshot.totalFilled,
+      maxTotal: snapshot.maxTotal,
+      stats: snapshot.stats
+    });
+  }, [buildTemplateFillSnapshot, isTrainingMode, runtimeRef, setDeployNotice, setTemplateFillPreview]);
+
+  const handleChangeTemplateFillTotal = useCallback((totalCount) => {
+    setTemplateFillPreview((previous) => {
+      if (!previous?.template) return previous;
+      const snapshot = buildTemplateFillSnapshot(
+        previous.template,
+        previous.team,
+        totalCount,
+        previous.mode === 'edit' ? previous.editingGroupId : ''
+      );
+      return {
+        ...previous,
+        rows: snapshot.rows,
+        totalRequested: snapshot.totalRequested,
+        totalFilled: snapshot.totalFilled,
+        maxTotal: snapshot.maxTotal,
+        stats: snapshot.stats
+      };
+    });
+  }, [buildTemplateFillSnapshot, setTemplateFillPreview]);
+
+  const handleChangeTemplateFillTeam = useCallback((team) => {
+    const safeTeam = team === TEAM_DEFENDER ? TEAM_DEFENDER : TEAM_ATTACKER;
+    setTemplateFillPreview((previous) => {
+      if (!previous?.template || previous.mode === 'edit') return previous;
+      const snapshot = buildTemplateFillSnapshot(previous.template, safeTeam, previous.totalRequested);
+      return {
+        ...previous,
+        team: safeTeam,
+        controlMode: safeTeam === TEAM_DEFENDER ? 'AI' : 'USER',
+        rows: snapshot.rows,
+        totalRequested: snapshot.totalRequested,
+        totalFilled: snapshot.totalFilled,
+        maxTotal: snapshot.maxTotal,
+        stats: snapshot.stats
+      };
+    });
+  }, [buildTemplateFillSnapshot, setTemplateFillPreview]);
+
+  const handleChangeTemplateFillName = useCallback((name) => {
+    const safeName = typeof name === 'string' ? name.slice(0, 32) : '';
+    setTemplateFillPreview((previous) => ({ ...previous, name: safeName }));
+  }, [setTemplateFillPreview]);
+
+  const handleChangeTemplateFillControlMode = useCallback((controlMode) => {
+    setTemplateFillPreview((previous) => ({
+      ...previous,
+      controlMode: controlMode === 'AI' ? 'AI' : 'USER'
+    }));
+  }, [setTemplateFillPreview]);
+
+  const handleCloseTemplateFillPreview = useCallback(() => {
+    setTemplateFillPreview(createDefaultTemplateFillPreview());
+  }, [setTemplateFillPreview]);
+
+  const handleConfirmTemplateFillPreview = useCallback(() => {
+    const template = templateFillPreview.template;
+    if (!template) return;
+    const safeTeam = templateFillPreview.team === TEAM_DEFENDER ? TEAM_DEFENDER : TEAM_ATTACKER;
+    const isEditing = templateFillPreview.mode === 'edit' && !!templateFillPreview.editingGroupId;
+    const snapshot = buildTemplateFillSnapshot(
+      template,
+      safeTeam,
+      templateFillPreview.totalRequested,
+      isEditing ? templateFillPreview.editingGroupId : ''
+    );
+    if (snapshot.totalRequested <= 0 || snapshot.totalFilled !== snapshot.totalRequested) {
+      setDeployNotice('当前库存不足以按模板创建部队');
       return;
     }
-    if (deployEditingGroupId) {
-      const result = runtime.updateDeployGroup(safeTeam, deployEditingGroupId, {
-        name: deployEditorDraft.name,
+    const unitsMap = snapshot.rows.reduce((result, row) => {
+      if (row.filled > 0) result[row.unitTypeId] = row.filled;
+      return result;
+    }, {});
+    if (isEditing) {
+      const runtime = runtimeRef.current;
+      const result = runtime?.updateDeployGroup(safeTeam, templateFillPreview.editingGroupId, {
+        name: String(templateFillPreview.name || '').trim(),
         units: unitsMap
       });
       if (!result?.ok) {
         setDeployNotice(result?.reason || '编辑部队失败');
         return;
       }
-      targetGroupId = deployEditingGroupId;
-    } else {
-      const result = runtime.createDeployGroup(createTeam, {
-        name: deployEditorDraft.name,
-        units: unitsMap,
-        x: pointerWorldRef.current.x,
-        y: pointerWorldRef.current.y,
-        placed: false
-      });
-      if (!result?.ok) {
-        setDeployNotice(result?.reason || '新建部队失败');
-        return;
-      }
-      targetGroupId = result.groupId;
-    }
-    runtime.setSelectedDeployGroup(targetGroupId);
-    runtime.setFocusSquad(targetGroupId);
-    runtime.setDeployGroupPlaced(createTeam, targetGroupId, false);
-    setSelectedSquadId(targetGroupId);
-    setDeployDraggingGroup({ groupId: targetGroupId, team: createTeam });
-    setDeployActionAnchorMode('');
-    syncCardsAndMinimap(runtime);
-    setDeployEditorOpen(false);
-    setDeployEditingGroupId('');
-    setDeployEditorTeam(TEAM_ATTACKER);
-    setDeployEditorDraft(createDefaultDeployEditorDraft());
-    if (!deployEditingGroupId && isTrainingMode) {
-      setDeployNotice('部队已创建，移动鼠标并点击地图放置；左侧归我方，右侧归敌方');
+      stageDeployGroupForPlacement(runtime, templateFillPreview.editingGroupId, safeTeam);
+      handleCloseTemplateFillPreview();
+      setDeployNotice('部队已更新，移动鼠标并点击地图重新放置');
       return;
     }
-    setDeployNotice(`部队已创建，移动鼠标并点击地图放置到${createTeam === TEAM_DEFENDER ? '右侧红色' : '左侧蓝色'}部署区`);
+    const created = createDeployGroupFromTemplateUnits(
+      safeTeam,
+      unitsMap,
+      template,
+      templateFillPreview.name,
+      templateFillPreview.controlMode
+    );
+    if (created) handleCloseTemplateFillPreview();
   }, [
-    deployEditingGroupId,
-    deployEditorDraft,
-    deployEditorTeam,
-    isTrainingMode,
-    pointerWorldRef,
+    buildTemplateFillSnapshot,
+    createDeployGroupFromTemplateUnits,
+    handleCloseTemplateFillPreview,
     runtimeRef,
-    setDeployActionAnchorMode,
-    setDeployDraggingGroup,
-    setDeployEditorDraft,
-    setDeployEditorOpen,
-    setDeployEditorTeam,
-    setDeployEditingGroupId,
     setDeployNotice,
-    setSelectedSquadId,
-    syncCardsAndMinimap
+    stageDeployGroupForPlacement,
+    templateFillPreview
   ]);
 
   const handleRecallDeployDraggingGroup = useCallback((groupId = '', team = TEAM_ATTACKER) => {
@@ -344,105 +387,10 @@ export default function useBattleDeployEditor({
     setDeployActionAnchorMode('');
     syncCardsAndMinimap(runtime);
     onDeployGroupRemoved?.(group.id);
-    setDeployQuantityDialog(createDefaultDeployQuantityDialog());
-    setDeployEditorDragUnitId('');
-    setDeployEditorOpen(false);
-    setDeployEditingGroupId('');
-    setDeployEditorDraft(createDefaultDeployEditorDraft());
-    setDeployEditorTeam(TEAM_ATTACKER);
     setDeployNotice('已取消放置');
     return { ok: true, groupId: group.id, team: resolvedTeam };
   }, [
-    runtimeRef,
-    setDeployNotice,
-    setSelectedSquadId,
-    setDeployDraggingGroup,
-    setDeployActionAnchorMode,
-    syncCardsAndMinimap,
-    setDeployEditorTeam,
-    setDeployEditingGroupId,
-    setDeployEditorDraft,
-    setDeployQuantityDialog,
-    setDeployEditorDragUnitId,
-    setDeployEditorOpen,
-    onDeployGroupRemoved
-  ]);
-
-  const buildTemplateFillSnapshot = useCallback((template, team = TEAM_ATTACKER) => {
-    const runtime = runtimeRef.current;
-    const safeTeam = team === TEAM_DEFENDER ? TEAM_DEFENDER : TEAM_ATTACKER;
-    if (!runtime) {
-      return { rows: [], totalRequested: 0, totalFilled: 0 };
-    }
-    const rosterRows = runtime.getRosterRows(safeTeam);
-    const rosterMap = new Map(
-      (Array.isArray(rosterRows) ? rosterRows : []).map((row) => ([
-        row.unitTypeId,
-        {
-          available: Math.max(0, Math.floor(Number(row?.available) || 0)),
-          unitName: row?.unitName || row?.unitTypeId || ''
-        }
-      ]))
-    );
-    const rows = normalizeTemplateUnits(template?.units || []).map((entry) => {
-      const rosterInfo = rosterMap.get(entry.unitTypeId) || { available: 0, unitName: entry.unitTypeId };
-      const requested = Math.max(1, Math.floor(Number(entry.count) || 1));
-      const filled = Math.max(0, Math.min(requested, rosterInfo.available));
-      const fillPercent = requested > 0 ? Math.max(0, Math.min(100, (filled / requested) * 100)) : 0;
-      return {
-        unitTypeId: entry.unitTypeId,
-        unitName: entry.unitName || rosterInfo.unitName || entry.unitTypeId,
-        requested,
-        available: rosterInfo.available,
-        filled,
-        fillPercent
-      };
-    });
-    const totalRequested = rows.reduce((sum, row) => sum + row.requested, 0);
-    const totalFilled = rows.reduce((sum, row) => sum + row.filled, 0);
-    return { rows, totalRequested, totalFilled };
-  }, [runtimeRef]);
-
-  const createDeployGroupFromTemplateUnits = useCallback((team, unitsMap, templateName = '', templateFormations = []) => {
-    const runtime = runtimeRef.current;
-    if (!runtime || runtime.getPhase() !== 'deploy') return false;
-    const safeTeam = team === TEAM_DEFENDER ? TEAM_DEFENDER : TEAM_ATTACKER;
-    const result = runtime.createDeployGroup(safeTeam, {
-      name: typeof templateName === 'string' ? templateName.trim() : '',
-      units: unitsMap,
-      x: pointerWorldRef.current.x,
-      y: pointerWorldRef.current.y,
-      placed: false
-    });
-    if (!result?.ok) {
-      setDeployNotice(result?.reason || '按模板创建部队失败');
-      return false;
-    }
-    const targetGroupId = result.groupId;
-    const legalFormations = normalizeLegalTemplateFormations(templateFormations);
-    const defaultFormation = legalFormations[0] || null;
-    let activeFormationId = '';
-    if (defaultFormation) {
-      const formationResult = runtime.setDeployGroupFormation(targetGroupId, defaultFormation, safeTeam);
-      if (formationResult?.ok) {
-        activeFormationId = getTemplateFormationId(defaultFormation, 0);
-      }
-    }
-    onDeployGroupFormationsChange?.(targetGroupId, legalFormations, activeFormationId);
-    runtime.setSelectedDeployGroup(targetGroupId);
-    runtime.setFocusSquad(targetGroupId);
-    runtime.setDeployGroupPlaced(safeTeam, targetGroupId, false);
-    setSelectedSquadId(targetGroupId);
-    setDeployDraggingGroup({ groupId: targetGroupId, team: safeTeam });
-    setDeployActionAnchorMode('');
-    syncCardsAndMinimap(runtime);
-    setDeployNotice(defaultFormation
-      ? `模板部队已创建，默认阵型为「${defaultFormation.name || '阵型1'}」，移动鼠标并点击地图放置`
-      : `模板部队已创建，移动鼠标并点击地图放置到${safeTeam === TEAM_DEFENDER ? '右侧红色' : '左侧蓝色'}部署区`);
-    return true;
-  }, [
-    onDeployGroupFormationsChange,
-    pointerWorldRef,
+    onDeployGroupRemoved,
     runtimeRef,
     setDeployActionAnchorMode,
     setDeployDraggingGroup,
@@ -451,71 +399,15 @@ export default function useBattleDeployEditor({
     syncCardsAndMinimap
   ]);
 
-  const handleCreateTrainingGroupByTemplate = useCallback((template, team = TEAM_ATTACKER) => {
-    const safeTeam = team === TEAM_DEFENDER ? TEAM_DEFENDER : TEAM_ATTACKER;
-    const snapshot = buildTemplateFillSnapshot(template, safeTeam);
-    const unitsMap = {};
-    snapshot.rows.forEach((row) => {
-      if (row.filled > 0) {
-        unitsMap[row.unitTypeId] = row.filled;
-      }
-    });
-    createDeployGroupFromTemplateUnits(safeTeam, unitsMap, template?.name || '', template?.formations || []);
-  }, [buildTemplateFillSnapshot, createDeployGroupFromTemplateUnits]);
-
-  const handleOpenTemplateFillPreview = useCallback((template, team = TEAM_ATTACKER) => {
-    const safeTeam = team === TEAM_DEFENDER ? TEAM_DEFENDER : TEAM_ATTACKER;
-    const snapshot = buildTemplateFillSnapshot(template, safeTeam);
-    setTemplateFillPreview({
-      ...createDefaultTemplateFillPreview(),
-      open: true,
-      team: safeTeam,
-      template,
-      rows: snapshot.rows,
-      totalRequested: snapshot.totalRequested,
-      totalFilled: snapshot.totalFilled
-    });
-  }, [buildTemplateFillSnapshot, setTemplateFillPreview]);
-
-  const handleCloseTemplateFillPreview = useCallback(() => {
-    setTemplateFillPreview(createDefaultTemplateFillPreview());
-  }, [setTemplateFillPreview]);
-
-  const handleConfirmTemplateFillPreview = useCallback(() => {
-    const template = templateFillPreview.template;
-    if (!template) return;
-    const safeTeam = templateFillPreview.team === TEAM_DEFENDER ? TEAM_DEFENDER : TEAM_ATTACKER;
-    const snapshot = buildTemplateFillSnapshot(template, safeTeam);
-    const unitsMap = {};
-    snapshot.rows.forEach((row) => {
-      if (row.filled > 0) {
-        unitsMap[row.unitTypeId] = row.filled;
-      }
-    });
-    const created = createDeployGroupFromTemplateUnits(safeTeam, unitsMap, template?.name || '', template?.formations || []);
-    if (created) {
-      handleCloseTemplateFillPreview();
-    }
-  }, [
-    buildTemplateFillSnapshot,
-    createDeployGroupFromTemplateUnits,
-    handleCloseTemplateFillPreview,
-    templateFillPreview
-  ]);
-
   return {
-    closeDeployEditor,
-    handleOpenDeployCreator,
-    handleOpenDeployEditorForGroup,
-    openDeployQuantityDialog,
-    handleDeployEditorDrop,
-    handleConfirmDeployQuantity,
-    handleRemoveDraftUnit,
-    handleSaveDeployEditor,
-    handleRecallDeployDraggingGroup,
-    handleCreateTrainingGroupByTemplate,
     handleOpenTemplateFillPreview,
+    handleOpenTemplateFillEditor,
+    handleChangeTemplateFillTotal,
+    handleChangeTemplateFillTeam,
+    handleChangeTemplateFillName,
+    handleChangeTemplateFillControlMode,
     handleCloseTemplateFillPreview,
-    handleConfirmTemplateFillPreview
+    handleConfirmTemplateFillPreview,
+    handleRecallDeployDraggingGroup
   };
 }

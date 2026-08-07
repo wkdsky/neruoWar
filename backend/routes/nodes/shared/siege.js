@@ -21,7 +21,6 @@ module.exports = ({
   buildUnitCountMap,
   mapToUnitCountEntries,
   mergeUnitCountMaps,
-  normalizeUserRoster,
   buildArmyUnitTypeMap,
   isGateEnabledForNode,
   CITY_GATE_KEYS,
@@ -45,6 +44,19 @@ module.exports = ({
       acc[gateKey] = buildUnitCountMap(source[gateKey] || []);
       return acc;
     }, { cheng: new Map(), qi: new Map() });
+  };
+
+  const buildCombatArmyUnitCountMap = (rawArmies = [], unitTypeMap = new Map()) => {
+    const unitMap = new Map();
+    (Array.isArray(rawArmies) ? rawArmies : []).forEach((army) => {
+      (Array.isArray(army?.units) ? army.units : []).forEach((entry) => {
+        const unitTypeId = typeof entry?.unitTypeId === 'string' ? entry.unitTypeId.trim() : '';
+        const count = Math.max(0, Math.floor(Number(entry?.count) || 0));
+        if (!unitTypeId || !unitTypeMap.has(unitTypeId) || count <= 0) return;
+        unitMap.set(unitTypeId, (unitMap.get(unitTypeId) || 0) + count);
+      });
+    });
+    return unitMap;
   };
 
   const parseSupportStatusLabel = (status = '') => {
@@ -416,8 +428,7 @@ module.exports = ({
     intelSnapshot = null
   }) => {
     const unitTypeMap = buildArmyUnitTypeMap(unitTypes);
-    const roster = normalizeUserRoster(user?.armyRoster, unitTypes);
-    const ownRosterMap = buildUnitCountMap(roster);
+    const ownRosterMap = buildCombatArmyUnitCountMap(user?.combatArmies, unitTypeMap);
     const ownUnits = mapToUnitCountEntries(ownRosterMap, unitTypeMap);
     const ownTotalCount = ownUnits.reduce((sum, item) => sum + item.count, 0);
     const userId = getIdString(user?._id);
@@ -514,7 +525,7 @@ module.exports = ({
       canStartSiege = false;
     } else if (ownTotalCount <= 0) {
       canStartSiege = false;
-      startDisabledReason = '至少需要拥有一名兵力';
+      startDisabledReason = '请先在兵营中创建至少一支实际参战部队';
     } else if (!selectedStartGate) {
       canStartSiege = false;
       startDisabledReason = '无法判定围攻门向，请从相邻知识域移动后再试';
@@ -671,7 +682,7 @@ module.exports = ({
 
     const [node, user, unitTypes] = await Promise.all([
       Node.findById(safeNodeId).select('name status domainMaster domainAdmins relatedParentDomains relatedChildDomains'),
-      User.findById(safeUserId).select('username role allianceId armyRoster intelDomainSnapshots'),
+      User.findById(safeUserId).select('username role allianceId armyRoster combatArmies intelDomainSnapshots'),
       fetchEnabledUnitTypes()
     ]);
     if (!node || node.status !== 'approved') {

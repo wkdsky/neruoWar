@@ -9,9 +9,9 @@ const require = createRequire(import.meta.url);
 const { buildUnitCatalog } = require('../../backend/seed/unitCatalogFactory');
 
 const RPS_ADV = {
-  mobility: 'ranged',
-  ranged: 'defense',
-  defense: 'mobility'
+  melee: 'ranged',
+  ranged: 'support',
+  support: 'melee'
 };
 
 const RPS_MUL = {
@@ -232,7 +232,6 @@ const run = () => {
   });
 
   const rpsChecks = [];
-  const tiers = [1, 2, 3, 4];
   const avgMatchupWinRate = (attackers, defenders, seedBase) => {
     if (!attackers.length || !defenders.length) return 0;
     let sum = 0;
@@ -246,28 +245,27 @@ const run = () => {
     }
     return sum / Math.max(1, count);
   };
-  tiers.forEach((tier) => {
-    const group = units.filter((u) => Number(u.tier) === tier);
-    const mob = group.filter((u) => u.rpsType === 'mobility');
-    const rng = group.filter((u) => u.rpsType === 'ranged');
-    const def = group.filter((u) => u.rpsType === 'defense');
-    if (!mob.length || !rng.length || !def.length) return;
+  const group = units.filter((u) => Number(u.tier) === 1);
+  const melee = group.filter((u) => u.rpsType === 'melee');
+  const ranged = group.filter((u) => u.rpsType === 'ranged');
+  const support = group.filter((u) => u.rpsType === 'support');
+  if (melee.length && ranged.length && support.length) {
     rpsChecks.push({
-      tier,
-      matchup: 'mobility > ranged',
-      winRate: avgMatchupWinRate(mob, rng, 9900 + tier)
+      tier: 1,
+      matchup: 'melee > ranged',
+      winRate: avgMatchupWinRate(melee, ranged, 9901)
     });
     rpsChecks.push({
-      tier,
-      matchup: 'ranged > defense',
-      winRate: avgMatchupWinRate(rng, def, 11200 + tier)
+      tier: 1,
+      matchup: 'ranged > support',
+      winRate: avgMatchupWinRate(ranged, support, 11201)
     });
     rpsChecks.push({
-      tier,
-      matchup: 'defense > mobility',
-      winRate: avgMatchupWinRate(def, mob, 12900 + tier)
+      tier: 1,
+      matchup: 'support > melee',
+      winRate: avgMatchupWinRate(support, melee, 12901)
     });
-  });
+  }
 
   const samplePairs = [
     [units[0], units[8]],

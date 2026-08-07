@@ -26,9 +26,9 @@ const GUARD_REEVAL_SEC = 0.15;
 const MOVING_FIRE_MAX_SPREAD = 14;
 const MOVING_FIRE_MIN_HIT = 0.42;
 const RPS_ADVANTAGE = {
-  mobility: 'ranged',
-  ranged: 'defense',
-  defense: 'mobility'
+  melee: 'ranged',
+  ranged: 'support',
+  support: 'melee'
 };
 const RPS_MUL = {
   advantage: { damageMul: 1.2, poiseDamageMul: 1.25, hitMul: 1.08 },
@@ -111,8 +111,8 @@ const ensureStability = (squad) => {
 };
 
 const resolveRpsMul = (attackerSquad, defenderSquad) => {
-  const attackerType = typeof attackerSquad?.rpsType === 'string' ? attackerSquad.rpsType : 'mobility';
-  const defenderType = typeof defenderSquad?.rpsType === 'string' ? defenderSquad.rpsType : 'mobility';
+  const attackerType = typeof attackerSquad?.rpsType === 'string' ? attackerSquad.rpsType : 'melee';
+  const defenderType = typeof defenderSquad?.rpsType === 'string' ? defenderSquad.rpsType : 'melee';
   if (attackerType === defenderType) return RPS_MUL.neutral;
   if (RPS_ADVANTAGE[attackerType] === defenderType) return RPS_MUL.advantage;
   if (RPS_ADVANTAGE[defenderType] === attackerType) return RPS_MUL.disadvantage;
@@ -289,10 +289,6 @@ export const applyDamageToAgent = (sim, crowd, sourceAgent, targetAgent, amount 
   if (targetSquad) {
     targetSquad.underAttackTimer = 1.1;
     targetSquad.lastAttackedAt = Date.now();
-    targetSquad.morale = clamp((Number(targetSquad.morale) || 0) - (safeAmount * 0.22), 0, 100);
-  }
-  if (sourceSquad) {
-    sourceSquad.morale = clamp((Number(sourceSquad.morale) || 0) + (safeAmount * 0.2), 0, 100);
   }
   if (targetSquad && sourceSquad) {
     applySquadStabilityHit(targetSquad, sourceSquad, safeAmount, { poiseDamageMul: Number(options?.poiseDamageMul) || 1 });
@@ -737,7 +733,7 @@ export const updateCrowdCombat = (sim, crowd, dt) => {
     const movingPenalty = !!guard && speedRatio > 0.05 && !squad.activeSkill;
     const moveOrder = orderType === ORDER_MOVE;
     const attackMoveOrder = orderType === ORDER_ATTACK_MOVE;
-    const strictPlayerControl = squad.team === TEAM_ATTACKER && !guard && !attackMoveOrder && !chargeCommitted;
+    const strictPlayerControl = squad.controlMode === 'USER' && !guard && !attackMoveOrder && !chargeCommitted;
     let idleCanRetaliate = behavior !== 'idle'
       || (Number(squad.underAttackTimer) || 0) > 0.18
       || squadDistToTarget < (attackRange * 0.92);

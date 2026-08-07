@@ -96,6 +96,70 @@ export default function useBattleDeployGroupActions({
     setConfirmDeleteGroupId(String(groupId || ''));
   }, [glCanvasRef, isTrainingMode, runtimeRef, setConfirmDeleteGroupId, setConfirmDeletePos]);
 
+  const handleDeployPlacementAction = useCallback((groupId, event = null) => {
+    const runtime = runtimeRef.current;
+    if (!runtime || runtime.getPhase() !== 'deploy') return;
+    const group = runtime.getDeployGroupById(groupId);
+    if (!group) return;
+    if (!isTrainingMode) {
+      handleDeployDelete(groupId, event);
+      return;
+    }
+    const safeTeam = group.team === TEAM_DEFENDER ? TEAM_DEFENDER : TEAM_ATTACKER;
+    if (group.placed !== false) {
+      const hasCancelApi = typeof runtime.cancelDeployGroupPlacement === 'function';
+      const cancelResult = hasCancelApi
+        ? runtime.cancelDeployGroupPlacement(safeTeam, group.id)
+        : { ok: runtime.setDeployGroupPlaced(safeTeam, group.id, false) };
+      if (cancelResult === false || cancelResult?.ok === false) {
+        setDeployNotice(cancelResult?.reason || '取消放置失败');
+        return;
+      }
+      if (!hasCancelApi) group.placementActive = false;
+      setDeployDraggingGroup((prev) => (prev.groupId === group.id ? createDefaultDeployDraggingGroup() : prev));
+      setDeployActionAnchorMode('');
+      setSelectedSquadId(runtime.getDeployGroups()?.selectedId || '');
+      setCards(runtime.getCardRows());
+      setMinimapSnapshot(runtime.getMinimapSnapshot());
+      setDeployNotice('已取消放置，再次点击可删除该训练部队');
+      return;
+    }
+    handleDeployDelete(groupId, event);
+  }, [handleDeployDelete, isTrainingMode, runtimeRef, setCards, setDeployActionAnchorMode, setDeployDraggingGroup, setDeployNotice, setMinimapSnapshot, setSelectedSquadId]);
+
+  const handleDeployControlModeToggle = useCallback((groupId, nextMode) => {
+    const runtime = runtimeRef.current;
+    if (!runtime || runtime.getPhase() !== 'deploy' || !isTrainingMode) return;
+    const result = runtime.setDeployGroupControlMode(groupId, nextMode, 'any');
+    if (!result?.ok) {
+      setDeployNotice(result?.reason || '切换控制权失败');
+      return;
+    }
+    setCards(runtime.getCardRows());
+    setMinimapSnapshot(runtime.getMinimapSnapshot());
+    setDeployNotice(result.controlMode === 'AI' ? '已切换为 AI 接管' : '已切换为用户操作');
+  }, [isTrainingMode, runtimeRef, setCards, setDeployNotice, setMinimapSnapshot]);
+
+  const handleDeployReorder = useCallback((groupId, targetGroupId) => {
+    const runtime = runtimeRef.current;
+    if (!runtime || runtime.getPhase() !== 'deploy' || !isTrainingMode) return;
+    const source = runtime.getDeployGroupById(groupId);
+    const target = runtime.getDeployGroupById(targetGroupId);
+    if (!source || !target || source.team !== target.team) return;
+    const groups = source.team === TEAM_DEFENDER
+      ? runtime.getDeployGroups()?.defender
+      : runtime.getDeployGroups()?.attacker;
+    const targetIndex = Array.isArray(groups) ? groups.findIndex((row) => row?.id === target.id) : -1;
+    if (targetIndex < 0) return;
+    const result = runtime.reorderDeployGroup(source.team, source.id, targetIndex);
+    if (!result?.ok) {
+      setDeployNotice(result?.reason || '调整部队顺序失败');
+      return;
+    }
+    setCards(runtime.getCardRows());
+    setMinimapSnapshot(runtime.getMinimapSnapshot());
+  }, [isTrainingMode, runtimeRef, setCards, setDeployNotice, setMinimapSnapshot]);
+
   const handleConfirmDeployDelete = useCallback(() => {
     const runtime = runtimeRef.current;
     if (!runtime || runtime.getPhase() !== 'deploy') return;
@@ -149,6 +213,9 @@ export default function useBattleDeployGroupActions({
     syncDeployUiFromRuntime,
     handleDeployMove,
     handleDeployDelete,
+    handleDeployPlacementAction,
+    handleDeployControlModeToggle,
+    handleDeployReorder,
     handleConfirmDeployDelete
   };
 }

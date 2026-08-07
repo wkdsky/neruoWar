@@ -4,16 +4,12 @@ import {
   BATTLE_UI_MODE_PATH,
   BATTLE_UI_MODE_SKILL_PICK,
   SPEED_MODE_AUTO,
-  SPEED_MODE_B,
-  TEAM_ATTACKER,
-  TEAM_DEFENDER
+  SPEED_MODE_B
 } from '../screens/battleSceneConstants';
 import {
   buildDeployFormationFootprint,
   buildDomLineStyle,
-  normalizeDraftUnits,
-  parseQuickDeployNumber,
-  unitsToSummary
+  parseQuickDeployNumber
 } from '../screens/battleSceneUtils';
 
 const useBattleSceneDerivedState = ({
@@ -24,10 +20,6 @@ const useBattleSceneDerivedState = ({
   battleUiMode,
   skillPopupSquadId,
   cameraRef,
-  isTrainingMode,
-  deployEditingGroupId,
-  deployEditorTeam,
-  deployEditorDraft,
   deployDraggingGroupId,
   worldToDomRef,
   deployActionAnchorMode,
@@ -67,50 +59,6 @@ const useBattleSceneDerivedState = ({
     : (cameraRef.current.getPitchBlend() >= 0.5
       ? `${Math.round(Number(cameraRef.current.pitchHigh) || BATTLE_PITCH_HIGH_DEG)}°`
       : `${Math.round(Number(cameraRef.current.pitchLow) || BATTLE_PITCH_LOW_DEG)}°`);
-
-  const deployEditorIsTeamAuto = isTrainingMode && !deployEditingGroupId;
-  const deployRosterRows = (() => {
-    if (!runtime) return [];
-    if (!deployEditorIsTeamAuto) return runtime.getRosterRows(deployEditorTeam);
-    const byUnitType = new Map();
-    runtime.getRosterRows(TEAM_ATTACKER).forEach((row) => {
-      byUnitType.set(row.unitTypeId, {
-        ...row,
-        available: Math.max(0, Math.floor(Number(row?.available) || 0))
-      });
-    });
-    runtime.getRosterRows(TEAM_DEFENDER).forEach((row) => {
-      const safeAvailable = Math.max(0, Math.floor(Number(row?.available) || 0));
-      const prev = byUnitType.get(row.unitTypeId);
-      if (!prev) {
-        byUnitType.set(row.unitTypeId, { ...row, available: safeAvailable });
-        return;
-      }
-      byUnitType.set(row.unitTypeId, {
-        ...prev,
-        unitName: prev.unitName || row.unitName || row.unitTypeId,
-        available: Math.max(prev.available, safeAvailable)
-      });
-    });
-    return Array.from(byUnitType.values());
-  })();
-
-  const deployEditingGroup = deployEditingGroupId ? runtime?.getDeployGroupById?.(deployEditingGroupId, deployEditorTeam) : null;
-  const deployEditingBaseUnits = deployEditingGroup?.units || {};
-  const deployEditorAvailableRows = deployRosterRows
-    .map((row) => ({
-      ...row,
-      availableForDraft: Math.max(0, row.available + Math.max(0, Number(deployEditingBaseUnits[row.unitTypeId]) || 0))
-    }))
-    .sort((a, b) => a.unitName.localeCompare(b.unitName, 'zh-Hans-CN'));
-  const deployEditorDraftSummary = unitsToSummary(
-    deployEditorDraft.units,
-    new Map(deployRosterRows.map((row) => [row.unitTypeId, row.unitName]))
-  );
-  const deployEditorTeamLabel = deployEditorIsTeamAuto
-    ? '落点决定阵营'
-    : (deployEditorTeam === TEAM_DEFENDER ? '敌方' : '我方');
-  const deployEditorTotal = normalizeDraftUnits(deployEditorDraft.units).reduce((sum, entry) => sum + entry.count, 0);
 
   const selectedDeployGroup = phase === 'deploy' ? runtime?.getDeployGroupById?.(selectedSquadId) : null;
   const selectedDeployFormation = (
@@ -214,10 +162,6 @@ const useBattleSceneDerivedState = ({
     selectedSpeedModeUi,
     selectedWaypoints,
     pitchLabel,
-    deployEditorAvailableRows,
-    deployEditorDraftSummary,
-    deployEditorTeamLabel,
-    deployEditorTotal,
     selectedDeployGroup,
     selectedDeployFormation,
     selectedDeployFormationLines,

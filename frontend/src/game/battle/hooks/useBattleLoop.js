@@ -108,8 +108,10 @@ export default function useBattleLoop({
 
     const focusAnchor = runtime.getFocusAnchor?.() || null;
     const focusTargetSquadId = String(focusAnchor?.squadId || '');
-    const followTargetSquadId = nowPhase === 'battle' ? focusTargetSquadId : '';
-    const followAnchor = nowPhase === 'battle'
+    const isPanning = !!callbacks.panDragRef?.current;
+    const followEnabled = nowPhase === 'battle' && !isPanning;
+    const followTargetSquadId = followEnabled ? focusTargetSquadId : '';
+    const followAnchor = followEnabled
       ? {
           x: Number(focusAnchor?.x) || 0,
           y: Number(focusAnchor?.y) || 0,
@@ -170,8 +172,8 @@ export default function useBattleLoop({
           };
       setCameraMiniState({
         center: {
-          x: nowPhase === 'battle' ? (followAnchor?.x || 0) : camera.centerX,
-          y: nowPhase === 'battle' ? (followAnchor?.y || 0) : camera.centerY
+          x: followAnchor ? (followAnchor.x || 0) : camera.centerX,
+          y: followAnchor ? (followAnchor.y || 0) : camera.centerY
         },
         viewport: cameraViewRectRef.current
       });

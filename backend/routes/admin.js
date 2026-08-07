@@ -29,7 +29,13 @@ const {
 const UNIT_TYPE_ID_RE = /^[a-zA-Z0-9_-]{2,64}$/;
 const CATALOG_ID_RE = /^[a-zA-Z0-9_-]{2,64}$/;
 const ROLE_TAG_SET = new Set(['近战', '远程']);
-const RPS_TYPE_SET = new Set(['mobility', 'ranged', 'defense']);
+const UNIT_CATEGORY_SET = new Set(['melee', 'ranged', 'support']);
+const UNIT_SUBTYPE_BY_CATEGORY = {
+  melee: new Set(['mobility', 'defense', 'balance']),
+  ranged: new Set(['mobility', 'defense', 'balance']),
+  support: new Set(['combination', 'comprehensive', 'intervention'])
+};
+const RPS_TYPE_SET = new Set(['melee', 'ranged', 'support']);
 const RARITY_SET = new Set(['common', 'rare', 'epic', 'legend']);
 const COMPONENT_KIND_SET = new Set(['body', 'weapon', 'vehicle', 'ability', 'behaviorProfile', 'stabilityProfile', 'staggerReaction', 'interactionRule']);
 const VALID_USER_AVATARS = new Set([
@@ -123,6 +129,27 @@ const parseUnitTypePayload = (body, { create = false } = {}) => {
     errors.push('缺少字段：roleTag');
   }
 
+  const requestedCategory = typeof source.unitCategory === 'string' ? source.unitCategory.trim() : '';
+  const unitCategory = requestedCategory || (create ? 'melee' : 'melee');
+  if (Object.prototype.hasOwnProperty.call(source, 'unitCategory') || create) {
+    if (!UNIT_CATEGORY_SET.has(unitCategory)) {
+      errors.push('unitCategory 必须是 melee/ranged/support');
+    } else {
+      parsed.unitCategory = unitCategory;
+    }
+  }
+
+  const requestedSubtype = typeof source.unitSubtype === 'string' ? source.unitSubtype.trim() : '';
+  const unitSubtype = requestedSubtype || (create ? 'balance' : 'balance');
+  if (Object.prototype.hasOwnProperty.call(source, 'unitSubtype') || create) {
+    const validSubtypes = UNIT_SUBTYPE_BY_CATEGORY[unitCategory] || UNIT_SUBTYPE_BY_CATEGORY.melee;
+    if (!validSubtypes.has(unitSubtype)) {
+      errors.push(`unitSubtype 与 unitCategory 不匹配：${unitCategory}/${unitSubtype}`);
+    } else {
+      parsed.unitSubtype = unitSubtype;
+    }
+  }
+
   [
     ['speed', false, 0],
     ['hp', true, 1],
@@ -158,12 +185,12 @@ const parseUnitTypePayload = (body, { create = false } = {}) => {
   if (Object.prototype.hasOwnProperty.call(source, 'rpsType')) {
     const rpsType = typeof source.rpsType === 'string' ? source.rpsType.trim() : '';
     if (!RPS_TYPE_SET.has(rpsType)) {
-      errors.push('rpsType 必须是 mobility/ranged/defense');
+      errors.push('rpsType 必须是 melee/ranged/support');
     } else {
       parsed.rpsType = rpsType;
     }
   } else if (create) {
-    errors.push('缺少字段：rpsType');
+    parsed.rpsType = unitCategory;
   }
 
   if (Object.prototype.hasOwnProperty.call(source, 'professionId')) {
@@ -234,17 +261,6 @@ const parseUnitTypePayload = (body, { create = false } = {}) => {
       errors.push('weaponIds 必须是字符串数组');
     } else {
       parsed.weaponIds = source.weaponIds
-        .map((id) => (typeof id === 'string' ? id.trim() : ''))
-        .filter(Boolean)
-        .slice(0, 16);
-    }
-  }
-
-  if (Object.prototype.hasOwnProperty.call(source, 'abilityIds')) {
-    if (!Array.isArray(source.abilityIds)) {
-      errors.push('abilityIds 必须是字符串数组');
-    } else {
-      parsed.abilityIds = source.abilityIds
         .map((id) => (typeof id === 'string' ? id.trim() : ''))
         .filter(Boolean)
         .slice(0, 16);

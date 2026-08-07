@@ -70,7 +70,7 @@
 ```json
 {
   "kind":"concealment",
-  "selector":{"rpsType":["mobility","ranged","defense"],"classTag":["infantry","cavalry","archer","artillery"],"tags":[]},
+  "selector":{"rpsType":["melee","ranged","support"],"classTag":["infantry","cavalry","archer","artillery"],"tags":[]},
   "params":{"revealRadius":2.2}
 }
 ```
@@ -81,7 +81,7 @@
 ```json
 {
   "kind":"trapStagger",
-  "selector":{"rpsType":["mobility","ranged","defense"],"classTag":["infantry","cavalry","archer","artillery"],"tags":[]},
+  "selector":{"rpsType":["melee","ranged","support"],"classTag":["infantry","cavalry","archer","artillery"],"tags":[]},
   "params":{"hpDamage":10,"poiseDamage":96,"staggerTier":"heavy","cooldownSec":4.2}
 }
 ```
@@ -92,7 +92,7 @@
 ```json
 {
   "kind":"trapStagger",
-  "selector":{"rpsType":["mobility","ranged","defense"],"classTag":["infantry","cavalry","archer","artillery"],"tags":[]},
+  "selector":{"rpsType":["melee","ranged","support"],"classTag":["infantry","cavalry","archer","artillery"],"tags":[]},
   "params":{"hpDamage":7,"poiseDamage":120,"staggerTier":"heavy","cooldownSec":4.8}
 }
 ```
@@ -104,8 +104,8 @@
 ```json
 {
   "kind":"contactDot",
-  "selector":{"rpsType":["mobility","ranged","defense"],"classTag":["infantry","cavalry","archer","artillery"],"tags":[]},
-  "params":{"hpDamageEnter":8,"hpDamageTick":5,"tickIntervalSec":1,"classMultiplier":{"cavalry":2},"rpsMultiplier":{"mobility":2}}
+  "selector":{"rpsType":["melee","ranged","support"],"classTag":["infantry","cavalry","archer","artillery"],"tags":[]},
+  "params":{"hpDamageEnter":8,"hpDamageTick":5,"tickIntervalSec":1,"classMultiplier":{"cavalry":2},"rpsMultiplier":{"melee":2}}
 }
 ```
 
@@ -115,7 +115,7 @@
 ```json
 {
   "kind":"contactDot",
-  "selector":{"rpsType":["mobility","ranged","defense"],"classTag":["infantry","cavalry","archer","artillery"],"tags":[]},
+  "selector":{"rpsType":["melee","ranged","support"],"classTag":["infantry","cavalry","archer","artillery"],"tags":[]},
   "params":{"hpDamageEnter":4,"hpDamageTick":6,"tickIntervalSec":0.8}
 }
 ```
@@ -126,7 +126,7 @@
 ```json
 {
   "kind":"spotterAura",
-  "selector":{"rpsType":["mobility","ranged","defense"],"classTag":["infantry","cavalry","archer","artillery"],"tags":[]},
+  "selector":{"rpsType":["melee","ranged","support"],"classTag":["infantry","cavalry","archer","artillery"],"tags":[]},
   "params":{"revealBonusRadius":0.7}
 }
 ```
@@ -135,4 +135,4 @@
 
 - 所有这 10 个物品在 seed 中 `enabled=true`，`initialCount=5`。
 - 普通用户库存通过 `backend/services/battlefieldInventoryService.js` 懒初始化/注册初始化，缺失项补 `count=5`。
-- 训练场模式在 `backend/routes/army.js` 的 `/army/training/init` 仍使用 `MAX_TEMPLATE_UNIT_COUNT`（无限/超大）行为。
+- 训练场模式在 `backend/routes/army.js` 的 `/army/training/init` 为每类兵种提供 `TRAINING_MAX_GROUP_TOTAL` 训练库存；单支实际部队总兵数上限为 10000。

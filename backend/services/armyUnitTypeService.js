@@ -1,15 +1,23 @@
 const ArmyUnitType = require('../models/ArmyUnitType');
+const { ensureGeneratedCatalog } = require('./unitRegistryService');
+const { resolveUnitClassification } = require('./unitTypeDtoService');
+const { resolveUnitPalette } = require('../seed/unitCatalogFactory');
 
 const serializeArmyUnitType = (doc) => {
   const src = typeof doc?.toObject === 'function' ? doc.toObject() : (doc || {});
   const tier = Math.max(1, Math.floor(Number(src.tier || src.level) || 1));
   const battleVisual = src?.visuals?.battle && typeof src.visuals.battle === 'object' ? src.visuals.battle : {};
   const previewVisual = src?.visuals?.preview && typeof src.visuals.preview === 'object' ? src.visuals.preview : {};
+  const { unitCategory, unitSubtype } = resolveUnitClassification(src);
+  const paletteFallback = resolveUnitPalette(unitCategory, unitSubtype);
   return {
+    schemaVersion: 2,
     id: src.unitTypeId || '',
     unitTypeId: src.unitTypeId || '',
     name: src.name || '',
     roleTag: src.roleTag || '',
+    unitCategory,
+    unitSubtype,
     speed: Number(src.speed) || 0,
     hp: Number(src.hp) || 0,
     atk: Number(src.atk) || 0,
@@ -22,7 +30,7 @@ const serializeArmyUnitType = (doc) => {
     upgradeCostKP: Number.isFinite(src.upgradeCostKP) ? src.upgradeCostKP : null,
     sortOrder: Number(src.sortOrder) || 0,
     enabled: src.enabled !== false,
-    rpsType: src.rpsType || 'mobility',
+    rpsType: src.rpsType || 'melee',
     professionId: src.professionId || '',
     rarity: src.rarity || 'common',
     tags: Array.isArray(src.tags) ? src.tags : [],
@@ -30,7 +38,6 @@ const serializeArmyUnitType = (doc) => {
     bodyId: src.bodyId || null,
     weaponIds: Array.isArray(src.weaponIds) ? src.weaponIds.filter((id) => typeof id === 'string' && id.trim()) : [],
     vehicleId: src.vehicleId || null,
-    abilityIds: Array.isArray(src.abilityIds) ? src.abilityIds.filter((id) => typeof id === 'string' && id.trim()) : [],
     behaviorProfileId: src.behaviorProfileId || null,
     stabilityProfileId: src.stabilityProfileId || null,
     visuals: {
@@ -46,9 +53,9 @@ const serializeArmyUnitType = (doc) => {
           ? previewVisual.style.trim()
           : 'procedural',
         palette: {
-          primary: typeof previewVisual?.palette?.primary === 'string' ? previewVisual.palette.primary : '#5aa3ff',
-          secondary: typeof previewVisual?.palette?.secondary === 'string' ? previewVisual.palette.secondary : '#cfd8e3',
-          accent: typeof previewVisual?.palette?.accent === 'string' ? previewVisual.palette.accent : '#ffd166'
+          primary: typeof previewVisual?.palette?.primary === 'string' ? previewVisual.palette.primary : paletteFallback.primary,
+          secondary: typeof previewVisual?.palette?.secondary === 'string' ? previewVisual.palette.secondary : paletteFallback.secondary,
+          accent: typeof previewVisual?.palette?.accent === 'string' ? previewVisual.palette.accent : paletteFallback.accent
         }
       }
     },
@@ -58,6 +65,7 @@ const serializeArmyUnitType = (doc) => {
 };
 
 const fetchArmyUnitTypes = async ({ enabledOnly = true } = {}) => {
+  await ensureGeneratedCatalog();
   const filter = enabledOnly ? { enabled: true } : {};
   const docs = await ArmyUnitType.find(filter).sort({ sortOrder: 1, createdAt: 1, _id: 1 }).lean();
   return docs.map(serializeArmyUnitType);
