@@ -88,6 +88,8 @@ export default function useBattleLoop({
     } else {
       frameMetricsRef.current.simSteps = 0;
     }
+    const focusAnchor = runtime.getFocusAnchor?.() || null;
+    const focusTargetSquadId = String(focusAnchor?.squadId || '');
     if (nowPhase === 'deploy') {
       camera.yawDeg = Number(constants.DEPLOY_DEFAULT_YAW_DEG) || 0;
       camera.mirrorX = false;
@@ -98,7 +100,7 @@ export default function useBattleLoop({
         camera.pitchTo = fallbackPitch;
         camera.pitchTweenSec = camera.pitchTweenDurationSec;
       }
-    } else {
+    } else if (!runtime.isTrainingMode || focusTargetSquadId) {
       camera.yawDeg = Number(constants.BATTLE_FOLLOW_YAW_DEG) || 0;
       if (!Number.isFinite(Number(camera.worldYawDeg))) {
         camera.worldYawDeg = Number(constants.BATTLE_FOLLOW_WORLD_YAW_DEG) || 0;
@@ -106,10 +108,8 @@ export default function useBattleLoop({
       camera.mirrorX = !!constants.BATTLE_FOLLOW_MIRROR_X;
     }
 
-    const focusAnchor = runtime.getFocusAnchor?.() || null;
-    const focusTargetSquadId = String(focusAnchor?.squadId || '');
     const isPanning = !!callbacks.panDragRef?.current;
-    const followEnabled = nowPhase === 'battle' && !isPanning;
+    const followEnabled = nowPhase === 'battle' && !isPanning && !!focusTargetSquadId;
     const followTargetSquadId = followEnabled ? focusTargetSquadId : '';
     const followAnchor = followEnabled
       ? {

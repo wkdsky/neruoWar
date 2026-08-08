@@ -9,8 +9,9 @@ import {
   allocateTemplateUnits,
   normalizeTemplatePercentages
 } from '../screens/battleSceneUtils';
+import { limitNameByDisplayWidth } from '../shared/nameLimits';
 
-const MAX_TEMPLATE_FORMATIONS = 15;
+const MAX_TEMPLATE_FORMATIONS = 9;
 const TRAINING_MAX_GROUP_TOTAL = 10000;
 const EMPTY_TEMPLATE_FILL_STATS = Object.freeze({
   totalCount: 0,
@@ -51,8 +52,7 @@ export default function useBattleDeployEditor({
   setCards,
   setMinimapSnapshot,
   setTemplateFillPreview,
-  onDeployGroupFormationsChange,
-  onDeployGroupRemoved
+  onDeployGroupFormationsChange
 } = {}) {
   const syncCardsAndMinimap = useCallback((runtime) => {
     if (!runtime) return;
@@ -151,15 +151,14 @@ export default function useBattleDeployEditor({
     if (!runtime || runtime.getPhase() !== 'deploy') return false;
     const safeTeam = team === TEAM_DEFENDER ? TEAM_DEFENDER : TEAM_ATTACKER;
     const result = runtime.createDeployGroup(safeTeam, {
-      name: typeof name === 'string' ? name.trim() : '',
+      name: typeof name === 'string' ? limitNameByDisplayWidth(name.trim()) : '',
       units: unitsMap,
       controlMode: controlMode === 'AI' || controlMode === 'USER'
         ? controlMode
         : (safeTeam === TEAM_DEFENDER ? 'AI' : 'USER'),
       templateId: typeof template?.templateId === 'string' ? template.templateId.trim() : '',
-      templateName: typeof template?.name === 'string' ? template.name.trim() : '',
+      templateName: typeof template?.name === 'string' ? limitNameByDisplayWidth(template.name.trim()) : '',
       templateFormations: normalizeLegalTemplateFormations(template?.formations),
-      skillSlots: [],
       x: pointerWorldRef.current.x,
       y: pointerWorldRef.current.y,
       placed: false
@@ -292,7 +291,7 @@ export default function useBattleDeployEditor({
   }, [buildTemplateFillSnapshot, setTemplateFillPreview]);
 
   const handleChangeTemplateFillName = useCallback((name) => {
-    const safeName = typeof name === 'string' ? name.slice(0, 32) : '';
+    const safeName = typeof name === 'string' ? limitNameByDisplayWidth(name) : '';
     setTemplateFillPreview((previous) => ({ ...previous, name: safeName }));
   }, [setTemplateFillPreview]);
 
@@ -376,21 +375,22 @@ export default function useBattleDeployEditor({
       return { ok: false, reason: '未找到待放置部队' };
     }
     const resolvedTeam = group.team === TEAM_DEFENDER ? TEAM_DEFENDER : TEAM_ATTACKER;
-    const result = runtime.removeDeployGroup(resolvedTeam, group.id);
-    if (!result?.ok) {
+    const result = typeof runtime.cancelDeployGroupPlacement === 'function'
+      ? runtime.cancelDeployGroupPlacement(resolvedTeam, group.id)
+      : { ok: runtime.setDeployGroupPlaced(resolvedTeam, group.id, false) };
+    if (result === false || result?.ok === false) {
       setDeployNotice(result?.reason || '取消放置失败');
       return { ok: false, reason: result?.reason || '取消放置失败' };
     }
-    const nextSelected = runtime.getDeployGroups()?.selectedId || '';
-    setSelectedSquadId(nextSelected);
+    runtime.setSelectedDeployGroup?.(group.id);
+    runtime.setFocusSquad?.(group.id);
+    setSelectedSquadId(group.id);
     setDeployDraggingGroup({ groupId: '', team: TEAM_ATTACKER });
     setDeployActionAnchorMode('');
     syncCardsAndMinimap(runtime);
-    onDeployGroupRemoved?.(group.id);
-    setDeployNotice('已取消放置');
+    setDeployNotice('已取消鼠标吸附，部队保留在卡片中，可通过移动按钮再次放置');
     return { ok: true, groupId: group.id, team: resolvedTeam };
   }, [
-    onDeployGroupRemoved,
     runtimeRef,
     setDeployActionAnchorMode,
     setDeployDraggingGroup,

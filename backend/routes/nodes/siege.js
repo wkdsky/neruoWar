@@ -1,3 +1,5 @@
+const MAX_DEPLOY_TEMPLATE_FORMATIONS = 9;
+
 const getCombatArmyDeployments = (rawArmies = [], unitTypeMap = new Map()) => (
   (Array.isArray(rawArmies) ? rawArmies : [])
     .map((army, index) => {
@@ -23,7 +25,7 @@ const getCombatArmyDeployments = (rawArmies = [], unitTypeMap = new Map()) => (
         templateId: typeof army?.templateId === 'string' ? army.templateId.trim() : '',
         units,
         templateFormations: Array.isArray(army?.templateFormations)
-          ? army.templateFormations.map((formation) => ({ ...formation }))
+          ? army.templateFormations.slice(0, MAX_DEPLOY_TEMPLATE_FORMATIONS).map((formation) => ({ ...formation }))
           : [],
         activeFormationId: typeof army?.activeFormationId === 'string' ? army.activeFormationId.trim() : '',
         skillSlots: Array.isArray(army?.skillSlots) ? army.skillSlots.map((slot) => ({ ...slot })) : [],

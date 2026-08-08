@@ -135,6 +135,7 @@ export default class BattleSnapshotBuilder {
       const fillPreviewGroup = (group, teamTag, selected) => {
         if (!group) return;
         if (group.placed === false && !group.placementActive) return;
+        const hovered = !selected && group.id === runtime.hoveredDeploySquadId;
         runtime.hydrateDeployGroupFormation(group, teamTag);
         const unitsMap = normalizeUnitsMap(group.units || {});
         const total = Math.max(1, sumUnitsMap(unitsMap));
@@ -183,7 +184,7 @@ export default class BattleSnapshotBuilder {
           units.data[base + 12] = selected ? 1 : 0;
           units.data[base + 13] = !showFullFormation || slotIndex === 0 ? 1 : 0;
           units.data[base + 14] = 1;
-          units.data[base + 15] = 0;
+          units.data[base + 15] = hovered ? 1 : 0;
           units.data[base + 16] = visual.bodyTopIndex;
           units.data[base + 17] = visual.gearTopIndex;
           units.data[base + 18] = visual.vehicleTopIndex;

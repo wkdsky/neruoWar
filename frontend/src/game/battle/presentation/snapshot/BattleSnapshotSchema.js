@@ -32,7 +32,7 @@ const BattleSnapshotSchema = {
       'x', 'y', 'z', 'size',
       'yawRad', 'teamIndex', 'hpRatio', 'bodyIndex',
       'gearIndex', 'vehicleIndex', 'silhouetteIndex', 'tint',
-      'selectedFlag', 'flagBearerFlag', 'ghostFlag', 'reserved',
+      'selectedFlag', 'flagBearerFlag', 'ghostFlag', 'hoverFlag',
       'bodyTopIndex', 'gearTopIndex', 'vehicleTopIndex', 'silhouetteTopIndex'
     ],
     notes: 'Compatible with ImpostorRenderer attribute layout locations 2..6'

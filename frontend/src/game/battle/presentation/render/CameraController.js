@@ -1,5 +1,6 @@
 const DEG2RAD = Math.PI / 180;
 const CAMERA_IMPL_TAG = 'CAMERA_WORLD_MAP_ALIGN_V4';
+const CAMERA_FAR = 8000;
 
 const clamp = (value, min, max) => Math.min(max, Math.max(min, value));
 const smoothstep = (t) => {
@@ -242,6 +243,8 @@ export default class CameraController {
     this.pitchTweenDurationSec = 0.32;
 
     this.distance = Math.max(120, Number(distance) || 560);
+    this.overviewDistanceStart = 0;
+    this.overviewDistanceMax = 0;
     this.centerX = 0;
     this.centerY = 0;
     this.lookAheadScale = 0.22;
@@ -250,7 +253,9 @@ export default class CameraController {
     this.followTau = 0.19;
     this.followSquadId = '';
     this.focusTransitionSec = 0;
-    this.focusTransitionDurationSec = 0.36;
+    this.focusTransitionDurationSec = 0.48;
+    this.focusStartX = 0;
+    this.focusStartY = 0;
     this.followSnapRequested = false;
     this.worldYawDeg = 0;
 
@@ -298,12 +303,31 @@ export default class CameraController {
     this.pitchTweenSec = this.pitchTweenDurationSec;
   }
 
-  setDistanceWithDynamicPitch(distance, distanceMin, distanceMax) {
+  setDistanceWithDynamicPitch(distance, distanceMin, distanceMax, overviewDistanceMax = distanceMax) {
     const minDistance = Math.max(1, Number(distanceMin) || 1);
-    const maxDistance = Math.max(minDistance + 1, Number(distanceMax) || (minDistance + 1));
-    const nextDistance = clamp(Number(distance) || minDistance, minDistance, maxDistance);
+    const pitchDistanceMax = Math.max(minDistance + 1, Number(distanceMax) || (minDistance + 1));
+    const totalDistanceMax = Math.max(
+      pitchDistanceMax,
+      Number(overviewDistanceMax) || pitchDistanceMax
+    );
+    const nextDistance = clamp(Number(distance) || minDistance, minDistance, totalDistanceMax);
     this.distance = nextDistance;
-    this.setPitchImmediate(this.resolveDynamicPitchForDistance(nextDistance, minDistance, maxDistance));
+    this.overviewDistanceStart = pitchDistanceMax;
+    this.overviewDistanceMax = totalDistanceMax;
+    this.setPitchImmediate(this.resolveDynamicPitchForDistance(nextDistance, minDistance, pitchDistanceMax));
+  }
+
+  getOverviewZoomProgress() {
+    const start = Math.max(0, Number(this.overviewDistanceStart) || 0);
+    const max = Math.max(start, Number(this.overviewDistanceMax) || 0);
+    if (max <= start + 1e-4) return 0;
+    return clamp((this.distance - start) / (max - start), 0, 1);
+  }
+
+  clearFollow() {
+    this.followSquadId = '';
+    this.followSnapRequested = false;
+    this.focusTransitionSec = 0;
   }
 
   update(dtSec, anchor = null) {
@@ -316,11 +340,18 @@ export default class CameraController {
       this.currentPitch = this.pitchTo;
     }
 
-    if (anchor && Number.isFinite(Number(anchor.x)) && Number.isFinite(Number(anchor.y))) {
+    if (!anchor || !String(anchor.squadId || '')) {
+      this.clearFollow();
+      return;
+    }
+
+    if (Number.isFinite(Number(anchor.x)) && Number.isFinite(Number(anchor.y))) {
       const nextSquadId = String(anchor.squadId || '');
       const switched = !!nextSquadId && nextSquadId !== this.followSquadId;
       if (switched || this.followSnapRequested) {
         this.focusTransitionSec = 0;
+        this.focusStartX = this.centerX;
+        this.focusStartY = this.centerY;
         this.followSquadId = nextSquadId;
         this.followSnapRequested = false;
       } else if (!this.followSquadId && nextSquadId) {
@@ -342,18 +373,21 @@ export default class CameraController {
       const dirY = validLookAhead ? (vy / speed) : 0;
       const targetX = (Number(anchor.x) || 0) + (dirX * lookAhead);
       const targetY = (Number(anchor.y) || 0) + (dirY * lookAhead);
-      const tau = Math.max(0.04, this.followTau);
-      const followLerp = clamp(1 - Math.exp(-dt / tau), 0, 1);
-      this.centerX += (targetX - this.centerX) * followLerp;
-      this.centerY += (targetY - this.centerY) * followLerp;
+      if (transitionMix < 1) {
+        this.centerX = this.focusStartX + ((targetX - this.focusStartX) * smoothMix);
+        this.centerY = this.focusStartY + ((targetY - this.focusStartY) * smoothMix);
+      } else {
+        const tau = Math.max(0.04, this.followTau);
+        const followLerp = clamp(1 - Math.exp(-dt / tau), 0, 1);
+        this.centerX += (targetX - this.centerX) * followLerp;
+        this.centerY += (targetY - this.centerY) * followLerp;
+      }
     }
   }
 
   beginFocusTransition(anchor = null) {
     this.followSnapRequested = true;
     if (anchor && Number.isFinite(Number(anchor.x)) && Number.isFinite(Number(anchor.y))) {
-      this.centerX = Number(anchor.x) || 0;
-      this.centerY = Number(anchor.y) || 0;
       this.followSquadId = String(anchor.squadId || this.followSquadId || '');
     }
   }
@@ -378,7 +412,7 @@ export default class CameraController {
       vertical
     ];
 
-    this.projection = mat4Perspective(48 * DEG2RAD, safeWidth / safeHeight, 1, 5000);
+    this.projection = mat4Perspective(48 * DEG2RAD, safeWidth / safeHeight, 1, CAMERA_FAR);
     const pivotWorldRotation = mat4Multiply(
       mat4Multiply(
         mat4Translation(this.centerX, this.centerY, 0),
@@ -439,6 +473,9 @@ export default class CameraController {
       forward,
       handedness,
       cameraImplTag: CAMERA_IMPL_TAG,
+      distance: this.distance,
+      overviewZoomProgress: this.getOverviewZoomProgress(),
+      pitchDeg: this.currentPitch,
       worldYawDeg: Number(this.worldYawDeg) || 0,
       forwardZ: Number(forward[2]) || 0,
       flipFixApplied,
@@ -485,7 +522,10 @@ export default class CameraController {
     return {
       x: nearP[0] + (dir[0] * t),
       y: nearP[1] + (dir[1] * t),
-      valid: Number.isFinite(t)
+      // Do not turn a ray that hits the ground behind the camera into a
+      // usable map point. That produces mirrored, very distant coordinates
+      // near the edge of the deployment view after panning.
+      valid: Number.isFinite(t) && t >= -1e-5
     };
   }
 }

@@ -45,8 +45,11 @@ export default function useBattleRuntime({
     setTrainingSessionActive(false);
     setRuntimeVersion((prev) => prev + 1);
     const cardsRows = runtime.getCardRows();
-    const initialSelected = runtime.getDeployGroups()?.selectedId || cardsRows.find((row) => row.team === 'attacker')?.id || '';
-    runtime.setFocusSquad(initialSelected);
+    const initialSelected = mode === 'training'
+      ? ''
+      : (runtime.getDeployGroups()?.selectedId || cardsRows.find((row) => row.team === 'attacker')?.id || '');
+    if (initialSelected) runtime.setFocusSquad(initialSelected);
+    else runtime.clearSelection();
     setPhase(runtime.getPhase());
     return () => {
       if (runtimeRef.current === runtime) {

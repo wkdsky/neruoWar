@@ -1,7 +1,10 @@
 .pve2-overlay {
-  --pve2-card-zone-top: 76px;
-  --pve2-card-zone-height: calc(100% - 92px);
-  --pve2-card-zone-width: clamp(176px, 16vw, 236px);
+  --pve2-template-zone-top: 56px;
+  --pve2-template-zone-height: 64px;
+  --pve2-card-zone-top: calc(var(--pve2-template-zone-top) + var(--pve2-template-zone-height) + 24px);
+  --pve2-card-zone-height: calc(100% - var(--pve2-card-zone-top) - 18px);
+  --pve2-card-zone-width: clamp(172px, 16vw, 228px);
+  --pve2-card-zone-gutter: 12px;
   position: fixed;
   inset: 0;
   z-index: 30000;
@@ -181,9 +184,11 @@
 .pve2-template-strip {
   position: absolute;
   z-index: 8;
-  top: 54px;
-  left: calc(16px + var(--pve2-card-zone-width) + 16px);
-  right: calc(16px + var(--pve2-card-zone-width) + 16px);
+  top: var(--pve2-template-zone-top);
+  left: 50%;
+  right: auto;
+  width: min(920px, calc(100% - 32px));
+  transform: translateX(-50%);
   display: grid;
   grid-template-columns: auto minmax(0, 1fr);
   align-items: center;
@@ -196,10 +201,15 @@
   opacity: 0.58;
 }
 
+.pve2-template-strip-heading {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+}
+
 .pve2-template-strip-title {
-  display: grid;
-  gap: 2px;
-  min-width: 104px;
+  min-width: 0;
 }
 
 .pve2-template-strip-title strong {
@@ -207,10 +217,28 @@
   font-size: 12px;
 }
 
-.pve2-template-strip-title span {
-  color: #94a3b8;
-  font-size: 9px;
-  line-height: 1.25;
+.pve2-template-create-button {
+  display: inline-grid;
+  flex: 0 0 28px;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 1px solid rgba(74, 222, 128, 0.6);
+  border-radius: 5px;
+  color: #bbf7d0;
+  background: rgba(6, 78, 59, 0.42);
+  cursor: pointer;
+}
+
+.pve2-template-create-button:hover:not(:disabled) {
+  border-color: rgba(187, 247, 208, 0.9);
+  background: rgba(6, 95, 70, 0.64);
+}
+
+.pve2-template-create-button:disabled {
+  cursor: default;
+  opacity: 0.48;
 }
 
 .pve2-template-strip .pve2-template-list {
@@ -226,7 +254,7 @@
 
 .pve2-template-strip .pve2-template-card-wrap,
 .pve2-template-strip .pve2-template-strip-hint {
-  flex: 0 0 min(300px, 32vw);
+  flex: 0 0 min(244px, 28vw);
   min-width: 0;
 }
 
@@ -235,7 +263,7 @@
 }
 
 .pve2-template-strip .pve2-template-row-main {
-  min-height: 64px;
+  min-height: var(--pve2-template-zone-height);
 }
 
 .pve2-card-strip {
@@ -249,7 +277,7 @@
   display: grid;
   grid-template-columns: minmax(0, 1fr);
   grid-auto-rows: minmax(var(--pve2-card-min-height), auto);
-  align-content: start;
+  align-content: safe center;
   gap: var(--pve2-card-gap);
   z-index: 7;
   width: var(--pve2-card-zone-width);
@@ -528,12 +556,12 @@
 }
 
 .pve2-card-strip.left {
-  left: 16px;
+  left: var(--pve2-card-zone-gutter);
   top: var(--pve2-card-zone-top);
 }
 
 .pve2-card-strip.right {
-  right: 16px;
+  right: var(--pve2-card-zone-gutter);
   top: var(--pve2-card-zone-top);
 }
 
@@ -589,23 +617,26 @@
 .pve2-card-head {
   display: flex;
   justify-content: space-between;
-  align-items: center;
+  align-items: flex-start;
   font-size: 10px;
   margin-bottom: 4px;
 }
 
 .pve2-card-head-meta {
   display: inline-flex;
+  flex: 0 0 auto;
   align-items: center;
   gap: 4px;
 }
 
 .pve2-card-head strong {
+  flex: 1 1 auto;
   font-size: var(--pve2-card-head-size);
   max-width: 100%;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  line-height: 1.25;
 }
 
 .pve2-card-row {
@@ -1068,19 +1099,33 @@
 }
 
 .pve2-template-row-actions {
-  display: grid;
+  display: flex;
+  align-items: center;
   gap: 4px;
   flex: 0 0 auto;
 }
 
 .pve2-template-action {
-  padding: 3px 6px;
+  display: inline-grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
   border: 1px solid rgba(148, 163, 184, 0.32);
-  border-radius: 6px;
+  border-radius: 5px;
   color: #cbd5e1;
   background: rgba(15, 23, 42, 0.8);
-  font-size: 10px;
   cursor: pointer;
+}
+
+.pve2-template-action.create {
+  border-color: rgba(74, 222, 128, 0.58);
+  color: #bbf7d0;
+}
+
+.pve2-template-action.create:hover:not(:disabled) {
+  border-color: rgba(187, 247, 208, 0.9);
+  color: #dcfce7;
 }
 
 .pve2-template-action.edit:hover:not(:disabled) {
@@ -1110,18 +1155,7 @@
   align-items: flex-start;
   gap: 10px;
   text-align: left;
-  cursor: pointer;
-  appearance: none;
-  -webkit-appearance: none;
-}
-
-.pve2-template-row-main:hover {
-  border-color: rgba(96, 165, 250, 0.55);
-}
-
-.pve2-template-row-main:focus-visible {
-  outline: none;
-  box-shadow: 0 0 0 2px rgba(56, 189, 248, 0.45);
+  cursor: default;
 }
 
 .pve2-template-meta {
@@ -1131,8 +1165,12 @@
 }
 
 .pve2-template-meta strong {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  word-break: break-word;
   color: #f8fafc;
   font-size: 12px;
+  line-height: 1.3;
 }
 
 .pve2-template-meta span {
@@ -2117,7 +2155,7 @@
   display: block;
 }
 
-.pve2-march-float {
+.pve2-formation-spacing-float {
   position: absolute;
   transform: translate(-50%, -110%);
   z-index: 70;
@@ -2265,19 +2303,19 @@
   position: fixed;
   transform: none;
   z-index: 72;
-  width: min(560px, calc(100vw - 28px));
-  width: min(560px, calc(100dvw - 28px));
-  height: min(520px, calc(100vh - 32px));
-  height: min(520px, calc(100dvh - 32px));
+  width: min(340px, calc(100vw - 28px));
+  width: min(340px, calc(100dvw - 28px));
+  height: min(300px, calc(100vh - 32px));
+  height: min(300px, calc(100dvh - 32px));
   min-height: 0;
   overflow: hidden;
   box-sizing: border-box;
-  border-radius: 10px;
+  border-radius: 7px;
   border: 1px solid rgba(96, 165, 250, 0.48);
   background: rgba(8, 14, 24, 0.95);
-  padding: 10px;
+  padding: 8px;
   display: grid;
-  gap: 10px;
+  gap: 6px;
   grid-template-rows: auto minmax(0, 1fr);
 }
 
@@ -2287,7 +2325,7 @@
   overscroll-behavior: contain;
   display: grid;
   align-content: start;
-  gap: 10px;
+  gap: 6px;
   padding-right: 3px;
 }
 
@@ -2295,47 +2333,47 @@
   display: flex;
   justify-content: space-between;
   align-items: center;
-  gap: 10px;
+  gap: 6px;
 }
 
 .pve2-deploy-info-head strong {
   display: block;
-  font-size: 14px;
+  font-size: 12px;
 }
 
 .pve2-deploy-info-head span {
   display: block;
-  font-size: 11px;
+  font-size: 9px;
   color: #cbd5e1;
   margin-top: 2px;
 }
 
 .pve2-deploy-info-section {
   display: grid;
-  gap: 8px;
+  gap: 5px;
 }
 
 .pve2-deploy-info-section h4 {
   margin: 0;
-  font-size: 12px;
+  font-size: 10px;
   color: #bfdbfe;
 }
 
 .pve2-deploy-info-rows {
   display: grid;
-  gap: 4px;
+  gap: 3px;
 }
 
 .pve2-deploy-info-row {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  gap: 10px;
-  border-radius: 6px;
+  gap: 6px;
+  border-radius: 4px;
   border: 1px solid rgba(148, 163, 184, 0.18);
   background: rgba(15, 23, 42, 0.52);
-  padding: 5px 8px;
-  font-size: 12px;
+  padding: 4px 5px;
+  font-size: 10px;
 }
 
 .pve2-deploy-info-row em {
@@ -2349,28 +2387,28 @@
 .pve2-deploy-skill-list {
   display: flex;
   flex-wrap: wrap;
-  gap: 6px;
+  gap: 4px;
 }
 
 .pve2-deploy-skill-btn {
   border: 1px solid rgba(148, 163, 184, 0.38);
-  border-radius: 8px;
+  border-radius: 5px;
   background: rgba(15, 23, 42, 0.68);
   color: #dbeafe;
-  min-width: 90px;
-  padding: 5px 8px;
+  min-width: 70px;
+  padding: 4px 5px;
   cursor: pointer;
   display: grid;
   gap: 2px;
 }
 
 .pve2-deploy-skill-btn strong {
-  font-size: 12px;
+  font-size: 10px;
   line-height: 1.2;
 }
 
 .pve2-deploy-skill-btn span {
-  font-size: 10px;
+  font-size: 8px;
   color: #cbd5e1;
   line-height: 1.2;
 }
@@ -2381,27 +2419,27 @@
 }
 
 .pve2-deploy-skill-detail {
-  border-radius: 8px;
+  border-radius: 5px;
   border: 1px solid rgba(148, 163, 184, 0.28);
   background: rgba(15, 23, 42, 0.45);
-  padding: 7px 8px;
+  padding: 5px 6px;
   display: grid;
   gap: 4px;
 }
 
 .pve2-deploy-skill-detail p {
   margin: 0;
-  font-size: 12px;
+  font-size: 10px;
   color: #e2e8f0;
 }
 
 .pve2-deploy-skill-power {
-  font-size: 12px;
+  font-size: 10px;
   color: #93c5fd;
 }
 
 .pve2-deploy-skill-meta {
-  font-size: 11px;
+  font-size: 9px;
   color: #cbd5e1;
 }
 
@@ -2784,6 +2822,338 @@
   }
 }
 
+/* Transient battlefield messages stay anchored to the browser viewport so
+   camera movement and panel selection never move the user's feedback. */
+.pve2-deploy-notice {
+  position: fixed;
+  left: max(12px, env(safe-area-inset-left));
+  bottom: max(12px, env(safe-area-inset-bottom));
+  z-index: 2147483000;
+  max-width: min(460px, calc(100vw - 24px));
+  max-width: min(460px, calc(100dvw - 24px));
+  box-sizing: border-box;
+  pointer-events: none;
+}
+
+.pve2-aim-tip {
+  position: fixed;
+  top: auto;
+  left: max(12px, env(safe-area-inset-left));
+  bottom: max(56px, calc(12px + env(safe-area-inset-bottom)));
+  transform: translateY(-100%);
+  z-index: 2147482999;
+  max-width: min(460px, calc(100vw - 24px));
+  max-width: min(460px, calc(100dvw - 24px));
+  box-sizing: border-box;
+  border-radius: 8px;
+  line-height: 1.35;
+}
+
+/* Training selection is two independent surfaces: readable unit data on the
+   left and the three slot/tree pairs on the right. */
+.pve2-training-squad-info-panel,
+.pve2-training-squad-skills-panel {
+  position: absolute;
+  z-index: 12;
+  bottom: 18px;
+  box-sizing: border-box;
+  min-width: 0;
+  border: 1px solid rgba(148, 163, 184, 0.38);
+  border-radius: 8px;
+  background: rgba(7, 15, 26, 0.95);
+  box-shadow: 0 12px 32px rgba(2, 6, 23, 0.4);
+  pointer-events: auto;
+}
+
+.pve2-training-squad-info-panel {
+  left: 50%;
+  width: min(380px, max(220px, calc(50vw - var(--pve2-card-zone-width) - 24px)));
+  max-height: min(238px, calc(100% - 108px));
+  overflow: hidden;
+  transform: translateX(calc(-100% - 8px));
+}
+
+.pve2-training-squad-skills-panel {
+  left: 50%;
+  width: min(360px, max(220px, calc(50vw - var(--pve2-card-zone-width) - 24px)));
+  padding: 8px;
+  transform: translateX(8px);
+}
+
+.pve2-training-squad-info-panel.is-attacker,
+.pve2-training-squad-skills-panel.is-attacker {
+  border-color: rgba(56, 189, 248, 0.56);
+}
+
+.pve2-training-squad-info-panel.is-defender,
+.pve2-training-squad-skills-panel.is-defender {
+  border-color: rgba(248, 113, 113, 0.56);
+}
+
+.pve2-training-squad-info-head,
+.pve2-training-squad-skills-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-width: 0;
+}
+
+.pve2-training-squad-info-head {
+  padding: 7px 9px;
+  border-bottom: 1px solid rgba(148, 163, 184, 0.18);
+}
+
+.pve2-training-squad-info-title {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+}
+
+.pve2-training-squad-info-title > div {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.pve2-training-squad-info-title strong {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  color: #f8fafc;
+  font-size: 12px;
+  line-height: 1.25;
+}
+
+.pve2-training-squad-info-title span:last-child {
+  color: #94a3b8;
+  font-size: 9px;
+}
+
+.pve2-training-squad-info-head .pve2-training-squad-action {
+  flex: 0 0 auto;
+  max-width: 110px;
+  overflow: hidden;
+  color: #cbd5e1;
+  font-size: 9px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pve2-training-squad-info-body {
+  display: grid;
+  grid-template-columns: minmax(118px, 0.92fr) minmax(0, 1.3fr);
+  gap: 8px;
+  min-height: 0;
+  padding: 7px 9px;
+  overflow-y: auto;
+}
+
+.pve2-training-squad-section-label {
+  margin-bottom: 4px;
+  color: #93c5fd;
+  font-size: 9px;
+  font-weight: 700;
+}
+
+.pve2-training-squad-unit-list {
+  min-width: 0;
+}
+
+.pve2-training-squad-unit-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 6px;
+  min-width: 0;
+  padding: 4px 5px;
+  border-bottom: 1px solid rgba(148, 163, 184, 0.12);
+  color: #cbd5e1;
+  font-size: 9px;
+}
+
+.pve2-training-squad-unit-row span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.pve2-training-squad-unit-row strong {
+  flex: 0 0 auto;
+  color: #f8fafc;
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  font-size: 9px;
+}
+
+.pve2-training-squad-unit-row.is-empty {
+  color: #64748b;
+}
+
+.pve2-training-squad-params {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 4px;
+  margin: 0;
+}
+
+.pve2-training-squad-params > div {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+  padding: 4px 5px;
+  border: 1px solid rgba(148, 163, 184, 0.16);
+  border-radius: 4px;
+  background: rgba(15, 23, 42, 0.52);
+}
+
+.pve2-training-squad-params dt {
+  color: #64748b;
+  font-size: 8px;
+}
+
+.pve2-training-squad-params dd {
+  min-width: 0;
+  margin: 0;
+  overflow: hidden;
+  color: #e2e8f0;
+  font-size: 9px;
+  font-weight: 700;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pve2-training-squad-info-actions {
+  display: flex;
+  justify-content: flex-end;
+  padding: 5px 9px 7px;
+  border-top: 1px solid rgba(148, 163, 184, 0.16);
+}
+
+.pve2-training-squad-info-actions .pve2-deploy-actions {
+  gap: 4px;
+}
+
+.pve2-training-squad-skills-head {
+  margin-bottom: 6px;
+}
+
+.pve2-training-squad-skills-head strong {
+  color: #f8fafc;
+  font-size: 11px;
+}
+
+.pve2-training-squad-skills-head span {
+  color: #fde68a;
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  font-size: 8px;
+  white-space: nowrap;
+}
+
+.pve2-training-squad-skills-panel .pve2-training-skill-slots {
+  display: block;
+  padding: 0;
+  border: 0;
+  background: transparent;
+}
+
+.pve2-training-squad-skills-panel .pve2-training-skill-slot-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 6px;
+  min-width: 0;
+  overflow: visible;
+}
+
+.pve2-training-skill-pair {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 24px;
+  align-items: center;
+  gap: 3px;
+  min-width: 0;
+}
+
+.pve2-training-squad-skills-panel .pve2-training-skill-slot {
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: 100%;
+  height: 42px;
+  min-height: 42px;
+  padding: 0;
+  overflow: hidden;
+  border: 1px solid color-mix(in srgb, var(--skill-slot-color, #64748b) 70%, rgba(148, 163, 184, 0.34));
+  border-radius: 5px;
+  background: color-mix(in srgb, var(--skill-slot-color, #64748b) 16%, rgba(15, 23, 42, 0.94));
+  color: var(--skill-slot-color, #dbeafe);
+}
+
+.pve2-training-squad-skills-panel .pve2-training-skill-slot:hover:not(:disabled),
+.pve2-training-squad-skills-panel .pve2-training-skill-slot.is-active,
+.pve2-training-squad-skills-panel .pve2-training-skill-tree-toggle:hover:not(:disabled),
+.pve2-training-squad-skills-panel .pve2-training-skill-tree-toggle.is-open {
+  border-color: #e0f2fe;
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--skill-slot-color, #7dd3fc) 62%, transparent);
+}
+
+.pve2-training-squad-skills-panel .pve2-training-skill-tree-toggle {
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 34px;
+  min-height: 34px;
+  padding: 0;
+  border: 1px solid color-mix(in srgb, var(--skill-slot-color, #a78bfa) 70%, rgba(148, 163, 184, 0.34));
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--skill-slot-color, #a78bfa) 14%, rgba(15, 23, 42, 0.94));
+  color: var(--skill-slot-color, #ddd6fe);
+  cursor: pointer;
+}
+
+.pve2-training-squad-skills-panel .pve2-training-skill-slot-hotkey {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  z-index: 3;
+  display: grid;
+  place-items: center;
+  width: 11px;
+  height: 11px;
+  border: 1px solid rgba(226, 232, 240, 0.32);
+  border-radius: 2px;
+  background: rgba(2, 6, 23, 0.68);
+  color: #dbeafe;
+  font-size: 7px;
+  line-height: 1;
+}
+
+.pve2-training-squad-skills-panel .pve2-training-skill-slot:disabled,
+.pve2-training-squad-skills-panel .pve2-training-skill-tree-toggle:disabled {
+  cursor: default;
+  opacity: 0.48;
+}
+
+@media (max-width: 720px) {
+  .pve2-training-squad-info-panel,
+  .pve2-training-squad-skills-panel {
+    left: 50%;
+    width: min(520px, calc(100% - 16px));
+    max-width: none;
+    transform: translateX(-50%);
+  }
+
+  .pve2-training-squad-info-panel {
+    bottom: 132px;
+    max-height: 170px;
+  }
+
+  .pve2-training-squad-skills-panel {
+    bottom: 8px;
+  }
+
+  .pve2-training-squad-info-body {
+    grid-template-columns: minmax(100px, 0.85fr) minmax(0, 1.15fr);
+  }
+}
+
 @media (max-height: 720px) {
   .pve2-template-fill-panel {
     height: calc(100vh - 16px);
@@ -3055,6 +3425,784 @@
   font-size: 8px;
 }
 
+/* Training uses an RTS-style command strip: one metadata row and one icon row. */
+.pve2-overlay.is-training-three .pve2-card-strip {
+  --pve2-card-min-height: 46px;
+  --pve2-card-padding: 4px;
+  --pve2-card-head-size: 10px;
+  --pve2-card-row-size: 9px;
+  --pve2-card-badge-size: 8px;
+  --pve2-card-gap: 5px;
+}
+
+.pve2-overlay.is-training-three .pve2-card-strip.is-medium {
+  --pve2-card-min-height: 42px;
+  --pve2-card-padding: 3px;
+  --pve2-card-gap: 4px;
+}
+
+.pve2-overlay.is-training-three .pve2-card-strip.is-compact {
+  --pve2-card-min-height: 38px;
+  --pve2-card-padding: 3px;
+  --pve2-card-gap: 3px;
+}
+
+.pve2-overlay.is-training-three .pve2-card {
+  border-radius: 6px;
+}
+
+.pve2-overlay.is-training-three .pve2-card-wrap.is-attacker .pve2-card {
+  padding-right: calc(var(--pve2-card-padding) + 21px);
+}
+
+.pve2-overlay.is-training-three .pve2-card-wrap.is-defender .pve2-card {
+  padding-left: calc(var(--pve2-card-padding) + 21px);
+}
+
+.pve2-overlay.is-training-three .pve2-card-head {
+  margin-bottom: 1px;
+}
+
+.pve2-card-row-compact {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 5px;
+  min-width: 0;
+}
+
+.pve2-card-row-compact span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pve2-card-row-compact span:last-child {
+  color: #94a3b8;
+}
+
+.pve2-overlay.is-training-three .pve2-training-card-controls {
+  top: 2px;
+  bottom: 2px;
+  width: 18px;
+  gap: 1px;
+}
+
+.pve2-overlay.is-training-three .pve2-training-card-controls.is-right {
+  right: 2px;
+}
+
+.pve2-overlay.is-training-three .pve2-training-card-controls.is-left {
+  left: 2px;
+}
+
+.pve2-overlay.is-training-three .pve2-training-card-control {
+  border-radius: 4px;
+}
+
+.pve2-overlay.is-training-three .pve2-template-strip .pve2-template-card-wrap {
+  flex-basis: min(224px, 28vw);
+}
+
+.pve2-overlay.is-training-three .pve2-template-strip .pve2-template-row-main {
+  min-height: 46px;
+}
+
+.pve2-overlay.is-training-three .pve2-template-row-actions {
+  gap: 3px;
+}
+
+.pve2-overlay.is-training-three .pve2-template-action {
+  display: inline-grid;
+  place-items: center;
+  min-width: 26px;
+  min-height: 26px;
+  padding: 0;
+}
+
+.pve2-training-squad-panel,
+.pve2-selected-squad-panel.pve2-training-squad-panel.is-runtime {
+  width: min(780px, calc(100% - var(--pve2-card-zone-width) - var(--pve2-card-zone-width) - 48px));
+  max-height: none;
+  overflow: hidden;
+  border-radius: 6px;
+  background: rgba(7, 15, 26, 0.94);
+}
+
+.pve2-training-squad-meta-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 30px;
+  padding: 4px 6px;
+  overflow-x: auto;
+  color: #b8c7da;
+  font-size: 9px;
+  white-space: nowrap;
+  scrollbar-width: none;
+}
+
+.pve2-training-squad-meta-row::-webkit-scrollbar {
+  display: none;
+}
+
+.pve2-training-squad-meta-row > strong {
+  min-width: 0;
+  max-width: 150px;
+  overflow: hidden;
+  color: #f8fafc;
+  font-size: 11px;
+  text-overflow: ellipsis;
+}
+
+.pve2-training-squad-class,
+.pve2-training-squad-team {
+  display: inline-grid;
+  flex: 0 0 auto;
+  place-items: center;
+  min-width: 18px;
+  height: 18px;
+  border: 1px solid rgba(148, 163, 184, 0.36);
+  border-radius: 4px;
+  font-size: 8px;
+  font-weight: 700;
+}
+
+.pve2-training-squad-class {
+  color: #dbeafe;
+  background: rgba(30, 64, 175, 0.2);
+}
+
+.pve2-training-squad-team.is-attacker {
+  border-color: rgba(56, 189, 248, 0.58);
+  color: #bae6fd;
+}
+
+.pve2-training-squad-team.is-defender {
+  border-color: rgba(248, 113, 113, 0.58);
+  color: #fecaca;
+}
+
+.pve2-training-squad-action {
+  margin-left: auto;
+  overflow: hidden;
+  color: #94a3b8;
+  text-overflow: ellipsis;
+}
+
+.pve2-training-squad-meta-row .pve2-deploy-actions {
+  flex: 0 0 auto;
+  gap: 3px;
+}
+
+.pve2-training-squad-meta-row .pve2-icon-btn {
+  width: 21px;
+  height: 21px;
+  border-radius: 4px;
+}
+
+.pve2-training-squad-skill-row {
+  display: flex;
+  align-items: center;
+  min-height: 42px;
+  padding: 3px 6px;
+  border-top: 1px solid rgba(148, 163, 184, 0.18);
+}
+
+.pve2-formation-slots {
+  flex: 0 0 118px;
+  width: 118px;
+  height: 118px;
+  min-width: 118px;
+  display: grid;
+  place-items: center;
+  margin-right: 6px;
+  border-right: 1px solid rgba(148, 163, 184, 0.2);
+}
+
+.pve2-formation-slot-grid {
+  display: grid;
+  grid-template-columns: repeat(var(--formation-columns, 3), 34px);
+  grid-template-rows: repeat(var(--formation-rows, 3), 34px);
+  gap: 4px;
+  width: 110px;
+  height: 110px;
+  place-content: center;
+}
+
+.pve2-formation-slot {
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  min-width: 34px;
+  min-height: 34px;
+  padding: 2px;
+  overflow: hidden;
+  border: 1px solid rgba(148, 163, 184, 0.42);
+  border-radius: 5px;
+  background: rgba(15, 23, 42, 0.9);
+  color: #cbd5e1;
+  cursor: pointer;
+  box-sizing: border-box;
+}
+
+.pve2-formation-slot:hover:not(:disabled),
+.pve2-formation-slot.is-active {
+  border-color: rgba(52, 211, 153, 0.9);
+  background: rgba(6, 78, 59, 0.46);
+  color: #bbf7d0;
+  box-shadow: 0 0 0 1px rgba(52, 211, 153, 0.28);
+}
+
+.pve2-formation-slot.is-dragging {
+  opacity: 0.45;
+}
+
+.pve2-formation-slot:disabled {
+  cursor: default;
+  opacity: 0.55;
+}
+
+.pve2-formation-slot-hotkey {
+  position: absolute;
+  top: 1px;
+  right: 1px;
+  z-index: 3;
+  display: grid;
+  place-items: center;
+  width: 10px;
+  height: 10px;
+  border: 1px solid rgba(226, 232, 240, 0.42);
+  border-radius: 2px;
+  background: rgba(2, 6, 23, 0.82);
+  color: #f8fafc;
+  font-size: 7px;
+  font-weight: 800;
+  line-height: 1;
+}
+
+.pve2-formation-slot-preview {
+  position: relative;
+  display: block;
+  width: 21px;
+  height: 21px;
+  border: 1px solid rgba(148, 163, 184, 0.25);
+  border-radius: 3px;
+  background: rgba(2, 6, 23, 0.42);
+}
+
+.pve2-formation-slot-preview i {
+  position: absolute;
+  width: 3px;
+  height: 3px;
+  border-radius: 1px;
+  background: currentColor;
+  transform: translate(-50%, -50%);
+}
+
+.pve2-formation-slot em {
+  position: absolute;
+  left: 2px;
+  right: 2px;
+  bottom: 1px;
+  overflow: hidden;
+  color: rgba(226, 232, 240, 0.78);
+  font-size: 6px;
+  font-style: normal;
+  line-height: 1;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pve2-training-squad-panel .pve2-training-skill-slots {
+  display: block;
+  flex: 1 1 auto;
+  min-width: 0;
+  width: 100%;
+  min-height: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+}
+
+.pve2-training-squad-panel .pve2-training-skill-slot-grid {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  overflow-x: auto;
+  scrollbar-width: thin;
+}
+
+.pve2-training-squad-panel .pve2-training-skill-slot,
+.pve2-training-squad-panel .pve2-training-skill-tree-toggle {
+  position: relative;
+  display: inline-grid;
+  flex: 0 0 36px;
+  place-items: center;
+  width: 36px;
+  height: 36px;
+  min-height: 36px;
+  padding: 0;
+  overflow: hidden;
+  box-sizing: border-box;
+  border: 1px solid color-mix(in srgb, var(--skill-slot-color, #64748b) 70%, rgba(148, 163, 184, 0.34));
+  border-radius: 5px;
+  background: color-mix(in srgb, var(--skill-slot-color, #64748b) 16%, rgba(15, 23, 42, 0.94));
+  color: var(--skill-slot-color, #dbeafe);
+  cursor: pointer;
+  aspect-ratio: 1;
+}
+
+.pve2-training-squad-panel .pve2-training-skill-slot:hover:not(:disabled),
+.pve2-training-squad-panel .pve2-training-skill-slot.is-active,
+.pve2-training-squad-panel .pve2-training-skill-tree-toggle:hover:not(:disabled),
+.pve2-training-squad-panel .pve2-training-skill-tree-toggle.is-open {
+  border-color: #e0f2fe;
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--skill-slot-color, #7dd3fc) 62%, transparent);
+}
+
+.pve2-training-squad-panel .pve2-training-skill-slot.is-empty {
+  border-style: dashed;
+  color: #64748b;
+  background: rgba(15, 23, 42, 0.62);
+}
+
+.pve2-training-squad-panel .pve2-training-skill-slot.is-conflict {
+  border-color: rgba(251, 191, 36, 0.8);
+}
+
+.pve2-training-squad-panel .pve2-training-skill-slot:disabled,
+.pve2-training-squad-panel .pve2-training-skill-tree-toggle:disabled {
+  cursor: default;
+  opacity: 0.48;
+}
+
+.pve2-training-squad-panel .pve2-training-skill-slot-hotkey {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  z-index: 3;
+  display: grid;
+  place-items: center;
+  width: 11px;
+  height: 11px;
+  border: 1px solid rgba(226, 232, 240, 0.32);
+  border-radius: 2px;
+  background: rgba(2, 6, 23, 0.68);
+  color: #dbeafe;
+  font-size: 7px;
+  font-weight: 700;
+  line-height: 1;
+}
+
+.pve2-training-squad-panel .pve2-runtime-skill-cooldown-text {
+  z-index: 3;
+  font-size: 10px;
+}
+
+.pve2-training-squad-panel .pve2-training-skill-tree-toggle {
+  --skill-slot-color: #a78bfa;
+  color: #ddd6fe;
+}
+
+.pve2-training-squad-panel .pve2-training-skill-points-summary {
+  flex: 0 0 auto;
+  margin-left: 3px;
+  color: #fde68a;
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  font-size: 9px;
+  white-space: nowrap;
+}
+
+/* The selection strip sits directly on the battlefield.  Only the unit
+   parameters receive a glass surface; formation and skill controls stay bare. */
+.pve2-training-squad-panel,
+.pve2-selected-squad-panel.pve2-training-squad-panel.is-runtime {
+  position: absolute;
+  z-index: 12;
+  left: 50%;
+  bottom: 14px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  width: max-content;
+  max-width: calc(100% - 24px);
+  min-width: 0;
+  max-height: none;
+  overflow: visible;
+  box-sizing: border-box;
+  transform: translateX(-50%);
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+  pointer-events: auto;
+}
+
+.pve2-training-squad-meta-row {
+  display: flex;
+  flex: 0 1 auto;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+  min-height: 32px;
+  padding: 4px 7px;
+  overflow: visible;
+  border: 1px solid rgba(148, 163, 184, 0.34);
+  border-radius: 4px;
+  background: rgba(7, 15, 26, 0.78);
+  box-shadow: 0 4px 12px rgba(2, 6, 23, 0.22);
+  color: #b8c7da;
+  font-size: 9px;
+  white-space: nowrap;
+}
+
+.pve2-training-squad-panel.is-attacker .pve2-training-squad-meta-row {
+  border-color: rgba(56, 189, 248, 0.48);
+}
+
+.pve2-training-squad-panel.is-defender .pve2-training-squad-meta-row {
+  border-color: rgba(248, 113, 113, 0.48);
+}
+
+.pve2-training-squad-meta-row > strong {
+  flex: 0 1 112px;
+  max-width: 112px;
+  overflow: hidden;
+  color: #f8fafc;
+  font-size: 10px;
+  text-overflow: ellipsis;
+}
+
+.pve2-training-squad-class,
+.pve2-training-squad-team {
+  min-width: 16px;
+  height: 16px;
+  border-radius: 3px;
+  background: transparent;
+  font-size: 7px;
+}
+
+.pve2-training-squad-action {
+  flex: 0 1 72px;
+  margin-left: 0;
+  font-size: 8px;
+}
+
+.pve2-training-squad-formation {
+  flex: 0 1 48px;
+  max-width: 48px;
+  overflow: hidden;
+  color: #94a3b8;
+  font-size: 8px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pve2-training-metric {
+  position: relative;
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: baseline;
+  gap: 3px;
+  min-width: 0;
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+}
+
+.pve2-training-metric-label {
+  color: #94a3b8;
+  font-family: inherit;
+  font-size: 7px;
+}
+
+.pve2-training-metric-value {
+  color: #e2e8f0;
+  font-size: 9px;
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+}
+
+.pve2-training-metric.is-points .pve2-training-metric-value {
+  color: #fde68a;
+}
+
+.pve2-training-metric.is-gain .pve2-training-metric-value {
+  animation: pve2-training-metric-gain 480ms ease-out;
+}
+
+.pve2-training-metric.is-loss .pve2-training-metric-value {
+  animation: pve2-training-metric-loss 480ms ease-out;
+}
+
+.pve2-training-metric-delta {
+  position: absolute;
+  right: 0;
+  bottom: calc(100% - 1px);
+  z-index: 3;
+  pointer-events: none;
+  font-size: 11px;
+  font-weight: 800;
+  line-height: 1;
+  text-shadow: 0 1px 3px rgba(2, 6, 23, 0.95);
+  animation: pve2-training-metric-float 920ms cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+.pve2-training-metric-delta.is-gain {
+  color: #fef08a;
+}
+
+.pve2-training-metric-delta.is-loss {
+  color: #fca5a5;
+}
+
+.pve2-training-squad-skill-row {
+  display: flex;
+  flex: 0 1 auto;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-width: 0;
+  min-height: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+}
+
+.pve2-training-squad-panel .pve2-formation-slots {
+  display: block;
+  flex: 0 1 auto;
+  width: auto;
+  min-width: 0;
+  max-width: min(258px, 31vw);
+  height: auto;
+  margin: 0;
+  overflow-x: auto;
+  border: 0;
+  background: transparent;
+  scrollbar-width: none;
+}
+
+.pve2-training-squad-panel .pve2-formation-slots::-webkit-scrollbar {
+  display: none;
+}
+
+.pve2-training-squad-panel .pve2-formation-slot-grid {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  width: max-content;
+  height: 32px;
+  place-content: initial;
+}
+
+.pve2-training-squad-panel .pve2-formation-slot {
+  flex: 0 0 30px;
+  width: 30px;
+  height: 30px;
+  min-width: 30px;
+  min-height: 30px;
+  padding: 1px;
+  border-color: rgba(148, 163, 184, 0.42);
+  border-radius: 4px;
+  background: transparent;
+}
+
+.pve2-training-squad-panel .pve2-formation-slot:hover:not(:disabled),
+.pve2-training-squad-panel .pve2-formation-slot.is-active {
+  border-color: rgba(52, 211, 153, 0.9);
+  background: transparent;
+  box-shadow: 0 0 0 1px rgba(52, 211, 153, 0.36);
+}
+
+.pve2-training-squad-panel .pve2-formation-slot-hotkey {
+  width: 9px;
+  height: 9px;
+  border-color: rgba(226, 232, 240, 0.3);
+  background: transparent;
+  font-size: 6px;
+}
+
+.pve2-training-squad-panel .pve2-formation-slot-preview {
+  width: 19px;
+  height: 19px;
+  border-color: rgba(148, 163, 184, 0.32);
+  border-radius: 3px;
+  background: transparent;
+}
+
+.pve2-training-squad-panel .pve2-formation-slot em {
+  display: none;
+}
+
+.pve2-training-squad-panel .pve2-training-skill-slots {
+  display: block;
+  flex: 0 1 auto;
+  width: auto;
+  min-width: 0;
+  min-height: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+}
+
+.pve2-training-squad-panel .pve2-training-skill-slot-grid {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+  overflow: visible;
+}
+
+.pve2-training-squad-panel .pve2-training-skill-pair {
+  position: relative;
+  display: block;
+  flex: 0 0 32px;
+  width: 32px;
+  height: 32px;
+}
+
+.pve2-training-squad-panel .pve2-training-skill-slot {
+  display: grid;
+  width: 32px;
+  height: 32px;
+  min-height: 32px;
+  padding: 0;
+  border-color: color-mix(in srgb, var(--skill-slot-color, #64748b) 68%, rgba(148, 163, 184, 0.34));
+  border-radius: 4px;
+  background: transparent;
+}
+
+.pve2-training-squad-panel .pve2-training-skill-slot:hover:not(:disabled),
+.pve2-training-squad-panel .pve2-training-skill-slot.is-active,
+.pve2-training-squad-panel .pve2-training-skill-tree-toggle:hover:not(:disabled),
+.pve2-training-squad-panel .pve2-training-skill-tree-toggle.is-open {
+  border-color: #e0f2fe;
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--skill-slot-color, #7dd3fc) 62%, transparent);
+}
+
+.pve2-training-squad-panel .pve2-training-skill-slot.is-empty {
+  border-style: dashed;
+  background: transparent;
+}
+
+.pve2-training-squad-panel .pve2-training-skill-slot.is-locked {
+  border-color: rgba(100, 116, 139, 0.42);
+  color: #64748b;
+  filter: grayscale(1);
+  opacity: 0.52;
+}
+
+.pve2-training-squad-panel .pve2-training-skill-slot:disabled,
+.pve2-training-squad-panel .pve2-training-skill-tree-toggle:disabled {
+  cursor: default;
+  opacity: 0.48;
+}
+
+.pve2-training-squad-panel .pve2-training-skill-slot-hotkey {
+  width: 10px;
+  height: 10px;
+  border-color: rgba(226, 232, 240, 0.28);
+  background: transparent;
+  font-size: 6px;
+}
+
+.pve2-training-squad-panel .pve2-training-skill-tree-toggle {
+  position: absolute;
+  right: -3px;
+  bottom: -3px;
+  z-index: 5;
+  display: grid;
+  place-items: center;
+  width: 13px;
+  height: 13px;
+  min-height: 13px;
+  padding: 0;
+  border: 1px solid color-mix(in srgb, var(--skill-slot-color, #a78bfa) 70%, rgba(148, 163, 184, 0.34));
+  border-radius: 3px;
+  background: transparent;
+  color: var(--skill-slot-color, #ddd6fe);
+}
+
+.pve2-training-squad-panel .pve2-training-skill-tree-toggle svg {
+  width: 9px;
+  height: 9px;
+}
+
+@keyframes pve2-training-metric-float {
+  0% {
+    opacity: 0;
+    transform: translateY(6px) scale(0.86);
+  }
+  24% {
+    opacity: 1;
+    transform: translateY(0) scale(1.08);
+  }
+  100% {
+    opacity: 0;
+    transform: translateY(-22px) scale(1);
+  }
+}
+
+@keyframes pve2-training-metric-gain {
+  0%, 100% { color: #e2e8f0; }
+  35% { color: #fef08a; transform: scale(1.16); }
+}
+
+@keyframes pve2-training-metric-loss {
+  0%, 100% { color: #e2e8f0; }
+  35% { color: #fca5a5; transform: scale(0.92); }
+}
+
+@keyframes pve2-training-tree-open {
+  from {
+    opacity: 0;
+    transform: translateY(10px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes pve2-training-tree-backdrop-open {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes pve2-training-tree-backdrop-close {
+  to { opacity: 0; }
+}
+
+@keyframes pve2-training-tree-close {
+  to {
+    opacity: 0;
+    transform: translateY(8px) scale(0.98);
+  }
+}
+
+.pve2-training-tree-backdrop {
+  animation: pve2-training-tree-backdrop-open 160ms ease-out;
+}
+
+.pve2-training-tree-modal {
+  animation: pve2-training-tree-open 180ms ease-out;
+}
+
+.pve2-training-tree-backdrop.is-closing {
+  animation: pve2-training-tree-backdrop-close 160ms ease-in forwards;
+  pointer-events: none;
+}
+
+.pve2-training-tree-modal.is-closing {
+  animation: pve2-training-tree-close 160ms ease-in forwards;
+}
+
 .pve2-training-tree-backdrop,
 .pve2-training-settings-backdrop {
   position: fixed;
@@ -3127,6 +4275,29 @@
   background: rgba(15, 23, 42, 0.86);
   color: #cbd5e1;
   cursor: pointer;
+}
+
+.pve2-training-tree-head-actions {
+  display: inline-flex;
+  flex: 0 0 auto;
+  gap: 4px;
+}
+
+.pve2-training-tree-toggle-close {
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  border: 1px solid color-mix(in srgb, var(--skill-tree-color, #a78bfa) 62%, rgba(148, 163, 184, 0.34));
+  border-radius: 5px;
+  background: color-mix(in srgb, var(--skill-tree-color, #a78bfa) 12%, rgba(15, 23, 42, 0.86));
+  color: var(--skill-tree-color, #ddd6fe);
+  cursor: pointer;
+}
+
+.pve2-training-tree-toggle-close:hover {
+  border-color: #e0f2fe;
 }
 
 .pve2-training-tree-tabs {
@@ -3231,9 +4402,21 @@
   background: color-mix(in srgb, var(--skill-tree-soft-color, rgba(56, 189, 248, 0.18)) 72%, rgba(15, 23, 42, 0.86));
 }
 
+.pve2-training-tree-node.is-locked {
+  border-color: rgba(100, 116, 139, 0.3);
+  background: rgba(15, 23, 42, 0.38);
+  color: #64748b;
+  filter: grayscale(1);
+  opacity: 0.72;
+}
+
+.pve2-training-tree-node.is-locked:disabled {
+  cursor: not-allowed;
+}
+
 .pve2-training-tree-node.is-available {
-  border-color: rgba(250, 204, 21, 0.84);
-  color: #fde68a;
+  border-color: rgba(250, 204, 21, 0.58);
+  box-shadow: inset 0 -1px 0 rgba(250, 204, 21, 0.42);
 }
 
 .pve2-training-tree-node.is-selected {
@@ -3241,12 +4424,24 @@
 }
 
 .pve2-training-tree-node-icon {
+  position: relative;
   display: grid;
   place-items: center;
   width: 28px;
   height: 28px;
   border: 1px solid currentColor;
   border-radius: 5px;
+}
+
+.pve2-training-tree-node-lock {
+  position: absolute;
+  right: -4px;
+  bottom: -4px;
+  padding: 1px;
+  border: 1px solid rgba(100, 116, 139, 0.72);
+  border-radius: 2px;
+  background: #0f172a;
+  color: #94a3b8;
 }
 
 .pve2-training-tree-node-copy {
@@ -3379,7 +4574,11 @@
 }
 
 .pve2-training-settings-modal {
-  width: min(440px, calc(100vw - 36px));
+  width: min(580px, calc(100vw - 36px));
+  max-height: min(560px, calc(100dvh - 36px));
+  display: grid;
+  grid-template-rows: auto auto minmax(0, 1fr) auto;
+  overflow: hidden;
   border: 1px solid rgba(125, 211, 252, 0.42);
   border-radius: 8px;
   background: #08111d;
@@ -3411,9 +4610,48 @@
   font-size: 16px;
 }
 
-.pve2-training-settings-points,
-.pve2-training-settings-rate {
-  padding: 14px;
+.pve2-training-settings-tabs {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 6px;
+  padding: 10px 14px;
+  border-bottom: 1px solid rgba(148, 163, 184, 0.2);
+}
+
+.pve2-training-settings-tabs button {
+  display: inline-flex;
+  min-width: 0;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  min-height: 34px;
+  padding: 5px 7px;
+  border: 1px solid rgba(148, 163, 184, 0.3);
+  border-radius: 6px;
+  background: rgba(15, 23, 42, 0.66);
+  color: #94a3b8;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.pve2-training-settings-tabs button.is-active {
+  border-color: rgba(125, 211, 252, 0.82);
+  background: rgba(8, 145, 178, 0.2);
+  color: #e0f2fe;
+}
+
+.pve2-training-settings-body {
+  min-height: 0;
+  overflow: auto;
+  padding: 0 14px;
+}
+
+.pve2-training-settings-section {
+  padding: 16px 0;
+}
+
+.pve2-training-settings-section + .pve2-training-settings-section {
+  border-top: 1px solid rgba(148, 163, 184, 0.18);
 }
 
 .pve2-training-settings-points {
@@ -3421,7 +4659,6 @@
   align-items: center;
   justify-content: space-between;
   gap: 16px;
-  border-bottom: 1px solid rgba(148, 163, 184, 0.18);
 }
 
 .pve2-training-settings-points > div:first-child {
@@ -3503,6 +4740,96 @@
   color: #e0f2fe;
 }
 
+.pve2-training-settings-ui,
+.pve2-training-settings-battlefield {
+  display: grid;
+  align-content: start;
+  gap: 12px;
+  min-height: 170px;
+}
+
+.pve2-training-settings-font-options {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.pve2-training-settings-font-options button {
+  min-height: 58px;
+  border: 1px solid rgba(148, 163, 184, 0.32);
+  border-radius: 6px;
+  background: rgba(15, 23, 42, 0.72);
+  color: #cbd5e1;
+  font-size: 18px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.pve2-training-settings-font-options button.is-active {
+  border-color: rgba(125, 211, 252, 0.86);
+  background: rgba(8, 145, 178, 0.24);
+  color: #e0f2fe;
+}
+
+.pve2-training-settings-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  min-height: 44px;
+  color: #e2e8f0;
+  font-size: 14px;
+}
+
+.pve2-training-settings-toggle input {
+  width: 20px;
+  height: 20px;
+  margin: 0;
+  accent-color: #38bdf8;
+}
+
+.pve2-training-settings-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 12px 14px;
+  border-top: 1px solid rgba(148, 163, 184, 0.2);
+}
+
+/* Training UI scaling intentionally excludes the battlefield canvas and its pointer math. */
+.pve2-overlay.is-training-three .pve2-head,
+.pve2-overlay.is-training-three .pve2-hud,
+.pve2-overlay.is-training-three .pve2-template-strip,
+.pve2-overlay.is-training-three .pve2-card-strip,
+.pve2-overlay.is-training-three .pve2-selected-squad-panel,
+.pve2-overlay.is-training-three .pve2-training-squad-panel,
+.pve2-overlay.is-training-three .pve2-training-squad-info-panel,
+.pve2-overlay.is-training-three .pve2-training-squad-skills-panel,
+.pve2-overlay.is-training-three .pve2-minimap-wrap,
+.pve2-overlay.is-training-three .pve2-deploy-notice,
+.pve2-overlay.is-training-three .pve2-action-pad,
+.pve2-overlay.is-training-three .pve2-battle-actions,
+.pve2-overlay.is-training-three .pve2-aim-tip,
+.pve2-overlay.is-training-three .pve2-runtime-debug,
+.pve2-overlay.is-training-three .pve2-debug-merged-panel,
+.pve2-overlay.is-training-three .pve2-path-confirm-btn,
+.pve2-overlay.is-training-three .pve2-loading,
+.pve2-overlay.is-training-three .pve2-error,
+.pve2-overlay.is-training-three .pve2-error-overlay,
+.pve2-overlay.is-training-three .pve2-quick-deploy-panel,
+.pve2-overlay.is-training-three .pve2-deploy-info,
+.pve2-overlay.is-training-three .pve2-training-tree-modal,
+.pve2-overlay.is-training-three .pve2-training-settings-modal,
+.pve2-overlay.is-training-three .pve2-formation-wheel,
+.pve2-overlay.is-training-three .pve2-confirm,
+.pve2-overlay.is-training-three .pve2-result {
+  zoom: var(--pve2-training-ui-scale, 1);
+}
+
+.pve2-template-fill-backdrop.is-training .pve2-template-fill-panel {
+  zoom: var(--pve2-training-ui-scale, 1);
+}
+
 @media (max-width: 720px) {
   .pve2-selected-squad-panel.is-runtime {
     max-height: min(250px, calc(100% - 76px));
@@ -3542,5 +4869,77 @@
 
   .pve2-training-settings-rate-options {
     grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 720px) {
+  .pve2-overlay {
+    --pve2-template-zone-top: 84px;
+    --pve2-template-zone-height: 52px;
+    --pve2-card-zone-top: calc(var(--pve2-template-zone-top) + var(--pve2-template-zone-height) + 26px);
+    --pve2-card-zone-height: calc(100% - var(--pve2-card-zone-top) - 12px);
+    --pve2-card-zone-width: min(142px, calc(50vw - 18px));
+    --pve2-card-zone-gutter: 8px;
+  }
+
+  .pve2-template-strip {
+    top: var(--pve2-template-zone-top);
+    left: 50%;
+    right: auto;
+    width: calc(100% - 16px);
+    transform: translateX(-50%);
+    gap: 5px;
+  }
+
+  .pve2-overlay.is-training-three .pve2-template-strip .pve2-template-card-wrap,
+  .pve2-template-strip .pve2-template-strip-hint {
+    flex-basis: 210px;
+  }
+
+  .pve2-card-strip.left {
+    left: var(--pve2-card-zone-gutter);
+  }
+
+  .pve2-card-strip.right {
+    top: var(--pve2-card-zone-top);
+    right: var(--pve2-card-zone-gutter);
+  }
+
+  .pve2-training-squad-panel {
+    bottom: 8px;
+    flex-wrap: wrap;
+    gap: 4px;
+    width: calc(100% - 16px);
+    max-width: none;
+  }
+
+  .pve2-training-squad-meta-row {
+    order: 2;
+    max-width: 100%;
+  }
+
+  .pve2-training-squad-skill-row {
+    order: 1;
+    max-width: 100%;
+  }
+
+  .pve2-training-squad-panel .pve2-formation-slots {
+    max-width: min(168px, 46vw);
+  }
+}
+
+@media (max-height: 620px) {
+  .pve2-overlay {
+    --pve2-template-zone-top: 46px;
+    --pve2-template-zone-height: 48px;
+    --pve2-card-zone-top: calc(var(--pve2-template-zone-top) + var(--pve2-template-zone-height) + 14px);
+  }
+
+  .pve2-template-strip .pve2-template-row-main {
+    min-height: 48px;
+  }
+
+  .pve2-training-squad-panel {
+    bottom: 6px;
   }
 }

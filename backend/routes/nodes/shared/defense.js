@@ -1,3 +1,5 @@
+const { limitNameByDisplayWidth } = require('../../../utils/nameLimits');
+
 module.exports = ({
   normalizeBattlefieldLayout,
   normalizeBattlefieldItemGeometryScale,
@@ -285,7 +287,7 @@ module.exports = ({
           id: typeof item?.deployId === 'string' ? item.deployId : '',
           deployId: typeof item?.deployId === 'string' ? item.deployId : '',
           layoutId: typeof item?.layoutId === 'string' ? item.layoutId : '',
-          name: typeof item?.name === 'string' ? item.name : '',
+          name: typeof item?.name === 'string' ? limitNameByDisplayWidth(item.name) : '',
           sortOrder: Math.max(0, Math.floor(Number(item?.sortOrder) || 0)),
           placed: item?.placed !== false,
           units,
@@ -412,7 +414,7 @@ module.exports = ({
         deployId: (typeof item?.deployId === 'string' && item.deployId.trim())
           ? item.deployId.trim()
           : ((typeof item?.id === 'string' && item.id.trim()) ? item.id.trim() : `deploy_${index + 1}`),
-        name: typeof item?.name === 'string' ? item.name.trim() : '',
+        name: typeof item?.name === 'string' ? limitNameByDisplayWidth(item.name.trim()) : '',
         sortOrder: Math.max(0, Math.floor(Number(item?.sortOrder) || 0)),
         placed: item?.placed !== false,
         units,

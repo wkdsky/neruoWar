@@ -8,6 +8,10 @@ import {
 
 const clamp = (value, min, max) => Math.min(max, Math.max(min, value));
 const lerp = (a, b, t) => a + ((b - a) * t);
+const smoothstep = (value) => {
+  const t = clamp(value, 0, 1);
+  return t * t * (3 - (2 * t));
+};
 const tempMatrix = new THREE.Matrix4();
 const tempQuat = new THREE.Quaternion();
 const tempEuler = new THREE.Euler(0, 0, 0, 'XYZ');
@@ -20,8 +24,106 @@ const TEAM_ATTACKER_COLOR = new THREE.Color(0x4ea9ff);
 const TEAM_DEFENDER_COLOR = new THREE.Color(0xff635f);
 const TEAM_ATTACKER_DARK = new THREE.Color(0x185a8c);
 const TEAM_DEFENDER_DARK = new THREE.Color(0x8b2424);
+const TEAM_ATTACKER = 'attacker';
+const TEAM_DEFENDER = 'defender';
 const SELECTED_COLOR = new THREE.Color(0xf6d45b);
+const HOVER_COLOR = new THREE.Color(0x87ddff);
 const GHOST_COLOR = new THREE.Color(0xb7d7ff);
+
+export const TRAINING_FLAG_HIDE_DISTANCE = 460;
+export const TRAINING_FLAG_SHOW_DISTANCE = 760;
+export const TRAINING_FLAG_TOP_DOWN_PITCH_DEG = 75;
+export const TRAINING_FLAG_OVERVIEW_SCALE_MAX = 1.85;
+
+export const resolveTrainingFlagPresentation = (distance = 0, pitchDeg = 0, overviewZoomProgress = 0) => {
+  const zoomProgress = smoothstep(
+    (Math.max(0, Number(distance) || 0) - TRAINING_FLAG_HIDE_DISTANCE)
+      / (TRAINING_FLAG_SHOW_DISTANCE - TRAINING_FLAG_HIDE_DISTANCE)
+  );
+  const topDown = Number(pitchDeg) >= TRAINING_FLAG_TOP_DOWN_PITCH_DEG;
+  const arrowOpacity = 1 - zoomProgress;
+  const uprightOpacity = topDown ? 0 : zoomProgress;
+  const topDownOpacity = topDown ? zoomProgress : 0;
+  const arrowScale = lerp(1.18, 0.9, zoomProgress);
+  const uprightScale = lerp(0.92, 1.26, zoomProgress);
+  const overviewScale = lerp(1, TRAINING_FLAG_OVERVIEW_SCALE_MAX, smoothstep(overviewZoomProgress));
+  const topDownScale = lerp(1.18, 0.9, zoomProgress) * overviewScale;
+  return {
+    opacity: uprightOpacity,
+    scale: uprightScale,
+    groundOpacity: arrowOpacity,
+    groundScale: arrowScale,
+    arrowOpacity,
+    arrowScale,
+    uprightOpacity,
+    uprightScale,
+    topDownOpacity,
+    topDownScale
+  };
+};
+
+const finiteOr = (value, fallback = 0) => (
+  Number.isFinite(Number(value)) ? Number(value) : fallback
+);
+
+const resolveFlagStrength = (source = null) => {
+  const direct = Math.max(0, finiteOr(source?.remain), finiteOr(source?.startCount));
+  const unitCount = Object.values(source?.units || {})
+    .reduce((sum, value) => sum + Math.max(0, finiteOr(value)), 0);
+  return Math.max(direct, unitCount);
+};
+
+const resolveFlagScale = (source = null) => {
+  const rect = source?.formationRect || {};
+  const formationSpan = Math.max(finiteOr(rect.width), finiteOr(rect.depth));
+  const baseRadius = Math.max(
+    finiteOr(source?.radius),
+    formationSpan * 0.32,
+    Math.sqrt(Math.max(1, resolveFlagStrength(source))) * 0.3
+  );
+  return clamp(Math.max(11, baseRadius * 0.43), 11, 28);
+};
+
+const resolveFlagYaw = (source = null, team = TEAM_ATTACKER) => {
+  const primaryX = finiteOr(source?.dirX, finiteOr(source?.vx));
+  const primaryY = finiteOr(source?.dirY, finiteOr(source?.vy));
+  if (Math.hypot(primaryX, primaryY) > 0.1) return Math.atan2(primaryY, primaryX);
+  const facing = Number(source?.formationRect?.facingRad);
+  if (Number.isFinite(facing)) return facing;
+  return team === TEAM_DEFENDER ? Math.PI : 0;
+};
+
+const buildFlagAnchor = (source = null, team = TEAM_ATTACKER) => ({
+  x: finiteOr(source?.centerX, finiteOr(source?.x)),
+  y: finiteOr(source?.centerY, finiteOr(source?.y)),
+  yaw: resolveFlagYaw(source, team),
+  teamIndex: team === TEAM_DEFENDER ? 1 : 0,
+  scale: resolveFlagScale(source)
+});
+
+export const resolveTrainingFlagAnchors = (runtime = null) => {
+  const phase = runtime?.getPhase?.() || runtime?.phase || 'deploy';
+  if (phase === 'battle' || phase === 'ended') {
+    return (Array.isArray(runtime?.sim?.squads) ? runtime.sim.squads : [])
+      .filter((squad) => (
+        squad
+        && finiteOr(squad.remain) > 0
+        && !(squad.team === TEAM_DEFENDER && squad.hiddenFromAttacker)
+      ))
+      .map((squad) => buildFlagAnchor(squad, squad.team));
+  }
+
+  const anchors = [];
+  const appendTeam = (groups, team) => {
+    if (team === TEAM_DEFENDER && runtime?.intelVisible === false) return;
+    (Array.isArray(groups) ? groups : [])
+      .filter((group) => group && group.placed !== false)
+      .forEach((group) => anchors.push(buildFlagAnchor(group, team)));
+  };
+  appendTeam(runtime?.attackerDeployGroups, TEAM_ATTACKER);
+  appendTeam(runtime?.defenderDeployGroups, TEAM_DEFENDER);
+  return anchors;
+};
 
 const disposeObject = (object) => {
   if (!object) return;
@@ -46,6 +148,16 @@ const clearGroup = (group) => {
   }
 };
 
+export const prepareInstanceColorGeometry = (geometry) => {
+  const position = geometry?.getAttribute?.('position');
+  if (!position || position.count <= 0) return geometry;
+  geometry.setAttribute(
+    'color',
+    new THREE.Float32BufferAttribute(new Float32Array(position.count * 3).fill(1), 3)
+  );
+  return geometry;
+};
+
 const createUnitGeometry = () => {
   const shape = new THREE.Shape();
   shape.moveTo(-0.46, -0.34);
@@ -62,8 +174,22 @@ const createUnitGeometry = () => {
     bevelSegments: 1
   });
   geometry.computeVertexNormals();
-  return geometry;
+  return prepareInstanceColorGeometry(geometry);
 };
+
+export const createGroundFlagGeometry = () => {
+  const shape = new THREE.Shape();
+  shape.moveTo(-0.94, -0.56);
+  shape.lineTo(0.94, 0);
+  shape.lineTo(-0.94, 0.56);
+  shape.lineTo(-0.42, 0);
+  shape.lineTo(-0.94, -0.56);
+  return prepareInstanceColorGeometry(new THREE.ShapeGeometry(shape));
+};
+
+export const createTopDownFlagGeometry = () => prepareInstanceColorGeometry(
+  new THREE.PlaneGeometry(1.72, 1.04, 1, 1)
+);
 
 const createBandMaterial = (color, roughness = 0.92) => new THREE.MeshStandardMaterial({
   color,
@@ -98,7 +224,7 @@ export default class TrainingThreeRenderPipeline {
 
     this.scene = new THREE.Scene();
     this.scene.fog = new THREE.Fog(0x07111d, 900, 2800);
-    this.camera = new THREE.PerspectiveCamera(48, 1, 1, 5000);
+    this.camera = new THREE.PerspectiveCamera(48, 1, 1, 8000);
     this.camera.up.set(0, 0, 1);
     this.camera.matrixAutoUpdate = false;
     this.camera.matrixWorldAutoUpdate = false;
@@ -152,17 +278,69 @@ export default class TrainingThreeRenderPipeline {
     this.selectedRingMesh = null;
     this.selectedRingCapacity = 0;
 
-    this.flagGeometry = new THREE.ConeGeometry(0.26, 1.2, 3);
-    this.flagGeometry.rotateX(Math.PI / 2);
-    this.flagGeometry.translate(0, 0, 0.6);
-    this.flagMaterial = new THREE.MeshStandardMaterial({
-      color: 0xf8fafc,
-      roughness: 0.68
+    this.hoverRingGeometry = new THREE.RingGeometry(0.78, 1.03, 40);
+    this.hoverRingMaterial = new THREE.MeshBasicMaterial({
+      color: 0x8ee7ff,
+      transparent: true,
+      opacity: 0.56,
+      side: THREE.DoubleSide,
+      depthWrite: false
     });
-    this.flagMesh = null;
-    this.flagCapacity = 0;
+    this.hoverRingMesh = null;
+    this.hoverRingCapacity = 0;
 
-    this.buildingGeometry = new THREE.BoxGeometry(1, 1, 1);
+    this.flagGroundGeometry = createGroundFlagGeometry();
+    this.flagGroundMaterial = new THREE.MeshBasicMaterial({
+      color: 0xffffff,
+      vertexColors: true,
+      transparent: true,
+      opacity: 1,
+      side: THREE.DoubleSide,
+      depthWrite: false,
+      fog: false
+    });
+    this.flagTopDownGeometry = createTopDownFlagGeometry();
+    this.flagTopDownMaterial = this.flagGroundMaterial.clone();
+    this.flagPoleGeometry = new THREE.CylinderGeometry(0.055, 0.075, 3.45, 6);
+    this.flagPoleGeometry.rotateX(Math.PI / 2);
+    this.flagPoleGeometry.translate(0, 0, 1.725);
+    this.flagPoleMaterial = new THREE.MeshStandardMaterial({
+      color: 0x253447,
+      transparent: true,
+      opacity: 0,
+      roughness: 0.64,
+      metalness: 0.14,
+      depthWrite: false
+    });
+    this.flagClothGeometry = prepareInstanceColorGeometry(new THREE.PlaneGeometry(1.72, 1.04, 1, 1));
+    this.flagClothGeometry.rotateX(Math.PI / 2);
+    this.flagClothGeometry.translate(0.86, 0, 2.72);
+    this.flagClothCrossGeometry = this.flagClothGeometry.clone();
+    this.flagClothCrossGeometry.rotateZ(Math.PI / 2);
+    this.flagClothMaterial = new THREE.MeshBasicMaterial({
+      color: 0xffffff,
+      vertexColors: true,
+      transparent: true,
+      opacity: 0,
+      side: THREE.DoubleSide,
+      depthWrite: false,
+      fog: false
+    });
+    this.flagGroundMesh = null;
+    this.flagTopDownMesh = null;
+    this.flagPoleMesh = null;
+    this.flagClothMesh = null;
+    this.flagClothCrossMesh = null;
+    this.flagCapacity = 0;
+    this.flagGroundVisibility = 1;
+    this.flagGroundScale = 1.18;
+    this.flagTopDownVisibility = 0;
+    this.flagTopDownScale = 1.18;
+    this.flagVisibility = 0;
+    this.flagScale = 0.92;
+    this.flagPresentationUpdatedAt = 0;
+
+    this.buildingGeometry = prepareInstanceColorGeometry(new THREE.BoxGeometry(1, 1, 1));
     this.buildingMaterial = new THREE.MeshStandardMaterial({
       color: 0xffffff,
       vertexColors: true,
@@ -189,6 +367,7 @@ export default class TrainingThreeRenderPipeline {
     this.projectilePool = [];
     this.effectPool = [];
     this.groundKey = '';
+    this.gridVisible = true;
   }
 
   prepareFrame() {
@@ -213,6 +392,22 @@ export default class TrainingThreeRenderPipeline {
     this.camera.matrix.copy(this.camera.matrixWorld);
     this.camera.position.setFromMatrixPosition(this.camera.matrixWorld);
     this.camera.matrixWorldNeedsUpdate = false;
+    if (this.scene.fog) {
+      const distance = Math.max(0, Number(cameraState.distance) || 0);
+      const overviewProgress = clamp(Number(cameraState.overviewZoomProgress) || 0, 0, 1);
+      this.scene.fog.near = lerp(900, 2600, overviewProgress);
+      this.scene.fog.far = Math.max(2800, lerp(2800, 7000, overviewProgress), distance * 1.35);
+    }
+  }
+
+  setGridVisible(visible = true) {
+    const nextVisible = visible !== false;
+    if (this.gridVisible === nextVisible) return;
+    this.gridVisible = nextVisible;
+    ['minor-grid', 'major-grid'].forEach((name) => {
+      const lines = this.groundGroup.getObjectByName(name);
+      if (lines) lines.visible = nextVisible;
+    });
   }
 
   updateGround(runtime) {
@@ -269,6 +464,7 @@ export default class TrainingThreeRenderPipeline {
       });
       const lines = new THREE.LineSegments(geometry, material);
       lines.name = name;
+      lines.visible = name === 'minor-grid' || name === 'major-grid' ? this.gridVisible : true;
       this.groundGroup.add(lines);
     };
     addLines(minorPositions, 0x7fa8bd, 0.16, 'minor-grid');
@@ -302,13 +498,76 @@ export default class TrainingThreeRenderPipeline {
     this.selectedRingCapacity = nextCapacity;
   }
 
-  ensureFlagCapacity(count) {
-    if (count <= this.flagCapacity && this.flagMesh) return;
+  ensureHoverRingCapacity(count) {
+    if (count <= this.hoverRingCapacity && this.hoverRingMesh) return;
     const nextCapacity = Math.max(32, Math.ceil(count * 1.35));
-    if (this.flagMesh) this.unitGroup.remove(this.flagMesh);
-    this.flagMesh = makeInstancedMesh(this.flagGeometry, this.flagMaterial, nextCapacity);
-    this.unitGroup.add(this.flagMesh);
+    if (this.hoverRingMesh) this.unitGroup.remove(this.hoverRingMesh);
+    this.hoverRingMesh = makeInstancedMesh(this.hoverRingGeometry, this.hoverRingMaterial, nextCapacity);
+    this.unitGroup.add(this.hoverRingMesh);
+    this.hoverRingCapacity = nextCapacity;
+  }
+
+  ensureFlagCapacity(count) {
+    if (
+      count <= this.flagCapacity
+      && this.flagGroundMesh
+      && this.flagTopDownMesh
+      && this.flagPoleMesh
+      && this.flagClothMesh
+      && this.flagClothCrossMesh
+    ) return;
+    const nextCapacity = Math.max(32, Math.ceil(count * 1.35));
+    if (this.flagGroundMesh) this.unitGroup.remove(this.flagGroundMesh);
+    if (this.flagTopDownMesh) this.unitGroup.remove(this.flagTopDownMesh);
+    if (this.flagPoleMesh) this.unitGroup.remove(this.flagPoleMesh);
+    if (this.flagClothMesh) this.unitGroup.remove(this.flagClothMesh);
+    if (this.flagClothCrossMesh) this.unitGroup.remove(this.flagClothCrossMesh);
+    this.flagGroundMesh = makeInstancedMesh(this.flagGroundGeometry, this.flagGroundMaterial, nextCapacity);
+    this.flagTopDownMesh = makeInstancedMesh(this.flagTopDownGeometry, this.flagTopDownMaterial, nextCapacity);
+    this.flagPoleMesh = makeInstancedMesh(this.flagPoleGeometry, this.flagPoleMaterial, nextCapacity);
+    this.flagClothMesh = makeInstancedMesh(this.flagClothGeometry, this.flagClothMaterial, nextCapacity);
+    this.flagClothCrossMesh = makeInstancedMesh(this.flagClothCrossGeometry, this.flagClothMaterial, nextCapacity);
+    this.flagGroundMesh.renderOrder = 2;
+    this.flagTopDownMesh.renderOrder = 2;
+    this.flagPoleMesh.renderOrder = 3;
+    this.flagClothMesh.renderOrder = 3;
+    this.flagClothCrossMesh.renderOrder = 3;
+    this.unitGroup.add(
+      this.flagGroundMesh,
+      this.flagTopDownMesh,
+      this.flagPoleMesh,
+      this.flagClothMesh,
+      this.flagClothCrossMesh
+    );
     this.flagCapacity = nextCapacity;
+  }
+
+  updateFlagPresentation(cameraState) {
+    const target = resolveTrainingFlagPresentation(
+      cameraState?.distance,
+      cameraState?.pitchDeg,
+      cameraState?.overviewZoomProgress
+    );
+    const now = typeof performance === 'undefined' ? Date.now() : performance.now();
+    const previous = this.flagPresentationUpdatedAt || (now - (1000 / 60));
+    const elapsedSec = clamp((now - previous) / 1000, 0, 0.1);
+    const blend = 1 - Math.exp(-elapsedSec / 0.18);
+    this.flagPresentationUpdatedAt = now;
+    this.flagVisibility = lerp(this.flagVisibility, target.opacity, blend);
+    this.flagScale = lerp(this.flagScale, target.scale, blend);
+    this.flagGroundVisibility = lerp(this.flagGroundVisibility, target.groundOpacity, blend);
+    this.flagGroundScale = lerp(this.flagGroundScale, target.groundScale, blend);
+    this.flagTopDownVisibility = lerp(this.flagTopDownVisibility, target.topDownOpacity, blend);
+    this.flagTopDownScale = lerp(this.flagTopDownScale, target.topDownScale, blend);
+    this.flagPoleMaterial.opacity = this.flagVisibility * 0.88;
+    this.flagClothMaterial.opacity = this.flagVisibility * 0.96;
+    this.flagGroundMaterial.opacity = this.flagGroundVisibility * 0.94;
+    this.flagTopDownMaterial.opacity = this.flagTopDownVisibility * 0.94;
+    return {
+      uprightScale: this.flagScale,
+      groundScale: this.flagGroundScale,
+      topDownScale: this.flagTopDownScale
+    };
   }
 
   updateUnits(units) {
@@ -316,7 +575,7 @@ export default class TrainingThreeRenderPipeline {
     this.ensureUnitCapacity(count);
     const data = units?.data || [];
     let selectedCount = 0;
-    let flagCount = 0;
+    let hoveredCount = 0;
     for (let i = 0; i < count; i += 1) {
       const base = i * UNIT_INSTANCE_STRIDE;
       const x = Number(data[base + 0]) || 0;
@@ -328,8 +587,8 @@ export default class TrainingThreeRenderPipeline {
       const hpRatio = clamp(Number(data[base + 6]) || 0, 0, 1);
       const tint = Number.isFinite(Number(data[base + 11])) ? Number(data[base + 11]) : 1;
       const selected = Number(data[base + 12]) > 0.5;
-      const flagBearer = Number(data[base + 13]) > 0.5;
       const ghost = Number(data[base + 14]) > 0.5;
+      const hovered = Number(data[base + 15]) > 0.5;
 
       tempPos.set(x, y, z + 0.12);
       tempEuler.set(0, 0, yaw);
@@ -341,31 +600,31 @@ export default class TrainingThreeRenderPipeline {
       tempColor.copy(teamIndex < 0.5 ? TEAM_ATTACKER_DARK : TEAM_DEFENDER_DARK);
       tempColorB.copy(teamIndex < 0.5 ? TEAM_ATTACKER_COLOR : TEAM_DEFENDER_COLOR);
       tempColor.lerp(tempColorB, 0.36 + (hpRatio * 0.58));
+      if (hovered) tempColor.lerp(HOVER_COLOR, 0.26);
       if (selected) tempColor.lerp(SELECTED_COLOR, 0.36);
       if (ghost) tempColor.lerp(GHOST_COLOR, 0.52);
       tempColor.multiplyScalar(clamp(tint, 0.52, 1.55));
       this.unitMesh.setColorAt(i, tempColor);
 
       if (selected) selectedCount += 1;
-      if (flagBearer) flagCount += 1;
+      if (hovered) hoveredCount += 1;
     }
     this.unitMesh.count = count;
     this.unitMesh.instanceMatrix.needsUpdate = true;
     if (this.unitMesh.instanceColor) this.unitMesh.instanceColor.needsUpdate = true;
 
     this.ensureSelectedRingCapacity(selectedCount);
-    this.ensureFlagCapacity(flagCount);
+    this.ensureHoverRingCapacity(hoveredCount);
     let selectedIndex = 0;
-    let flagIndex = 0;
+    let hoveredIndex = 0;
     for (let i = 0; i < count; i += 1) {
       const base = i * UNIT_INSTANCE_STRIDE;
       const x = Number(data[base + 0]) || 0;
       const y = Number(data[base + 1]) || 0;
       const z = Number(data[base + 2]) || 0;
       const size = Math.max(2.2, Number(data[base + 3]) || 4);
-      const yaw = Number(data[base + 4]) || 0;
       const selected = Number(data[base + 12]) > 0.5;
-      const flagBearer = Number(data[base + 13]) > 0.5;
+      const hovered = Number(data[base + 15]) > 0.5;
       if (selected) {
         tempPos.set(x, y, z + 0.14);
         tempQuat.identity();
@@ -374,20 +633,79 @@ export default class TrainingThreeRenderPipeline {
         this.selectedRingMesh.setMatrixAt(selectedIndex, tempMatrix);
         selectedIndex += 1;
       }
-      if (flagBearer) {
-        tempPos.set(x, y, z + Math.max(3.2, size * 0.88));
-        tempEuler.set(0, 0, yaw);
-        tempQuat.setFromEuler(tempEuler);
-        tempScale.set(size * 0.55, size * 0.55, size * 1.05);
+      if (hovered) {
+        tempPos.set(x, y, z + 0.13);
+        tempQuat.identity();
+        tempScale.set(size * 1.58, size * 1.58, 1);
         tempMatrix.compose(tempPos, tempQuat, tempScale);
-        this.flagMesh.setMatrixAt(flagIndex, tempMatrix);
-        flagIndex += 1;
+        this.hoverRingMesh.setMatrixAt(hoveredIndex, tempMatrix);
+        hoveredIndex += 1;
       }
     }
     this.selectedRingMesh.count = selectedCount;
     this.selectedRingMesh.instanceMatrix.needsUpdate = true;
-    this.flagMesh.count = flagCount;
-    this.flagMesh.instanceMatrix.needsUpdate = true;
+    this.hoverRingMesh.count = hoveredCount;
+    this.hoverRingMesh.instanceMatrix.needsUpdate = true;
+  }
+
+  updateFlags(runtime, presentation = {}) {
+    const anchors = resolveTrainingFlagAnchors(runtime);
+    const flagCount = anchors.length;
+    this.ensureFlagCapacity(flagCount);
+    const uprightScale = Math.max(0.1, Number(presentation?.uprightScale) || 0.92);
+    const groundScale = Math.max(0.1, Number(presentation?.groundScale) || 1.18);
+    const topDownScale = Math.max(0.1, Number(presentation?.topDownScale) || 1.18);
+    anchors.forEach((anchor, index) => {
+      const markerScale = Math.max(1, Number(anchor.scale) || 11);
+      const yaw = Number(anchor.yaw) || 0;
+      tempEuler.set(0, 0, yaw);
+      tempQuat.setFromEuler(tempEuler);
+
+      tempPos.set(anchor.x, anchor.y, 0.18);
+      tempScale.setScalar(markerScale * uprightScale);
+      tempMatrix.compose(tempPos, tempQuat, tempScale);
+      this.flagPoleMesh.setMatrixAt(index, tempMatrix);
+      this.flagClothMesh.setMatrixAt(index, tempMatrix);
+      this.flagClothCrossMesh.setMatrixAt(index, tempMatrix);
+
+      tempPos.set(anchor.x, anchor.y, Math.max(3.6, markerScale * 0.32));
+      tempScale.setScalar(markerScale * groundScale);
+      tempMatrix.compose(tempPos, tempQuat, tempScale);
+      this.flagGroundMesh.setMatrixAt(index, tempMatrix);
+
+      tempScale.setScalar(markerScale * topDownScale);
+      tempMatrix.compose(tempPos, tempQuat, tempScale);
+      this.flagTopDownMesh.setMatrixAt(index, tempMatrix);
+
+      tempColor.copy(anchor.teamIndex < 0.5 ? TEAM_ATTACKER_COLOR : TEAM_DEFENDER_COLOR);
+      this.flagGroundMesh.setColorAt(index, tempColor);
+      this.flagTopDownMesh.setColorAt(index, tempColor);
+      this.flagClothMesh.setColorAt(index, tempColor);
+      this.flagClothCrossMesh.setColorAt(index, tempColor);
+    });
+
+    const groundVisible = flagCount > 0 && this.flagGroundVisibility > 0.01;
+    const topDownVisible = flagCount > 0 && this.flagTopDownVisibility > 0.01;
+    const uprightVisible = flagCount > 0 && this.flagVisibility > 0.01;
+    this.flagGroundMesh.visible = groundVisible;
+    this.flagTopDownMesh.visible = topDownVisible;
+    this.flagPoleMesh.visible = uprightVisible;
+    this.flagClothMesh.visible = uprightVisible;
+    this.flagClothCrossMesh.visible = uprightVisible;
+    this.flagGroundMesh.count = flagCount;
+    this.flagTopDownMesh.count = flagCount;
+    this.flagPoleMesh.count = flagCount;
+    this.flagClothMesh.count = flagCount;
+    this.flagClothCrossMesh.count = flagCount;
+    this.flagGroundMesh.instanceMatrix.needsUpdate = true;
+    this.flagTopDownMesh.instanceMatrix.needsUpdate = true;
+    this.flagPoleMesh.instanceMatrix.needsUpdate = true;
+    this.flagClothMesh.instanceMatrix.needsUpdate = true;
+    this.flagClothCrossMesh.instanceMatrix.needsUpdate = true;
+    if (this.flagGroundMesh.instanceColor) this.flagGroundMesh.instanceColor.needsUpdate = true;
+    if (this.flagTopDownMesh.instanceColor) this.flagTopDownMesh.instanceColor.needsUpdate = true;
+    if (this.flagClothMesh.instanceColor) this.flagClothMesh.instanceColor.needsUpdate = true;
+    if (this.flagClothCrossMesh.instanceColor) this.flagClothCrossMesh.instanceColor.needsUpdate = true;
   }
 
   ensureBuildingCapacity(count) {
@@ -514,9 +832,11 @@ export default class TrainingThreeRenderPipeline {
   render({ cameraState, snapshot, runtime }) {
     if (!cameraState || !snapshot) return;
     this.updateCamera(cameraState);
+    const flagPresentation = this.updateFlagPresentation(cameraState);
     this.updateGround(runtime);
     this.updateBuildings(snapshot.buildings);
     this.updateUnits(snapshot.units);
+    this.updateFlags(runtime, flagPresentation);
     this.updateProjectiles(snapshot.projectiles);
     this.updateEffects(snapshot.effects);
     this.renderer.render(this.scene, this.camera);
@@ -527,7 +847,12 @@ export default class TrainingThreeRenderPipeline {
     this.renderer.dispose();
     this.unitMesh = null;
     this.selectedRingMesh = null;
-    this.flagMesh = null;
+    this.hoverRingMesh = null;
+    this.flagGroundMesh = null;
+    this.flagTopDownMesh = null;
+    this.flagPoleMesh = null;
+    this.flagClothMesh = null;
+    this.flagClothCrossMesh = null;
     this.buildingMesh = null;
     this.projectilePool = [];
     this.effectPool = [];

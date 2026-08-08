@@ -21,6 +21,7 @@ import { computeDeployOverviewDistance } from '../screens/battleSceneUtils';
 export default function useBattleSceneLifecycle({
   open = false,
   phase = 'deploy',
+  isTrainingMode = false,
   runtimeRef,
   runtimeVersion = 0,
   runtimeInitRef,
@@ -41,8 +42,8 @@ export default function useBattleSceneLifecycle({
   setSkillConfirmState,
   setSkillPopupSquadId,
   setSkillPopupPos,
-  setMarchModePickOpen,
-  setMarchPopupPos,
+  setSpacingPickOpen,
+  setSpacingPopupPos,
   setResultState,
   setDeployDraggingGroup,
   setDeployInfoState,
@@ -67,8 +68,11 @@ export default function useBattleSceneLifecycle({
     if (runtimeInitRef.current === runtime) return;
     runtimeInitRef.current = runtime;
     const cardsRows = runtime.getCardRows();
-    const initialSelected = runtime.getDeployGroups()?.selectedId || cardsRows.find((row) => row.team === TEAM_ATTACKER)?.id || '';
-    runtime.setFocusSquad(initialSelected);
+    const initialSelected = isTrainingMode
+      ? ''
+      : (runtime.getDeployGroups()?.selectedId || cardsRows.find((row) => row.team === TEAM_ATTACKER)?.id || '');
+    if (initialSelected) runtime.setFocusSquad(initialSelected);
+    else runtime.clearSelection();
     setCards(cardsRows || []);
     setBattleStatus(runtime.getBattleStatus() || { timerSec: 0, ended: false, endReason: '' });
     setMinimapSnapshot(runtime.getMinimapSnapshot() || null);
@@ -98,8 +102,8 @@ export default function useBattleSceneLifecycle({
     setSkillConfirmState(null);
     setSkillPopupSquadId('');
     setSkillPopupPos(createDefaultPopupPos());
-    setMarchModePickOpen(false);
-    setMarchPopupPos(createDefaultPopupPos());
+    setSpacingPickOpen(false);
+    setSpacingPopupPos(createDefaultPopupPos());
     setResultState(createDefaultResultState());
     setDeployDraggingGroup(createDefaultDeployDraggingGroup());
     setDeployInfoState(createDefaultDeployInfoState());
@@ -114,6 +118,7 @@ export default function useBattleSceneLifecycle({
     setShowMidlineDebug(true);
   }, [
     open,
+    isTrainingMode,
     runtimeRef,
     runtimeVersion,
     runtimeInitRef,
@@ -134,8 +139,8 @@ export default function useBattleSceneLifecycle({
     setSkillConfirmState,
     setSkillPopupSquadId,
     setSkillPopupPos,
-    setMarchModePickOpen,
-    setMarchPopupPos,
+    setSpacingPickOpen,
+    setSpacingPopupPos,
     setResultState,
     setDeployDraggingGroup,
     setDeployInfoState,
@@ -170,8 +175,8 @@ export default function useBattleSceneLifecycle({
     setPendingPathPoints([]);
     setPlanningHoverPoint(null);
     setSkillConfirmState(null);
-    setMarchModePickOpen(false);
-    setMarchPopupPos(createDefaultPopupPos());
+    setSpacingPickOpen(false);
+    setSpacingPopupPos(createDefaultPopupPos());
     setDeployInfoState(createDefaultDeployInfoState());
     setPaused(false);
     setLoopPaused(false);
@@ -183,8 +188,8 @@ export default function useBattleSceneLifecycle({
     setPendingPathPoints,
     setPlanningHoverPoint,
     setSkillConfirmState,
-    setMarchModePickOpen,
-    setMarchPopupPos,
+    setSpacingPickOpen,
+    setSpacingPopupPos,
     setDeployInfoState,
     setPaused,
     setLoopPaused

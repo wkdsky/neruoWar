@@ -43,6 +43,7 @@ const DeployActionButtons = ({
   onEdit,
   onFormation,
   onDelete,
+  showDelete = true,
   deleteTitle = '删除',
   deleteAriaLabel = deleteTitle
 }) => (
@@ -111,7 +112,7 @@ const DeployActionButtons = ({
     >
       <ActionIcon type="edit" />
     </button>
-    <button
+    {showDelete ? <button
       type="button"
       className="pve2-icon-btn delete"
       title={deleteTitle}
@@ -124,7 +125,7 @@ const DeployActionButtons = ({
       }}
     >
       <ActionIcon type="delete" />
-    </button>
+    </button> : null}
   </div>
 );
 

@@ -1,7 +1,7 @@
 import { useCallback } from 'react';
 import {
   BATTLE_UI_MODE_GUARD,
-  BATTLE_UI_MODE_MARCH_PICK,
+  BATTLE_UI_MODE_SPACING_PICK,
   BATTLE_UI_MODE_NONE,
   BATTLE_UI_MODE_PATH,
   BATTLE_UI_MODE_SKILL_CONFIRM,
@@ -28,8 +28,8 @@ export default function useBattleActions({
   setClockPaused,
   setPendingPathPoints,
   setPlanningHoverPoint,
-  setMarchModePickOpen,
-  setMarchPopupPos,
+  setSpacingPickOpen,
+  setSpacingPopupPos,
   setSkillPopupPos,
   setSkillPopupSquadId
 } = {}) {
@@ -115,13 +115,13 @@ export default function useBattleActions({
     syncBattleCards
   ]);
 
-  const closeMarchModePick = useCallback(() => {
-    setMarchModePickOpen(false);
-    if (battleUiMode === BATTLE_UI_MODE_MARCH_PICK) {
+  const closeSpacingPick = useCallback(() => {
+    setSpacingPickOpen(false);
+    if (battleUiMode === BATTLE_UI_MODE_SPACING_PICK) {
       setBattleUiMode(BATTLE_UI_MODE_NONE);
       setClockPaused(false);
     }
-  }, [battleUiMode, setBattleUiMode, setClockPaused, setMarchModePickOpen]);
+  }, [battleUiMode, setBattleUiMode, setClockPaused, setSpacingPickOpen]);
 
   const executeBattleAction = useCallback((squadId, actionId, payload = null) => {
     const runtime = runtimeRef.current;
@@ -131,8 +131,8 @@ export default function useBattleActions({
     if (!squad) return;
     const popupPos = resolvePopupPos(payload, { x: Number(squad.x) || 0, y: Number(squad.y) || 0 });
 
-    if (actionId !== 'marchMode') {
-      closeMarchModePick();
+    if (actionId !== 'formationSpacing') {
+      closeSpacingPick();
     }
     if (actionId !== 'skills') {
       closeSkillPick();
@@ -145,10 +145,10 @@ export default function useBattleActions({
       setClockPaused(true);
       return;
     }
-    if (actionId === 'marchMode') {
-      setBattleUiMode(BATTLE_UI_MODE_MARCH_PICK);
-      setMarchModePickOpen(true);
-      setMarchPopupPos(popupPos);
+    if (actionId === 'formationSpacing') {
+      setBattleUiMode(BATTLE_UI_MODE_SPACING_PICK);
+      setSpacingPickOpen(true);
+      setSpacingPopupPos(popupPos);
       setClockPaused(true);
       return;
     }
@@ -182,15 +182,15 @@ export default function useBattleActions({
       syncBattleCards();
     }
   }, [
-    closeMarchModePick,
+    closeSpacingPick,
     closeSkillPick,
     resolvePopupPos,
     runtimeRef,
     selectBattleSquad,
     setBattleUiMode,
     setClockPaused,
-    setMarchModePickOpen,
-    setMarchPopupPos,
+    setSpacingPickOpen,
+    setSpacingPopupPos,
     setPendingPathPoints,
     setPlanningHoverPoint,
     setSkillConfirmState,
@@ -306,13 +306,13 @@ export default function useBattleActions({
     commitPathPlanning(true);
   }, [commitPathPlanning]);
 
-  const handlePickMarchMode = useCallback((mode) => {
+  const handlePickFormationSpacing = useCallback((spacing) => {
     const runtime = runtimeRef.current;
     if (!runtime || runtime.getPhase() !== 'battle' || !selectedSquadId) return;
-    runtime.commandMarchMode(selectedSquadId, mode);
+    runtime.commandFormationSpacing(selectedSquadId, spacing);
     syncBattleCards();
-    closeMarchModePick();
-  }, [closeMarchModePick, runtimeRef, selectedSquadId, syncBattleCards]);
+    closeSpacingPick();
+  }, [closeSpacingPick, runtimeRef, selectedSquadId, syncBattleCards]);
 
   return {
     syncBattleCards,
@@ -320,13 +320,13 @@ export default function useBattleActions({
     closeSkillConfirm,
     closeSkillPick,
     commitPathPlanning,
-    closeMarchModePick,
+    closeSpacingPick,
     executeBattleAction,
     handleSetSpeedMode,
     handleCycleSpeedMode,
     handleBattleActionClick,
     handleSkillPick,
     handleFinishPathPlanning,
-    handlePickMarchMode
+    handlePickFormationSpacing
   };
 }

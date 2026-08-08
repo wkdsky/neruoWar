@@ -1,8 +1,9 @@
-import React, { useState } from 'react';
-import { ArrowUpDown, Ban, Bot, Trash2, User } from 'lucide-react';
+import React, { useEffect, useRef, useState } from 'react';
+import { ArrowUpDown, Ban, Bot, Pencil, Plus, Trash2, User, UserPlus } from 'lucide-react';
 import DeployActionButtons from './DeployActionButtons';
 import BattleActionButtons from './BattleActionButtons';
 import TrainingSkillSlots from './TrainingSkillSlots';
+import BattleFormationSlots from './BattleFormationSlots';
 import { normalizeTemplateUnits } from '../../screens/battleSceneUtils';
 
 const iconByClass = {
@@ -31,6 +32,56 @@ const cardSizeClassByCount = (count = 0) => {
   return 'is-large';
 };
 
+const normalizeMetricValue = (value = 0) => Math.max(0, Math.floor(Number(value) || 0));
+
+const TrainingMetric = ({
+  id,
+  label,
+  value,
+  displayValue = value,
+  trackerId,
+  tone = 'neutral'
+}) => {
+  const normalizedValue = normalizeMetricValue(value);
+  const previousRef = useRef({ trackerId, value: normalizedValue });
+  const sequenceRef = useRef(0);
+  const [delta, setDelta] = useState(null);
+
+  useEffect(() => {
+    const previous = previousRef.current;
+    if (previous.trackerId !== trackerId) {
+      previousRef.current = { trackerId, value: normalizedValue };
+      setDelta(null);
+      return undefined;
+    }
+
+    const change = normalizedValue - previous.value;
+    previousRef.current = { trackerId, value: normalizedValue };
+    if (change === 0) return undefined;
+
+    sequenceRef.current += 1;
+    setDelta({ value: change, key: sequenceRef.current });
+    const clearId = window.setTimeout(() => setDelta(null), 980);
+    return () => window.clearTimeout(clearId);
+  }, [normalizedValue, trackerId]);
+
+  const deltaClassName = delta?.value > 0 ? 'is-gain' : 'is-loss';
+  return (
+    <span
+      className={`pve2-training-metric is-${tone} ${delta ? deltaClassName : ''}`}
+      data-training-metric={id}
+    >
+      <span className="pve2-training-metric-label">{label}</span>
+      <strong className="pve2-training-metric-value">{displayValue}</strong>
+      {delta ? (
+        <span className={`pve2-training-metric-delta ${deltaClassName}`} key={delta.key} aria-live="polite">
+          {delta.value > 0 ? `+${delta.value}` : String(delta.value)}
+        </span>
+      ) : null}
+    </span>
+  );
+};
+
 const SquadCards = ({
   squads = [],
   phase = 'deploy',
@@ -48,14 +99,18 @@ const SquadCards = ({
   onBattleControlModeToggle,
   onReorder,
   onPlacementAction,
-  onSkillSlotsChange,
   onOpenSkillTree,
   onCastSkillSlot,
+  onFormationPick,
+  onFormationReorder,
+  trainingSkillTreeOpen = false,
+  trainingSkillTreeSlotIndex = -1,
   trainingState = null,
   armyTemplates = [],
   armyTemplatesLoading = false,
   armyTemplatesError = '',
   onTemplateFill,
+  onTemplateCreate,
   onTemplateEdit,
   onTemplateDelete,
   isTrainingMode = false,
@@ -94,39 +149,49 @@ const SquadCards = ({
         onClick={(event) => event.stopPropagation()}
       >
         <div className="pve2-template-row">
-          <button
-            type="button"
-            className="pve2-template-row-main"
-            disabled={disabled}
-            onClick={() => onTemplateFill?.(template, 'attacker')}
-          >
+          <div className="pve2-template-row-main">
             <span className="pve2-template-meta">
               <strong>{template?.name || '未命名模板'}</strong>
-              <span>模板占比 100%</span>
+              {!isTrainingMode ? <span>模板占比 100%</span> : null}
               <em>{templateSummary || '无兵种配置'}</em>
             </span>
-            <span className="pve2-template-direct">根据模板创建部队</span>
-          </button>
-          {isTrainingMode && (onTemplateEdit || onTemplateDelete) ? (
+          </div>
+          {onTemplateFill || (isTrainingMode && (onTemplateEdit || onTemplateDelete)) ? (
             <div className="pve2-template-row-actions">
-              {onTemplateEdit ? (
+              {onTemplateFill ? (
+                <button
+                  type="button"
+                  className="pve2-template-action create"
+                  disabled={disabled}
+                  title="从模板创建部队"
+                  aria-label="从模板创建部队"
+                  onClick={() => onTemplateFill(template, 'attacker')}
+                >
+                  <UserPlus size={14} aria-hidden="true" />
+                </button>
+              ) : null}
+              {isTrainingMode && onTemplateEdit ? (
                 <button
                   type="button"
                   className="pve2-template-action edit"
                   disabled={disabled}
+                  title="编辑模板"
+                  aria-label="编辑模板"
                   onClick={() => onTemplateEdit(template)}
                 >
-                  编辑模板
+                  {isTrainingMode ? <Pencil size={14} aria-hidden="true" /> : '编辑模板'}
                 </button>
               ) : null}
-              {onTemplateDelete ? (
+              {isTrainingMode && onTemplateDelete ? (
                 <button
                   type="button"
                   className="pve2-template-action delete"
                   disabled={disabled}
+                  title="删除模板"
+                  aria-label="删除模板"
                   onClick={() => onTemplateDelete(template)}
                 >
-                  删除模板
+                  {isTrainingMode ? <Trash2 size={14} aria-hidden="true" /> : '删除模板'}
                 </button>
               ) : null}
             </div>
@@ -252,12 +317,105 @@ const SquadCards = ({
             ) : null}
           </div>
         </div>
-        <div className="pve2-card-row">{row.remain}/{row.startCount}</div>
-        <div className="pve2-card-row">{row.action || '待命'}</div>
+        {isTrainingMode ? (
+          <div className="pve2-card-row pve2-card-row-compact">
+            <span>{row.remain}/{row.startCount}</span>
+            <span>{row.action || '待命'}</span>
+          </div>
+        ) : (
+          <>
+            <div className="pve2-card-row">{row.remain}/{row.startCount}</div>
+            <div className="pve2-card-row">{row.action || '待命'}</div>
+          </>
+        )}
       </button>
       {renderTrainingControls(row)}
     </div>
   );
+
+  const renderTrainingSelectedPanel = () => {
+    if (!selectedRow || !isTrainingMode) return null;
+    const isBattle = phase === 'battle';
+    const renderPanelEvents = {
+      onPointerDown: (event) => event.stopPropagation(),
+      onMouseDown: (event) => event.stopPropagation(),
+      onClick: (event) => event.stopPropagation()
+    };
+    return (
+      <section
+        className={`pve2-training-squad-panel is-${selectedRow.team} ${isBattle ? 'is-runtime' : ''}`}
+        aria-label="当前选中部队信息与技能"
+        {...renderPanelEvents}
+      >
+        <div className="pve2-training-squad-meta-row">
+          <span className="pve2-training-squad-class" title={labelByClass[selectedRow.classTag] || '部队'}>
+            {iconByClass[selectedRow.classTag] || '兵'}
+          </span>
+          <strong title={selectedRow.name}>{selectedRow.name}</strong>
+          <span className={`pve2-training-squad-team is-${selectedRow.team}`}>
+            {selectedRow.team === 'attacker' ? '我方' : '敌方'}
+          </span>
+          <TrainingMetric
+            key={`${selectedRow.id}:troops`}
+            id="troops"
+            label="兵力"
+            value={selectedRow.remain}
+            displayValue={`${selectedRow.remain}/${selectedRow.startCount}`}
+            trackerId={`${selectedRow.id}:troops`}
+            tone="troops"
+          />
+          <TrainingMetric
+            key={`${selectedRow.id}:skill-points`}
+            id="skill-points"
+            label="技能点"
+            value={trainingState?.points}
+            displayValue={Math.max(0, Number(trainingState?.points) || 0)}
+            trackerId={`${selectedRow.id}:skill-points`}
+            tone="points"
+          />
+          <span className="pve2-training-squad-formation" title={selectedRow.formationName || '默认阵型'}>
+            {selectedRow.formationName || '默认阵型'}
+          </span>
+          <span className="pve2-training-squad-action">{selectedRow.action || '待命'}</span>
+          {canShowDeployActions ? (
+            <DeployActionButtons
+              layout="line"
+              onInfo={(event) => onDeployInfo?.(selectedRow.id, event)}
+              onMove={(event) => onDeployMove?.(selectedRow.id, event)}
+              onEdit={(event) => onDeployEdit?.(selectedRow.id, event)}
+              onFormation={isTrainingMode ? undefined : (event) => onDeployFormation?.(selectedRow.id, event)}
+              onDelete={(event) => onDeployDelete?.(selectedRow.id, event)}
+              showDelete={false}
+            />
+          ) : null}
+        </div>
+        <div className="pve2-training-squad-skill-row">
+          {phase === 'deploy' && isTrainingMode ? (
+            <BattleFormationSlots
+              formations={selectedRow.templateFormations}
+              activeFormationId={selectedRow.activeFormationId || selectedRow.formationId}
+              editable={isTrainingMode}
+              disabled={disabled}
+              onPick={(formation) => onFormationPick?.(selectedRow.id, formation)}
+              onReorder={(formations) => onFormationReorder?.(selectedRow.id, formations)}
+            />
+          ) : null}
+          <TrainingSkillSlots
+            unitCategories={selectedRow.unitCategories}
+            skillSlots={selectedRow.skillSlots}
+            skills={isBattle ? selectedRow.skills : []}
+            phase={phase}
+            isTrainingMode={isTrainingMode}
+            trainingState={trainingState}
+            treeOpenSlotIndex={trainingSkillTreeOpen ? trainingSkillTreeSlotIndex : -1}
+            onOpenTree={(slotIndex, treeCategory, event) => onOpenSkillTree?.(selectedRow.id, slotIndex, treeCategory, event)}
+            onCastSlot={(slotIndex, event) => onCastSkillSlot?.(selectedRow.id, slotIndex, event)}
+            disabled={phase === 'deploy' ? !canConfigureSkills : false}
+          />
+        </div>
+      </section>
+    );
+  };
 
   return (
     <>
@@ -267,9 +425,22 @@ const SquadCards = ({
           aria-label="部队模板"
           onWheelCapture={(event) => event.stopPropagation()}
         >
-          <div className="pve2-template-strip-title">
-            <strong>部队模板</strong>
-            <span>{isTrainingMode ? '选择模板后，再选择我方或敌方创建训练部队' : '选择模板后创建我方参战部队'}</span>
+          <div className="pve2-template-strip-heading">
+            <div className="pve2-template-strip-title">
+              <strong>部队模板</strong>
+            </div>
+            {isTrainingMode && onTemplateCreate ? (
+              <button
+                type="button"
+                className="pve2-template-create-button"
+                disabled={disabled}
+                title="创建部队模板"
+                aria-label="创建部队模板"
+                onClick={onTemplateCreate}
+              >
+                <Plus size={15} aria-hidden="true" />
+              </button>
+            ) : null}
           </div>
           <div className="pve2-template-list">
             {armyTemplatesLoading ? (
@@ -299,11 +470,13 @@ const SquadCards = ({
       >
         {defender.map(renderCard)}
       </div>
-      {selectedRow ? (
+      {renderTrainingSelectedPanel()}
+      {!isTrainingMode && selectedRow ? (
         <section
-          className={`pve2-selected-squad-panel is-${selectedRow.team} ${phase === 'battle' && isTrainingMode ? 'is-runtime' : ''}`}
+          className={`pve2-selected-squad-panel is-${selectedRow.team}`}
           aria-label="当前选中部队信息"
           onPointerDown={(event) => event.stopPropagation()}
+          onMouseDown={(event) => event.stopPropagation()}
           onClick={(event) => event.stopPropagation()}
         >
           <header className="pve2-selected-squad-head">
@@ -355,18 +528,15 @@ const SquadCards = ({
                     onInfo={(event) => onDeployInfo?.(selectedRow.id, event)}
                     onMove={(event) => onDeployMove?.(selectedRow.id, event)}
                     onEdit={(event) => onDeployEdit?.(selectedRow.id, event)}
-                    onFormation={(event) => onDeployFormation?.(selectedRow.id, event)}
+                    onFormation={isTrainingMode ? undefined : (event) => onDeployFormation?.(selectedRow.id, event)}
                     onDelete={(event) => onDeployDelete?.(selectedRow.id, event)}
-                    deleteTitle={isTrainingMode
-                      ? (selectedRow.placed !== false ? '取消放置' : '删除训练部队')
-                      : '删除'}
-                    deleteAriaLabel={isTrainingMode
-                      ? (selectedRow.placed !== false ? '取消放置' : '删除训练部队')
-                      : '删除'}
+                    showDelete
+                    deleteTitle="删除"
+                    deleteAriaLabel="删除"
                   />
                 </div>
               ) : null}
-              {canShowBattleActions && !isTrainingMode ? (
+              {canShowBattleActions ? (
                 <div className="pve2-selected-squad-actions">
                   <span>战斗指令</span>
                   <BattleActionButtons
@@ -378,22 +548,6 @@ const SquadCards = ({
                 </div>
               ) : null}
             </div>
-            {isTrainingMode ? (
-              <TrainingSkillSlots
-                unitCategories={selectedRow.unitCategories}
-                skillSlots={selectedRow.skillSlots}
-                skills={phase === 'battle' ? selectedRow.skills : []}
-                phase={phase}
-                isTrainingMode={isTrainingMode}
-                trainingState={trainingState}
-                onOpenTree={(slotIndex, treeCategory, event) => onOpenSkillTree?.(selectedRow.id, slotIndex, treeCategory, event)}
-                onCastSlot={(slotIndex, event) => onCastSkillSlot?.(selectedRow.id, slotIndex, event)}
-                onChange={canConfigureSkills
-                  ? (skillSlots) => onSkillSlotsChange?.(selectedRow.id, skillSlots)
-                  : undefined}
-                disabled={phase === 'deploy' ? !canConfigureSkills : false}
-              />
-            ) : null}
           </div>
         </section>
       ) : null}

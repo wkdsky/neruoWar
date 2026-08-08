@@ -1,7 +1,7 @@
 import { useCallback } from 'react';
 import {
   BATTLE_UI_MODE_GUARD,
-  BATTLE_UI_MODE_MARCH_PICK,
+  BATTLE_UI_MODE_SPACING_PICK,
   BATTLE_UI_MODE_NONE,
   BATTLE_UI_MODE_PATH,
   BATTLE_UI_MODE_SKILL_CONFIRM,
@@ -35,7 +35,7 @@ export default function useBattleEscapeHandler({
   commitPathPlanning,
   setBattleUiMode,
   setSkillPopupSquadId,
-  setMarchModePickOpen,
+  setSpacingPickOpen,
   setClockPaused,
   setWorldActionsVisibleForSquadId,
   setAimState,
@@ -80,10 +80,10 @@ export default function useBattleEscapeHandler({
       commitPathPlanning(false);
       return;
     }
-    if (battleUiMode === BATTLE_UI_MODE_MARCH_PICK || battleUiMode === BATTLE_UI_MODE_SKILL_PICK || battleUiMode === BATTLE_UI_MODE_GUARD) {
+    if (battleUiMode === BATTLE_UI_MODE_SPACING_PICK || battleUiMode === BATTLE_UI_MODE_SKILL_PICK || battleUiMode === BATTLE_UI_MODE_GUARD) {
       setBattleUiMode(BATTLE_UI_MODE_NONE);
       setSkillPopupSquadId('');
-      setMarchModePickOpen(false);
+      setSpacingPickOpen(false);
       setClockPaused(false);
       return;
     }
@@ -118,7 +118,7 @@ export default function useBattleEscapeHandler({
     setDeployNotice,
     setDeployDraggingGroup,
     setDeployInfoState,
-    setMarchModePickOpen,
+    setSpacingPickOpen,
     setSkillPopupSquadId,
     setWorldActionsVisibleForSquadId,
     onRecallDeployDraggingGroup,

@@ -75,13 +75,13 @@ const DeployGroupInfoPanel = ({
 
   const initialPanelPosition = useMemo(() => ({
     x: (Number(position?.x) || 120) + 14,
-    y: (Number(position?.y) || 120) - 14
+    y: Math.max(56, (Number(position?.y) || 120) - 340)
   }), [position?.x, position?.y]);
 
   const { panelRef, panelStyle, handleHeaderPointerDown } = useDraggablePanel({
     open,
     initialPosition: initialPanelPosition,
-    defaultSize: { width: 560, height: 420 }
+    defaultSize: { width: 340, height: 300 }
   });
 
   if (!open || !info) return null;
@@ -192,16 +192,12 @@ const DeployGroupInfoPanel = ({
         <h4>部队属性</h4>
         <div className="pve2-deploy-info-rows">
           <div className="pve2-deploy-info-row">
-            <span>整体行进(B)</span>
+            <span>统一行进速度</span>
             <em>{formatNumber(info?.mobility?.cohesiveSpeed, 2)}</em>
           </div>
           <div className="pve2-deploy-info-row">
-            <span>游离行进(C)</span>
-            <em>
-              {(Array.isArray(info?.mobility?.perTypeLoose) ? info.mobility.perTypeLoose : [])
-                .map((row) => `${row.unitName} ${formatNumber(row.speed, 2)}`)
-                .join(' / ') || formatNumber(info?.mobility?.looseSpeed, 2)}
-            </em>
+            <span>默认士兵间距</span>
+            <em>标准（沿用部署阵型）</em>
           </div>
           <div className="pve2-deploy-info-row">
             <span>攻击力</span>

@@ -12,6 +12,7 @@ import {
   triggerCrowdSkill
 } from '../../simulation/crowd/CrowdSim';
 import { degToRad, normalizeDeg } from '../../shared/angle';
+import { limitNameByDisplayWidth } from '../../shared/nameLimits';
 import { buildBattleSummary } from './BattleSummary';
 import {
   buildRepConfig,
@@ -33,6 +34,7 @@ import {
   getAllowedSkillTreeCategories,
   getSkillById,
   getSkillCooldownSeconds,
+  getSkillTreeFirstActiveSkill,
   getSkillTreeById,
   getSkillUnlockCost,
   normalizeSkillSlots,
@@ -58,8 +60,9 @@ const ORDER_CHARGE = 'CHARGE';
 const SPEED_MODE_B = 'B_HARMONIC';
 const SPEED_MODE_C = 'C_PER_TYPE';
 const SPEED_MODE_AUTO = 'AUTO';
-const MARCH_MODE_COHESIVE = 'cohesive';
-const MARCH_MODE_LOOSE = 'loose';
+const FORMATION_SPACING_LOOSE = 'loose';
+const FORMATION_SPACING_STANDARD = 'standard';
+const FORMATION_SPACING_COMPACT = 'compact';
 const SPEED_AUTH_USER = 'USER';
 const SPEED_AUTH_AI = 'AI';
 const CONTROL_MODE_USER = 'USER';
@@ -68,6 +71,7 @@ const SPEED_POLICY_MARCH = 'MARCH';
 const SPEED_POLICY_RETREAT = 'RETREAT';
 const SPEED_POLICY_REFORM = 'REFORM';
 const CAMERA_DEAD_ZONE = 0.9;
+const EMPTY_CAMERA_ANCHOR = Object.freeze({ x: 0, y: 0, vx: 0, vy: 0, squadId: '', team: '' });
 const SKILL_COOLDOWN_BY_CLASS = {
   infantry: 2.1,
   cavalry: 2.8,
@@ -122,6 +126,7 @@ const DEPLOY_FORMATION_RATIO_MAX = 6;
 const DEPLOY_FORMATION_MIN_EDGE = 8;
 const DEPLOY_FORMATION_MAX_EDGE_MUL = 5.8;
 const TEMPLATE_FORMATION_CELL_SPACING = 13;
+const MAX_DEPLOY_TEMPLATE_FORMATIONS = 9;
 
 const clamp = (value, min, max) => Math.min(max, Math.max(min, value));
 const cloneJsonValue = (value, fallback = null) => {
@@ -150,6 +155,11 @@ const normalizeTrainingSkillPointInterval = (value) => {
   return TRAINING_SKILL_POINT_INTERVALS.reduce((closest, candidate) => (
     Math.abs(candidate - requested) < Math.abs(closest - requested) ? candidate : closest
   ), TRAINING_SKILL_POINT_INTERVALS[0]);
+};
+
+const normalizeFormationSpacing = (value) => {
+  if (value === FORMATION_SPACING_LOOSE || value === FORMATION_SPACING_COMPACT) return value;
+  return FORMATION_SPACING_STANDARD;
 };
 const clampToRange = (value, min, max) => {
   const safeMin = Number(min) || 0;
@@ -241,8 +251,8 @@ const inferClassFromUnitType = (unitType = {}) => {
 
 const resolveSkillTreeCategoryFromUnitType = (unitType = {}) => {
   const category = typeof unitType?.unitCategory === 'string'
-    ? unitType.unitCategory.trim()
-    : (typeof unitType?.rpsType === 'string' ? unitType.rpsType.trim() : '');
+    ? unitType.unitCategory.trim().toLowerCase()
+    : (typeof unitType?.rpsType === 'string' ? unitType.rpsType.trim().toLowerCase() : '');
   return category === 'ranged' || category === 'support' ? category : 'melee';
 };
 
@@ -253,6 +263,24 @@ const getGroupSkillTreeCategories = (units = {}, unitTypeMap = new Map()) => (
     ))
   )
 );
+
+const buildDefaultTrainingSkillSlots = (units = {}, unitTypeMap = new Map()) => {
+  const categories = getGroupSkillTreeCategories(units, unitTypeMap);
+  if (categories.length <= 0) return normalizeSkillSlots([]);
+  const selectedCategories = categories.length >= 3
+    ? categories.slice(0, 3)
+    : categories.length === 2
+      ? [categories[0], categories[0], categories[1]]
+      : [categories[0], categories[0], categories[0]];
+
+  const slots = selectedCategories.map((treeCategory, slotIndex) => ({
+    slotIndex,
+    treeCategory,
+    skillId: getSkillTreeFirstActiveSkill(treeCategory)?.id || '',
+    cooldownRemain: 0
+  }));
+  return normalizeSkillSlots(slots);
+};
 
 const aggregateStats = (unitsMap = {}, unitTypeMap = new Map()) => {
   const rows = Object.entries(unitsMap || {}).filter(([unitTypeId, count]) => unitTypeMap.has(unitTypeId) && count > 0);
@@ -737,7 +765,6 @@ const buildDeployGroupInfo = (group = null, unitTypeMap = new Map(), repConfig =
   };
   let totalAtk = 0;
   let speedReciprocalSum = 0;
-  let looseSpeed = 0;
   let hasRanged = false;
   let hasMelee = false;
 
@@ -747,7 +774,6 @@ const buildDeployGroupInfo = (group = null, unitTypeMap = new Map(), repConfig =
     const safeSpeed = Math.max(0.2, Number(row.speed) || 1);
     totalAtk += safeAtk * safeCount;
     speedReciprocalSum += safeCount / safeSpeed;
-    looseSpeed = Math.max(looseSpeed, safeSpeed);
     if (row.roleTag === '远程' || row.range >= 2.2) hasRanged = true;
     if (row.roleTag === '近战' || row.range < 2.2) hasMelee = true;
     classSummary[row.classTag].count += safeCount;
@@ -783,19 +809,13 @@ const buildDeployGroupInfo = (group = null, unitTypeMap = new Map(), repConfig =
   return {
     groupId: String(group?.id || ''),
     team: group?.team === TEAM_DEFENDER ? TEAM_DEFENDER : TEAM_ATTACKER,
-    name: String(group?.name || '未命名部队'),
+    name: limitNameByDisplayWidth(String(group?.name || '未命名部队')) || '未命名部队',
     totalCount: Math.max(0, Math.round(totalCount)),
     composition,
     skillSlots: normalizeSkillSlots(group?.skillSlots),
     skills,
     mobility: {
-      cohesiveSpeed: speedReciprocalSum > 0 ? (totalCount / speedReciprocalSum) : 1,
-      looseSpeed: Math.max(0.2, looseSpeed || 1),
-      perTypeLoose: composition.map((row) => ({
-        unitTypeId: row.unitTypeId,
-        unitName: row.unitName,
-        speed: Math.max(0.2, Number(row.speed) || 1)
-      }))
+      cohesiveSpeed: speedReciprocalSum > 0 ? (totalCount / speedReciprocalSum) : 1
     },
     attack: {
       totalAtk,
@@ -805,6 +825,69 @@ const buildDeployGroupInfo = (group = null, unitTypeMap = new Map(), repConfig =
         ...(hasRanged ? ['远'] : [])
       ]
     }
+  };
+};
+
+const resolveFormationName = (source = {}) => {
+  const directName = String(source?.formationRect?.formationName || '').trim();
+  if (directName) return directName;
+  const activeId = String(source?.activeFormationId || '').trim();
+  const templateFormation = (Array.isArray(source?.templateFormations) ? source.templateFormations : [])
+    .find((formation) => String(formation?.formationId || formation?.id || '').trim() === activeId)
+    || (Array.isArray(source?.templateFormations) ? source.templateFormations[0] : null);
+  return String(templateFormation?.name || '').trim() || '默认阵型';
+};
+
+const buildCardComposition = (remainUnits = {}, startUnits = {}, unitTypeMap = new Map()) => {
+  const remainMap = normalizeUnitsMap(remainUnits || {});
+  const startMap = normalizeUnitsMap(startUnits || remainUnits || {});
+  const unitTypeIds = Array.from(new Set([...Object.keys(startMap), ...Object.keys(remainMap)]));
+  return unitTypeIds
+    .map((unitTypeId) => {
+      const unitType = unitTypeMap.get(unitTypeId) || {};
+      const startCount = Math.max(0, Math.round(Number(startMap[unitTypeId]) || 0));
+      const count = Math.max(0, Math.round(Number(remainMap[unitTypeId]) || 0));
+      return {
+        unitTypeId,
+        unitName: unitType?.name || unitTypeId,
+        classTag: inferClassFromUnitType(unitType),
+        count,
+        startCount,
+        percent: startCount > 0 ? (count / startCount) * 100 : 0
+      };
+    })
+    .filter((row) => row.startCount > 0 || row.count > 0)
+    .sort((left, right) => right.count - left.count || left.unitName.localeCompare(right.unitName, 'zh-Hans-CN'));
+};
+
+const buildCardDetails = (source = {}, unitTypeMap = new Map(), isBattle = false) => {
+  const startUnits = normalizeUnitsMap(source?.units || {});
+  const remainUnits = isBattle
+    ? normalizeUnitsMap(source?.remainUnits || startUnits)
+    : startUnits;
+  const remainingMetrics = isBattle ? buildCompositionMetrics(remainUnits, unitTypeMap) : null;
+  const metrics = isBattle
+    ? {
+      totalHp: Math.max(0, Math.round(Number(source?.health) || remainingMetrics?.totalHp || 0)),
+      totalAtk: Math.max(0, Math.round(remainingMetrics?.totalAtk || ((Number(source?.stats?.atk) || 0) * (Number(source?.remain) || 0)))),
+      totalDef: Math.max(0, Math.round(remainingMetrics?.totalDef || ((Number(source?.stats?.def) || 0) * (Number(source?.remain) || 0)))),
+      cohesiveSpeed: Math.max(0, Number(remainingMetrics?.cohesiveSpeed) || Number(source?.stats?.speed) || 0),
+      range: Math.max(0, Number(remainingMetrics?.range) || Number(source?.stats?.range) || 0)
+    }
+    : (buildCompositionMetrics(startUnits, unitTypeMap) || {});
+  return {
+    unitComposition: buildCardComposition(remainUnits, startUnits, unitTypeMap),
+    formationName: resolveFormationName(source),
+    formationId: String(source?.formationRect?.formationId || source?.activeFormationId || '').trim(),
+    unitMetrics: metrics,
+    formationRect: source?.formationRect && typeof source.formationRect === 'object'
+      ? {
+        width: Math.max(0, Number(source.formationRect.width) || 0),
+        depth: Math.max(0, Number(source.formationRect.depth) || 0),
+        spacing: Math.max(0, Number(source.formationRect.spacing) || 0)
+      }
+      : null,
+    templateName: limitNameByDisplayWidth(String(source?.templateName || '').trim())
   };
 };
 
@@ -1082,7 +1165,7 @@ const buildDeployGroupFormationState = (group = {}, team = TEAM_ATTACKER, repCon
   };
 };
 
-const buildSavedDeployGroups = (deployUnits, team, field, unitTypeMap) => {
+const buildSavedDeployGroups = (deployUnits, team, field, unitTypeMap, { defaultSkillSlots = false } = {}) => {
   const safeTeam = team === TEAM_DEFENDER ? TEAM_DEFENDER : TEAM_ATTACKER;
   const source = (Array.isArray(deployUnits) ? deployUnits : [])
     .map((rawGroup, sourceIndex) => ({ rawGroup, sourceIndex }))
@@ -1116,15 +1199,17 @@ const buildSavedDeployGroups = (deployUnits, team, field, unitTypeMap) => {
       controlMode: rawGroup?.controlMode === CONTROL_MODE_AI || rawGroup?.controlMode === CONTROL_MODE_USER
         ? rawGroup.controlMode
         : (safeTeam === TEAM_DEFENDER ? CONTROL_MODE_AI : CONTROL_MODE_USER),
-      name: String(rawGroup?.name || rawGroup?.templateName || `${safeTeam === TEAM_DEFENDER ? '敌方' : '我方'}部队${index + 1}`).trim(),
+      name: limitNameByDisplayWidth(String(rawGroup?.name || rawGroup?.templateName || `${safeTeam === TEAM_DEFENDER ? '敌方' : '我方'}部队${index + 1}`).trim()),
       units,
       templateId: String(rawGroup?.templateId || '').trim(),
-      templateName: String(rawGroup?.templateName || '').trim(),
+      templateName: limitNameByDisplayWidth(String(rawGroup?.templateName || '').trim()),
       templateFormations: Array.isArray(rawGroup?.templateFormations)
-        ? rawGroup.templateFormations.map((formation) => ({ ...formation }))
+        ? rawGroup.templateFormations.slice(0, MAX_DEPLOY_TEMPLATE_FORMATIONS).map((formation) => ({ ...formation }))
         : [],
       activeFormationId: String(rawGroup?.activeFormationId || '').trim(),
-      skillSlots: Array.isArray(rawGroup?.skillSlots) ? rawGroup.skillSlots.map((slot) => ({ ...slot })) : [],
+      skillSlots: Array.isArray(rawGroup?.skillSlots)
+        ? rawGroup.skillSlots.slice(0, 3).map((slot) => ({ ...slot }))
+        : (defaultSkillSlots ? buildDefaultTrainingSkillSlots(units, unitTypeMap) : []),
       formationRect: rawGroup?.formationRect && typeof rawGroup.formationRect === 'object'
         ? { ...rawGroup.formationRect }
         : undefined,
@@ -1139,7 +1224,13 @@ const buildSavedDeployGroups = (deployUnits, team, field, unitTypeMap) => {
 };
 
 
-const buildDefenderDeployGroups = (defenderUnits, defenderDeployments, field, unitTypeMap) => {
+const buildDefenderDeployGroups = (
+  defenderUnits,
+  defenderDeployments,
+  field,
+  unitTypeMap,
+  { defaultSkillSlots = false } = {}
+) => {
   const availableMap = new Map(
     Object.entries(normalizeUnitsList(defenderUnits)).map(([unitTypeId, count]) => [
       unitTypeId,
@@ -1176,10 +1267,15 @@ const buildDefenderDeployGroups = (defenderUnits, defenderDeployments, field, un
     groups.push({
       id: `def_${deploy?.deployId || (index + 1)}`,
       team: TEAM_DEFENDER,
-      name: (typeof deploy?.name === 'string' && deploy.name.trim()) ? deploy.name.trim() : `守军${index + 1}`,
+      name: limitNameByDisplayWidth(
+        (typeof deploy?.name === 'string' && deploy.name.trim()) ? deploy.name.trim() : `守军${index + 1}`
+      ),
       units: assigned,
       x: clampXToDeployZone(Number(deploy?.x) || 0, field.width, 0, TEAM_DEFENDER),
       y: clamp(Number(deploy?.y) || 0, -field.height / 2, field.height / 2),
+      skillSlots: Array.isArray(deploy?.skillSlots)
+        ? deploy.skillSlots.slice(0, 3).map((slot) => ({ ...slot }))
+        : (defaultSkillSlots ? buildDefaultTrainingSkillSlots(assigned, unitTypeMap) : []),
       formationRect: Number.isFinite(deployRotationDeg)
         ? { facingRad: degToRad(normalizeDeg(deployRotationDeg)) }
         : undefined,
@@ -1203,6 +1299,9 @@ const buildDefenderDeployGroups = (defenderUnits, defenderDeployments, field, un
         team: TEAM_DEFENDER,
         name: entry.unitName || entry.unitTypeId,
         units: { [entry.unitTypeId]: entry.count },
+        skillSlots: defaultSkillSlots
+          ? buildDefaultTrainingSkillSlots({ [entry.unitTypeId]: entry.count }, unitTypeMap)
+          : [],
         x,
         y,
         placed: true
@@ -1307,6 +1406,7 @@ const createSquad = ({
 
   return {
     id: `${team}_squad_${index + 1}`,
+    sourceDeployGroupId: String(group?.id || ''),
     name: group?.name || (team === TEAM_ATTACKER ? `我方${index + 1}` : `守军${index + 1}`),
     team,
     controlMode: group?.controlMode === CONTROL_MODE_AI || group?.controlMode === CONTROL_MODE_USER
@@ -1315,6 +1415,10 @@ const createSquad = ({
     sortOrder: Math.max(0, Math.floor(Number(group?.sortOrder) || index)),
     units,
     templateId: typeof group?.templateId === 'string' ? group.templateId : '',
+    templateFormations: Array.isArray(group?.templateFormations)
+      ? group.templateFormations.slice(0, MAX_DEPLOY_TEMPLATE_FORMATIONS).map((formation) => ({ ...formation }))
+      : [],
+    activeFormationId: String(group?.activeFormationId || group?.formationRect?.formationId || '').trim(),
     skillSlots: normalizeSkillSlots(group?.skillSlots),
     startCount,
     remain: startCount,
@@ -1397,7 +1501,7 @@ const createSquad = ({
     speedMode: SPEED_MODE_B,
     speedModeAuthority: SPEED_AUTH_AI,
     speedPolicy: SPEED_POLICY_MARCH,
-    marchMode: MARCH_MODE_COHESIVE,
+    formationSpacing: FORMATION_SPACING_STANDARD,
     reformUntil: 0,
     reformRadiusThreshold: Math.max(18, radius * 1.4),
     underAttackTimer: 0,
@@ -1520,15 +1624,23 @@ export default class BattleRuntime {
       attackerDeploySource,
       TEAM_ATTACKER,
       this.field,
-      this.unitTypeMap
+      this.unitTypeMap,
+      { defaultSkillSlots: this.isTrainingMode }
     );
     this.defenderDeployGroups = Array.isArray(this.initData?.defender?.deployUnits)
-      ? buildSavedDeployGroups(defenderDeploySource, TEAM_DEFENDER, this.field, this.unitTypeMap)
+      ? buildSavedDeployGroups(
+        defenderDeploySource,
+        TEAM_DEFENDER,
+        this.field,
+        this.unitTypeMap,
+        { defaultSkillSlots: this.isTrainingMode }
+      )
       : buildDefenderDeployGroups(
         defenderDeploySource,
         this.initData?.battlefield?.defenderDeployments || [],
         this.field,
-        this.unitTypeMap
+        this.unitTypeMap,
+        { defaultSkillSlots: this.isTrainingMode }
       );
     this.attackerDeployGroups = this.attackerDeployGroups.map((group) => this.hydrateDeployGroupFormation(group, TEAM_ATTACKER));
     this.defenderDeployGroups = this.defenderDeployGroups.map((group) => this.hydrateDeployGroupFormation(group, TEAM_DEFENDER));
@@ -1537,7 +1649,8 @@ export default class BattleRuntime {
     const trainingConfig = this.initData?.training && typeof this.initData.training === 'object'
       ? this.initData.training
       : {};
-    this.trainingSkillPoints = Math.max(0, Math.floor(Number(trainingConfig.skillPoints) || 0));
+    // A training session always enters preparation with no earned points.
+    this.trainingSkillPoints = 0;
     this.trainingSkillPointIntervalSec = normalizeTrainingSkillPointInterval(
       trainingConfig.skillPointIntervalSec
         ?? this.initData?.rules?.skillPointIntervalSec
@@ -1549,6 +1662,7 @@ export default class BattleRuntime {
     this.trainingInitialSnapshot = null;
 
     this.selectedDeploySquadId = '';
+    this.hoveredDeploySquadId = '';
     this.focusSquadId = '';
     this.selectedBattleSquadId = '';
 
@@ -1759,7 +1873,10 @@ export default class BattleRuntime {
     this.phase = 'deploy';
     this.startedAtMs = 0;
     this.endedAtMs = 0;
+    this.selectedDeploySquadId = '';
     this.selectedBattleSquadId = '';
+    this.focusSquadId = '';
+    this.hoveredDeploySquadId = '';
     this.trainingSessionActive = false;
     this.updateCameraAnchor(0);
     return { ok: true, state: this.getTrainingState() };
@@ -1781,9 +1898,23 @@ export default class BattleRuntime {
     this.selectedDeploySquadId = String(groupId || '');
   }
 
+  setHoveredDeployGroup(groupId = '') {
+    if (this.phase !== 'deploy') {
+      this.hoveredDeploySquadId = '';
+      return false;
+    }
+    const requestedId = String(groupId || '');
+    const group = requestedId ? this.getDeployGroupById(requestedId, TEAM_ANY) : null;
+    const nextId = group && group.placed !== false ? group.id : '';
+    if (this.hoveredDeploySquadId === nextId) return false;
+    this.hoveredDeploySquadId = nextId;
+    return true;
+  }
+
   clearSelection() {
     this.selectedDeploySquadId = '';
     this.selectedBattleSquadId = '';
+    this.hoveredDeploySquadId = '';
     this.focusSquadId = '';
   }
 
@@ -1826,6 +1957,43 @@ export default class BattleRuntime {
   getDeployGroupSkillSlots(groupId = '', team = TEAM_ANY) {
     const group = this.getDeployGroupById(groupId, team);
     return group ? normalizeSkillSlots(group.skillSlots) : normalizeSkillSlots([]);
+  }
+
+  getDeployGroupFormations(groupId = '', team = TEAM_ANY) {
+    const group = this.getDeployGroupById(groupId, team);
+    if (!group) return [];
+    return (Array.isArray(group.templateFormations) ? group.templateFormations : [])
+      .filter((formation) => formation && formation.legal !== false)
+      .slice(0, MAX_DEPLOY_TEMPLATE_FORMATIONS)
+      .map((formation, index) => ({
+        ...formation,
+        formationId: String(formation?.formationId || formation?.id || `formation_${index}`).trim()
+      }));
+  }
+
+  reorderDeployGroupFormations(groupId = '', orderedFormationIds = [], team = TEAM_ANY) {
+    if (this.phase !== 'deploy') return { ok: false, reason: '仅部署阶段可调整阵型快捷键' };
+    const group = this.getDeployGroupById(groupId, team);
+    if (!group) return { ok: false, reason: '未找到部队' };
+    const source = this.getDeployGroupFormations(group.id, group.team);
+    if (source.length <= 1) return { ok: true, formations: source };
+    const byId = new Map(source.map((formation) => [formation.formationId, formation]));
+    const requested = Array.isArray(orderedFormationIds) ? orderedFormationIds : [];
+    const next = [];
+    requested.forEach((id) => {
+      const safeId = String(id || '').trim();
+      const formation = byId.get(safeId);
+      if (!formation || next.some((item) => item.formationId === safeId)) return;
+      next.push(formation);
+    });
+    source.forEach((formation) => {
+      if (!next.some((item) => item.formationId === formation.formationId)) next.push(formation);
+    });
+    group.templateFormations = next.slice(0, MAX_DEPLOY_TEMPLATE_FORMATIONS).map((formation) => ({ ...formation }));
+    return {
+      ok: true,
+      formations: group.templateFormations.map((formation) => ({ ...formation }))
+    };
   }
 
   setDeployGroupSkillSlots(groupId = '', skillSlots = [], team = TEAM_ANY) {
@@ -1930,9 +2098,19 @@ export default class BattleRuntime {
       depth: normalizedRect.depth,
       spacing,
       facingRad: nextFacing,
-      slotCount
+      slotCount,
+      formationId: typeof partialRect?.formationId === 'string'
+        ? partialRect.formationId.trim()
+        : String(current.formationId || '').trim(),
+      formationName: typeof partialRect?.formationName === 'string'
+        ? partialRect.formationName.trim()
+        : String(current.formationName || '').trim()
     };
-    group.deploySlots = buildFormationSlots(slotCount, group.formationRect);
+    // A facing-only update must leave template coordinates untouched.  This
+    // is the path used by the deployment mouse wheel.
+    group.deploySlots = Array.isArray(group.deploySlots) && group.deploySlots.length > 0
+      ? normalizeDeploySlotsForCount(group.deploySlots, slotCount, group.formationRect)
+      : buildFormationSlots(slotCount, group.formationRect);
     return {
       ok: true,
       formationRect: { ...group.formationRect },
@@ -2033,7 +2211,7 @@ export default class BattleRuntime {
     templateName = '',
     templateFormations = [],
     activeFormationId = '',
-    skillSlots = []
+    skillSlots = undefined
   } = {}) {
     if (this.phase !== 'deploy') return { ok: false, reason: '仅部署阶段可新建部队' };
     const safeTeam = resolveTeamTag(team);
@@ -2074,9 +2252,11 @@ export default class BattleRuntime {
     );
     const candidateTypeId = Object.keys(nextUnits)[0] || '';
     const candidateName = this.unitTypeMap.get(candidateTypeId)?.name || candidateTypeId || '部队';
-    const groupName = (typeof name === 'string' && name.trim())
-      ? name.trim()
-      : `${candidateName}${targetGroups.length + 1}`;
+    const groupName = limitNameByDisplayWidth(
+      (typeof name === 'string' && name.trim())
+        ? name.trim()
+        : `${candidateName}${targetGroups.length + 1}`
+    ) || `部队${targetGroups.length + 1}`;
     const safeControlMode = controlMode === CONTROL_MODE_AI || controlMode === CONTROL_MODE_USER
       ? controlMode
       : (safeTeam === TEAM_DEFENDER ? CONTROL_MODE_AI : CONTROL_MODE_USER);
@@ -2102,12 +2282,14 @@ export default class BattleRuntime {
       name: groupName,
       units: nextUnits,
       templateId: typeof templateId === 'string' ? templateId.trim() : '',
-      templateName: typeof templateName === 'string' ? templateName.trim() : '',
+      templateName: typeof templateName === 'string' ? limitNameByDisplayWidth(templateName.trim()) : '',
       templateFormations: Array.isArray(templateFormations)
-        ? templateFormations.map((formation) => ({ ...formation }))
+        ? templateFormations.slice(0, MAX_DEPLOY_TEMPLATE_FORMATIONS).map((formation) => ({ ...formation }))
         : [],
       activeFormationId: typeof activeFormationId === 'string' ? activeFormationId.trim() : '',
-      skillSlots: normalizeSkillSlots(skillSlots),
+      skillSlots: skillSlots === undefined
+        ? (this.isTrainingMode ? buildDefaultTrainingSkillSlots(nextUnits, this.unitTypeMap) : normalizeSkillSlots([]))
+        : normalizeSkillSlots(skillSlots),
       x: safeX,
       y: safeY,
       placed: placed !== false,
@@ -2148,7 +2330,7 @@ export default class BattleRuntime {
       }
     }
     target.units = nextUnits;
-    if (typeof name === 'string' && name.trim()) target.name = name.trim();
+    if (typeof name === 'string' && name.trim()) target.name = limitNameByDisplayWidth(name.trim());
     this.hydrateDeployGroupFormation(target, safeTeam);
     this.setDeployGroupSkillSlots(target.id, skillSlots === null ? target.skillSlots : skillSlots, safeTeam);
     return { ok: true };
@@ -2165,6 +2347,7 @@ export default class BattleRuntime {
     if (this[listKey].length === prevLen) return { ok: false, reason: '未找到部队' };
     const fallbackId = this.attackerDeployGroups[0]?.id || this.defenderDeployGroups[0]?.id || '';
     if (this.selectedDeploySquadId === safeGroupId) this.selectedDeploySquadId = fallbackId;
+    if (this.hoveredDeploySquadId === safeGroupId) this.hoveredDeploySquadId = '';
     if (this.focusSquadId === safeGroupId) this.focusSquadId = fallbackId;
     return { ok: true };
   }
@@ -2176,6 +2359,7 @@ export default class BattleRuntime {
     if (!target) return false;
     target.placed = !!placed;
     target.placementActive = !target.placed;
+    if (!target.placed && this.hoveredDeploySquadId === target.id) this.hoveredDeploySquadId = '';
     return true;
   }
 
@@ -2186,6 +2370,7 @@ export default class BattleRuntime {
     if (!target) return { ok: false, reason: '未找到部队' };
     target.placed = false;
     target.placementActive = false;
+    if (this.hoveredDeploySquadId === target.id) this.hoveredDeploySquadId = '';
     return { ok: true };
   }
 
@@ -2299,6 +2484,9 @@ export default class BattleRuntime {
   }
 
   pickDeployGroup(worldPoint, team = TEAM_ANY, radius = 26) {
+    if (worldPoint?.valid === false || !Number.isFinite(Number(worldPoint?.x)) || !Number.isFinite(Number(worldPoint?.y))) {
+      return null;
+    }
     const safeTeam = typeof team === 'string' ? team.trim() : '';
     const targetGroups = safeTeam === TEAM_ATTACKER
       ? this.attackerDeployGroups
@@ -2314,9 +2502,22 @@ export default class BattleRuntime {
       const dy = (Number(group.y) || 0) - y;
       const dist = Math.hypot(dx, dy);
       const rect = group?.formationRect || {};
-      const footprintRadius = Math.hypot(Number(rect.width) || 0, Number(rect.depth) || 0) * 0.5;
-      const pickRadius = Math.max(radius, Math.max(12, footprintRadius * 0.6));
-      if (dist <= pickRadius && dist < bestDist) {
+      const hitPadding = Math.max(8, Number(radius) || 0);
+      const width = Math.max(0, Number(rect.width) || 0);
+      const depth = Math.max(0, Number(rect.depth) || 0);
+      const facing = Number.isFinite(Number(rect.facingRad)) ? Number(rect.facingRad) : 0;
+      const frontX = Math.cos(facing);
+      const frontY = Math.sin(facing);
+      const sideX = -frontY;
+      const sideY = frontX;
+      const localSide = (dx * sideX) + (dy * sideY);
+      const localFront = (dx * frontX) + (dy * frontY);
+      const insideFormation = width > 0 && depth > 0
+        && Math.abs(localSide) <= (width * 0.5) + hitPadding
+        && Math.abs(localFront) <= (depth * 0.5) + hitPadding;
+      const footprintRadius = Math.hypot(width, depth) * 0.5;
+      const pickRadius = Math.max(hitPadding, footprintRadius + (hitPadding * 0.35));
+      if ((insideFormation || dist <= pickRadius) && dist < bestDist) {
         best = group;
         bestDist = dist;
       }
@@ -2451,6 +2652,7 @@ export default class BattleRuntime {
       this.trainingSkillPointAccumulatorSec = 0;
       this.trainingSessionActive = true;
     }
+    const selectedDeployGroupId = String(this.selectedDeploySquadId || '');
     const attackerSquads = this.attackerDeployGroups
       .filter((group) => group?.placed !== false)
       .map((group, index) => createSquad({
@@ -2479,6 +2681,9 @@ export default class BattleRuntime {
       }))
       .filter((row) => row.startCount > 0);
 
+    const battleTimeLimitSec = this.isTrainingMode
+      ? 0
+      : Math.max(30, Number(this.initData?.timeLimitSec) || DEFAULT_TIME_LIMIT);
     const simBase = {
       battleId: this.initData?.battleId || '',
       nodeId: this.initData?.nodeId || '',
@@ -2486,8 +2691,8 @@ export default class BattleRuntime {
       nodeName: this.initData?.nodeName || '',
       viewerTeam: TEAM_ATTACKER,
       startedAt: new Date().toISOString(),
-      timeLimitSec: Math.max(30, Number(this.initData?.timeLimitSec) || DEFAULT_TIME_LIMIT),
-      timerSec: Math.max(30, Number(this.initData?.timeLimitSec) || DEFAULT_TIME_LIMIT),
+      timeLimitSec: battleTimeLimitSec,
+      timerSec: battleTimeLimitSec,
       field: this.field,
       squads: [...attackerSquads, ...defenderSquads],
       buildings: cloneObstacleList(this.initialBuildings),
@@ -2510,8 +2715,15 @@ export default class BattleRuntime {
     this.startedAtMs = Date.now();
     this.endedAtMs = 0;
     const firstUserSquad = this.sim.squads.find((row) => this.canControlSquad(row) && row.remain > 0);
-    this.focusSquadId = firstUserSquad?.id || this.sim.squads.find((row) => row.remain > 0)?.id || '';
-    this.selectedBattleSquadId = firstUserSquad?.id || '';
+    const selectedTrainingSquad = this.isTrainingMode && selectedDeployGroupId
+      ? this.sim.squads.find((row) => (
+        row?.sourceDeployGroupId === selectedDeployGroupId && (Number(row?.remain) || 0) > 0
+      )) || null
+      : null;
+    const initialFocusSquad = this.isTrainingMode ? selectedTrainingSquad : firstUserSquad;
+    this.selectedDeploySquadId = '';
+    this.focusSquadId = initialFocusSquad?.id || '';
+    this.selectedBattleSquadId = this.canControlSquad(initialFocusSquad) ? initialFocusSquad.id : '';
     this.updateCameraAnchor(0);
     return { ok: true };
   }
@@ -2529,6 +2741,7 @@ export default class BattleRuntime {
       } else if (this.isTrainingMode) {
         this.selectedBattleSquadId = '';
       }
+      this.updateCameraAnchor(0);
     }
   }
 
@@ -2706,24 +2919,29 @@ export default class BattleRuntime {
   }
 
   resolveRawFocusAnchor() {
-    if (!this.sim || !this.crowd) return { x: 0, y: 0, vx: 0, vy: 0, squadId: '', team: '' };
+    if (!this.sim || !this.crowd) return EMPTY_CAMERA_ANCHOR;
     const preferredId = this.focusSquadId || this.selectedBattleSquadId;
     const preferred = preferredId ? this.getSquadById(preferredId) : null;
-    const fallback = preferred || (this.sim.squads || []).find((row) => row && row.remain > 0) || null;
-    if (!fallback) return { x: 0, y: 0, vx: 0, vy: 0, squadId: '', team: '' };
+    if (!preferred || (Number(preferred.remain) || 0) <= 0) return EMPTY_CAMERA_ANCHOR;
     return {
-      x: Number(fallback.x) || 0,
-      y: Number(fallback.y) || 0,
-      vx: Number(fallback.vx) || 0,
-      vy: Number(fallback.vy) || 0,
-      squadId: fallback.id,
-      team: fallback.team
+      x: Number(preferred.x) || 0,
+      y: Number(preferred.y) || 0,
+      vx: Number(preferred.vx) || 0,
+      vy: Number(preferred.vy) || 0,
+      squadId: preferred.id,
+      team: preferred.team
     };
   }
 
   updateCameraAnchor(dtSec = 0.016) {
     const raw = this.resolveRawFocusAnchor();
     this.cameraAnchorRaw = { ...raw };
+    if (!raw.squadId) {
+      this.focusSquadId = '';
+      this.selectedBattleSquadId = '';
+      this.cameraAnchor = { ...raw };
+      return;
+    }
     if (!this.cameraAnchor.squadId || this.cameraAnchor.squadId !== raw.squadId) {
       this.cameraAnchor = { ...raw };
       return;
@@ -2901,22 +3119,12 @@ export default class BattleRuntime {
     return true;
   }
 
-  commandMarchMode(squadId, mode = MARCH_MODE_COHESIVE) {
+  commandFormationSpacing(squadId, spacing = FORMATION_SPACING_STANDARD) {
     if (this.phase !== 'battle' || !this.sim) return false;
     const squad = this.getSquadById(squadId);
     if (!this.canControlSquad(squad)) return false;
-    if (mode === MARCH_MODE_LOOSE) {
-      squad.speedMode = SPEED_MODE_C;
-      squad.speedModeAuthority = SPEED_AUTH_USER;
-      squad.speedPolicy = SPEED_POLICY_RETREAT;
-      squad.marchMode = MARCH_MODE_LOOSE;
-    } else {
-      squad.speedMode = SPEED_MODE_B;
-      squad.speedModeAuthority = SPEED_AUTH_USER;
-      squad.speedPolicy = SPEED_POLICY_MARCH;
-      squad.marchMode = MARCH_MODE_COHESIVE;
-    }
-    this.markCommandIssued('march_mode');
+    squad.formationSpacing = normalizeFormationSpacing(spacing);
+    this.markCommandIssued('formation_spacing');
     return true;
   }
 
@@ -3011,7 +3219,9 @@ export default class BattleRuntime {
     if (this.phase !== 'battle' || !this.sim || this.sim.ended) return;
     const dt = clamp(Number(dtSec) || 0, 0.001, 0.05);
     const t0 = performance.now();
-    this.sim.timerSec = Math.max(0, Number(this.sim.timerSec) - dt);
+    if (!this.isTrainingMode) {
+      this.sim.timerSec = Math.max(0, Number(this.sim.timerSec) - dt);
+    }
     updateCrowdSim(this.crowd, this.sim, dt);
     if (this.isTrainingMode) {
       this.trainingSkillPointAccumulatorSec = Math.max(0, Number(this.trainingSkillPointAccumulatorSec) || 0) + dt;
@@ -3119,9 +3329,10 @@ export default class BattleRuntime {
 
     const noTrainingUnitsRemain = this.isTrainingMode && attackerAlive <= 0 && defenderAlive <= 0;
     const oneSideDefeated = !this.isTrainingMode && (attackerAlive <= 0 || defenderAlive <= 0);
-    if (this.sim.timerSec <= 0 || oneSideDefeated || noTrainingUnitsRemain) {
+    const timedOut = !this.isTrainingMode && this.sim.timerSec <= 0;
+    if (timedOut || oneSideDefeated || noTrainingUnitsRemain) {
       this.sim.ended = true;
-      this.sim.endReason = this.sim.timerSec <= 0
+      this.sim.endReason = timedOut
         ? '时间到'
         : (attackerAlive <= 0 ? '我方全灭' : '守军全灭');
       this.phase = 'ended';
@@ -3191,12 +3402,17 @@ export default class BattleRuntime {
           classTag: inferClassFromUnitType(this.unitTypeMap.get(Object.keys(group.units)[0]) || {}),
           unitCategories: getGroupSkillTreeCategories(group.units, this.unitTypeMap),
           templateId: typeof group?.templateId === 'string' ? group.templateId : '',
+          templateFormations: Array.isArray(group?.templateFormations)
+            ? group.templateFormations.slice(0, MAX_DEPLOY_TEMPLATE_FORMATIONS).map((formation) => ({ ...formation }))
+            : [],
+          activeFormationId: String(group?.activeFormationId || group?.formationRect?.formationId || '').trim(),
           skillSlots: normalizeSkillSlots(group?.skillSlots),
           remain: sumUnitsMap(group.units),
           startCount: sumUnitsMap(group.units),
           action: group?.placed === false ? '待放置' : '部署中',
           stamina: 100,
-          placed: group?.placed !== false
+          placed: group?.placed !== false,
+          ...buildCardDetails(group, this.unitTypeMap, false)
         })),
         ...(!hideDefenderIntelInDeploy ? this.defenderDeployGroups.map((group, index) => ({
           id: group.id,
@@ -3207,12 +3423,17 @@ export default class BattleRuntime {
           classTag: inferClassFromUnitType(this.unitTypeMap.get(Object.keys(group.units)[0]) || {}),
           unitCategories: getGroupSkillTreeCategories(group.units, this.unitTypeMap),
           templateId: typeof group?.templateId === 'string' ? group.templateId : '',
+          templateFormations: Array.isArray(group?.templateFormations)
+            ? group.templateFormations.slice(0, MAX_DEPLOY_TEMPLATE_FORMATIONS).map((formation) => ({ ...formation }))
+            : [],
+          activeFormationId: String(group?.activeFormationId || group?.formationRect?.formationId || '').trim(),
           skillSlots: normalizeSkillSlots(group?.skillSlots),
           remain: sumUnitsMap(group.units),
           startCount: sumUnitsMap(group.units),
           action: group?.placed === false ? '待放置' : '部署中',
           stamina: 100,
-          placed: group?.placed !== false
+          placed: group?.placed !== false,
+          ...buildCardDetails(group, this.unitTypeMap, false)
         })) : [])
       ];
 
@@ -3221,12 +3442,16 @@ export default class BattleRuntime {
       team: squad.team,
       controlMode: squad.controlMode === CONTROL_MODE_AI ? CONTROL_MODE_AI : CONTROL_MODE_USER,
       sortOrder: Math.max(0, Math.floor(Number(squad.sortOrder) || 0)),
-      name: squad.name,
+      name: limitNameByDisplayWidth(String(squad?.name || '').trim()) || '未命名部队',
       classTag: squad.classTag,
       unitCategories: Array.isArray(squad?.unitCategories)
         ? squad.unitCategories
         : getGroupSkillTreeCategories(squad?.units || {}, this.unitTypeMap),
       templateId: typeof squad?.templateId === 'string' ? squad.templateId : '',
+      templateFormations: Array.isArray(squad?.templateFormations)
+        ? squad.templateFormations.slice(0, MAX_DEPLOY_TEMPLATE_FORMATIONS).map((formation) => ({ ...formation }))
+        : [],
+      activeFormationId: String(squad?.activeFormationId || squad?.formationRect?.formationId || '').trim(),
       skillSlots: normalizeSkillSlots(squad?.skillSlots),
       action: squad.action,
       remain: Math.max(0, Math.floor(Number(squad.remain) || 0)),
@@ -3235,7 +3460,7 @@ export default class BattleRuntime {
       speedMode: squad.speedMode || SPEED_MODE_B,
       speedModeAuthority: squad.speedModeAuthority || SPEED_AUTH_AI,
       speedPolicy: squad.speedPolicy || SPEED_POLICY_MARCH,
-      marchMode: squad.marchMode || MARCH_MODE_COHESIVE,
+      formationSpacing: normalizeFormationSpacing(squad.formationSpacing),
       behavior: squad.behavior || 'idle',
       debugTargetScore: squad.debugTargetScore || null,
       orderType: squad.order?.type || ORDER_IDLE,
@@ -3253,7 +3478,20 @@ export default class BattleRuntime {
         ? squad.id === this.selectedBattleSquadId
         : squad.id === this.selectedDeploySquadId,
       focus: squad.id === this.focusSquadId,
-      alive: (Number(squad.remain) || 0) > 0
+      alive: (Number(squad.remain) || 0) > 0,
+      // Deployment rows are flattened before this projection, so carry their
+      // already-built detail model through instead of trying to recover units
+      // from the presentation-only row.
+      ...(this.phase === 'battle'
+        ? buildCardDetails(squad, this.unitTypeMap, true)
+        : {
+          unitComposition: Array.isArray(squad?.unitComposition) ? squad.unitComposition : [],
+          formationName: squad?.formationName || '默认阵型',
+          formationId: String(squad?.formationId || '').trim(),
+          unitMetrics: squad?.unitMetrics || {},
+          formationRect: squad?.formationRect || null,
+          templateName: String(squad?.templateName || '').trim()
+        })
     }));
   }
 
@@ -3266,7 +3504,11 @@ export default class BattleRuntime {
         || { x: 0, y: 0, id: '' };
       return { x: Number(group.x) || 0, y: Number(group.y) || 0, vx: 0, vy: 0, squadId: group.id || '' };
     }
-    if (!this.sim || !this.crowd) return { x: 0, y: 0, vx: 0, vy: 0, squadId: '' };
+    if (!this.sim || !this.crowd) return null;
+    const focusedSquadId = String(this.focusSquadId || this.selectedBattleSquadId || '');
+    const focusedSquad = focusedSquadId ? this.getSquadById(focusedSquadId) : null;
+    if (!focusedSquad || (Number(focusedSquad.remain) || 0) <= 0) return null;
+    if (String(this.cameraAnchor?.squadId || '') !== focusedSquadId) return null;
     return {
       x: Number(this.cameraAnchor?.x) || 0,
       y: Number(this.cameraAnchor?.y) || 0,

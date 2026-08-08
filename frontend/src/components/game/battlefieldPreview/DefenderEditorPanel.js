@@ -1,4 +1,8 @@
 import React from 'react';
+import {
+  limitNameByDisplayWidth,
+  MAX_NAME_DISPLAY_WIDTH
+} from '../../../game/battle/shared/nameLimits';
 
 const DefenderEditorPanel = ({
   defenderEditingDeployId = '',
@@ -34,12 +38,12 @@ const DefenderEditorPanel = ({
         部队名称
         <input
           type="text"
-          maxLength={32}
+          maxLength={MAX_NAME_DISPLAY_WIDTH}
           value={defenderEditorDraft.name || ''}
           placeholder="不填则自动命名"
           onChange={(event) => {
             const value = typeof event.target.value === 'string' ? event.target.value : '';
-            onDraftChange({ ...defenderEditorDraft, name: value });
+            onDraftChange({ ...defenderEditorDraft, name: limitNameByDisplayWidth(value) });
           }}
         />
       </label>

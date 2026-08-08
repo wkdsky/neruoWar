@@ -1,7 +1,6 @@
 import {
   clamp,
   normalizeVec,
-  estimateLocalFlowWidth,
   buildSpatialHash,
   querySpatialNearby,
   pushOutOfRect,
@@ -28,13 +27,15 @@ const SPEED_MODE_C = 'C_PER_TYPE';
 const SPEED_POLICY_MARCH = 'MARCH';
 const SPEED_POLICY_RETREAT = 'RETREAT';
 const SPEED_POLICY_REFORM = 'REFORM';
+const FORMATION_SPACING_LOOSE = 'loose';
+const FORMATION_SPACING_STANDARD = 'standard';
+const FORMATION_SPACING_COMPACT = 'compact';
 const STAMINA_MAX = 100;
 const STAMINA_MOVE_THRESHOLD = 20;
 const STAMINA_MOVE_COST = 8;
 const STAMINA_RECOVER = 28;
 const AGENT_RADIUS = 2.25;
 const AGENT_GAP = 1.05;
-const WEIGHT_BOTTLENECK_ALPHA = 0.035;
 const MAX_AGENTS_PER_SQUAD = 4096;
 const DEFAULT_MAX_AGENT_WEIGHT = 50;
 const DEFAULT_DAMAGE_EXPONENT = 0.75;
@@ -56,6 +57,12 @@ const AGENT_REFORM_ACCEL = 260;
 const AGENT_RETREAT_ACCEL = 280;
 const AGENT_AVOID_PROBE = 10;
 const FLAG_BACK_OFFSET = 0.72;
+const FORMATION_SPACING_SCALE = Object.freeze({
+  [FORMATION_SPACING_LOOSE]: 1.28,
+  [FORMATION_SPACING_STANDARD]: 1,
+  [FORMATION_SPACING_COMPACT]: 0.76
+});
+const FORMATION_STRUCTURAL_GAP_MULTIPLIER = 1.5;
 const LEADER_MAX_TURN_RATE = Math.PI * 1.9;
 const LEADER_MAX_ACCEL = 120;
 const LEADER_MAX_DECEL = 170;
@@ -203,6 +210,73 @@ const slotOffsetForIndex = (index, columns, spacing = (AGENT_RADIUS * 2) + AGENT
     side: (col - ((columns - 1) / 2)) * spacing,
     back: row * (spacing * 0.92)
   };
+};
+
+const normalizeFormationSpacing = (value) => {
+  if (value === FORMATION_SPACING_LOOSE || value === FORMATION_SPACING_COMPACT) return value;
+  return FORMATION_SPACING_STANDARD;
+};
+
+const normalizeFormationSlot = (slot = {}, fallback = {}) => ({
+  side: Number.isFinite(Number(slot?.side)) ? Number(slot.side) : (Number(fallback?.side) || 0),
+  front: Number.isFinite(Number(slot?.front)) ? Number(slot.front) : (Number(fallback?.front) || 0)
+});
+
+const buildFormationAxisScale = (slots = [], axis = 'side', baseSpacing = 1, scale = 1) => {
+  const values = Array.from(new Set(
+    slots
+      .map((slot) => Number(slot?.[axis]))
+      .filter(Number.isFinite)
+  )).sort((left, right) => left - right);
+  if (values.length <= 1 || Math.abs(scale - 1) <= 1e-6) {
+    return new Map(values.map((value) => [value, value]));
+  }
+  const scaled = new Map([[values[0], values[0]]]);
+  let cursor = values[0];
+  for (let index = 1; index < values.length; index += 1) {
+    const previous = values[index - 1];
+    const value = values[index];
+    const gap = value - previous;
+    const structuralGap = gap > (Math.max(0.1, baseSpacing) * FORMATION_STRUCTURAL_GAP_MULTIPLIER);
+    cursor += structuralGap ? gap : (gap * scale);
+    scaled.set(value, cursor);
+  }
+  const originalCenter = (values[0] + values[values.length - 1]) * 0.5;
+  const scaledCenter = ((scaled.get(values[0]) || 0) + (scaled.get(values[values.length - 1]) || 0)) * 0.5;
+  const centerShift = originalCenter - scaledCenter;
+  values.forEach((value) => scaled.set(value, (scaled.get(value) || 0) + centerShift));
+  return scaled;
+};
+
+const assignFormationSpacingSlots = (agents = [], baseSpacing = (AGENT_RADIUS * 2) + AGENT_GAP) => {
+  const slots = agents.map((agent) => normalizeFormationSlot(agent?.formationSlot));
+  const scales = Object.entries(FORMATION_SPACING_SCALE).reduce((out, [mode, scale]) => {
+    out[mode] = {
+      side: buildFormationAxisScale(slots, 'side', baseSpacing, scale),
+      front: buildFormationAxisScale(slots, 'front', baseSpacing, scale)
+    };
+    return out;
+  }, {});
+  agents.forEach((agent, index) => {
+    const slot = slots[index];
+    agent.formationSlot = slot;
+    agent.formationSpacingSlots = Object.keys(FORMATION_SPACING_SCALE).reduce((out, mode) => {
+      const axis = scales[mode];
+      out[mode] = {
+        side: axis.side.get(slot.side) ?? slot.side,
+        front: axis.front.get(slot.front) ?? slot.front
+      };
+      return out;
+    }, {});
+  });
+};
+
+const resolveAgentFormationSlot = (agent, index, columns, spacing, mode) => {
+  const normalizedMode = normalizeFormationSpacing(mode);
+  const configured = agent?.formationSpacingSlots?.[normalizedMode] || agent?.formationSlot;
+  if (configured) return normalizeFormationSlot(configured);
+  const fallback = slotOffsetForIndex(index, columns, spacing);
+  return { side: fallback.side, front: -fallback.back };
 };
 
 const teamForward = (team) => (team === TEAM_ATTACKER ? { x: 1, y: 0 } : { x: -1, y: 0 });
@@ -923,6 +997,8 @@ const createAgent = ({
   y,
   weight,
   slotOrder = 0,
+  formationSlot = null,
+  formationSpacingSlots = null,
   moveSpeedMul = 1,
   isFlagBearer = false
 }) => ({
@@ -944,6 +1020,10 @@ const createAgent = ({
   attackCd: 0,
   targetAgentId: '',
   slotOrder,
+  formationSlot: formationSlot ? normalizeFormationSlot(formationSlot) : null,
+  formationSpacingSlots: formationSpacingSlots && typeof formationSpacingSlots === 'object'
+    ? formationSpacingSlots
+    : null,
   moveSpeedMul: clamp(Number(moveSpeedMul) || 1, 0.6, 1.8),
   isFlagBearer: !!isFlagBearer,
   hitTimer: 0,
@@ -1000,23 +1080,20 @@ const createAgentsForSquad = (squad, crowd) => {
   const forwardVec = resolveSquadForward(squad);
   const sideVec = { x: -forwardVec.y, y: forwardVec.x };
   const deploySlots = Array.isArray(squad?.deploySlots)
-    ? squad.deploySlots.map((slot) => ({
-      side: Number(slot?.side) || 0,
-      front: Number(slot?.front) || 0
-    }))
+    ? squad.deploySlots.map((slot) => normalizeFormationSlot(slot))
     : [];
 
-  const resolveSpawnPoint = (slotOrder, fallbackOffset) => {
-    if (deploySlots[slotOrder]) {
-      const slot = deploySlots[slotOrder];
-      return {
-        x: (Number(squad.x) || 0) + (sideVec.x * slot.side) + (forwardVec.x * slot.front),
-        y: (Number(squad.y) || 0) + (sideVec.y * slot.side) + (forwardVec.y * slot.front)
-      };
+  const resolveFormationSlotForOrder = (slotOrder, fallbackOffset) => (
+    deploySlots[slotOrder] || {
+      side: Number(fallbackOffset?.side) || 0,
+      front: -(Number(fallbackOffset?.back) || 0)
     }
+  );
+
+  const resolveSpawnPoint = (slot) => {
     return {
-      x: (Number(squad.x) || 0) - fallbackOffset.back,
-      y: (Number(squad.y) || 0) + fallbackOffset.side
+      x: (Number(squad.x) || 0) + (sideVec.x * slot.side) + (forwardVec.x * slot.front),
+      y: (Number(squad.y) || 0) + (sideVec.y * slot.side) + (forwardVec.y * slot.front)
     };
   };
 
@@ -1032,7 +1109,8 @@ const createAgentsForSquad = (squad, crowd) => {
     const moveSpeedMul = resolveAgentSpeedMul(unitType, category);
     for (let i = 0; i < safeCount; i += 1) {
       const offset = slotOffsetForIndex(slotOrder, baseCols);
-      const spawnPoint = resolveSpawnPoint(slotOrder, offset);
+      const formationSlot = resolveFormationSlotForOrder(slotOrder, offset);
+      const spawnPoint = resolveSpawnPoint(formationSlot);
       agents.push(createAgent({
         id: `${squad.id}_ag_${slotOrder + 1}`,
         squadId: squad.id,
@@ -1043,6 +1121,7 @@ const createAgentsForSquad = (squad, crowd) => {
         y: spawnPoint.y,
         weight: perAgentWeight,
         slotOrder,
+        formationSlot,
         moveSpeedMul
       }));
       slotOrder += 1;
@@ -1060,9 +1139,11 @@ const createAgentsForSquad = (squad, crowd) => {
       y: Number(squad.y) || 0,
       weight: Math.min(remain, repConfig.maxAgentWeight),
       slotOrder: 0,
+      formationSlot: { side: 0, front: 0 },
       moveSpeedMul: resolveAgentSpeedMul({}, squad?.classTag || 'infantry')
     }));
   }
+  assignFormationSpacingSlots(agents, formationSpacing);
   squad._repMaxAgentWeight = repConfig.maxAgentWeight;
   squad._crowdBaseColumns = Math.max(1, hintedCols || Math.ceil(Math.sqrt(agents.length)));
   squad._crowdForward = { x: forwardVec.x, y: forwardVec.y };
@@ -1403,6 +1484,8 @@ const trimOrGrowAgents = (squad, agents = [], crowd, dt) => {
         y: (source.y || 0) + ((Math.random() - 0.5) * 2.4),
         weight: splitWeight,
         slotOrder: source.slotOrder + i + 1,
+        formationSlot: source.formationSlot,
+        formationSpacingSlots: source.formationSpacingSlots,
         moveSpeedMul: source.moveSpeedMul || 1
       }));
     }
@@ -1878,27 +1961,16 @@ export const updateCrowdSim = (crowd, sim, dt) => {
     const baseCols = Math.max(1, Number(squad._crowdBaseColumns) || Math.ceil(Math.sqrt(agents.length)));
     const leaderMoving = ((Number(squad.skillRush?.ttl) || 0) > 0)
       || (Array.isArray(squad.waypoints) && squad.waypoints.length > 0);
-    const allowFlowCompact = leaderMoving || squad.behavior === 'auto' || squad.behavior === 'defend' || squad.behavior === 'retreat';
-    let columns = baseCols;
-    if (allowFlowCompact) {
-      const flowWidth = estimateLocalFlowWidth({ x: squad.x, y: squad.y }, forward, walls, {
-        step: 3.2,
-        maxProbe: 120,
-        inflate: AGENT_RADIUS + 1
-      });
-      const flowCols = Math.max(1, Math.floor(flowWidth / ((AGENT_RADIUS * 2) + AGENT_GAP)));
-      columns = Math.max(1, Math.min(baseCols, flowCols));
-    }
-    const bottlenecked = columns < baseCols;
     const side = { x: -forward.y, y: forward.x };
     const spacing = (AGENT_RADIUS * 2) + AGENT_GAP;
+    const formationSpacing = normalizeFormationSpacing(squad?.formationSpacing);
+    const formationSpacingScale = FORMATION_SPACING_SCALE[formationSpacing] || FORMATION_SPACING_SCALE[FORMATION_SPACING_STANDARD];
     const speedPolicy = typeof squad.speedPolicy === 'string' ? squad.speedPolicy : SPEED_POLICY_MARCH;
     const retreatMode = speedPolicy === SPEED_POLICY_RETREAT;
     const reformMode = speedPolicy === SPEED_POLICY_REFORM;
-    const looseMarch = squad?.marchMode === 'loose' && !retreatMode;
-    const slotGain = retreatMode ? 0.44 : (reformMode ? 1.36 : (looseMarch ? 0.82 : 1));
-    const sepGain = retreatMode ? 0.52 : (reformMode ? 0.86 : (looseMarch ? 0.72 : 1));
-    const avoidGain = retreatMode ? 0.68 : (looseMarch ? 0.78 : 0.95);
+    const slotGain = retreatMode ? 0.44 : (reformMode ? 1.36 : 1);
+    const sepGain = retreatMode ? 0.52 : (reformMode ? 0.86 : 1);
+    const avoidGain = retreatMode ? 0.68 : 0.95;
     const accelCap = retreatMode ? AGENT_RETREAT_ACCEL : (reformMode ? AGENT_REFORM_ACCEL : AGENT_MAX_ACCEL);
     const flagBack = spacing * FLAG_BACK_OFFSET;
     const sorted = [...agents].sort((a, b) => a.slotOrder - b.slotOrder);
@@ -1922,15 +1994,13 @@ export const updateCrowdSim = (crowd, sim, dt) => {
         agent.hitTimer = Math.max(0, (Number(agent.hitTimer) || 0) - safeDt);
         return;
       }
-      const slot = slotOffsetForIndex(index, columns, spacing);
-      const desiredX = (Number(squad.x) || 0) + (side.x * slot.side) - (forward.x * slot.back);
-      const desiredY = (Number(squad.y) || 0) + (side.y * slot.side) - (forward.y * slot.back);
+      const slot = resolveAgentFormationSlot(agent, index, baseCols, spacing, formationSpacing);
+      const desiredX = (Number(squad.x) || 0) + (side.x * slot.side) + (forward.x * slot.front);
+      const desiredY = (Number(squad.y) || 0) + (side.y * slot.side) + (forward.y * slot.front);
       const toDesired = normalizeVec(desiredX - (agent.x || 0), desiredY - (agent.y || 0));
       const stationaryHold = !leaderMoving && (squad.behavior === 'idle' || squad.behavior === 'move' || squad.behavior === 'standby');
       const fatigueMul = squad.fatigueTimer > 0 ? 0.72 : 1;
-      const weightSlow = bottlenecked
-        ? 1 / (1 + (WEIGHT_BOTTLENECK_ALPHA * Math.max(0, Math.min(40, (agent.weight || 1)) - 1)))
-        : 1;
+      const weightSlow = 1;
       const speedMul = (squad.effectBuff?.speedMul ? Number(squad.effectBuff.speedMul) : 1) * ((squad.skillRush?.ttl || 0) > 0 ? 1.45 : 1);
       const modeSpeedMul = resolveAgentModeSpeedMul(agent, squad, crowd);
       const speed = Math.max(6, (Number(squad._groupSpeedScalar) || Number(squad.stats?.speed) || 1) * 20 * fatigueMul * weightSlow * speedMul * modeSpeedMul);
@@ -1941,7 +2011,8 @@ export const updateCrowdSim = (crowd, sim, dt) => {
         && Number.isFinite(Number(agent.engageAx)) && Number.isFinite(Number(agent.engageAy));
 
       const neighbors = querySpatialNearby(spatial, agent.x, agent.y, 12);
-      const sep = computeTeamAwareSeparation(agent, neighbors, spacing * 0.94);
+      const separationDistance = Math.max((AGENT_RADIUS * 2) + 0.3, spacing * formationSpacingScale * 0.94);
+      const sep = computeTeamAwareSeparation(agent, neighbors, separationDistance);
       const sepScale = stationaryHold
         ? (agent.isFlagBearer ? STATIONARY_FLAG_SEPARATION_SCALE : STATIONARY_SEPARATION_SCALE)
         : 1;

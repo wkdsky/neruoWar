@@ -2,13 +2,84 @@ import { normalizeDeg } from '../shared/angle';
 
 const clamp = (value, min, max) => Math.min(max, Math.max(min, value));
 const PAN_DRAG_THRESHOLD_PX = 4;
+const TEAM_ANY = 'any';
+const CAMERA_VERTICAL_FOV_DEG = 48;
+const DEFAULT_TRAINING_OVERVIEW_DISTANCE_EXTRA = 900;
+const DEFAULT_TRAINING_OVERVIEW_DISTANCE_MAX = 4600;
+const DEFAULT_TRAINING_OVERVIEW_VIEW_PADDING = 1.08;
+const INTERACTIVE_UI_SELECTOR = [
+  '.pve2-world-actions',
+  '.pve2-battle-actions',
+  '.pve2-card-actions',
+  '.pve2-card',
+  '.pve2-training-card-controls',
+  '.pve2-selected-squad-panel',
+  '.pve2-training-squad-panel',
+  '.pve2-training-squad-info-panel',
+  '.pve2-training-squad-skills-panel',
+  '.pve2-training-skill-slots',
+  '.pve2-formation-slots',
+  '.pve2-template-strip',
+  '.pve2-template-row-main',
+  '.pve2-template-row-actions',
+  '.army-template-editor-overlay',
+  '.army-template-editor-modal',
+  '.pve2-template-fill-backdrop',
+  '.pve2-template-fill-panel',
+  '.pve2-minimap-wrap',
+  '.pve2-action-pad',
+  '.pve2-skill-float',
+  '.pve2-formation-spacing-float',
+  '.pve2-path-confirm-btn',
+  '.pve2-hud',
+  '.pve2-confirm',
+  '.pve2-quick-deploy-backdrop',
+  '.pve2-quick-deploy-panel',
+  '.pve2-deploy-info',
+  '.pve2-formation-wheel',
+  '.number-pad-dialog-overlay',
+  '.number-pad-dialog'
+].join(', ');
+
+const isInteractiveUiTarget = (target) => (
+  !!target
+  && typeof target.closest === 'function'
+  && !!target.closest(INTERACTIVE_UI_SELECTOR)
+);
+
+export const resolveTrainingOverviewDistance = ({
+  field = null,
+  viewport = null,
+  baseDistance = 980,
+  extraDistance = DEFAULT_TRAINING_OVERVIEW_DISTANCE_EXTRA,
+  maxDistance = DEFAULT_TRAINING_OVERVIEW_DISTANCE_MAX,
+  padding = DEFAULT_TRAINING_OVERVIEW_VIEW_PADDING
+} = {}) => {
+  const base = Math.max(1, Number(baseDistance) || 980);
+  const minimumOverview = base + Math.max(1, Number(extraDistance) || DEFAULT_TRAINING_OVERVIEW_DISTANCE_EXTRA);
+  const cap = Math.max(minimumOverview, Number(maxDistance) || DEFAULT_TRAINING_OVERVIEW_DISTANCE_MAX);
+  const fieldWidth = Math.max(0, Number(field?.width) || 0);
+  const fieldHeight = Math.max(0, Number(field?.height) || 0);
+  const viewportWidth = Math.max(0, Number(viewport?.width) || 0);
+  const viewportHeight = Math.max(0, Number(viewport?.height) || 0);
+  if (fieldWidth <= 0 || fieldHeight <= 0 || viewportWidth <= 0 || viewportHeight <= 0) {
+    return cap;
+  }
+
+  const aspect = Math.max(0.1, viewportWidth / viewportHeight);
+  const halfFovTangent = Math.tan((CAMERA_VERTICAL_FOV_DEG * Math.PI / 180) * 0.5);
+  const widthDistance = (fieldWidth * 0.5) / (halfFovTangent * aspect);
+  const heightDistance = (fieldHeight * 0.5) / halfFovTangent;
+  const fitDistance = Math.ceil(Math.max(widthDistance, heightDistance) * Math.max(1, Number(padding) || 1));
+  return Math.min(cap, Math.max(minimumOverview, fitDistance));
+};
 
 export const createBattleInputController = ({
   open = false,
+  interactionLocked = false,
   canvasRef,
   runtimeRef,
   cameraControllerRef,
-  cameraViewRectRef,
   worldToScreenRef,
   pointerWorldRef,
   panDragRef,
@@ -25,13 +96,17 @@ export const createBattleInputController = ({
     const rect = canvas.getBoundingClientRect();
     const px = ((event.clientX - rect.left) / Math.max(1, rect.width)) * canvas.width;
     const py = ((event.clientY - rect.top) / Math.max(1, rect.height)) * canvas.height;
-    const world = cameraControllerRef.current.screenToGround(px, py, { width: canvas.width, height: canvas.height });
+    const camera = cameraControllerRef.current;
+    camera?.buildMatrices?.(canvas.width, canvas.height);
+    const world = camera.screenToGround(px, py, { width: canvas.width, height: canvas.height });
+    if (world?.valid === false) return null;
     pointerWorldRef.current = world;
     if (!Number.isFinite(Number(world?.x)) || !Number.isFinite(Number(world?.y))) return null;
     return world;
   };
 
   const beginPanDrag = (event, buttonMask = 1, primaryAction = '') => {
+    if (interactionLocked) return;
     const canvas = canvasRef?.current;
     if (!canvas) return;
     const rect = canvas.getBoundingClientRect();
@@ -40,9 +115,13 @@ export const createBattleInputController = ({
     const clientY = Number(event.clientY) || 0;
     const px = ((event.clientX - rect.left) / Math.max(1, rect.width)) * canvas.width;
     const py = ((event.clientY - rect.top) / Math.max(1, rect.height)) * canvas.height;
+    const camera = cameraControllerRef.current;
+    camera?.buildMatrices?.(canvas.width, canvas.height);
+    const anchorWorld = camera?.screenToGround?.(px, py, { width: canvas.width, height: canvas.height });
     panDragRef.current = {
-      prevPx: px,
-      prevPy: py,
+      anchorWorld: Number.isFinite(Number(anchorWorld?.x)) && Number.isFinite(Number(anchorWorld?.y)) && anchorWorld?.valid !== false
+        ? { x: Number(anchorWorld.x), y: Number(anchorWorld.y) }
+        : null,
       startClientX: clientX,
       startClientY: clientY,
       buttonMask,
@@ -82,6 +161,7 @@ export const createBattleInputController = ({
   };
 
   const handleMapCommand = (event) => {
+    if (interactionLocked) return;
     if (event.button !== 0) return;
     const runtime = runtimeRef.current;
     const world = resolveEventWorldPoint(event);
@@ -141,6 +221,7 @@ export const createBattleInputController = ({
   };
 
   const handleBattlePrimaryAction = (event) => {
+    if (interactionLocked) return;
     if (event.button !== 0) return;
     const runtime = runtimeRef.current;
     if (!runtime || runtime.getPhase?.() !== 'battle') return;
@@ -150,8 +231,8 @@ export const createBattleInputController = ({
     const battleUiMode = getters.getBattleUiMode?.();
     const skillConfirmState = getters.getSkillConfirmState?.();
 
-    if (battleUiMode === constants.BATTLE_UI_MODE_MARCH_PICK) {
-      callbacks.closeMarchModePick?.();
+    if (battleUiMode === constants.BATTLE_UI_MODE_SPACING_PICK) {
+      callbacks.closeSpacingPick?.();
       return;
     }
     if (battleUiMode === constants.BATTLE_UI_MODE_SKILL_PICK) {
@@ -213,15 +294,42 @@ export const createBattleInputController = ({
     }
   };
 
-  const onMouseDown = (event) => {
+  const onDoubleClick = (event) => {
+    if (interactionLocked) return;
+    if (event.button !== 0 || !getters.isTrainingMode?.()) return;
     const target = event.target;
-    if (
-      target
-      && typeof target.closest === 'function'
-      && target.closest('.pve2-world-actions, .pve2-battle-actions, .pve2-card-actions, .pve2-card-strip, .pve2-card-wrap, .pve2-card, .pve2-training-card-controls, .pve2-template-strip, .pve2-template-card-wrap, .pve2-template-fill-backdrop, .pve2-template-fill-panel, .pve2-minimap-wrap, .pve2-action-pad, .pve2-skill-float, .pve2-march-float, .pve2-path-confirm-btn, .pve2-hud, .pve2-confirm, .pve2-quick-deploy-backdrop, .pve2-quick-deploy-panel, .pve2-formation-wheel, .number-pad-dialog-overlay, .number-pad-dialog')
-    ) {
-      return;
-    }
+    if (isInteractiveUiTarget(target)) return;
+    const runtime = runtimeRef.current;
+    if (!runtime || runtime.getPhase?.() !== 'deploy') return;
+    const world = resolveEventWorldPoint(event);
+    if (!world) return;
+    const group = runtime.pickDeployGroup?.(world, 'any');
+    if (!group?.id || group.placed === false) return;
+
+    const camera = cameraControllerRef.current;
+    const anchor = {
+      x: Number(group.x) || 0,
+      y: Number(group.y) || 0,
+      squadId: group.id
+    };
+    camera.centerX = anchor.x;
+    camera.centerY = anchor.y;
+    camera.beginFocusTransition?.(anchor);
+    const canvas = canvasRef?.current;
+    camera.buildMatrices?.(canvas?.width, canvas?.height);
+    runtime.setSelectedDeployGroup?.(group.id);
+    runtime.setFocusSquad?.(group.id);
+    callbacks.setSelectedSquadId?.(group.id);
+    callbacks.setDeployActionAnchorMode?.('world');
+    callbacks.setCards?.(runtime.getCardRows?.() || []);
+    callbacks.setMinimapSnapshot?.(runtime.getMinimapSnapshot?.() || null);
+    event.preventDefault();
+  };
+
+  const onMouseDown = (event) => {
+    if (interactionLocked) return;
+    const target = event.target;
+    if (isInteractiveUiTarget(target)) return;
     const runtime = runtimeRef.current;
     if (!runtime) return;
     const currentPhase = runtime.getPhase();
@@ -264,8 +372,8 @@ export const createBattleInputController = ({
     }
 
     const battleUiMode = getters.getBattleUiMode?.();
-    if (battleUiMode === constants.BATTLE_UI_MODE_MARCH_PICK) {
-      callbacks.closeMarchModePick?.();
+    if (battleUiMode === constants.BATTLE_UI_MODE_SPACING_PICK) {
+      callbacks.closeSpacingPick?.();
       return;
     }
     if (event.button === 0) {
@@ -274,8 +382,6 @@ export const createBattleInputController = ({
     }
     if (event.button !== 2) return;
 
-    const world = resolveEventWorldPoint(event);
-    if (!world) return;
     const selected = runtime.getSquadById(getters.getSelectedSquadId?.());
     event.preventDefault();
     if (battleUiMode === constants.BATTLE_UI_MODE_SKILL_CONFIRM) {
@@ -297,31 +403,81 @@ export const createBattleInputController = ({
       return;
     }
     if (selected && runtime.canControlSquad?.(selected) && selected.remain > 0) {
+      const world = resolveEventWorldPoint(event);
+      if (!world) return;
       runtime.commandMove(selected.id, world, { append: false, replace: true, orderType: constants.ORDER_MOVE, inputType: 'battle_rmb_move' });
       callbacks.syncBattleCards?.();
+      return;
     }
+    deployYawDragRef.current = {
+      startX: Number(event.clientX) || 0,
+      startWorldYawDeg: Number(cameraControllerRef.current.worldYawDeg) || 0,
+      moved: false
+    };
   };
 
   const onWheel = (event) => {
+    if (interactionLocked) return;
     const runtime = runtimeRef.current;
     if (!runtime) return;
     const phase = runtime.getPhase?.();
     if (phase !== 'deploy' && phase !== 'battle') return;
+    if (isInteractiveUiTarget(event?.target)) return;
     if (panDragRef.current) return;
     event.preventDefault();
+
+    if (phase === 'deploy') {
+      const groupId = getters.getDeployDraggingGroupId?.()
+        || getters.getSelectedSquadId?.()
+        || runtime.getDeployGroups?.()?.selectedId
+        || '';
+      const group = groupId ? runtime.getDeployGroupById?.(groupId, TEAM_ANY) : null;
+      if (group && typeof runtime.setDeployGroupRect === 'function') {
+        const fallbackFacing = group.team === 'defender' ? Math.PI : 0;
+        const currentFacing = Number.isFinite(Number(group?.formationRect?.facingRad))
+          ? Number(group.formationRect.facingRad)
+          : fallbackFacing;
+        const stepDeg = Math.max(1, Number(constants.DEPLOY_WHEEL_ROTATE_STEP_DEG) || 15);
+        const direction = Number(event?.deltaY) < 0 ? -1 : 1;
+        const nextFacing = (normalizeDeg((currentFacing * 180 / Math.PI) + (direction * stepDeg)) * Math.PI) / 180;
+        const result = runtime.setDeployGroupRect(group.id, { facingRad: nextFacing }, group.team);
+        if (result?.ok !== false) {
+          callbacks.setCards?.(runtime.getCardRows?.() || []);
+          callbacks.setMinimapSnapshot?.(runtime.getMinimapSnapshot?.() || null);
+        }
+        return;
+      }
+    }
+
+    const baseDistanceMax = constants.CAMERA_DISTANCE_MAX || 980;
+    const overviewDistanceMax = getters.isTrainingMode?.()
+      ? resolveTrainingOverviewDistance({
+        field: runtime.getField?.(),
+        viewport: {
+          width: canvasRef?.current?.width || canvasRef?.current?.clientWidth,
+          height: canvasRef?.current?.height || canvasRef?.current?.clientHeight
+        },
+        baseDistance: baseDistanceMax,
+        extraDistance: constants.TRAINING_OVERVIEW_DISTANCE_EXTRA,
+        maxDistance: constants.TRAINING_OVERVIEW_DISTANCE_MAX,
+        padding: constants.TRAINING_OVERVIEW_VIEW_PADDING
+      })
+      : baseDistanceMax;
     const nextDistance = cameraControllerRef.current.distance + (event.deltaY < 0 ? -(constants.CAMERA_ZOOM_STEP || 24) : (constants.CAMERA_ZOOM_STEP || 24));
     if (typeof cameraControllerRef.current.setDistanceWithDynamicPitch === 'function') {
       cameraControllerRef.current.setDistanceWithDynamicPitch(
         nextDistance,
         constants.CAMERA_DISTANCE_MIN || 360,
-        constants.CAMERA_DISTANCE_MAX || 980
+        baseDistanceMax,
+        overviewDistanceMax
       );
     } else {
-      cameraControllerRef.current.distance = clamp(nextDistance, constants.CAMERA_DISTANCE_MIN || 360, constants.CAMERA_DISTANCE_MAX || 980);
+      cameraControllerRef.current.distance = clamp(nextDistance, constants.CAMERA_DISTANCE_MIN || 360, overviewDistanceMax);
     }
   };
 
   const onMinimapClick = (worldPoint) => {
+    if (interactionLocked) return;
     const runtime = runtimeRef.current;
     if (!runtime) return;
     if (runtime.getPhase() === 'deploy') {
@@ -333,38 +489,52 @@ export const createBattleInputController = ({
     if (runtime.getPhase() !== 'battle') return;
     cameraControllerRef.current.centerX = Number(worldPoint?.x) || 0;
     cameraControllerRef.current.centerY = Number(worldPoint?.y) || 0;
+    const canvas = canvasRef?.current;
+    cameraControllerRef.current.buildMatrices?.(canvas?.width, canvas?.height);
   };
 
   const onMouseMove = (event) => {
     const runtime = runtimeRef.current;
     const canvas = canvasRef?.current;
     if (!runtime || !canvas) return;
+    if (interactionLocked) {
+      if (runtime.getPhase?.() === 'deploy') runtime.setHoveredDeployGroup?.('');
+      return;
+    }
     const target = event.target;
-    if (
-      target
-      && typeof target.closest === 'function'
-      && target.closest('.pve2-world-actions, .pve2-battle-actions, .pve2-card-actions, .pve2-card-strip, .pve2-card-wrap, .pve2-card, .pve2-training-card-controls, .pve2-template-strip, .pve2-template-card-wrap, .pve2-template-fill-backdrop, .pve2-template-fill-panel, .pve2-minimap-wrap, .pve2-action-pad, .pve2-skill-float, .pve2-march-float, .pve2-hud, .pve2-confirm, .pve2-quick-deploy-backdrop, .pve2-quick-deploy-panel, .pve2-formation-wheel, .number-pad-dialog-overlay, .number-pad-dialog')
-    ) {
+    if (isInteractiveUiTarget(target)) {
+      if (runtime.getPhase?.() === 'deploy') runtime.setHoveredDeployGroup?.('');
       return;
     }
     if (panDragRef.current || deployYawDragRef.current) return;
     const rect = canvas.getBoundingClientRect();
     const px = ((event.clientX - rect.left) / Math.max(1, rect.width)) * canvas.width;
     const py = ((event.clientY - rect.top) / Math.max(1, rect.height)) * canvas.height;
+    cameraControllerRef.current.buildMatrices?.(canvas.width, canvas.height);
     const world = cameraControllerRef.current.screenToGround(px, py, { width: canvas.width, height: canvas.height });
+    if (world?.valid === false) {
+      if (runtime.getPhase?.() === 'deploy') runtime.setHoveredDeployGroup?.('');
+      return;
+    }
     pointerWorldRef.current = world;
 
     const deployDraggingGroupId = getters.getDeployDraggingGroupId?.() || '';
     const deployDraggingTeam = getters.getDeployDraggingTeam?.() || 'attacker';
     if (runtime.getPhase() === 'deploy' && deployDraggingGroupId) {
+      runtime.setHoveredDeployGroup?.('');
       runtime.moveDeployGroup(deployDraggingGroupId, world, deployDraggingTeam);
       syncCardsAndMinimap();
       return;
     }
 
     if (runtime.getPhase() === 'deploy') {
-      // Hovering the battlefield must not change the selected card. Selection
-      // is committed only by a click in handleMapCommand.
+      const hovered = runtime.pickDeployGroup?.(
+        world,
+        getters.isTrainingMode?.() ? 'any' : 'attacker'
+      );
+      runtime.setHoveredDeployGroup?.(hovered?.placed === false ? '' : (hovered?.id || ''));
+      // Hovering only changes the renderer preselection. Selection is
+      // committed by a click in handleMapCommand.
       return;
     }
 
@@ -420,6 +590,11 @@ export const createBattleInputController = ({
     callbacks.setAimState?.((prev) => ({ ...prev, point: { x: world.x, y: world.y }, radiusPx }));
   };
 
+  const onMouseLeave = () => {
+    if (interactionLocked) return;
+    runtimeRef.current?.setHoveredDeployGroup?.('');
+  };
+
   const onContextMenu = (event) => {
     event.preventDefault();
   };
@@ -427,6 +602,12 @@ export const createBattleInputController = ({
   const bindWindow = () => {
     if (!open) return () => {};
     const handleWindowMouseMove = (event) => {
+      if (interactionLocked) {
+        clearPanDrag();
+        clearDeployYawDrag();
+        clearDeployRectDrag();
+        return;
+      }
       const canvas = canvasRef?.current;
       if (!canvas) return;
       const rect = canvas.getBoundingClientRect();
@@ -441,10 +622,7 @@ export const createBattleInputController = ({
         clearDeployRectDrag();
         return;
       }
-      if (!isDeploy) {
-        clearDeployYawDrag();
-        clearDeployRectDrag();
-      }
+      if (!isDeploy) clearDeployRectDrag();
       const rectDrag = deployRectDragRef.current;
       if (isDeploy && rectDrag && runtime) {
         if ((event.buttons & 1) !== 1) {
@@ -453,8 +631,10 @@ export const createBattleInputController = ({
         }
         const px = ((event.clientX - rect.left) / Math.max(1, rect.width)) * canvas.width;
         const py = ((event.clientY - rect.top) / Math.max(1, rect.height)) * canvas.height;
-        const world = cameraControllerRef.current.screenToGround(px, py, { width: canvas.width, height: canvas.height });
-        if (Number.isFinite(Number(world?.x)) && Number.isFinite(Number(world?.y))) {
+        const camera = cameraControllerRef.current;
+        camera.buildMatrices?.(canvas.width, canvas.height);
+        const world = camera.screenToGround(px, py, { width: canvas.width, height: canvas.height });
+        if (world?.valid !== false && Number.isFinite(Number(world?.x)) && Number.isFinite(Number(world?.y))) {
           const dx = (Number(world.x) || 0) - (Number(rectDrag.centerX) || 0);
           const dy = (Number(world.y) || 0) - (Number(rectDrag.centerY) || 0);
           const projection = ((dx * (Number(rectDrag.axisX) || 0)) + (dy * (Number(rectDrag.axisY) || 0))) * (Number(rectDrag.sideSign) || 1);
@@ -466,7 +646,7 @@ export const createBattleInputController = ({
       }
 
       const rotate = deployYawDragRef.current;
-      if (isDeploy && rotate) {
+      if (rotate) {
         if ((event.buttons & 2) !== 2) {
           clearDeployYawDrag();
         } else {
@@ -495,17 +675,30 @@ export const createBattleInputController = ({
       cameraControllerRef.current.pitchFrom = cameraControllerRef.current.currentPitch;
       cameraControllerRef.current.pitchTo = cameraControllerRef.current.currentPitch;
       cameraControllerRef.current.pitchTweenSec = cameraControllerRef.current.pitchTweenDurationSec;
-      const dxPx = px - pan.prevPx;
-      const dyPx = py - pan.prevPy;
-      const viewW = Math.max(1, Number(cameraViewRectRef.current?.widthWorld) || 1);
-      const viewH = Math.max(1, Number(cameraViewRectRef.current?.heightWorld) || 1);
-      cameraControllerRef.current.centerX -= (dxPx / Math.max(1, canvas.width)) * viewW;
-      cameraControllerRef.current.centerY += (dyPx / Math.max(1, canvas.height)) * viewH;
-      pan.prevPx = px;
-      pan.prevPy = py;
+      const camera = cameraControllerRef.current;
+      camera.buildMatrices?.(canvas.width, canvas.height);
+      const currentWorld = camera.screenToGround?.(px, py, { width: canvas.width, height: canvas.height });
+      if (
+        pan.anchorWorld
+        && Number.isFinite(Number(currentWorld?.x))
+        && Number.isFinite(Number(currentWorld?.y))
+        && currentWorld?.valid !== false
+      ) {
+        // Keep the ground point grabbed on pointer down under the cursor. This
+        // remains correct when the camera yaw or pitch changes the screen axes.
+        camera.centerX += pan.anchorWorld.x - Number(currentWorld.x);
+        camera.centerY += pan.anchorWorld.y - Number(currentWorld.y);
+      }
+      camera.buildMatrices?.(canvas.width, canvas.height);
     };
 
     const handleWindowMouseUp = (event) => {
+      if (interactionLocked) {
+        clearPanDrag();
+        clearDeployYawDrag();
+        clearDeployRectDrag();
+        return;
+      }
       const pan = panDragRef.current;
       const rotate = deployYawDragRef.current;
       if (rotate && !rotate.moved && runtimeRef.current?.getPhase() === 'deploy') {
@@ -530,6 +723,7 @@ export const createBattleInputController = ({
       clearPanDrag();
       clearDeployYawDrag();
       clearDeployRectDrag();
+      runtimeRef.current?.setHoveredDeployGroup?.('');
       spacePressedRef.current = false;
     };
 
@@ -550,9 +744,11 @@ export const createBattleInputController = ({
     clearDeployRectDrag,
     resolveEventWorldPoint,
     handleMapCommand,
+    onDoubleClick,
     onMouseDown,
     onMouseUp: () => {},
     onMouseMove,
+    onMouseLeave,
     onWheel,
     onContextMenu,
     onMinimapClick,

@@ -14,6 +14,10 @@ import {
   allocateTemplateUnits,
   normalizeTemplatePercentages
 } from '../../game/battle/screens/battleSceneUtils';
+import {
+  MAX_NAME_DISPLAY_WIDTH,
+  limitNameByDisplayWidth
+} from '../../game/battle/shared/nameLimits';
 import ArmyFormationThreeEditor, {
   expandUnitsToFormationPlacements,
   getFormationOccupancyMetrics,
@@ -45,6 +49,7 @@ const getApiErrorMessage = (parsed, fallback) => {
 const ARMY_EDITOR_STEPS = ['units', 'formations', 'preview'];
 const ARMY_MAX_UNIT_BASIS = 100;
 const MAX_COMBAT_ARMY_UNIT_COUNT = 1000000;
+const MAX_TEMPLATE_FORMATIONS = 9;
 
 const getUnitId = (unit) => {
   const id = typeof unit?.id === 'string' ? unit.id.trim() : '';
@@ -78,7 +83,7 @@ const getFormationSlotId = (formation) => {
 
 const getTroopDisplayName = (template) => {
   const name = typeof template?.name === 'string' ? template.name.trim() : '';
-  return name || '未命名部队';
+  return limitNameByDisplayWidth(name) || '未命名部队';
 };
 
 const buildUnitIntro = (unit = {}) => {
@@ -432,7 +437,7 @@ const normalizeFormationSlots = (formations = [], basisEntries = []) => {
   const source = Array.isArray(formations) && formations.length > 0
     ? formations
     : [createFormationSlot(0)];
-  return source.map((formation, index) => ({
+  return source.slice(0, MAX_TEMPLATE_FORMATIONS).map((formation, index) => ({
     id: getFormationSlotId(formation) || createFormationSlotId(),
     name: (typeof formation?.name === 'string' && formation.name.trim())
       ? formation.name.trim().slice(0, 24)
@@ -1205,6 +1210,10 @@ const ArmyPanel = ({
     if (isTemplateEditorMode) onClose?.();
   };
 
+  const isolateTemplateEditorEvent = (event) => {
+    event.stopPropagation();
+  };
+
   const openTemplateCreate = useCallback(() => {
     setTemplateNotice('');
     const nextDraft = createTemplateEditorDraft(getNextTemplateDraftName(templates));
@@ -1509,6 +1518,10 @@ const ArmyPanel = ({
   }, [updateActiveFormation]);
 
   const handleAddFormationSlot = useCallback(() => {
+    if (templateEditorFormations.length >= MAX_TEMPLATE_FORMATIONS) {
+      pushArmyToast(`最多创建 ${MAX_TEMPLATE_FORMATIONS} 个阵型`, 'error');
+      return;
+    }
     const nextFormation = createFormationSlot(templateEditorFormations.length);
     setTemplateEditorDraft((prev) => {
       const source = normalizeFormationSlots(prev.formations, prev.unitBasis);
@@ -1521,7 +1534,7 @@ const ArmyPanel = ({
     setTemplateEditorSelectedPlacementId('');
     setTemplateEditorSelectedPlacementIds([]);
     setTemplateEditorMoveSelectionIds([]);
-  }, [templateEditorFormations.length]);
+  }, [pushArmyToast, templateEditorFormations.length]);
 
   const handleDeleteFormationSlot = useCallback((formationId) => {
     const safeId = typeof formationId === 'string' ? formationId.trim() : '';
@@ -1616,7 +1629,7 @@ const ArmyPanel = ({
             Authorization: `Bearer ${token}`
           },
           body: JSON.stringify({
-            name: templateEditorDraft.name || '',
+            name: limitNameByDisplayWidth(templateEditorDraft.name || ''),
             units,
             formations: legalFormationPayload
           })
@@ -1708,7 +1721,7 @@ const ArmyPanel = ({
   }, [knowledgeBalance, unitTypeMap]);
 
   const handleChangeCombatArmyCreateName = useCallback((name) => {
-    const safeName = typeof name === 'string' ? name.slice(0, 32) : '';
+    const safeName = typeof name === 'string' ? limitNameByDisplayWidth(name) : '';
     setCombatArmyCreatePanel((previous) => ({ ...previous, name: safeName }));
   }, []);
 
@@ -2446,7 +2459,24 @@ const ArmyPanel = ({
       ) : null}
 
       {templateEditorOpen && (
-        <div className="army-template-editor-overlay" onClick={closeTemplateEditor}>
+        <div
+          className="army-template-editor-overlay"
+          onClick={isolateTemplateEditorEvent}
+          onPointerDown={isolateTemplateEditorEvent}
+          onPointerUp={isolateTemplateEditorEvent}
+          onPointerMove={isolateTemplateEditorEvent}
+          onMouseDown={isolateTemplateEditorEvent}
+          onMouseUp={isolateTemplateEditorEvent}
+          onMouseMove={isolateTemplateEditorEvent}
+          onWheel={isolateTemplateEditorEvent}
+          onDragStart={isolateTemplateEditorEvent}
+          onDragOver={isolateTemplateEditorEvent}
+          onDrop={isolateTemplateEditorEvent}
+          onContextMenu={(event) => {
+            event.preventDefault();
+            isolateTemplateEditorEvent(event);
+          }}
+        >
           <div
             className="army-template-editor-modal"
             onClick={(event) => event.stopPropagation()}
@@ -2493,10 +2523,13 @@ const ArmyPanel = ({
               <span>模板名称</span>
               <input
                 type="text"
-                maxLength={32}
+                maxLength={MAX_NAME_DISPLAY_WIDTH}
                 value={templateEditorDraft.name || ''}
                 placeholder="创建部队模板1"
-                onChange={(event) => setTemplateEditorDraft((prev) => ({ ...prev, name: event.target.value || '' }))}
+                onChange={(event) => setTemplateEditorDraft((prev) => ({
+                  ...prev,
+                  name: limitNameByDisplayWidth(event.target.value || '')
+                }))}
               />
             </label>
             {templateEditorStep === 'units' ? (
@@ -2702,7 +2735,14 @@ const ArmyPanel = ({
                   <aside className="army-formation-slot-panel">
                     <div className="army-formation-slot-head">
                       <span>阵型栏</span>
-                      <button type="button" className="btn btn-secondary btn-small" onClick={handleAddFormationSlot}>新增阵型</button>
+                      <button
+                        type="button"
+                        className="btn btn-secondary btn-small"
+                        onClick={handleAddFormationSlot}
+                        disabled={templateEditorFormations.length >= MAX_TEMPLATE_FORMATIONS}
+                      >
+                        新增阵型
+                      </button>
                     </div>
                     <div className="army-formation-slot-list">
                       {templateEditorFormationSummaries.map((formation) => (

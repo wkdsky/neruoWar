@@ -3,10 +3,10 @@ import createBattleInputController from '../input/BattleInputController';
 
 export default function useBattleSceneInputController({
   open = false,
+  interactionLocked = false,
   glCanvasRef,
   runtimeRef,
   cameraRef,
-  cameraViewRectRef,
   worldToScreenRef,
   pointerWorldRef,
   panDragRef,
@@ -26,7 +26,7 @@ export default function useBattleSceneInputController({
   selectBattleSquad,
   closeSkillConfirm,
   closeSkillPick,
-  closeMarchModePick,
+  closeSpacingPick,
   recallDeployDraggingGroup,
   setClockPaused,
   setCards,
@@ -47,12 +47,16 @@ export default function useBattleSceneInputController({
   CAMERA_ZOOM_STEP,
   CAMERA_DISTANCE_MIN,
   CAMERA_DISTANCE_MAX,
+  TRAINING_OVERVIEW_DISTANCE_EXTRA,
+  TRAINING_OVERVIEW_DISTANCE_MAX,
+  TRAINING_OVERVIEW_VIEW_PADDING,
   DEPLOY_ROTATE_SENSITIVITY,
   DEPLOY_ROTATE_CLICK_THRESHOLD,
+  DEPLOY_WHEEL_ROTATE_STEP_DEG,
   DEPLOY_PITCH_DEG,
   BATTLE_UI_MODE_NONE,
   BATTLE_UI_MODE_PATH,
-  BATTLE_UI_MODE_MARCH_PICK,
+  BATTLE_UI_MODE_SPACING_PICK,
   BATTLE_UI_MODE_SKILL_PICK,
   BATTLE_UI_MODE_SKILL_CONFIRM,
   skillRangeByClass,
@@ -60,10 +64,10 @@ export default function useBattleSceneInputController({
 } = {}) {
   const battleInputController = useMemo(() => createBattleInputController({
     open,
+    interactionLocked,
     canvasRef: glCanvasRef,
     runtimeRef,
     cameraControllerRef: cameraRef,
-    cameraViewRectRef,
     worldToScreenRef,
     pointerWorldRef,
     panDragRef,
@@ -75,12 +79,16 @@ export default function useBattleSceneInputController({
       CAMERA_ZOOM_STEP,
       CAMERA_DISTANCE_MIN,
       CAMERA_DISTANCE_MAX,
+      TRAINING_OVERVIEW_DISTANCE_EXTRA,
+      TRAINING_OVERVIEW_DISTANCE_MAX,
+      TRAINING_OVERVIEW_VIEW_PADDING,
       DEPLOY_ROTATE_SENSITIVITY,
       DEPLOY_ROTATE_CLICK_THRESHOLD,
+      DEPLOY_WHEEL_ROTATE_STEP_DEG,
       DEPLOY_PITCH_DEG,
       BATTLE_UI_MODE_NONE,
       BATTLE_UI_MODE_PATH,
-      BATTLE_UI_MODE_MARCH_PICK,
+      BATTLE_UI_MODE_SPACING_PICK,
       BATTLE_UI_MODE_SKILL_PICK,
       BATTLE_UI_MODE_SKILL_CONFIRM,
       skillRangeByClass,
@@ -117,13 +125,13 @@ export default function useBattleSceneInputController({
       selectBattleSquad,
       closeSkillConfirm,
       closeSkillPick,
-      closeMarchModePick,
+      closeSpacingPick,
       recallDeployDraggingGroup
     }
   }), [
     open,
+    interactionLocked,
     runtimeRef,
-    cameraViewRectRef,
     worldToScreenRef,
     selectedSquadId,
     battleUiMode,
@@ -138,7 +146,7 @@ export default function useBattleSceneInputController({
     selectBattleSquad,
     closeSkillConfirm,
     closeSkillPick,
-    closeMarchModePick,
+    closeSpacingPick,
     recallDeployDraggingGroup,
     setClockPaused,
     setCards,
@@ -166,12 +174,16 @@ export default function useBattleSceneInputController({
     CAMERA_ZOOM_STEP,
     CAMERA_DISTANCE_MIN,
     CAMERA_DISTANCE_MAX,
+    TRAINING_OVERVIEW_DISTANCE_EXTRA,
+    TRAINING_OVERVIEW_DISTANCE_MAX,
+    TRAINING_OVERVIEW_VIEW_PADDING,
     DEPLOY_ROTATE_SENSITIVITY,
     DEPLOY_ROTATE_CLICK_THRESHOLD,
+    DEPLOY_WHEEL_ROTATE_STEP_DEG,
     DEPLOY_PITCH_DEG,
     BATTLE_UI_MODE_NONE,
     BATTLE_UI_MODE_PATH,
-    BATTLE_UI_MODE_MARCH_PICK,
+    BATTLE_UI_MODE_SPACING_PICK,
     BATTLE_UI_MODE_SKILL_PICK,
     BATTLE_UI_MODE_SKILL_CONFIRM,
     skillRangeByClass,
@@ -183,9 +195,19 @@ export default function useBattleSceneInputController({
     return battleInputController.bindWindow();
   }, [open, battleInputController]);
 
+  useEffect(() => {
+    if (!interactionLocked) return;
+    battleInputController.clearPanDrag();
+    battleInputController.clearDeployYawDrag();
+    battleInputController.clearDeployRectDrag();
+    runtimeRef.current?.setHoveredDeployGroup?.('');
+  }, [battleInputController, interactionLocked, runtimeRef]);
+
   return {
+    onDoubleClick: battleInputController.onDoubleClick,
     onMouseDown: battleInputController.onMouseDown,
     onMouseMove: battleInputController.onMouseMove,
+    onMouseLeave: battleInputController.onMouseLeave,
     onWheel: battleInputController.onWheel,
     onContextMenu: battleInputController.onContextMenu,
     onMinimapClick: battleInputController.onMinimapClick

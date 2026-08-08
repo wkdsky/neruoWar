@@ -2,6 +2,7 @@ import React from 'react';
 import { createPortal } from 'react-dom';
 import useDraggablePanel from './useDraggablePanel';
 import './Battle.css';
+import { MAX_NAME_DISPLAY_WIDTH } from '../../shared/nameLimits';
 
 const NUMBER_PAD_ROWS = [
   ['1', '2', '3'],
@@ -35,6 +36,7 @@ const BattleTemplateFillModal = ({
   open = false,
   preview = null,
   isTrainingMode = false,
+  trainingUiScale = 1,
   onClose,
   onChangeTotal,
   onChangeTeam,
@@ -74,7 +76,6 @@ const BattleTemplateFillModal = ({
 
   const handleBackdropPointerDown = (event) => {
     event.stopPropagation();
-    if (event.target === event.currentTarget) onClose?.();
   };
 
   const stopModalInteraction = (event) => event.stopPropagation();
@@ -95,7 +96,8 @@ const BattleTemplateFillModal = ({
 
   const modal = (
     <div
-      className="pve2-template-fill-backdrop"
+      className={`pve2-template-fill-backdrop ${isTrainingMode ? 'is-training' : ''}`}
+      style={isTrainingMode ? { '--pve2-training-ui-scale': trainingUiScale } : undefined}
       onPointerDown={handleBackdropPointerDown}
       onMouseDown={stopModalInteraction}
       onClick={stopModalInteraction}
@@ -119,7 +121,7 @@ const BattleTemplateFillModal = ({
             <span>部队名称</span>
             <input
               type="text"
-              maxLength={32}
+              maxLength={MAX_NAME_DISPLAY_WIDTH}
               value={troopName}
               placeholder={templateName}
               data-no-drag

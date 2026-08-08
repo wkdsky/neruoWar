@@ -1,6 +1,6 @@
 import React from 'react';
 
-const MAX_FORMATION_WHEEL_ITEMS = 15;
+const MAX_FORMATION_WHEEL_ITEMS = 9;
 
 const BattleFormationWheel = ({
   open = false,

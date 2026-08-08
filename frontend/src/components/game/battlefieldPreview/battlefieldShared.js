@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { limitNameByDisplayWidth } from '../../../game/battle/shared/nameLimits';
 
 export const CAMERA_ANGLE_PREVIEW = 45;
 export const CAMERA_ANGLE_EDIT = 45;
@@ -370,7 +371,7 @@ export const sanitizeDefenderDeployments = (rawDeployments = []) => {
     const primary = units[0];
     out.push({
       deployId,
-      name: typeof item?.name === 'string' ? item.name.trim() : '',
+      name: typeof item?.name === 'string' ? limitNameByDisplayWidth(item.name.trim()) : '',
       sortOrder: Math.max(0, Math.floor(Number(item?.sortOrder) || 0)),
       placed: item?.placed !== false,
       rotation: normalizeDefenderFacingDeg(item?.rotation),

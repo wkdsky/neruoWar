@@ -566,6 +566,13 @@ export const getSkillTreeRoot = (treeCategory = '') => {
   return tree?.skills?.find((skill) => skill.tier === 0) || tree?.skills?.[0] || null;
 };
 
+// The root node is a free passive.  A newly created command slot needs the
+// first usable (active) node so it can be cast once training starts.
+export const getSkillTreeFirstActiveSkill = (treeCategory = '') => {
+  const tree = getSkillTreeById(treeCategory);
+  return tree?.skills?.find((skill) => skill.kind !== 'passive') || getSkillTreeRoot(treeCategory);
+};
+
 export const getAllowedSkillTreeCategories = (unitCategories = []) => {
   const allowed = new Set(
     (Array.isArray(unitCategories) ? unitCategories : [])

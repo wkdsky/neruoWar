@@ -9,9 +9,13 @@ export const SPEED_MODE_AUTO = 'AUTO';
 export const CAMERA_ZOOM_STEP = 72;
 export const CAMERA_DISTANCE_MIN = 420;
 export const CAMERA_DISTANCE_MAX = 980;
+export const TRAINING_OVERVIEW_DISTANCE_EXTRA = 900;
+export const TRAINING_OVERVIEW_DISTANCE_MAX = 4600;
+export const TRAINING_OVERVIEW_VIEW_PADDING = 1.08;
 
 export const DEPLOY_ROTATE_SENSITIVITY = 0.28;
 export const DEPLOY_ROTATE_CLICK_THRESHOLD = 3;
+export const DEPLOY_WHEEL_ROTATE_STEP_DEG = 15;
 
 // Keep attacker (world -X) on web-left when using pitch > 90 deg.
 export const DEPLOY_DEFAULT_YAW_DEG = 0;
@@ -26,10 +30,22 @@ export const BATTLE_FOLLOW_MIRROR_X = false;
 
 export const BATTLE_UI_MODE_NONE = 'NONE';
 export const BATTLE_UI_MODE_PATH = 'PATH_PLANNING';
-export const BATTLE_UI_MODE_MARCH_PICK = 'MARCH_PICK';
+export const BATTLE_UI_MODE_SPACING_PICK = 'SPACING_PICK';
 export const BATTLE_UI_MODE_GUARD = 'GUARD';
 export const BATTLE_UI_MODE_SKILL_PICK = 'SKILL_PICK';
 export const BATTLE_UI_MODE_SKILL_CONFIRM = 'SKILL_CONFIRM';
+
+export const TRAINING_FONT_SIZE_OPTIONS = Object.freeze([
+  { value: 'small', label: '小' },
+  { value: 'medium', label: '中' },
+  { value: 'large', label: '大' }
+]);
+
+export const TRAINING_FONT_SCALE_BY_SIZE = Object.freeze({
+  small: 1,
+  medium: 1.15,
+  large: 1.3
+});
 
 export const QUICK_DEPLOY_TEAM_SHORTCUTS = [5, 10, 20, 30, 50];
 export const QUICK_DEPLOY_TOTAL_SHORTCUTS = [
@@ -128,6 +144,11 @@ export const createDefaultTemplateFillPreview = () => ({
 export const createDefaultQuickDeployRandomForm = () => ({ ...QUICK_DEPLOY_RANDOM_DEFAULT });
 
 export const createDefaultConfirmDeletePos = () => ({ x: 0, y: 0 });
+
+export const createDefaultTrainingPresentationSettings = () => ({
+  fontSize: 'medium',
+  showGrid: true
+});
 
 export const createDefaultDeployInfoState = () => ({
   open: false,

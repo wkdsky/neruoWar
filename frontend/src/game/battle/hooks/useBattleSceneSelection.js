@@ -5,7 +5,7 @@ import {
   BATTLE_FOLLOW_YAW_DEG,
   BATTLE_PITCH_HIGH_DEG,
   BATTLE_PITCH_LOW_DEG,
-  BATTLE_UI_MODE_MARCH_PICK,
+  BATTLE_UI_MODE_SPACING_PICK,
   BATTLE_UI_MODE_NONE,
   BATTLE_UI_MODE_PATH,
   BATTLE_UI_MODE_SKILL_CONFIRM,
@@ -85,14 +85,15 @@ export default function useBattleSceneSelection({
   setPendingPathPoints,
   setPlanningHoverPoint,
   setSkillConfirmState,
-  setMarchModePickOpen,
-  setMarchPopupPos,
+  setSpacingPickOpen,
+  setSpacingPopupPos,
   setDeployDraggingGroup,
   setDeployActionAnchorMode,
   setSelectedPaletteItemId,
   setQuickDeployOpen,
   setQuickDeployApplying,
   setQuickDeployError,
+  setDeployNotice,
   setMinimapSnapshot
 } = {}) {
   const handleStartBattle = useCallback(() => {
@@ -103,17 +104,12 @@ export default function useBattleSceneSelection({
       setResultState((prev) => ({ ...prev, open: true, error: result?.reason || '无法开战', summary: null }));
       return;
     }
-    const battleRows = runtime.getCardRows();
-    const firstControllable = battleRows.find((row) => row.alive && runtime.canControlSquad?.(runtime.getSquadById?.(row.id)))
-      || battleRows.find((row) => row.alive && row.team === TEAM_ATTACKER)
-      || battleRows.find((row) => row.alive);
-    if (firstControllable) {
-      runtime.setFocusSquad(firstControllable.id);
-      if (runtime.canControlSquad?.(runtime.getSquadById?.(firstControllable.id))) {
-        runtime.setSelectedBattleSquad(firstControllable.id);
-      }
-      setSelectedSquadId(runtime.canControlSquad?.(runtime.getSquadById?.(firstControllable.id)) ? firstControllable.id : '');
-      const anchor = runtime.getFocusAnchor();
+    const anchor = runtime.getFocusAnchor();
+    const focusedSquadId = String(anchor?.squadId || '');
+    const focusedSquad = focusedSquadId ? runtime.getSquadById?.(focusedSquadId) : null;
+    const canControlFocusedSquad = !!focusedSquad && runtime.canControlSquad?.(focusedSquad);
+    if (focusedSquadId) {
+      setSelectedSquadId(canControlFocusedSquad ? focusedSquadId : '');
       cameraRef.current.centerX = Number(anchor?.x) || 0;
       cameraRef.current.centerY = Number(anchor?.y) || 0;
       cameraRef.current.yawDeg = BATTLE_FOLLOW_YAW_DEG;
@@ -125,25 +121,29 @@ export default function useBattleSceneSelection({
       cameraRef.current.pitchFrom = cameraRef.current.pitchLow;
       cameraRef.current.pitchTo = cameraRef.current.pitchLow;
       cameraRef.current.pitchTweenSec = cameraRef.current.pitchTweenDurationSec;
+    } else {
+      cameraRef.current.clearFollow?.();
+      setSelectedSquadId('');
     }
     setPhase(runtime.getPhase());
     setBattleStatus(runtime.getBattleStatus());
     setCards(runtime.getCardRows());
     setAimState(createDefaultAimState());
     setBattleUiMode(BATTLE_UI_MODE_NONE);
-    setWorldActionsVisibleForSquadId(runtime.canControlSquad?.(runtime.getSquadById?.(firstControllable?.id)) ? (firstControllable?.id || '') : '');
+    setWorldActionsVisibleForSquadId(canControlFocusedSquad ? focusedSquadId : '');
     setHoverSquadIdOnCard('');
     setPendingPathPoints([]);
     setPlanningHoverPoint(null);
     setSkillConfirmState(null);
-    setMarchModePickOpen(false);
-    setMarchPopupPos(createDefaultPopupPos());
+    setSpacingPickOpen(false);
+    setSpacingPopupPos(createDefaultPopupPos());
     setDeployDraggingGroup(createDefaultDeployDraggingGroup());
     setDeployActionAnchorMode('');
     setSelectedPaletteItemId('');
     setQuickDeployOpen(false);
     setQuickDeployApplying(false);
     setQuickDeployError('');
+    setDeployNotice?.('');
   }, [
     cameraRef,
     runtimeRef,
@@ -154,8 +154,8 @@ export default function useBattleSceneSelection({
     setDeployActionAnchorMode,
     setDeployDraggingGroup,
     setHoverSquadIdOnCard,
-    setMarchModePickOpen,
-    setMarchPopupPos,
+    setSpacingPickOpen,
+    setSpacingPopupPos,
     setPendingPathPoints,
     setPhase,
     setPlanningHoverPoint,
@@ -163,6 +163,7 @@ export default function useBattleSceneSelection({
     setQuickDeployError,
     setQuickDeployOpen,
     setResultState,
+    setDeployNotice,
     setSelectedPaletteItemId,
     setSelectedSquadId,
     setSkillConfirmState,
@@ -230,7 +231,7 @@ export default function useBattleSceneSelection({
     setSelectedSquadId(squadId);
     setWorldActionsVisibleForSquadId(squadId);
     setBattleUiMode((prev) => (
-      prev === BATTLE_UI_MODE_PATH || prev === BATTLE_UI_MODE_SKILL_CONFIRM || prev === BATTLE_UI_MODE_MARCH_PICK
+      prev === BATTLE_UI_MODE_PATH || prev === BATTLE_UI_MODE_SKILL_CONFIRM || prev === BATTLE_UI_MODE_SPACING_PICK
         ? prev
         : BATTLE_UI_MODE_NONE
     ));

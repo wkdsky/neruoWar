@@ -31,7 +31,7 @@ const BattleHUD = ({
   <div className="pve2-hud">
     <div className="pve2-hud-left">
       <span className="pve2-chip">{phase === 'deploy' ? '部署中' : (phase === 'ended' ? '战斗结束' : (paused ? '已暂停' : '战斗中'))}</span>
-      <span className="pve2-time">{formatTime(status?.timerSec || 0)}</span>
+      {!isTrainingMode ? <span className="pve2-time">{formatTime(status?.timerSec || 0)}</span> : null}
       {status?.endReason ? <span className="pve2-reason">{status.endReason}</span> : null}
     </div>
     <div className="pve2-hud-right">

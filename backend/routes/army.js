@@ -9,6 +9,10 @@ const {
   BATTLEFIELD_FIELD_WIDTH,
   BATTLEFIELD_FIELD_HEIGHT
 } = require('../services/battlefieldScale');
+const {
+  MAX_NAME_DISPLAY_WIDTH,
+  limitNameByDisplayWidth
+} = require('../utils/nameLimits');
 
 const getUnitTypeId = (unit) => {
   const unitTypeId = typeof unit?.unitTypeId === 'string' ? unit.unitTypeId.trim() : '';
@@ -73,21 +77,21 @@ const getUnitKnowledgeCost = (unitType) => (
   Math.max(1, Math.floor(Number(unitType?.costKP) || 1))
 );
 
-const MAX_TEMPLATE_NAME_LEN = 32;
+const MAX_TEMPLATE_NAME_LEN = MAX_NAME_DISPLAY_WIDTH;
 const MAX_TEMPLATE_COUNT = 100;
 const MAX_TEMPLATE_UNIT_COUNT = 100;
 const MAX_TEMPLATE_TOTAL_COUNT = 100;
 const TRAINING_MAX_GROUP_TOTAL = 10000;
-const MAX_TEMPLATE_FORMATION_COUNT = 12;
+const MAX_TEMPLATE_FORMATION_COUNT = 9;
 const MAX_TEMPLATE_FORMATION_NAME_LEN = 24;
 const MAX_TEMPLATE_FORMATION_COORD = 999;
 const MAX_COMBAT_ARMY_COUNT = 100;
 const MAX_TRAINING_ARMY_COUNT = 200;
-const MAX_ARMY_NAME_LEN = 32;
+const MAX_ARMY_NAME_LEN = MAX_NAME_DISPLAY_WIDTH;
 const MAX_ARMY_UNIT_COUNT = 1000000;
 const MAX_ARMY_DEPLOY_SLOT_COUNT = 1000;
 const MAX_ARMY_COORD = 100000;
-const MAX_ARMY_SKILL_SLOT_COUNT = 8;
+const MAX_ARMY_SKILL_SLOT_COUNT = 3;
 
 const buildTemplateId = () => `tpl_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
 const buildFormationId = () => `fmt_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
@@ -96,7 +100,7 @@ const buildArmyId = (scope = 'army') => `${scope}_${Date.now()}_${Math.random().
 const normalizeTemplateName = (rawName, fallback = '未命名模板') => {
   const name = typeof rawName === 'string' ? rawName.trim() : '';
   if (!name) return fallback;
-  return name.slice(0, MAX_TEMPLATE_NAME_LEN);
+  return limitNameByDisplayWidth(name, MAX_TEMPLATE_NAME_LEN);
 };
 
 const normalizeFormationName = (rawName, fallback = '默认阵型') => {
@@ -107,7 +111,7 @@ const normalizeFormationName = (rawName, fallback = '默认阵型') => {
 
 const normalizeArmyName = (rawName, fallback = '未命名部队') => {
   const name = typeof rawName === 'string' ? rawName.trim() : '';
-  return (name || fallback).slice(0, MAX_ARMY_NAME_LEN);
+  return limitNameByDisplayWidth(name || fallback, MAX_ARMY_NAME_LEN) || fallback;
 };
 
 const normalizeTemplateUnitsLoose = (rawUnits) => {
@@ -1038,7 +1042,6 @@ router.get('/training/init', authenticateToken, async (req, res) => {
       gateKey: 'training',
       gateLabel: '训练场',
       nodeName: '训练场',
-      timeLimitSec: 240,
       unitsPerSoldier: 10,
       rules: {
         maxDeployGroupTotal: TRAINING_MAX_GROUP_TOTAL,

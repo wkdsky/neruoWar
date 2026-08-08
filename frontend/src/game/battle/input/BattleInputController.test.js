@@ -1,4 +1,5 @@
-import createBattleInputController from './BattleInputController';
+import createBattleInputController, { resolveTrainingOverviewDistance } from './BattleInputController';
+import CameraController from '../presentation/render/CameraController';
 
 const createCanvas = () => ({
   width: 1000,
@@ -6,9 +7,15 @@ const createCanvas = () => ({
   getBoundingClientRect: () => ({ left: 0, top: 0, width: 1000, height: 500 })
 });
 
-const createFixture = ({ phase = 'battle', getters = {}, runtimeOverrides = {} } = {}) => {
+const createFixture = ({
+  phase = 'battle',
+  interactionLocked = false,
+  getters = {},
+  runtimeOverrides = {},
+  camera: suppliedCamera = null
+} = {}) => {
   const canvas = createCanvas();
-  const camera = {
+  const camera = suppliedCamera || {
     centerX: 10,
     centerY: 20,
     distance: 560,
@@ -48,6 +55,7 @@ const createFixture = ({ phase = 'battle', getters = {}, runtimeOverrides = {} }
   };
   const controller = createBattleInputController({
     open: true,
+    interactionLocked,
     canvasRef: refs.canvasRef,
     runtimeRef: refs.runtimeRef,
     cameraControllerRef: refs.cameraRef,
@@ -60,7 +68,7 @@ const createFixture = ({ phase = 'battle', getters = {}, runtimeOverrides = {} }
     constants: {
       BATTLE_UI_MODE_NONE: 'none',
       BATTLE_UI_MODE_PATH: 'path',
-      BATTLE_UI_MODE_MARCH_PICK: 'march-pick',
+      BATTLE_UI_MODE_SPACING_PICK: 'spacing-pick',
       BATTLE_UI_MODE_SKILL_PICK: 'skill-pick',
       BATTLE_UI_MODE_SKILL_CONFIRM: 'skill-confirm',
       ORDER_MOVE: 'MOVE'
@@ -92,6 +100,84 @@ const sceneMouseDown = (overrides = {}) => ({
 });
 
 describe('BattleInputController primary-button panning', () => {
+  test('calculates a wider training overview distance from the battlefield and viewport', () => {
+    const landscape = resolveTrainingOverviewDistance({
+      field: { width: 2700, height: 1488 },
+      viewport: { width: 1000, height: 500 },
+      baseDistance: 980
+    });
+    const portrait = resolveTrainingOverviewDistance({
+      field: { width: 2700, height: 1488 },
+      viewport: { width: 500, height: 1000 },
+      baseDistance: 980
+    });
+
+    expect(landscape).toBeGreaterThan(980);
+    expect(portrait).toBeGreaterThan(landscape);
+  });
+
+  test('passes the extended overview band to the training wheel zoom', () => {
+    const setDistanceWithDynamicPitch = jest.fn();
+    const camera = {
+      distance: 980,
+      setDistanceWithDynamicPitch,
+      screenToGround: jest.fn()
+    };
+    const { controller } = createFixture({
+      camera,
+      getters: { isTrainingMode: () => true },
+      runtimeOverrides: {
+        getField: jest.fn(() => ({ width: 2700, height: 1488 }))
+      }
+    });
+
+    controller.onWheel({
+      deltaY: 1,
+      preventDefault: jest.fn(),
+      target: { closest: () => null }
+    });
+
+    expect(setDistanceWithDynamicPitch).toHaveBeenCalledWith(
+      1_004,
+      360,
+      980,
+      expect.any(Number)
+    );
+    expect(setDistanceWithDynamicPitch.mock.calls[0][3]).toBeGreaterThan(980);
+  });
+
+  test('rotates the selected deployment formation with the mouse wheel', () => {
+    const group = {
+      id: 'deploy-group',
+      team: 'attacker',
+      formationRect: { facingRad: 0 }
+    };
+    const setDeployGroupRect = jest.fn(() => ({ ok: true }));
+    const { camera, controller, runtime } = createFixture({
+      phase: 'deploy',
+      getters: { getSelectedSquadId: () => 'deploy-group' },
+      runtimeOverrides: {
+        getDeployGroupById: jest.fn(() => group),
+        setDeployGroupRect
+      }
+    });
+
+    controller.onWheel({
+      deltaY: -1,
+      preventDefault: jest.fn(),
+      target: { closest: () => null }
+    });
+
+    expect(setDeployGroupRect).toHaveBeenCalledWith(
+      'deploy-group',
+      { facingRad: expect.any(Number) },
+      'attacker'
+    );
+    expect(setDeployGroupRect.mock.calls[0][1].facingRad).toBeCloseTo((Math.PI * 23) / 12, 6);
+    expect(camera.distance).toBe(560);
+    expect(runtime.getCardRows).toHaveBeenCalled();
+  });
+
   test('pans the battle camera with a primary-button drag without issuing a battle command', () => {
     const { callbacks, camera, controller, refs, runtime } = createFixture();
     const cleanup = controller.bindWindow();
@@ -110,8 +196,8 @@ describe('BattleInputController primary-button panning', () => {
       clientY: 140
     }));
 
-    expect(camera.centerX).toBe(6);
-    expect(camera.centerY).toBe(24);
+    expect(camera.centerX).toBe(-30);
+    expect(camera.centerY).toBe(-20);
     expect(runtime.pickSquadAtPoint).not.toHaveBeenCalled();
     expect(refs.panDragRef.current).toBeNull();
     expect(callbacks.setIsPanning).toHaveBeenLastCalledWith(false);
@@ -144,6 +230,98 @@ describe('BattleInputController primary-button panning', () => {
     cleanup();
   });
 
+  test('lets a click on the empty deployment card strip reach the map', () => {
+    const deployGroup = { id: 'deploy-group', placed: true };
+    const { callbacks, controller, runtime } = createFixture({
+      phase: 'deploy',
+      getters: { isTrainingMode: () => true },
+      runtimeOverrides: {
+        pickDeployGroup: jest.fn(() => deployGroup)
+      }
+    });
+    const cleanup = controller.bindWindow();
+    const cardStrip = document.createElement('div');
+    cardStrip.className = 'pve2-card-strip';
+
+    controller.onMouseDown(sceneMouseDown({ target: cardStrip }));
+    window.dispatchEvent(new MouseEvent('mouseup', {
+      bubbles: true,
+      button: 0,
+      clientX: 100,
+      clientY: 100
+    }));
+
+    expect(runtime.pickDeployGroup).toHaveBeenCalledWith({ x: 100, y: 100 }, 'any');
+    expect(runtime.setSelectedDeployGroup).toHaveBeenCalledWith('deploy-group');
+    expect(callbacks.setSelectedSquadId).toHaveBeenCalledWith('deploy-group');
+    cleanup();
+  });
+
+  test.each([
+    { label: 'rotated camera', pitch: 40, worldYawDeg: 75 },
+    { label: 'top-down camera', pitch: 90, worldYawDeg: 135 }
+  ])('keeps the grabbed ground point under the pointer with a $label', ({ pitch, worldYawDeg }) => {
+    const camera = new CameraController({
+      yawDeg: 0,
+      pitchLow: pitch,
+      pitchHigh: 90,
+      distance: 560
+    });
+    camera.currentPitch = pitch;
+    camera.pitchFrom = pitch;
+    camera.pitchTo = pitch;
+    camera.pitchTweenSec = camera.pitchTweenDurationSec;
+    camera.worldYawDeg = worldYawDeg;
+    camera.buildMatrices(1000, 500);
+
+    const { controller } = createFixture({ camera });
+    const cleanup = controller.bindWindow();
+    const grabbedGround = camera.screenToGround(500, 250, { width: 1000, height: 500 });
+
+    controller.onMouseDown(sceneMouseDown({ clientX: 500, clientY: 250 }));
+    window.dispatchEvent(new MouseEvent('mousemove', {
+      bubbles: true,
+      buttons: 1,
+      clientX: 560,
+      clientY: 285
+    }));
+    window.dispatchEvent(new MouseEvent('mousemove', {
+      bubbles: true,
+      buttons: 1,
+      clientX: 605,
+      clientY: 310
+    }));
+
+    const groundUnderPointer = camera.screenToGround(605, 310, { width: 1000, height: 500 });
+    expect(groundUnderPointer.valid).toBe(true);
+    expect(groundUnderPointer.x).toBeCloseTo(grabbedGround.x, 4);
+    expect(groundUnderPointer.y).toBeCloseTo(grabbedGround.y, 4);
+    cleanup();
+  });
+
+  test('focuses an already deployed training group after a double click', () => {
+    const deployedGroup = { id: 'defender-group', x: 360, y: -120, placed: true };
+    const { callbacks, camera, controller, runtime } = createFixture({
+      phase: 'deploy',
+      getters: {
+        isTrainingMode: () => true
+      },
+      runtimeOverrides: {
+        pickDeployGroup: jest.fn(() => deployedGroup)
+      }
+    });
+    camera.beginFocusTransition = jest.fn();
+
+    controller.onDoubleClick(sceneMouseDown({ clientX: 440, clientY: 220 }));
+
+    expect(runtime.pickDeployGroup).toHaveBeenCalledWith({ x: 440, y: 220 }, 'any');
+    expect(camera.centerX).toBe(360);
+    expect(camera.centerY).toBe(-120);
+    expect(camera.beginFocusTransition).toHaveBeenCalledWith({ x: 360, y: -120, squadId: 'defender-group' });
+    expect(runtime.setSelectedDeployGroup).toHaveBeenCalledWith('defender-group');
+    expect(callbacks.setSelectedSquadId).toHaveBeenCalledWith('defender-group');
+  });
+
   test('pans while a deploy group is awaiting placement', () => {
     const { camera, controller, runtime } = createFixture({
       phase: 'deploy',
@@ -170,8 +348,8 @@ describe('BattleInputController primary-button panning', () => {
       clientY: 140
     }));
 
-    expect(camera.centerX).toBe(6);
-    expect(camera.centerY).toBe(24);
+    expect(camera.centerX).toBe(-30);
+    expect(camera.centerY).toBe(-20);
     expect(runtime.moveDeployGroup).not.toHaveBeenCalled();
     cleanup();
   });
@@ -199,9 +377,104 @@ describe('BattleInputController primary-button panning', () => {
     expect(runtime.pickDeployGroup).toHaveBeenCalled();
     cleanup();
   });
+
+  test('does not start map input when pressing the compact training squad panel', () => {
+    const { controller, refs } = createFixture();
+    controller.onMouseDown(sceneMouseDown({
+      target: {
+        closest: (selector) => (selector.includes('.pve2-training-squad-panel') ? {} : null)
+      }
+    }));
+
+    expect(refs.panDragRef.current).toBeNull();
+  });
+
+  test('does not start map input from the template editor overlay', () => {
+    const { controller, refs } = createFixture();
+    controller.onMouseDown(sceneMouseDown({
+      target: {
+        closest: (selector) => (selector.includes('.army-template-editor-overlay') ? {} : null)
+      }
+    }));
+
+    expect(refs.panDragRef.current).toBeNull();
+  });
+
+  test('locks map input while a modal editor is open', () => {
+    const { controller, refs, runtime } = createFixture({
+      phase: 'deploy',
+      interactionLocked: true
+    });
+
+    controller.onMouseDown(sceneMouseDown());
+    controller.onMouseMove({
+      clientX: 140,
+      clientY: 120,
+      target: { closest: () => null }
+    });
+    controller.onMinimapClick({ x: 12, y: 8 });
+
+    expect(refs.panDragRef.current).toBeNull();
+    expect(runtime.pickDeployGroup).not.toHaveBeenCalled();
+  });
+
+  test('updates deployment hover state without changing selected group', () => {
+    const hoveredGroup = { id: 'hovered-group', placed: true };
+    const setHoveredDeployGroup = jest.fn();
+    const { controller, runtime } = createFixture({
+      phase: 'deploy',
+      getters: { isTrainingMode: () => true },
+      runtimeOverrides: {
+        pickDeployGroup: jest.fn(() => hoveredGroup),
+        setHoveredDeployGroup
+      }
+    });
+
+    controller.onMouseMove({
+      clientX: 140,
+      clientY: 120,
+      target: { closest: () => null }
+    });
+
+    expect(runtime.pickDeployGroup).toHaveBeenCalledWith({ x: 140, y: 120 }, 'any');
+    expect(setHoveredDeployGroup).toHaveBeenCalledWith('hovered-group');
+    expect(runtime.setSelectedDeployGroup).not.toHaveBeenCalled();
+  });
 });
 
 describe('BattleInputController training control', () => {
+  test('rotates the battlefield with a right-button drag when no squad is selected', () => {
+    const commandMove = jest.fn();
+    const { camera, controller, refs } = createFixture({
+      getters: {
+        isTrainingMode: () => true
+      },
+      runtimeOverrides: {
+        commandMove
+      }
+    });
+    const cleanup = controller.bindWindow();
+
+    controller.onMouseDown(sceneMouseDown({ button: 2, clientX: 100, clientY: 100 }));
+    window.dispatchEvent(new MouseEvent('mousemove', {
+      bubbles: true,
+      buttons: 2,
+      clientX: 160,
+      clientY: 100
+    }));
+    window.dispatchEvent(new MouseEvent('mouseup', {
+      bubbles: true,
+      button: 2,
+      clientX: 160,
+      clientY: 100
+    }));
+
+    expect(commandMove).not.toHaveBeenCalled();
+    expect(camera.worldYawDeg).toBeCloseTo(16.8, 6);
+    expect(refs.deployYawDragRef.current).toBeNull();
+    cleanup();
+  });
+
   test('allows a user-controlled defender to receive a right-click move command', () => {
     const defender = { id: 'defender_squad_1', team: 'defender', remain: 20 };
     const syncBattleCards = jest.fn();

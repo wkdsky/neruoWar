@@ -1,57 +1,7 @@
 import React, { useMemo, useState } from 'react';
-import {
-  ArrowUpRight,
-  Ban,
-  CircleDot,
-  Crosshair,
-  Flame,
-  Gauge,
-  HeartPulse,
-  Layers,
-  Move,
-  Orbit,
-  Radio,
-  RotateCw,
-  Shield,
-  ShieldCheck,
-  SlidersHorizontal,
-  Sparkles,
-  Sword,
-  Swords,
-  Target,
-  Waves,
-  Wind,
-  Zap,
-  Rocket
-} from 'lucide-react';
+import { resolveSkillTreeIcon } from './skillTreeIcons';
 import './SkillTreePanel.css';
 import { SKILL_TREE_CATALOG } from './skillTreeData';
-
-const SKILL_ICONS = Object.freeze({
-  ArrowUpRight,
-  Ban,
-  CircleDot,
-  Crosshair,
-  Flame,
-  Gauge,
-  HeartPulse,
-  Layers,
-  Move,
-  Orbit,
-  Radio,
-  RotateCw,
-  Shield,
-  ShieldCheck,
-  SlidersHorizontal,
-  Sparkles,
-  Sword,
-  Swords,
-  Target,
-  Waves,
-  Wind,
-  Zap,
-  Rocket
-});
 
 const TREE_LEVEL_Y = Object.freeze({ 0: 12, 1: 36, 2: 60, 3: 84 });
 
@@ -64,8 +14,8 @@ const getSkillCoordinates = (skill) => ({
   y: TREE_LEVEL_Y[skill.tier] || TREE_LEVEL_Y[0]
 });
 
-const SkillIcon = ({ name, size = 20, strokeWidth = 1.8 }) => {
-  const Icon = SKILL_ICONS[name] || Sparkles;
+const SkillIcon = ({ skill = null, name = '', size = 20, strokeWidth = 1.8 }) => {
+  const Icon = resolveSkillTreeIcon(skill || { icon: name });
   return <Icon size={size} strokeWidth={strokeWidth} aria-hidden="true" />;
 };
 
@@ -78,7 +28,7 @@ const SkillNode = ({ skill, selected, onSelect }) => (
     aria-label={`${skill.name}，查看技能详情`}
   >
     <span className="skill-tree-node-icon">
-      <SkillIcon name={skill.icon} size={22} />
+      <SkillIcon skill={skill} size={22} />
     </span>
     <span className="skill-tree-node-copy">
       <strong>{skill.name}</strong>

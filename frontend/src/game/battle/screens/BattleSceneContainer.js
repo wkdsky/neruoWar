@@ -26,23 +26,28 @@ import AimOverlayCanvas from '../presentation/ui/AimOverlayCanvas';
 import BattleDebugPanel from '../presentation/ui/BattleDebugPanel';
 import BattleQuickDeployModal from '../presentation/ui/BattleQuickDeployModal';
 import BattleTemplateFillModal from '../presentation/ui/BattleTemplateFillModal';
-import BattleMarchModeFloat from '../presentation/ui/BattleMarchModeFloat';
+import BattleFormationSpacingFloat from '../presentation/ui/BattleFormationSpacingFloat';
 import BattleSkillPickFloat from '../presentation/ui/BattleSkillPickFloat';
 import DeployGroupInfoPanel from '../presentation/ui/DeployGroupInfoPanel';
 import BattleFormationWheel from '../presentation/ui/BattleFormationWheel';
 import TrainingSkillTreeModal from '../presentation/ui/TrainingSkillTreeModal';
 import TrainingSettingsModal from '../presentation/ui/TrainingSettingsModal';
 import useDraggablePanel from '../presentation/ui/useDraggablePanel';
+import ArmyPanel from '../../../components/game/ArmyPanel';
 import unitVisualConfig from '../presentation/assets/UnitVisualConfig.example.json';
 import BattleDataService from '../data/BattleDataService';
-import { getSkillTreeById, normalizeSkillSlots } from '../../../components/game/skillTree/skillTreeData';
+import {
+  getSkillTreeById,
+  getSkillTreeFirstActiveSkill,
+  normalizeSkillSlots
+} from '../../../components/game/skillTree/skillTreeData';
 import {
   BATTLE_FOLLOW_MIRROR_X,
   BATTLE_FOLLOW_WORLD_YAW_DEG,
   BATTLE_FOLLOW_YAW_DEG,
   BATTLE_PITCH_HIGH_DEG,
   BATTLE_PITCH_LOW_DEG,
-  BATTLE_UI_MODE_MARCH_PICK,
+  BATTLE_UI_MODE_SPACING_PICK,
   BATTLE_UI_MODE_NONE,
   BATTLE_UI_MODE_PATH,
   BATTLE_UI_MODE_SKILL_CONFIRM,
@@ -50,16 +55,22 @@ import {
   CAMERA_DISTANCE_MAX,
   CAMERA_DISTANCE_MIN,
   CAMERA_ZOOM_STEP,
+  TRAINING_OVERVIEW_DISTANCE_EXTRA,
+  TRAINING_OVERVIEW_DISTANCE_MAX,
+  TRAINING_OVERVIEW_VIEW_PADDING,
   DEPLOY_DEFAULT_YAW_DEG,
   DEPLOY_PITCH_DEG,
   DEPLOY_ROTATE_CLICK_THRESHOLD,
   DEPLOY_ROTATE_SENSITIVITY,
+  DEPLOY_WHEEL_ROTATE_STEP_DEG,
   ORDER_MOVE,
   TEAM_ATTACKER,
   TEAM_DEFENDER,
   createDefaultConfirmDeletePos,
   createDefaultDeployInfoState,
   createDefaultResultState,
+  createDefaultTrainingPresentationSettings,
+  TRAINING_FONT_SCALE_BY_SIZE,
   speedModeLabel
 } from './battleSceneConstants';
 import {
@@ -90,7 +101,7 @@ const serializeTrainingArmyGroup = (group = {}) => {
     templateName: String(group?.templateName || '').trim(),
     units,
     templateFormations: Array.isArray(group?.templateFormations)
-      ? group.templateFormations.map((formation) => ({
+      ? group.templateFormations.slice(0, 9).map((formation) => ({
         formationId: String(formation?.formationId || formation?.id || '').trim(),
         name: String(formation?.name || '').trim(),
         placements: Array.isArray(formation?.placements)
@@ -107,7 +118,9 @@ const serializeTrainingArmyGroup = (group = {}) => {
       ? { ...group.formationRect }
       : null,
     deploySlots: Array.isArray(group?.deploySlots) ? group.deploySlots.map((slot) => ({ ...slot })) : [],
-    skillSlots: Array.isArray(group?.skillSlots) ? group.skillSlots.map((slot) => ({ ...slot })) : [],
+    skillSlots: Array.isArray(group?.skillSlots)
+      ? group.skillSlots.slice(0, 3).map((slot) => ({ ...slot }))
+      : [],
     x: Number(group?.x) || 0,
     y: Number(group?.y) || 0,
     placed: group?.placed !== false
@@ -160,6 +173,7 @@ const BattleSceneContainer = ({
   const reportBattleResultRef = useRef(() => {});
   const lastTrainingArmySnapshotRef = useRef('');
   const trainingArmySaveInFlightRef = useRef(null);
+  const resetDeployNoticeTimeoutRef = useRef(null);
   const [mapKeyCommand, setMapKeyCommand] = useState('');
   const [deployFormationLibrary, setDeployFormationLibrary] = useState({});
   const [formationWheelState, setFormationWheelState] = useState({
@@ -169,6 +183,11 @@ const BattleSceneContainer = ({
     y: 0
   });
   const [trainingSettingsOpen, setTrainingSettingsOpen] = useState(false);
+  const [templateEditorState, setTemplateEditorState] = useState({
+    open: false,
+    template: null
+  });
+  const [trainingPresentationSettings, setTrainingPresentationSettings] = useState(createDefaultTrainingPresentationSettings);
   const [skillTreeModal, setSkillTreeModal] = useState({
     open: false,
     groupId: '',
@@ -176,6 +195,14 @@ const BattleSceneContainer = ({
     treeCategory: '',
     progress: { unlocked: [] }
   });
+  const trainingUiScale = TRAINING_FONT_SCALE_BY_SIZE[trainingPresentationSettings.fontSize]
+    || TRAINING_FONT_SCALE_BY_SIZE.medium;
+
+  useEffect(() => () => {
+    if (resetDeployNoticeTimeoutRef.current) {
+      window.clearTimeout(resetDeployNoticeTimeoutRef.current);
+    }
+  }, []);
 
   const {
     paused,
@@ -200,10 +227,10 @@ const BattleSceneContainer = ({
     setSkillPopupSquadId,
     skillPopupPos,
     setSkillPopupPos,
-    marchModePickOpen,
-    setMarchModePickOpen,
-    marchPopupPos,
-    setMarchPopupPos,
+    spacingPickOpen,
+    setSpacingPickOpen,
+    spacingPopupPos,
+    setSpacingPopupPos,
     selectedSquadId,
     setSelectedSquadId,
     resultState,
@@ -332,8 +359,37 @@ const BattleSceneContainer = ({
   const {
     armyTemplates,
     armyTemplatesLoading,
-    armyTemplatesError
+    armyTemplatesError,
+    reloadArmyTemplates,
+    deleteTemplate: deleteArmyTemplate
   } = useArmyTemplates({ open });
+
+  const handleOpenTemplateEditor = useCallback((template = null) => {
+    setTemplateEditorState({ open: true, template: template || null });
+  }, []);
+
+  const handleCloseTemplateEditor = useCallback(() => {
+    setTemplateEditorState({ open: false, template: null });
+  }, []);
+
+  const handleTemplateEditorSaved = useCallback(() => {
+    reloadArmyTemplates().catch((loadError) => {
+      setDeployNotice(`部队模板刷新失败: ${loadError?.message || '请重试'}`);
+    });
+  }, [reloadArmyTemplates, setDeployNotice]);
+
+  const handleDeleteArmyTemplate = useCallback(async (template) => {
+    const templateId = String(template?.templateId || '').trim();
+    if (!templateId) return;
+    const templateName = String(template?.name || '未命名模板').trim() || '未命名模板';
+    if (typeof window !== 'undefined' && !window.confirm(`确认删除部队模板「${templateName}」？`)) return;
+    try {
+      await deleteArmyTemplate(templateId);
+      setDeployNotice(`已删除部队模板「${templateName}」`);
+    } catch (deleteError) {
+      setDeployNotice(`删除部队模板失败: ${deleteError?.message || '请重试'}`);
+    }
+  }, [deleteArmyTemplate, setDeployNotice]);
 
   const {
     pipelineRef,
@@ -348,6 +404,11 @@ const BattleSceneContainer = ({
     battleInitData,
     mode
   });
+
+  useEffect(() => {
+    if (!isTrainingMode || !renderReady) return;
+    pipelineRef.current?.threePipeline?.setGridVisible?.(trainingPresentationSettings.showGrid);
+  }, [isTrainingMode, pipelineRef, renderReady, trainingPresentationSettings.showGrid]);
 
   const {
     stats: debugStats,
@@ -389,6 +450,7 @@ const BattleSceneContainer = ({
   useBattleSceneLifecycle({
     open,
     phase,
+    isTrainingMode,
     runtimeRef,
     runtimeVersion,
     runtimeInitRef,
@@ -409,8 +471,8 @@ const BattleSceneContainer = ({
     setSkillConfirmState,
     setSkillPopupSquadId,
     setSkillPopupPos,
-    setMarchModePickOpen,
-    setMarchPopupPos,
+    setSpacingPickOpen,
+    setSpacingPopupPos,
     setResultState,
     setDeployDraggingGroup,
     setDeployInfoState,
@@ -492,7 +554,7 @@ const BattleSceneContainer = ({
     setDeployFormationLibrary((prev) => {
       const legalFormations = (Array.isArray(formations) ? formations : [])
         .filter((formation) => formation && formation.legal !== false)
-        .slice(0, 15);
+        .slice(0, 9);
       if (legalFormations.length <= 0) {
         const next = { ...prev };
         delete next[safeGroupId];
@@ -538,7 +600,7 @@ const BattleSceneContainer = ({
       const groupId = String(group?.id || '').trim();
       const formations = (Array.isArray(group?.templateFormations) ? group.templateFormations : [])
         .filter((formation) => formation && formation.legal !== false && Array.isArray(formation.placements) && formation.placements.length > 0)
-        .slice(0, 15);
+        .slice(0, 9);
       if (!groupId || formations.length <= 0) return library;
       library[groupId] = {
         formations,
@@ -617,9 +679,9 @@ const BattleSceneContainer = ({
     setFormationWheelState((prev) => ({ ...prev, open: false }));
   }, []);
 
-  const handlePickDeployFormation = useCallback((formation) => {
+  const handlePickDeployFormation = useCallback((formation, targetGroupIdOverride = '') => {
     const runtime = runtimeRef.current;
-    const groupId = String(formationWheelState.groupId || deployDraggingGroupId || selectedSquadId || '').trim();
+    const groupId = String(targetGroupIdOverride || formationWheelState.groupId || deployDraggingGroupId || selectedSquadId || '').trim();
     if (!runtime || runtime.getPhase?.() !== 'deploy' || !groupId || !formation) return;
     const group = runtime.getDeployGroupById(groupId);
     if (!group) {
@@ -671,6 +733,49 @@ const BattleSceneContainer = ({
     setMinimapSnapshot,
     setSelectedSquadId
   ]);
+
+  const handleReorderDeployFormations = useCallback((groupId = '', formations = []) => {
+    const runtime = runtimeRef.current;
+    const safeGroupId = String(groupId || '').trim();
+    if (!runtime || runtime.getPhase?.() !== 'deploy' || !safeGroupId) return;
+    const orderedIds = (Array.isArray(formations) ? formations : [])
+      .map((formation) => String(formation?.formationId || formation?.id || '').trim())
+      .filter(Boolean);
+    const result = runtime.reorderDeployGroupFormations?.(safeGroupId, orderedIds, 'any');
+    if (result?.ok === false) {
+      setDeployNotice(result.reason || '阵型快捷键调整失败');
+      return;
+    }
+    const nextFormations = Array.isArray(result?.formations) ? result.formations : formations;
+    setDeployFormationLibrary((prev) => {
+      const source = prev[safeGroupId];
+      if (!source) return prev;
+      return {
+        ...prev,
+        [safeGroupId]: { ...source, formations: nextFormations.slice(0, 9) }
+      };
+    });
+    setCards(runtime.getCardRows?.() || []);
+  }, [runtimeRef, setCards, setDeployNotice]);
+
+  const handleFormationHotkey = useCallback((slotIndex = 0) => {
+    if (phase !== 'deploy') return;
+    const runtime = runtimeRef.current;
+    const groupId = String(
+      deployDraggingGroupId
+      || selectedSquadId
+      || runtime?.getDeployGroups?.()?.selectedId
+      || ''
+    ).trim();
+    if (!groupId) return;
+    const runtimeFormations = runtime?.getDeployGroupFormations?.(groupId, 'any') || [];
+    const formations = runtimeFormations.length > 0
+      ? runtimeFormations
+      : (deployFormationLibrary[groupId]?.formations || []);
+    const formation = formations[Math.max(0, Math.min(8, Math.floor(Number(slotIndex) || 0)))];
+    if (!formation) return;
+    handlePickDeployFormation(formation, groupId);
+  }, [deployDraggingGroupId, deployFormationLibrary, handlePickDeployFormation, phase, runtimeRef, selectedSquadId]);
 
   useEffect(() => {
     if (!open) return undefined;
@@ -799,14 +904,15 @@ const BattleSceneContainer = ({
     setPendingPathPoints,
     setPlanningHoverPoint,
     setSkillConfirmState,
-    setMarchModePickOpen,
-    setMarchPopupPos,
+    setSpacingPickOpen,
+    setSpacingPopupPos,
     setDeployDraggingGroup,
     setDeployActionAnchorMode,
     setSelectedPaletteItemId,
     setQuickDeployOpen,
     setQuickDeployApplying,
     setQuickDeployError,
+    setDeployNotice,
     setMinimapSnapshot
   });
 
@@ -821,13 +927,13 @@ const BattleSceneContainer = ({
     closeSkillConfirm,
     closeSkillPick,
     commitPathPlanning,
-    closeMarchModePick,
+    closeSpacingPick,
     executeBattleAction,
     handleCycleSpeedMode,
     handleBattleActionClick,
     handleSkillPick,
     handleFinishPathPlanning,
-    handlePickMarchMode
+    handlePickFormationSpacing
   } = useBattleActions({
     runtimeRef,
     cameraRef,
@@ -844,8 +950,8 @@ const BattleSceneContainer = ({
     setClockPaused,
     setPendingPathPoints,
     setPlanningHoverPoint,
-    setMarchModePickOpen,
-    setMarchPopupPos,
+    setSpacingPickOpen,
+    setSpacingPopupPos,
     setSkillPopupPos,
     setSkillPopupSquadId
   });
@@ -872,22 +978,25 @@ const BattleSceneContainer = ({
     setCards,
     setMinimapSnapshot,
     setTemplateFillPreview,
-    onDeployGroupFormationsChange: handleDeployGroupFormationsChange,
-    onDeployGroupRemoved: handleDeployGroupRemoved
+    onDeployGroupFormationsChange: handleDeployGroupFormationsChange
   });
 
+  const modalInteractionLocked = templateEditorState.open || templateFillPreview.open;
+
   const {
+    onDoubleClick: handleSceneDoubleClick,
     onMouseDown: handleSceneMouseDown,
     onMouseMove: handlePointerMove,
+    onMouseLeave: handleSceneMouseLeave,
     onWheel: handleSceneWheel,
     onContextMenu: handleSceneContextMenu,
     onMinimapClick: handleMinimapClick
   } = useBattleSceneInputController({
     open,
+    interactionLocked: modalInteractionLocked,
     glCanvasRef,
     runtimeRef,
     cameraRef,
-    cameraViewRectRef,
     worldToScreenRef,
     pointerWorldRef,
     panDragRef,
@@ -907,7 +1016,7 @@ const BattleSceneContainer = ({
     selectBattleSquad,
     closeSkillConfirm,
     closeSkillPick,
-    closeMarchModePick,
+    closeSpacingPick,
     recallDeployDraggingGroup: handleRecallDeployDraggingGroup,
     setClockPaused,
     setCards,
@@ -928,12 +1037,16 @@ const BattleSceneContainer = ({
     CAMERA_ZOOM_STEP,
     CAMERA_DISTANCE_MIN,
     CAMERA_DISTANCE_MAX,
+    TRAINING_OVERVIEW_DISTANCE_EXTRA,
+    TRAINING_OVERVIEW_DISTANCE_MAX,
+    TRAINING_OVERVIEW_VIEW_PADDING,
     DEPLOY_ROTATE_SENSITIVITY,
     DEPLOY_ROTATE_CLICK_THRESHOLD,
+    DEPLOY_WHEEL_ROTATE_STEP_DEG,
     DEPLOY_PITCH_DEG,
     BATTLE_UI_MODE_NONE,
     BATTLE_UI_MODE_PATH,
-    BATTLE_UI_MODE_MARCH_PICK,
+    BATTLE_UI_MODE_SPACING_PICK,
     BATTLE_UI_MODE_SKILL_PICK,
     BATTLE_UI_MODE_SKILL_CONFIRM,
     skillRangeByClass,
@@ -965,23 +1078,6 @@ const BattleSceneContainer = ({
     onDeployGroupRemoved: handleDeployGroupRemoved
   });
 
-  const handleDeployGroupSkillSlotsChange = useCallback((groupId, skillSlots = []) => {
-    const runtime = runtimeRef.current;
-    if (!runtime || runtime.getPhase?.() !== 'deploy') return;
-    const result = runtime.setDeployGroupSkillSlots(groupId, skillSlots, 'any');
-    if (!result?.ok) {
-      setDeployNotice(result?.reason || '技能配置失败');
-      return;
-    }
-    setCards(runtime.getCardRows());
-    setMinimapSnapshot(runtime.getMinimapSnapshot());
-  }, [
-    runtimeRef,
-    setCards,
-    setDeployNotice,
-    setMinimapSnapshot
-  ]);
-
   const syncTrainingUi = useCallback(() => {
     const runtime = runtimeRef.current;
     if (!runtime) return;
@@ -1012,12 +1108,12 @@ const BattleSceneContainer = ({
       setPlanningHoverPoint(null);
       setSkillConfirmState(null);
       setSkillPopupSquadId('');
-      setMarchModePickOpen(false);
+      setSpacingPickOpen(false);
       setBattleUiMode(BATTLE_UI_MODE_NONE);
       if (
         battleUiMode === BATTLE_UI_MODE_PATH
         || battleUiMode === BATTLE_UI_MODE_SKILL_CONFIRM
-        || battleUiMode === BATTLE_UI_MODE_MARCH_PICK
+        || battleUiMode === BATTLE_UI_MODE_SPACING_PICK
       ) {
         setClockPaused(false);
       }
@@ -1035,7 +1131,7 @@ const BattleSceneContainer = ({
     setBattleUiMode,
     setClockPaused,
     setDeployNotice,
-    setMarchModePickOpen,
+    setSpacingPickOpen,
     setPendingPathPoints,
     setPlanningHoverPoint,
     setSelectedSquadId,
@@ -1052,21 +1148,30 @@ const BattleSceneContainer = ({
   const handleOpenTrainingSkillTree = useCallback((groupId, slotIndex = 0, treeCategory = '') => {
     const runtime = runtimeRef.current;
     if (!runtime) return;
-    const source = phase === 'battle'
-      ? runtime.getSquadById?.(groupId)
-      : runtime.getDeployGroupById?.(groupId, 'any');
-    if (!source) return;
+    const safeGroupId = String(groupId || '');
     const safeIndex = clamp(Math.floor(Number(slotIndex) || 0), 0, 2);
+    if (
+      skillTreeModal.open
+      && skillTreeModal.groupId === safeGroupId
+      && skillTreeModal.slotIndex === safeIndex
+    ) {
+      closeTrainingSkillTree();
+      return;
+    }
+    const source = phase === 'battle'
+      ? runtime.getSquadById?.(safeGroupId)
+      : runtime.getDeployGroupById?.(safeGroupId, 'any');
+    if (!source) return;
     const slot = normalizeSkillSlots(source.skillSlots)[safeIndex];
     const category = String(treeCategory || slot?.treeCategory || '').trim();
     setSkillTreeModal({
       open: true,
-      groupId: String(groupId || ''),
+      groupId: safeGroupId,
       slotIndex: safeIndex,
       treeCategory: category,
-      progress: category ? runtime.getTrainingSkillTreeProgress?.(groupId, category) || { unlocked: [] } : { unlocked: [] }
+      progress: category ? runtime.getTrainingSkillTreeProgress?.(safeGroupId, category) || { unlocked: [] } : { unlocked: [] }
     });
-  }, [phase, runtimeRef]);
+  }, [closeTrainingSkillTree, phase, runtimeRef, skillTreeModal.groupId, skillTreeModal.open, skillTreeModal.slotIndex]);
 
   const handleTrainingTreeCategoryChange = useCallback((nextCategory = '') => {
     const runtime = runtimeRef.current;
@@ -1078,7 +1183,7 @@ const BattleSceneContainer = ({
     slots[skillTreeModal.slotIndex] = {
       ...slots[skillTreeModal.slotIndex],
       treeCategory: tree?.id || '',
-      skillId: tree?.skills?.find((skill) => skill.kind !== 'passive')?.id || '',
+      skillId: getSkillTreeFirstActiveSkill(tree?.id)?.id || '',
       cooldownRemain: 0
     };
     const result = runtime.setDeployGroupSkillSlots(group.id, slots, 'any');
@@ -1102,6 +1207,10 @@ const BattleSceneContainer = ({
       return;
     }
     if (phase === 'deploy') {
+      if (!meta.lit) {
+        setDeployNotice('准备阶段仅保留起始技能，训练中使用技能点点亮后才能装备');
+        return;
+      }
       const group = runtime.getDeployGroupById(skillTreeModal.groupId, 'any');
       if (!group) return;
       const slots = normalizeSkillSlots(group.skillSlots);
@@ -1198,6 +1307,16 @@ const BattleSceneContainer = ({
     setTrainingState(result.state);
   }, [runtimeRef, setDeployNotice, setTrainingState]);
 
+  const handleApplyTrainingPresentationSettings = useCallback((nextSettings = {}) => {
+    const fontSize = TRAINING_FONT_SCALE_BY_SIZE[nextSettings.fontSize]
+      ? nextSettings.fontSize
+      : 'medium';
+    setTrainingPresentationSettings({
+      fontSize,
+      showGrid: nextSettings.showGrid !== false
+    });
+  }, []);
+
   const handleResetTraining = useCallback(() => {
     const result = resetTraining();
     if (!result?.ok) {
@@ -1208,8 +1327,17 @@ const BattleSceneContainer = ({
     closeTrainingSkillTree();
     setResultState(createDefaultResultState());
     setBattleUiMode(BATTLE_UI_MODE_NONE);
-    setSelectedSquadId(runtimeRef.current?.getDeployGroups?.()?.selectedId || '');
-    setDeployNotice('已重置到开始训练前的部署状态');
+    runtimeRef.current?.clearSelection?.();
+    setSelectedSquadId('');
+    const resetNotice = '已重置到开始训练前的部署状态';
+    setDeployNotice(resetNotice);
+    if (resetDeployNoticeTimeoutRef.current) {
+      window.clearTimeout(resetDeployNoticeTimeoutRef.current);
+    }
+    resetDeployNoticeTimeoutRef.current = window.setTimeout(() => {
+      setDeployNotice((current) => (current === resetNotice ? '' : current));
+      resetDeployNoticeTimeoutRef.current = null;
+    }, 2800);
     syncTrainingUi();
   }, [closeTrainingSkillTree, resetTraining, runtimeRef, setBattleUiMode, setDeployNotice, setResultState, setSelectedSquadId, syncTrainingUi]);
 
@@ -1331,7 +1459,7 @@ const BattleSceneContainer = ({
     commitPathPlanning,
     setBattleUiMode,
     setSkillPopupSquadId,
-    setMarchModePickOpen,
+    setSpacingPickOpen,
     setClockPaused,
     setWorldActionsVisibleForSquadId,
     setAimState,
@@ -1339,6 +1467,7 @@ const BattleSceneContainer = ({
   });
 
   const handleSceneEscape = useCallback(() => {
+    if (modalInteractionLocked) return;
     if (trainingSettingsOpen) {
       setTrainingSettingsOpen(false);
       return;
@@ -1352,21 +1481,23 @@ const BattleSceneContainer = ({
       return;
     }
     handleEscape();
-  }, [closeTrainingSkillTree, formationWheelState.open, handleCloseFormationWheel, handleEscape, skillTreeModal.open, trainingSettingsOpen]);
+  }, [closeTrainingSkillTree, formationWheelState.open, handleCloseFormationWheel, handleEscape, modalInteractionLocked, skillTreeModal.open, trainingSettingsOpen]);
 
   useBattleSceneGlobalInput({
     open,
+    interactionLocked: modalInteractionLocked,
     runtimeRef,
     spacePressedRef,
-    marchModePickOpen,
+    spacingPickOpen,
     isSkillPickMode: battleUiMode === BATTLE_UI_MODE_SKILL_PICK,
     onEscape: handleSceneEscape,
     onTogglePause: handleTogglePause,
     onTogglePitch: handleTogglePitch,
     onMapKeyCommand: handleMapKeyCommand,
-    onFormationKey: handleFormationKey,
+    onFormationKey: isTrainingMode ? undefined : handleFormationKey,
+    onFormationHotkey: isTrainingMode ? handleFormationHotkey : undefined,
     onSkillHotkey: handleTrainingSkillHotkey,
-    onCloseMarchModePick: closeMarchModePick,
+    onCloseSpacingPick: closeSpacingPick,
     onCloseSkillPick: closeSkillPick
   });
 
@@ -1473,11 +1604,15 @@ const BattleSceneContainer = ({
   const overlayClassName = [
     'pve2-overlay',
     isTrainingMode ? 'is-training-three' : '',
+    isTrainingMode ? `training-font-${trainingPresentationSettings.fontSize}` : '',
     deployPlacementLocked ? 'is-deploy-placement-lock' : ''
   ].filter(Boolean).join(' ');
 
   return (
-    <div className={overlayClassName}>
+    <div
+      className={overlayClassName}
+      style={isTrainingMode ? { '--pve2-training-ui-scale': trainingUiScale } : undefined}
+    >
       <div className="pve2-head">
         <div className="pve2-title">
           <strong>{battleInitData?.nodeName || (isTrainingMode ? '训练场' : '攻占战')}</strong>
@@ -1534,8 +1669,10 @@ const BattleSceneContainer = ({
           <div
             ref={sceneRef}
             className={`pve2-scene ${isPanning ? 'is-panning' : ''}`}
+            onDoubleClick={handleSceneDoubleClick}
             onMouseDown={handleSceneMouseDown}
             onMouseMove={handlePointerMove}
+            onMouseLeave={handleSceneMouseLeave}
             onContextMenu={handleSceneContextMenu}
             onWheel={handleSceneWheel}
           >
@@ -1593,16 +1730,31 @@ const BattleSceneContainer = ({
               onBattleControlModeToggle={handleTrainingBattleControlModeToggle}
               onReorder={handleDeployReorder}
               onPlacementAction={handleDeployPlacementAction}
-              onSkillSlotsChange={handleDeployGroupSkillSlotsChange}
               onOpenSkillTree={handleOpenTrainingSkillTree}
               onCastSkillSlot={handleCastTrainingSkillSlot}
+              onFormationPick={isTrainingMode ? (groupId, formation) => handlePickDeployFormation(formation, groupId) : undefined}
+              onFormationReorder={isTrainingMode ? handleReorderDeployFormations : undefined}
+              trainingSkillTreeOpen={skillTreeModal.open && skillTreeModal.groupId === selectedCardRow?.id}
+              trainingSkillTreeSlotIndex={skillTreeModal.groupId === selectedCardRow?.id ? skillTreeModal.slotIndex : -1}
               trainingState={trainingState}
               armyTemplates={armyTemplates}
               armyTemplatesLoading={armyTemplatesLoading}
               armyTemplatesError={armyTemplatesError}
               onTemplateFill={handleOpenTemplateFillPreview}
+              onTemplateCreate={isTrainingMode ? () => handleOpenTemplateEditor() : undefined}
+              onTemplateEdit={isTrainingMode ? handleOpenTemplateEditor : undefined}
+              onTemplateDelete={isTrainingMode ? handleDeleteArmyTemplate : undefined}
               isTrainingMode={isTrainingMode}
             />
+
+            {templateEditorState.open ? (
+              <ArmyPanel
+                mode="templateEditor"
+                templateToEdit={templateEditorState.template}
+                onTemplateSaved={handleTemplateEditorSaved}
+                onClose={handleCloseTemplateEditor}
+              />
+            ) : null}
 
             {phase === 'battle' && !isTrainingMode ? (
               <div className="pve2-action-pad">
@@ -1618,10 +1770,11 @@ const BattleSceneContainer = ({
             ) : null}
 
             {phase === 'battle' ? (
-              <BattleMarchModeFloat
-                open={marchModePickOpen}
-                popupPos={marchPopupPos}
-                onPickMode={handlePickMarchMode}
+              <BattleFormationSpacingFloat
+                open={spacingPickOpen}
+                popupPos={spacingPopupPos}
+                value={selectedCardRow?.formationSpacing || 'standard'}
+                onPickSpacing={handlePickFormationSpacing}
               />
             ) : null}
 
@@ -1640,6 +1793,7 @@ const BattleSceneContainer = ({
                 open={templateFillPreview.open}
                 preview={templateFillPreview}
                 isTrainingMode={isTrainingMode}
+                trainingUiScale={trainingUiScale}
                 onClose={handleCloseTemplateFillPreview}
                 onChangeTotal={handleChangeTemplateFillTotal}
                 onChangeTeam={handleChangeTemplateFillTeam}
@@ -1759,8 +1913,9 @@ const BattleSceneContainer = ({
                   onInfo={(event) => handleOpenDeployInfo(worldActionGroupId, event)}
                   onMove={(event) => handleDeployMoveWithInfoClose(worldActionGroupId, event)}
                   onEdit={(event) => handleDeployEditWithInfoClose(worldActionGroupId, event)}
-                  onFormation={(event) => openFormationWheelForGroup(worldActionGroupId, event)}
+                  onFormation={isTrainingMode ? undefined : (event) => openFormationWheelForGroup(worldActionGroupId, event)}
                   onDelete={(event) => handleDeployDeleteWithInfoClose(worldActionGroupId, event)}
+                  showDelete={!isTrainingMode}
                   deleteTitle={isTrainingMode
                     ? (selectedCardRow?.placed !== false ? '取消放置' : '删除训练部队')
                     : '删除'}
@@ -1771,7 +1926,7 @@ const BattleSceneContainer = ({
               </div>
             ) : null}
 
-            {phase === 'deploy' ? (
+            {phase === 'deploy' && !isTrainingMode ? (
               <BattleFormationWheel
                 open={formationWheelState.open}
                 formations={deployFormationLibrary[formationWheelState.groupId]?.formations || []}
@@ -1792,8 +1947,8 @@ const BattleSceneContainer = ({
               />
             ) : null}
 
-            {phase === 'deploy' && deployNotice ? (
-              <div className="pve2-deploy-notice">{deployNotice}</div>
+            {deployNotice ? (
+              <div className="pve2-deploy-notice" role="status" aria-live="polite">{deployNotice}</div>
             ) : null}
 
             {confirmOpen ? (
@@ -1856,9 +2011,11 @@ const BattleSceneContainer = ({
             <TrainingSettingsModal
               open={trainingSettingsOpen}
               state={trainingState}
+              settings={trainingPresentationSettings}
               onClose={() => setTrainingSettingsOpen(false)}
               onAdjustPoints={handleTrainingAdjustSkillPoints}
               onChangeInterval={handleTrainingPointIntervalChange}
+              onApply={handleApplyTrainingPresentationSettings}
             />
           ) : null}
 
