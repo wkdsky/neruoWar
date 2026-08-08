@@ -7,6 +7,7 @@
  * - Deploy phase now supports formation rectangle state for slot expansion/reshape.
  */
 import {
+  applyCrowdSquadFormation,
   createCrowdSim,
   updateCrowdSim,
   triggerCrowdSkill
@@ -127,6 +128,7 @@ const DEPLOY_FORMATION_MIN_EDGE = 8;
 const DEPLOY_FORMATION_MAX_EDGE_MUL = 5.8;
 const TEMPLATE_FORMATION_CELL_SPACING = 13;
 const MAX_DEPLOY_TEMPLATE_FORMATIONS = 9;
+const FORMATION_CHANGE_DURATION_SEC = 4.6;
 
 const clamp = (value, min, max) => Math.min(max, Math.max(min, value));
 const cloneJsonValue = (value, fallback = null) => {
@@ -1924,6 +1926,10 @@ export default class BattleRuntime {
     return squad.controlMode !== CONTROL_MODE_AI;
   }
 
+  canSelectSquad(squad = null) {
+    return !!squad && (Number(squad.remain) || 0) > 0;
+  }
+
   getDeployGroupById(groupId = '', team = TEAM_ANY) {
     const safeId = typeof groupId === 'string' ? groupId.trim() : '';
     if (!safeId) return null;
@@ -1937,6 +1943,21 @@ export default class BattleRuntime {
     return this.attackerDeployGroups.find((row) => row.id === safeId)
       || this.defenderDeployGroups.find((row) => row.id === safeId)
       || null;
+  }
+
+  getFormationGroupById(groupId = '', team = TEAM_ANY) {
+    const safeId = typeof groupId === 'string' ? groupId.trim() : '';
+    if (!safeId) return null;
+    if (this.phase === 'battle') {
+      const direct = this.getSquadById(safeId);
+      if (direct) return direct;
+      const safeTeam = typeof team === 'string' ? team.trim() : '';
+      return (Array.isArray(this.sim?.squads) ? this.sim.squads : []).find((row) => (
+        row?.sourceDeployGroupId === safeId
+        && (safeTeam === TEAM_ATTACKER || safeTeam === TEAM_DEFENDER ? row.team === safeTeam : true)
+      )) || null;
+    }
+    return this.getDeployGroupById(safeId, team);
   }
 
   getDeployGroupInfo(groupId = '', team = TEAM_ANY) {
@@ -1960,7 +1981,7 @@ export default class BattleRuntime {
   }
 
   getDeployGroupFormations(groupId = '', team = TEAM_ANY) {
-    const group = this.getDeployGroupById(groupId, team);
+    const group = this.getFormationGroupById(groupId, team);
     if (!group) return [];
     return (Array.isArray(group.templateFormations) ? group.templateFormations : [])
       .filter((formation) => formation && formation.legal !== false)
@@ -2119,11 +2140,28 @@ export default class BattleRuntime {
   }
 
   setDeployGroupFormation(groupId = '', formation = null, team = TEAM_ANY) {
-    if (this.phase !== 'deploy') return { ok: false, reason: '仅部署阶段可切换阵型' };
-    const group = this.getDeployGroupById(groupId, team);
+    const isBattleFormationChange = this.phase === 'battle';
+    if (this.phase !== 'deploy' && !isBattleFormationChange) {
+      return { ok: false, reason: '当前阶段不可切换阵型' };
+    }
+    const group = this.getFormationGroupById(groupId, team);
     if (!group) return { ok: false, reason: '未找到部队' };
+    if (isBattleFormationChange && !this.canControlSquad(group)) {
+      return { ok: false, reason: '该部队由 AI 接管' };
+    }
     const nextFormation = buildTemplateFormationState(formation, group, group.team, this.repConfig);
     if (!nextFormation) return { ok: false, reason: '阵型不可用' };
+    const nextFormationId = String(formation?.formationId || formation?.id || '').trim();
+    const currentFormationId = String(group?.formationRect?.formationId || group?.activeFormationId || '').trim();
+    if (isBattleFormationChange && currentFormationId === nextFormationId) {
+      return {
+        ok: true,
+        changed: false,
+        reforming: (Number(group?.formationChange?.remainingSec) || 0) > 0,
+        formationRect: { ...group.formationRect },
+        slotCount: Array.isArray(group.deploySlots) ? group.deploySlots.length : 0
+      };
+    }
     group.formationRect = {
       ...nextFormation.formationRect,
       facingRad: normalizeFormationFacing(group.team, group.formationRect?.facingRad)
@@ -2133,9 +2171,27 @@ export default class BattleRuntime {
       group.formationRect.slotCount,
       group.formationRect
     );
-    group.activeFormationId = String(formation?.formationId || formation?.id || '').trim();
+    group.activeFormationId = nextFormationId;
+    if (isBattleFormationChange) {
+      group.formationChange = {
+        fromFormationId: currentFormationId,
+        toFormationId: nextFormationId,
+        remainingSec: FORMATION_CHANGE_DURATION_SEC,
+        durationSec: FORMATION_CHANGE_DURATION_SEC
+      };
+      group.speedPolicy = SPEED_POLICY_REFORM;
+      group.reformUntil = FORMATION_CHANGE_DURATION_SEC;
+      group.action = '换阵中';
+      if (this.crowd) {
+        applyCrowdSquadFormation(this.crowd, group, group.deploySlots, group.formationRect);
+      }
+      this.markCommandIssued('formation_change');
+    }
     return {
       ok: true,
+      changed: true,
+      reforming: isBattleFormationChange,
+      reformDurationSec: isBattleFormationChange ? FORMATION_CHANGE_DURATION_SEC : 0,
       formationRect: { ...group.formationRect },
       slotCount: group.deploySlots.length
     };
@@ -2394,7 +2450,7 @@ export default class BattleRuntime {
     const nextMode = controlMode === CONTROL_MODE_AI ? CONTROL_MODE_AI : CONTROL_MODE_USER;
     this.focusSquadId = squad.id;
     if (squad.controlMode === nextMode) {
-      this.selectedBattleSquadId = nextMode === CONTROL_MODE_USER ? squad.id : '';
+      this.selectedBattleSquadId = squad.id;
       return { ok: true, squadId: squad.id, controlMode: nextMode };
     }
 
@@ -2405,7 +2461,7 @@ export default class BattleRuntime {
       squad.targetSquadId = '';
       this.commandBehavior(squad.id, 'auto');
       squad.controlMode = CONTROL_MODE_AI;
-      if (this.selectedBattleSquadId === squad.id) this.selectedBattleSquadId = '';
+      this.selectedBattleSquadId = squad.id;
     } else {
       squad.controlMode = CONTROL_MODE_USER;
       this.commandBehavior(squad.id, 'idle');
@@ -2699,6 +2755,7 @@ export default class BattleRuntime {
       effects: [],
       projectiles: [],
       hitEffects: [],
+      damageNumbers: [],
       destroyedBuildings: 0,
       ended: false,
       endReason: ''
@@ -2723,7 +2780,7 @@ export default class BattleRuntime {
     const initialFocusSquad = this.isTrainingMode ? selectedTrainingSquad : firstUserSquad;
     this.selectedDeploySquadId = '';
     this.focusSquadId = initialFocusSquad?.id || '';
-    this.selectedBattleSquadId = this.canControlSquad(initialFocusSquad) ? initialFocusSquad.id : '';
+    this.selectedBattleSquadId = this.canSelectSquad(initialFocusSquad) ? initialFocusSquad.id : '';
     this.updateCameraAnchor(0);
     return { ok: true };
   }
@@ -2736,9 +2793,9 @@ export default class BattleRuntime {
     this.focusSquadId = String(squadId || '');
     if (this.phase === 'battle') {
       const squad = this.getSquadById(this.focusSquadId);
-      if (this.canControlSquad(squad)) {
+      if (this.canSelectSquad(squad)) {
         this.selectedBattleSquadId = squad.id;
-      } else if (this.isTrainingMode) {
+      } else {
         this.selectedBattleSquadId = '';
       }
       this.updateCameraAnchor(0);
@@ -2747,7 +2804,7 @@ export default class BattleRuntime {
 
   setSelectedBattleSquad(squadId = '') {
     const squad = this.getSquadById(squadId);
-    if (!this.canControlSquad(squad)) return false;
+    if (!this.canSelectSquad(squad)) return false;
     this.selectedBattleSquadId = squad.id;
     this.focusSquadId = squad.id;
     return true;
@@ -3195,6 +3252,8 @@ export default class BattleRuntime {
           treeCategory: slot.treeCategory,
           skillId: skill?.id || '',
           name: skill?.name || '空技能位',
+          tier: Math.max(0, Number(skill?.tier) || 0),
+          unlockCost: getSkillUnlockCost(skill),
           kind: classTag,
           classTag,
           count: Math.max(0, Number(squad.remain) || 0),
@@ -3409,6 +3468,9 @@ export default class BattleRuntime {
           skillSlots: normalizeSkillSlots(group?.skillSlots),
           remain: sumUnitsMap(group.units),
           startCount: sumUnitsMap(group.units),
+          x: Number(group?.x) || 0,
+          y: Number(group?.y) || 0,
+          radius: Math.max(0, Number(group?.radius) || 0),
           action: group?.placed === false ? '待放置' : '部署中',
           stamina: 100,
           placed: group?.placed !== false,
@@ -3430,6 +3492,9 @@ export default class BattleRuntime {
           skillSlots: normalizeSkillSlots(group?.skillSlots),
           remain: sumUnitsMap(group.units),
           startCount: sumUnitsMap(group.units),
+          x: Number(group?.x) || 0,
+          y: Number(group?.y) || 0,
+          radius: Math.max(0, Number(group?.radius) || 0),
           action: group?.placed === false ? '待放置' : '部署中',
           stamina: 100,
           placed: group?.placed !== false,
@@ -3460,6 +3525,9 @@ export default class BattleRuntime {
       speedMode: squad.speedMode || SPEED_MODE_B,
       speedModeAuthority: squad.speedModeAuthority || SPEED_AUTH_AI,
       speedPolicy: squad.speedPolicy || SPEED_POLICY_MARCH,
+      formationChange: squad.formationChange && typeof squad.formationChange === 'object'
+        ? { ...squad.formationChange }
+        : null,
       formationSpacing: normalizeFormationSpacing(squad.formationSpacing),
       behavior: squad.behavior || 'idle',
       debugTargetScore: squad.debugTargetScore || null,
@@ -3468,6 +3536,9 @@ export default class BattleRuntime {
       stability: squad.stability || null,
       x: Number(squad.x) || 0,
       y: Number(squad.y) || 0,
+      centerX: Number.isFinite(Number(squad.centerX)) ? Number(squad.centerX) : (Number(squad.x) || 0),
+      centerY: Number.isFinite(Number(squad.centerY)) ? Number(squad.centerY) : (Number(squad.y) || 0),
+      radius: Math.max(0, Number(squad.radius) || 0),
       health: Math.max(0, Number(squad.health) || 0),
       maxHealth: Math.max(0, Number(squad.maxHealth) || 0),
       skills: this.phase === 'battle' && this.canControlSquad(squad)

@@ -8,6 +8,7 @@ import {
   raycastObstacles
 } from './crowdPhysics';
 import {
+  acquireDamageNumber,
   acquireProjectile,
   acquireHitEffect
 } from '../effects/CombatEffects';
@@ -293,6 +294,14 @@ export const applyDamageToAgent = (sim, crowd, sourceAgent, targetAgent, amount 
   if (targetSquad && sourceSquad) {
     applySquadStabilityHit(targetSquad, sourceSquad, safeAmount, { poiseDamageMul: Number(options?.poiseDamageMul) || 1 });
   }
+  acquireDamageNumber(crowd.effectsPool, {
+    squadId: targetSquad?.id || targetAgent.squadId,
+    team: targetAgent.team,
+    x: targetAgent.x,
+    y: targetAgent.y,
+    z: 3.2,
+    amount: safeAmount
+  });
   acquireHitEffect(crowd.effectsPool, {
     type: hitType,
     x: targetAgent.x,

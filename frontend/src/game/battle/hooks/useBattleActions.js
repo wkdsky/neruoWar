@@ -17,6 +17,7 @@ export default function useBattleActions({
   cameraRef,
   glCanvasRef,
   worldToDomRef,
+  isTrainingMode = false,
   selectedSquadId = '',
   battleUiMode = BATTLE_UI_MODE_NONE,
   pendingPathPoints = [],
@@ -70,16 +71,20 @@ export default function useBattleActions({
     const runtime = runtimeRef.current;
     if (!runtime || runtime.getPhase() !== 'battle') return false;
     if (!runtime.setSelectedBattleSquad(squadId)) return false;
+    const squad = runtime.getSquadById(squadId);
+    const canControl = runtime.canControlSquad?.(squad);
     runtime.setFocusSquad(squadId);
     const anchor = runtime.getFocusAnchor();
     cameraRef.current.beginFocusTransition(anchor);
     setSelectedSquadId(squadId);
-    if (showActions) {
+    if (showActions && canControl && !isTrainingMode) {
       setWorldActionsVisibleForSquadId(squadId);
+    } else {
+      setWorldActionsVisibleForSquadId('');
     }
     syncBattleCards();
     return true;
-  }, [cameraRef, runtimeRef, setSelectedSquadId, setWorldActionsVisibleForSquadId, syncBattleCards]);
+  }, [cameraRef, isTrainingMode, runtimeRef, setSelectedSquadId, setWorldActionsVisibleForSquadId, syncBattleCards]);
 
   const closeSkillConfirm = useCallback((resumeBattle = true) => {
     setSkillConfirmState(null);
@@ -129,6 +134,7 @@ export default function useBattleActions({
     if (!selectBattleSquad(squadId, true)) return;
     const squad = runtime.getSquadById(squadId);
     if (!squad) return;
+    if (!runtime.canControlSquad?.(squad)) return;
     const popupPos = resolvePopupPos(payload, { x: Number(squad.x) || 0, y: Number(squad.y) || 0 });
 
     if (actionId !== 'formationSpacing') {
@@ -306,10 +312,11 @@ export default function useBattleActions({
     commitPathPlanning(true);
   }, [commitPathPlanning]);
 
-  const handlePickFormationSpacing = useCallback((spacing) => {
+  const handlePickFormationSpacing = useCallback((spacing, squadId = selectedSquadId) => {
     const runtime = runtimeRef.current;
-    if (!runtime || runtime.getPhase() !== 'battle' || !selectedSquadId) return;
-    runtime.commandFormationSpacing(selectedSquadId, spacing);
+    const targetSquadId = String(squadId || selectedSquadId || '').trim();
+    if (!runtime || runtime.getPhase() !== 'battle' || !targetSquadId) return;
+    runtime.commandFormationSpacing(targetSquadId, spacing);
     syncBattleCards();
     closeSpacingPick();
   }, [closeSpacingPick, runtimeRef, selectedSquadId, syncBattleCards]);

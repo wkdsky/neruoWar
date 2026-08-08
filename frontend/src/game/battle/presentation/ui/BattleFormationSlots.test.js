@@ -9,6 +9,23 @@ const formations = Array.from({ length: 4 }, (_, index) => ({
 }));
 
 describe('BattleFormationSlots', () => {
+  test('expands the centered formation grid on hover when requested', () => {
+    jest.useFakeTimers();
+    const { container } = render(
+      <BattleFormationSlots formations={formations} activeFormationId="formation-2" showHoverGrid />
+    );
+    const panel = container.querySelector('.pve2-formation-slots');
+    const trigger = screen.getByRole('button', { name: '阵型选择' });
+
+    fireEvent.mouseEnter(panel);
+    expect(panel.className).toContain('is-popover-open');
+    expect(trigger.getAttribute('aria-expanded')).toBe('true');
+
+    fireEvent.mouseLeave(panel);
+    expect(panel.className).toContain('is-popover-open');
+    jest.useRealTimers();
+  });
+
   test('renders formation shortcuts as a compact horizontal strip', () => {
     const { container } = render(
       <BattleFormationSlots formations={formations} activeFormationId="formation-2" editable />

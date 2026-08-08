@@ -45,6 +45,7 @@ export default function useBattleSceneInputController({
   setWorldActionsVisibleForSquadId,
   ORDER_MOVE,
   CAMERA_ZOOM_STEP,
+  CAMERA_DISTANCE_CLOSE_MIN,
   CAMERA_DISTANCE_MIN,
   CAMERA_DISTANCE_MAX,
   TRAINING_OVERVIEW_DISTANCE_EXTRA,
@@ -77,6 +78,7 @@ export default function useBattleSceneInputController({
     constants: {
       ORDER_MOVE,
       CAMERA_ZOOM_STEP,
+      CAMERA_DISTANCE_CLOSE_MIN,
       CAMERA_DISTANCE_MIN,
       CAMERA_DISTANCE_MAX,
       TRAINING_OVERVIEW_DISTANCE_EXTRA,
@@ -172,6 +174,7 @@ export default function useBattleSceneInputController({
     setWorldActionsVisibleForSquadId,
     ORDER_MOVE,
     CAMERA_ZOOM_STEP,
+    CAMERA_DISTANCE_CLOSE_MIN,
     CAMERA_DISTANCE_MIN,
     CAMERA_DISTANCE_MAX,
     TRAINING_OVERVIEW_DISTANCE_EXTRA,

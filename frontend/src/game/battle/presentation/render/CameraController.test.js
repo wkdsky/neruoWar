@@ -69,6 +69,19 @@ describe('CameraController focus transition', () => {
     expect(camera.getOverviewZoomProgress()).toBe(1);
   });
 
+  test('holds a 15-degree pitch while extending into the close ground band', () => {
+    const camera = new CameraController({ pitchLow: 15, pitchHigh: 90, distance: 980 });
+
+    camera.setDistanceWithDynamicPitch(420, 200, 980, 980, 420);
+    expect(camera.distance).toBe(420);
+    expect(camera.currentPitch).toBe(15);
+
+    camera.setDistanceWithDynamicPitch(120, 200, 980, 980, 420);
+    expect(camera.distance).toBe(200);
+    expect(camera.currentPitch).toBe(15);
+    expect(camera.buildMatrices(1280, 720).eye[2]).toBeCloseTo((200 * Math.sin(Math.PI / 12)) + 1, 6);
+  });
+
   test('covers the training battlefield at the end of the overview band', () => {
     const camera = new CameraController({ pitchLow: 40, pitchHigh: 90, distance: 980 });
     camera.setDistanceWithDynamicPitch(1_880, 420, 980, 1_880);

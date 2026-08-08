@@ -1,14 +1,14 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import {
-  Crosshair,
-  GitBranch,
-  Radio,
+  ArrowUpRight,
   Sparkles,
-  Swords
+  Swords,
+  Wand2
 } from 'lucide-react';
 import {
   getAllowedSkillTreeCategories,
   getSkillTreeById,
+  getSkillTreeRemainingUnlockCost,
   normalizeSkillSlots,
   resolveEffectiveSkillSlots
 } from '../../../../components/game/skillTree/skillTreeData';
@@ -16,8 +16,8 @@ import TrainingSkillIcon from './TrainingSkillIcon';
 
 const TREE_ICONS = Object.freeze({
   melee: Swords,
-  ranged: Crosshair,
-  support: Radio
+  ranged: ArrowUpRight,
+  support: Wand2
 });
 
 const formatCooldown = (value = 0) => {
@@ -33,6 +33,7 @@ const TrainingSkillSlots = ({
   phase = 'deploy',
   isTrainingMode = true,
   trainingState = null,
+  skillTreeProgress = {},
   onOpenTree,
   onCastSlot,
   treeOpenSlotIndex = -1,
@@ -60,6 +61,7 @@ const TrainingSkillSlots = ({
     || effectiveSlots[0]
     || normalizedSlots[0]
     || { slotIndex: 0, treeCategory: '' };
+  const unspentSkillPoints = Math.max(0, Math.floor(Number(trainingState?.points) || 0));
 
   useEffect(() => {
     if (effectiveSlots.some((slot) => slot.slotIndex === activeSlotIndex)) return;
@@ -84,6 +86,9 @@ const TrainingSkillSlots = ({
           const runtimeSkill = skillBySlot.get(slot.slotIndex) || null;
           const displaySkill = runtimeSkill?.skillId ? runtimeSkill : selectedSkill;
           const TreeIcon = TREE_ICONS[slot.treeCategory] || Sparkles;
+          const skillLevel = displaySkill
+            ? Math.max(1, Math.min(3, Math.floor(Number(displaySkill?.tier) || 0) + 1))
+            : 0;
           const cooldownRemain = Math.max(0, Number(runtimeSkill?.cooldownRemain ?? slot.cooldownRemain) || 0);
           const cooldownTotal = Math.max(0.1, Number(runtimeSkill?.cooldownTotal) || 1);
           const cooldownRatio = Math.max(0, Math.min(1, cooldownRemain / cooldownTotal));
@@ -94,8 +99,18 @@ const TrainingSkillSlots = ({
             : (isBattle ? '空技能位' : '空技能位 · 选择后可在技能树配置');
           const treeDisabled = disabled || (!tree && (isBattle || allowedCategories.length <= 0));
           const treeOpen = treeOpenSlotIndex === slot.slotIndex;
+          const remainingTreeCost = getSkillTreeRemainingUnlockCost(
+            slot.treeCategory,
+            skillTreeProgress?.[slot.treeCategory]
+          );
+          const visibleSkillPointCount = Math.min(unspentSkillPoints, remainingTreeCost);
+          const pointBadgeTitle = remainingTreeCost <= 0
+            ? '技能树已全部点亮'
+            : (visibleSkillPointCount < unspentSkillPoints
+              ? `此技能树还需 ${visibleSkillPointCount} 点`
+              : `未使用技能点 ${unspentSkillPoints}`);
           return (
-            <div className="pve2-training-skill-pair" key={`training-skill-pair-${slot.slotIndex}`}>
+            <div className={`pve2-training-skill-pair is-${slot.treeCategory || 'empty'}`} key={`training-skill-pair-${slot.slotIndex}`}>
               <button
                 type="button"
                 className={`pve2-training-skill-slot ${slot.slotIndex === activeSlot.slotIndex ? 'is-active' : ''} ${slot.conflict ? 'is-conflict' : ''} ${!slot.skillId ? 'is-empty' : ''} ${skillLocked ? 'is-locked' : ''} ${cooldownRemain > 0.01 ? 'is-cooldown' : ''}`}
@@ -108,8 +123,13 @@ const TrainingSkillSlots = ({
                 onClick={(event) => handleSlotClick(slot, slotDisabled, event)}
               >
                 {displaySkill
-                  ? <TrainingSkillIcon skill={displaySkill} size={18} strokeWidth={1.9} />
-                  : <TreeIcon size={18} strokeWidth={1.9} aria-hidden="true" />}
+                  ? <TrainingSkillIcon skill={displaySkill} size={21} strokeWidth={1.9} />
+                  : <TreeIcon size={21} strokeWidth={1.9} aria-hidden="true" />}
+                {skillLevel > 0 ? (
+                  <span className="pve2-training-skill-level" aria-label={`技能等级 ${skillLevel}`}>
+                    {[1, 2, 3].map((level) => <i key={level} className={level <= skillLevel ? 'is-filled' : ''} />)}
+                  </span>
+                ) : null}
                 <span className="pve2-training-skill-slot-hotkey">{slot.slotIndex + 1}</span>
                 {cooldownRemain > 0.01 ? (
                   <>
@@ -131,10 +151,21 @@ const TrainingSkillSlots = ({
                 onMouseDown={(event) => event.stopPropagation()}
                 onClick={(event) => {
                   event.stopPropagation();
+                  setActiveSlotIndex(slot.slotIndex);
                   onOpenTree?.(slot.slotIndex, slot.treeCategory, event);
                 }}
-              >
-                <GitBranch size={15} aria-hidden="true" />
+                >
+                  <TreeIcon size={21} aria-hidden="true" />
+                  {slot.treeCategory === 'support' ? <Sparkles className="pve2-training-skill-tree-spark" size={8} aria-hidden="true" /> : null}
+                {tree ? (
+                  <span
+                    className={`pve2-training-skill-point-badge ${remainingTreeCost <= 0 ? 'is-complete' : ''}`}
+                    title={pointBadgeTitle}
+                    aria-label={pointBadgeTitle}
+                  >
+                    {visibleSkillPointCount}
+                  </span>
+                ) : null}
               </button>
             </div>
           );

@@ -303,18 +303,23 @@ export default class CameraController {
     this.pitchTweenSec = this.pitchTweenDurationSec;
   }
 
-  setDistanceWithDynamicPitch(distance, distanceMin, distanceMax, overviewDistanceMax = distanceMax) {
-    const minDistance = Math.max(1, Number(distanceMin) || 1);
-    const pitchDistanceMax = Math.max(minDistance + 1, Number(distanceMax) || (minDistance + 1));
+  setDistanceWithDynamicPitch(distance, distanceMin, distanceMax, overviewDistanceMax = distanceMax, pitchDistanceMin = distanceMin) {
+    const closeDistanceMin = Math.max(1, Number(distanceMin) || 1);
+    const pitchDistanceMax = Math.max(closeDistanceMin + 1, Number(distanceMax) || (closeDistanceMin + 1));
+    const pitchDistanceStart = clamp(
+      Number.isFinite(Number(pitchDistanceMin)) ? Number(pitchDistanceMin) : closeDistanceMin,
+      closeDistanceMin,
+      Math.max(closeDistanceMin, pitchDistanceMax - 1)
+    );
     const totalDistanceMax = Math.max(
       pitchDistanceMax,
       Number(overviewDistanceMax) || pitchDistanceMax
     );
-    const nextDistance = clamp(Number(distance) || minDistance, minDistance, totalDistanceMax);
+    const nextDistance = clamp(Number(distance) || closeDistanceMin, closeDistanceMin, totalDistanceMax);
     this.distance = nextDistance;
     this.overviewDistanceStart = pitchDistanceMax;
     this.overviewDistanceMax = totalDistanceMax;
-    this.setPitchImmediate(this.resolveDynamicPitchForDistance(nextDistance, minDistance, pitchDistanceMax));
+    this.setPitchImmediate(this.resolveDynamicPitchForDistance(nextDistance, pitchDistanceStart, pitchDistanceMax));
   }
 
   getOverviewZoomProgress() {

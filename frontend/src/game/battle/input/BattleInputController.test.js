@@ -1,5 +1,6 @@
 import createBattleInputController, { resolveTrainingOverviewDistance } from './BattleInputController';
 import CameraController from '../presentation/render/CameraController';
+import { CAMERA_ZOOM_STEP } from '../screens/battleSceneConstants';
 
 const createCanvas = () => ({
   width: 1000,
@@ -12,7 +13,8 @@ const createFixture = ({
   interactionLocked = false,
   getters = {},
   runtimeOverrides = {},
-  camera: suppliedCamera = null
+  camera: suppliedCamera = null,
+  constants: suppliedConstants = {}
 } = {}) => {
   const canvas = createCanvas();
   const camera = suppliedCamera || {
@@ -71,7 +73,8 @@ const createFixture = ({
       BATTLE_UI_MODE_SPACING_PICK: 'spacing-pick',
       BATTLE_UI_MODE_SKILL_PICK: 'skill-pick',
       BATTLE_UI_MODE_SKILL_CONFIRM: 'skill-confirm',
-      ORDER_MOVE: 'MOVE'
+      ORDER_MOVE: 'MOVE',
+      ...suppliedConstants
     },
     getters: {
       getSelectedSquadId: () => '',
@@ -99,7 +102,37 @@ const sceneMouseDown = (overrides = {}) => ({
   ...overrides
 });
 
+test('uses a finer production wheel zoom increment', () => {
+  expect(CAMERA_ZOOM_STEP).toBe(36);
+});
+
 describe('BattleInputController primary-button panning', () => {
+  test('selects a non-controllable battle squad from the battlefield', () => {
+    const selectBattleSquad = jest.fn();
+    const { controller, runtime } = createFixture({
+      runtimeOverrides: {
+        pickSquadAtPoint: jest.fn(() => 'ai_squad_1'),
+        callbacks: { selectBattleSquad }
+      }
+    });
+    const cleanup = controller.bindWindow();
+
+    controller.onMouseDown(sceneMouseDown());
+    window.dispatchEvent(new MouseEvent('mouseup', {
+      bubbles: true,
+      button: 0,
+      clientX: 100,
+      clientY: 100
+    }));
+
+    expect(runtime.pickSquadAtPoint).toHaveBeenCalledWith(100, 100, {
+      team: 'any',
+      maxDist: 34
+    });
+    expect(selectBattleSquad).toHaveBeenCalledWith('ai_squad_1', true);
+    cleanup();
+  });
+
   test('calculates a wider training overview distance from the battlefield and viewport', () => {
     const landscape = resolveTrainingOverviewDistance({
       field: { width: 2700, height: 1488 },
@@ -141,9 +174,36 @@ describe('BattleInputController primary-button panning', () => {
       1_004,
       360,
       980,
-      expect.any(Number)
+      expect.any(Number),
+      360
     );
     expect(setDistanceWithDynamicPitch.mock.calls[0][3]).toBeGreaterThan(980);
+  });
+
+  test('extends battle wheel zoom below the pitch anchor', () => {
+    const setDistanceWithDynamicPitch = jest.fn();
+    const camera = {
+      distance: 420,
+      setDistanceWithDynamicPitch,
+      screenToGround: jest.fn()
+    };
+    const { controller } = createFixture({
+      camera,
+      constants: {
+        CAMERA_ZOOM_STEP: 72,
+        CAMERA_DISTANCE_CLOSE_MIN: 200,
+        CAMERA_DISTANCE_MIN: 420,
+        CAMERA_DISTANCE_MAX: 980
+      }
+    });
+
+    controller.onWheel({
+      deltaY: -1,
+      preventDefault: jest.fn(),
+      target: { closest: () => null }
+    });
+
+    expect(setDistanceWithDynamicPitch).toHaveBeenCalledWith(348, 200, 980, 980, 420);
   });
 
   test('rotates the selected deployment formation with the mouse wheel', () => {

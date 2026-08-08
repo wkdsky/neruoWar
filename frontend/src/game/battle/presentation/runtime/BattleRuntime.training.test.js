@@ -50,6 +50,25 @@ const buildMixedInit = () => {
   return init;
 };
 
+const buildFormationTemplates = () => ([
+  {
+    formationId: 'line',
+    name: '横向阵',
+    placements: [
+      { unitTypeId: 'infantry_basic', x: 0, y: 0 },
+      { unitTypeId: 'infantry_basic', x: 2, y: 0 }
+    ]
+  },
+  {
+    formationId: 'column',
+    name: '纵深阵',
+    placements: [
+      { unitTypeId: 'infantry_basic', x: 0, y: 0 },
+      { unitTypeId: 'infantry_basic', x: 0, y: 2 }
+    ]
+  }
+]);
+
 describe('BattleRuntime training control', () => {
   test('projects per-兵种 counts and formation metadata into a deployment card', () => {
     const runtime = new BattleRuntime(buildMixedInit());
@@ -137,6 +156,94 @@ describe('BattleRuntime training control', () => {
     expect(result.ok).toBe(true);
     expect(result.formations.map((formation) => formation.formationId)).toEqual(['three', 'one', 'two']);
     expect(runtime.getDeployGroupById(created.groupId).activeFormationId).toBe('two');
+  });
+
+  test('switches formations instantly before training and reforms over time during training', () => {
+    const runtime = new BattleRuntime(buildInit());
+    const formations = buildFormationTemplates();
+    const created = runtime.createDeployGroup('attacker', {
+      units: { infantry_basic: 100 },
+      x: -420,
+      y: 0,
+      placed: true,
+      controlMode: 'USER',
+      templateFormations: formations,
+      activeFormationId: 'line'
+    });
+
+    expect(runtime.setDeployGroupFormation(created.groupId, formations[1], 'attacker')).toMatchObject({
+      ok: true,
+      reforming: false
+    });
+    expect(runtime.getDeployGroupById(created.groupId, 'attacker').activeFormationId).toBe('column');
+    expect(runtime.setDeployGroupFormation(created.groupId, formations[0], 'attacker').ok).toBe(true);
+    expect(runtime.startBattle().ok).toBe(true);
+
+    const squad = runtime.getSquadById('attacker_squad_1');
+    const beforeSlots = runtime.crowd.agentsBySquad.get(squad.id).map((agent) => ({ ...agent.formationSlot }));
+    const result = runtime.setDeployGroupFormation(squad.id, formations[1], 'attacker');
+
+    expect(result).toMatchObject({ ok: true, reforming: true, reformDurationSec: 4.6 });
+    expect(squad.activeFormationId).toBe('column');
+    expect(squad.formationChange).toMatchObject({
+      fromFormationId: 'line',
+      toFormationId: 'column',
+      remainingSec: 4.6
+    });
+    expect(runtime.getDeployGroupFormations(squad.id).map((formation) => formation.formationId)).toEqual(['line', 'column']);
+    expect(runtime.crowd.agentsBySquad.get(squad.id).map((agent) => agent.formationSlot)).not.toEqual(beforeSlots);
+
+    runtime.step(0.05);
+    expect(runtime.getCardRows().find((row) => row.id === squad.id)).toMatchObject({
+      action: '换阵中',
+      formationChange: expect.objectContaining({ toFormationId: 'column' })
+    });
+
+    for (let index = 0; index < 100; index += 1) runtime.step(0.05);
+
+    expect(squad.formationChange).toBeNull();
+    expect(squad.speedPolicy).toBe('MARCH');
+  });
+
+  test('reforms formations after a regular battle begins', () => {
+    const init = buildInit();
+    init.mode = 'battle';
+    const runtime = new BattleRuntime(init);
+    const formations = buildFormationTemplates();
+    const created = runtime.createDeployGroup('attacker', {
+      units: { infantry_basic: 100 },
+      x: -420,
+      y: 0,
+      placed: true,
+      templateFormations: formations,
+      activeFormationId: 'line'
+    });
+
+    expect(created.ok).toBe(true);
+    expect(runtime.createDeployGroup('defender', {
+      units: { infantry_basic: 100 },
+      x: 420,
+      y: 0,
+      placed: true
+    }).ok).toBe(true);
+
+    expect(runtime.startBattle().ok).toBe(true);
+
+    const squad = runtime.getSquadById('attacker_squad_1');
+    const result = runtime.setDeployGroupFormation(squad.id, formations[1], 'attacker');
+
+    expect(result).toMatchObject({ ok: true, reforming: true, reformDurationSec: 4.6 });
+    expect(squad.activeFormationId).toBe('column');
+    expect(squad.formationChange).toMatchObject({
+      fromFormationId: 'line',
+      toFormationId: 'column',
+      remainingSec: 4.6
+    });
+
+    for (let index = 0; index < 100; index += 1) runtime.step(0.05);
+
+    expect(squad.formationChange).toBeNull();
+    expect(squad.speedPolicy).toBe('MARCH');
   });
 
   test('rotates a template formation without rebuilding its custom slots', () => {
@@ -299,6 +406,29 @@ describe('BattleRuntime training control', () => {
     expect(result.ok).toBe(true);
     expect(runtime.startBattle().ok).toBe(true);
     expect(runtime.commandMove('defender_squad_1', { x: 300, y: 40 })).toBe(false);
+  });
+
+  test('AI-controlled defenders remain selectable and camera-followable', () => {
+    const runtime = new BattleRuntime(buildInit());
+    const result = runtime.createDeployGroup('defender', {
+      units: { infantry_basic: 20 },
+      x: 450,
+      y: 0,
+      placed: true,
+      controlMode: 'AI'
+    });
+    expect(result.ok).toBe(true);
+    runtime.setSelectedDeployGroup(result.groupId);
+    runtime.setFocusSquad(result.groupId);
+    expect(runtime.startBattle().ok).toBe(true);
+
+    const squad = runtime.getSquadById('defender_squad_1');
+    expect(runtime.canControlSquad(squad)).toBe(false);
+    expect(runtime.setSelectedBattleSquad(squad.id)).toBe(true);
+    runtime.setFocusSquad(squad.id);
+    expect(runtime.getCardRows().find((row) => row.id === squad.id)?.selected).toBe(true);
+    expect(runtime.getFocusAnchor()).toMatchObject({ squadId: squad.id });
+    expect(runtime.commandMove(squad.id, { x: 300, y: 40 })).toBe(false);
   });
 
   test('can hand any training squad between AI and user control during battle', () => {
@@ -572,6 +702,40 @@ describe('BattleRuntime training control', () => {
     expect(runtime.commandFormationSpacing(squad.id, 'loose')).toBe(true);
     expect(squad.formationSpacing).toBe('loose');
     expect(squad.speedPolicy).toBe('MARCH');
+  });
+
+  test('settles a compact formation after changing spacing and stopping', () => {
+    const runtime = new BattleRuntime(buildInit());
+    const created = runtime.createDeployGroup('attacker', {
+      units: { infantry_basic: 30 },
+      x: -450,
+      y: 0,
+      placed: true,
+      controlMode: 'USER'
+    });
+    expect(created.ok).toBe(true);
+    runtime.setSelectedDeployGroup(created.groupId);
+    runtime.setFocusSquad(created.groupId);
+    expect(runtime.startBattle().ok).toBe(true);
+
+    const squad = runtime.getSquadById('attacker_squad_1');
+    for (let index = 0; index < 180; index += 1) runtime.step(0.016);
+    expect(runtime.commandFormationSpacing(squad.id, 'compact')).toBe(true);
+    for (let index = 0; index < 300; index += 1) runtime.step(0.016);
+    expect(runtime.commandMove(squad.id, { x: -412, y: 12 })).toBe(true);
+    for (let index = 0; index < 600; index += 1) runtime.step(0.016);
+
+    const agents = runtime.crowd.agentsBySquad.get(squad.id).filter((agent) => !agent.isFlagBearer);
+    const settled = new Map(agents.map((agent) => [agent.id, { x: agent.x, y: agent.y }]));
+    for (let index = 0; index < 120; index += 1) runtime.step(0.016);
+
+    const maxDrift = Math.max(...agents.map((agent) => {
+      const previous = settled.get(agent.id);
+      return Math.hypot(agent.x - previous.x, agent.y - previous.y);
+    }));
+    const maxSpeed = Math.max(...agents.map((agent) => Math.hypot(agent.vx, agent.vy)));
+    expect(maxDrift).toBeLessThan(0.02);
+    expect(maxSpeed).toBeLessThan(0.02);
   });
 
   test('tracks configured slot cooldowns and training skill points independently', () => {

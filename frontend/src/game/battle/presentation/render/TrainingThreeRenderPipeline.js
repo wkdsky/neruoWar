@@ -8,10 +8,6 @@ import {
 
 const clamp = (value, min, max) => Math.min(max, Math.max(min, value));
 const lerp = (a, b, t) => a + ((b - a) * t);
-const smoothstep = (value) => {
-  const t = clamp(value, 0, 1);
-  return t * t * (3 - (2 * t));
-};
 const tempMatrix = new THREE.Matrix4();
 const tempQuat = new THREE.Quaternion();
 const tempEuler = new THREE.Euler(0, 0, 0, 'XYZ');
@@ -19,6 +15,10 @@ const tempScale = new THREE.Vector3();
 const tempPos = new THREE.Vector3();
 const tempColor = new THREE.Color();
 const tempColorB = new THREE.Color();
+const tempWorldFlagAnchor = new THREE.Vector3();
+const tempWorldFlagCameraForward = new THREE.Vector3();
+const tempWorldFlagCameraUp = new THREE.Vector3();
+const tempWorldFlagViewSize = new THREE.Vector2();
 
 const TEAM_ATTACKER_COLOR = new THREE.Color(0x4ea9ff);
 const TEAM_DEFENDER_COLOR = new THREE.Color(0xff635f);
@@ -30,35 +30,17 @@ const SELECTED_COLOR = new THREE.Color(0xf6d45b);
 const HOVER_COLOR = new THREE.Color(0x87ddff);
 const GHOST_COLOR = new THREE.Color(0xb7d7ff);
 
-export const TRAINING_FLAG_HIDE_DISTANCE = 460;
-export const TRAINING_FLAG_SHOW_DISTANCE = 760;
-export const TRAINING_FLAG_TOP_DOWN_PITCH_DEG = 75;
-export const TRAINING_FLAG_OVERVIEW_SCALE_MAX = 1.85;
+export const TRAINING_WORLD_FLAG_MAX_PITCH_DEG = 50;
+export const TRAINING_WORLD_FLAG_TARGET_SCREEN_HEIGHT = 76;
+export const TRAINING_WORLD_FLAG_MIN_SCREEN_SCALE = 0.85;
+export const TRAINING_WORLD_FLAG_MAX_SCREEN_SCALE = 8;
 
-export const resolveTrainingFlagPresentation = (distance = 0, pitchDeg = 0, overviewZoomProgress = 0) => {
-  const zoomProgress = smoothstep(
-    (Math.max(0, Number(distance) || 0) - TRAINING_FLAG_HIDE_DISTANCE)
-      / (TRAINING_FLAG_SHOW_DISTANCE - TRAINING_FLAG_HIDE_DISTANCE)
-  );
-  const topDown = Number(pitchDeg) >= TRAINING_FLAG_TOP_DOWN_PITCH_DEG;
-  const arrowOpacity = 1 - zoomProgress;
-  const uprightOpacity = topDown ? 0 : zoomProgress;
-  const topDownOpacity = topDown ? zoomProgress : 0;
-  const arrowScale = lerp(1.18, 0.9, zoomProgress);
-  const uprightScale = lerp(0.92, 1.26, zoomProgress);
-  const overviewScale = lerp(1, TRAINING_FLAG_OVERVIEW_SCALE_MAX, smoothstep(overviewZoomProgress));
-  const topDownScale = lerp(1.18, 0.9, zoomProgress) * overviewScale;
+export const resolveTrainingFlagLod = (pitchDeg = 90) => {
+  const normalizedPitch = Number.isFinite(Number(pitchDeg)) ? Number(pitchDeg) : 90;
+  const worldFlag = normalizedPitch <= TRAINING_WORLD_FLAG_MAX_PITCH_DEG;
   return {
-    opacity: uprightOpacity,
-    scale: uprightScale,
-    groundOpacity: arrowOpacity,
-    groundScale: arrowScale,
-    arrowOpacity,
-    arrowScale,
-    uprightOpacity,
-    uprightScale,
-    topDownOpacity,
-    topDownScale
+    worldFlag,
+    infoLabel: !worldFlag
   };
 };
 
@@ -66,43 +48,126 @@ const finiteOr = (value, fallback = 0) => (
   Number.isFinite(Number(value)) ? Number(value) : fallback
 );
 
-const resolveFlagStrength = (source = null) => {
+export const resolveTrainingWorldFlagScreenScale = ({
+  clothHeight = 1,
+  viewHeight = 0,
+  viewportHeight = 0,
+  verticalScreenFactor = 1
+} = {}) => {
+  const safeClothHeight = Math.max(1, finiteOr(clothHeight, 1));
+  const safeViewHeight = Math.max(1e-4, finiteOr(viewHeight));
+  const safeViewportHeight = Math.max(1, finiteOr(viewportHeight));
+  const safeVerticalScreenFactor = clamp(Math.abs(finiteOr(verticalScreenFactor, 1)), 0.35, 1);
+  const targetWorldHeight = (
+    safeViewHeight
+    * (TRAINING_WORLD_FLAG_TARGET_SCREEN_HEIGHT / safeViewportHeight)
+  ) / safeVerticalScreenFactor;
+  return clamp(
+    targetWorldHeight / safeClothHeight,
+    TRAINING_WORLD_FLAG_MIN_SCREEN_SCALE,
+    TRAINING_WORLD_FLAG_MAX_SCREEN_SCALE
+  );
+};
+
+const resolveMarkerStrength = (source = null) => {
   const direct = Math.max(0, finiteOr(source?.remain), finiteOr(source?.startCount));
   const unitCount = Object.values(source?.units || {})
     .reduce((sum, value) => sum + Math.max(0, finiteOr(value)), 0);
   return Math.max(direct, unitCount);
 };
 
-const resolveFlagScale = (source = null) => {
-  const rect = source?.formationRect || {};
-  const formationSpan = Math.max(finiteOr(rect.width), finiteOr(rect.depth));
-  const baseRadius = Math.max(
-    finiteOr(source?.radius),
-    formationSpan * 0.32,
-    Math.sqrt(Math.max(1, resolveFlagStrength(source))) * 0.3
+export const resolveTrainingWorldFlagDimensions = (source = null) => {
+  const count = Math.max(1, resolveMarkerStrength(source));
+  const radius = Math.max(0, finiteOr(source?.radius));
+  const clothHeight = clamp(
+    Math.max(17, radius * 0.16, Math.sqrt(count) * 0.33),
+    17,
+    25
   );
-  return clamp(Math.max(11, baseRadius * 0.43), 11, 28);
+  const clothWidth = clamp(
+    Math.max(36, clothHeight * 2.08, radius * 0.28, Math.sqrt(count) * 0.28),
+    36,
+    54
+  );
+  const clothBottom = 2.2;
+  const poleHeight = clothBottom + clothHeight + 1.05;
+  return {
+    poleHeight,
+    clothHeight,
+    clothWidth,
+    clothBottom
+  };
 };
 
-const resolveFlagYaw = (source = null, team = TEAM_ATTACKER) => {
+export const resolveTrainingInfoLabelElevation = (source = null) => {
+  const count = Math.max(1, resolveMarkerStrength(source));
+  const radius = Math.max(0, finiteOr(source?.radius));
+  return clamp(Math.max(6, radius * 0.1, 4 + (Math.sqrt(count) * 0.1)), 6, 14);
+};
+
+const resolveDirectionArcDimensions = (source = null) => {
+  const rect = source?.formationRect || {};
+  const strength = Math.max(1, resolveMarkerStrength(source));
+  const squadRadius = Math.max(0, finiteOr(source?.radius));
+  const inferredSpan = Math.sqrt(strength) * 3;
+  const formationWidth = Math.max(
+    10,
+    finiteOr(rect.width),
+    squadRadius * 1.9,
+    inferredSpan
+  );
+  const formationDepth = Math.max(
+    8,
+    finiteOr(rect.depth),
+    squadRadius,
+    inferredSpan * 0.68
+  );
+  const arcRadius = clamp(Math.max(8, (formationWidth * 0.5) + 2.5), 8, 112);
+  const frontEdgeOffset = (formationDepth * 0.5) + clamp(arcRadius * 0.08, 1.2, 5.4);
+  return {
+    arcRadius,
+    arcCenterOffset: frontEdgeOffset - arcRadius
+  };
+};
+
+const resolveDirectionYaw = (source = null, team = TEAM_ATTACKER, preferFormationFacing = false) => {
+  const facing = Number(source?.formationRect?.facingRad);
+  if (preferFormationFacing && Number.isFinite(facing)) return facing;
   const primaryX = finiteOr(source?.dirX, finiteOr(source?.vx));
   const primaryY = finiteOr(source?.dirY, finiteOr(source?.vy));
   if (Math.hypot(primaryX, primaryY) > 0.1) return Math.atan2(primaryY, primaryX);
-  const facing = Number(source?.formationRect?.facingRad);
   if (Number.isFinite(facing)) return facing;
   return team === TEAM_DEFENDER ? Math.PI : 0;
 };
 
-const buildFlagAnchor = (source = null, team = TEAM_ATTACKER) => ({
-  x: finiteOr(source?.centerX, finiteOr(source?.x)),
-  y: finiteOr(source?.centerY, finiteOr(source?.y)),
-  yaw: resolveFlagYaw(source, team),
-  teamIndex: team === TEAM_DEFENDER ? 1 : 0,
-  scale: resolveFlagScale(source)
-});
+const buildDirectionArcAnchor = (
+  source = null,
+  team = TEAM_ATTACKER,
+  preferFormationFacing = false,
+  skillPoints = 0
+) => {
+  const startCount = Math.max(1, Math.floor(finiteOr(source?.startCount, resolveMarkerStrength(source))));
+  const remain = Math.max(0, Math.floor(finiteOr(source?.remain, startCount)));
+  return {
+    x: finiteOr(source?.centerX, finiteOr(source?.x)),
+    y: finiteOr(source?.centerY, finiteOr(source?.y)),
+    yaw: resolveDirectionYaw(source, team, preferFormationFacing),
+    teamIndex: team === TEAM_DEFENDER ? 1 : 0,
+    team,
+    name: String(source?.name || '部队'),
+    remain,
+    startCount,
+    ratio: clamp(remain / startCount, 0, 1),
+    skillPoints: Math.max(0, Math.floor(Number(skillPoints) || 0)),
+    selected: !!source?.selected,
+    ...resolveTrainingWorldFlagDimensions(source),
+    ...resolveDirectionArcDimensions(source)
+  };
+};
 
-export const resolveTrainingFlagAnchors = (runtime = null) => {
+export const resolveTrainingDirectionArcAnchors = (runtime = null) => {
   const phase = runtime?.getPhase?.() || runtime?.phase || 'deploy';
+  const skillPoints = runtime?.getTrainingState?.()?.points || 0;
   if (phase === 'battle' || phase === 'ended') {
     return (Array.isArray(runtime?.sim?.squads) ? runtime.sim.squads : [])
       .filter((squad) => (
@@ -110,7 +175,7 @@ export const resolveTrainingFlagAnchors = (runtime = null) => {
         && finiteOr(squad.remain) > 0
         && !(squad.team === TEAM_DEFENDER && squad.hiddenFromAttacker)
       ))
-      .map((squad) => buildFlagAnchor(squad, squad.team));
+      .map((squad) => buildDirectionArcAnchor(squad, squad.team, false, skillPoints));
   }
 
   const anchors = [];
@@ -118,7 +183,7 @@ export const resolveTrainingFlagAnchors = (runtime = null) => {
     if (team === TEAM_DEFENDER && runtime?.intelVisible === false) return;
     (Array.isArray(groups) ? groups : [])
       .filter((group) => group && group.placed !== false)
-      .forEach((group) => anchors.push(buildFlagAnchor(group, team)));
+      .forEach((group) => anchors.push(buildDirectionArcAnchor(group, team, true, skillPoints)));
   };
   appendTeam(runtime?.attackerDeployGroups, TEAM_ATTACKER);
   appendTeam(runtime?.defenderDeployGroups, TEAM_DEFENDER);
@@ -177,19 +242,22 @@ const createUnitGeometry = () => {
   return prepareInstanceColorGeometry(geometry);
 };
 
-export const createGroundFlagGeometry = () => {
-  const shape = new THREE.Shape();
-  shape.moveTo(-0.94, -0.56);
-  shape.lineTo(0.94, 0);
-  shape.lineTo(-0.94, 0.56);
-  shape.lineTo(-0.42, 0);
-  shape.lineTo(-0.94, -0.56);
-  return prepareInstanceColorGeometry(new THREE.ShapeGeometry(shape));
-};
-
-export const createTopDownFlagGeometry = () => prepareInstanceColorGeometry(
-  new THREE.PlaneGeometry(1.72, 1.04, 1, 1)
+export const createTrainingDirectionArcGeometry = () => prepareInstanceColorGeometry(
+  new THREE.RingGeometry(0.955, 1, 56, 1, -1.16, 2.32)
 );
+
+export const createTrainingFlagClothGeometry = () => {
+  const shape = new THREE.Shape();
+  shape.moveTo(0, 0);
+  shape.lineTo(1, 0);
+  shape.lineTo(0.82, 0.5);
+  shape.lineTo(1, 1);
+  shape.lineTo(0, 1);
+  shape.lineTo(0, 0);
+  const geometry = prepareInstanceColorGeometry(new THREE.ShapeGeometry(shape));
+  geometry.rotateX(Math.PI / 2);
+  return geometry;
+};
 
 const createBandMaterial = (color, roughness = 0.92) => new THREE.MeshStandardMaterial({
   color,
@@ -204,6 +272,132 @@ const makeInstancedMesh = (geometry, material, capacity) => {
   mesh.frustumCulled = false;
   return mesh;
 };
+
+const TRAINING_FLAG_CANVAS_WIDTH = 512;
+const TRAINING_FLAG_CANVAS_HEIGHT = 232;
+const TRAINING_FLAG_CANVAS_TOP_INSET = 34;
+const TRAINING_FLAG_CANVAS_BOTTOM_INSET = 86;
+
+const TRAINING_FLAG_CANVAS_THEME = {
+  attacker: {
+    accent: '#7dd3fc',
+    soft: 'rgba(14, 116, 144, 0.82)'
+  },
+  defender: {
+    accent: '#fda4af',
+    soft: 'rgba(153, 27, 27, 0.84)'
+  }
+};
+
+const createTrainingFlagCanvas = () => {
+  if (typeof document === 'undefined' || typeof document.createElement !== 'function') return null;
+  const canvas = document.createElement('canvas');
+  canvas.width = TRAINING_FLAG_CANVAS_WIDTH;
+  canvas.height = TRAINING_FLAG_CANVAS_HEIGHT;
+  return canvas;
+};
+
+const traceTrainingFlagSilhouette = (context, width, height) => {
+  const horizontalInset = 12;
+  const notch = 62;
+  context.beginPath();
+  context.moveTo(horizontalInset, TRAINING_FLAG_CANVAS_TOP_INSET);
+  context.lineTo(width - horizontalInset, TRAINING_FLAG_CANVAS_TOP_INSET);
+  context.lineTo(width - notch, height * 0.5);
+  context.lineTo(width - horizontalInset, height - TRAINING_FLAG_CANVAS_BOTTOM_INSET);
+  context.lineTo(horizontalInset, height - TRAINING_FLAG_CANVAS_BOTTOM_INSET);
+  context.closePath();
+};
+
+const drawTrainingFlagCanvas = (canvas, anchor = {}) => {
+  const context = canvas?.getContext?.('2d');
+  if (!context) return;
+  const width = canvas.width;
+  const height = canvas.height;
+  const theme = TRAINING_FLAG_CANVAS_THEME[anchor.team] || TRAINING_FLAG_CANVAS_THEME.attacker;
+  context.clearRect(0, 0, width, height);
+  context.save();
+  context.shadowColor = 'rgba(2, 6, 23, 0.72)';
+  context.shadowBlur = 10;
+  context.shadowOffsetY = 4;
+  traceTrainingFlagSilhouette(context, width, height);
+  const background = context.createLinearGradient(0, 0, width, 0);
+  background.addColorStop(0, theme.soft);
+  background.addColorStop(0.36, 'rgba(5, 12, 21, 0.96)');
+  background.addColorStop(1, 'rgba(5, 12, 21, 0.88)');
+  context.fillStyle = background;
+  context.fill();
+  context.restore();
+
+  context.save();
+  traceTrainingFlagSilhouette(context, width, height);
+  context.strokeStyle = anchor.selected ? '#fde68a' : theme.accent;
+  context.lineWidth = 4;
+  context.globalAlpha = 0.88;
+  context.stroke();
+  context.restore();
+
+  context.fillStyle = theme.accent;
+  context.globalAlpha = 0.78;
+  context.fillRect(
+    16,
+    TRAINING_FLAG_CANVAS_TOP_INSET + 4,
+    10,
+    height - TRAINING_FLAG_CANVAS_TOP_INSET - TRAINING_FLAG_CANVAS_BOTTOM_INSET - 8
+  );
+  context.globalAlpha = 1;
+  context.textBaseline = 'middle';
+  context.font = '800 28px "JetBrains Mono", ui-monospace, monospace';
+  context.fillStyle = '#cbd5e1';
+  context.fillText('兵', 44, 67);
+  context.font = '900 43px "JetBrains Mono", ui-monospace, monospace';
+  context.fillStyle = '#f8fafc';
+  const remainText = String(Math.max(0, Math.floor(Number(anchor.remain) || 0)));
+  context.fillText(remainText, 82, 67);
+  const remainWidth = context.measureText(remainText).width;
+  context.font = '700 24px "JetBrains Mono", ui-monospace, monospace';
+  context.fillStyle = '#94a3b8';
+  const startText = `/${Math.max(1, Math.floor(Number(anchor.startCount) || 1))}`;
+  const startX = 88 + remainWidth;
+  context.fillText(startText, startX, 67);
+  const startWidth = context.measureText(startText).width;
+
+  const pointSeparatorX = Math.min(width - 132, startX + startWidth + 22);
+  context.strokeStyle = 'rgba(226, 232, 240, 0.28)';
+  context.lineWidth = 2;
+  context.beginPath();
+  context.moveTo(pointSeparatorX, 34);
+  context.lineTo(pointSeparatorX, 96);
+  context.stroke();
+  context.font = '800 27px "JetBrains Mono", ui-monospace, monospace';
+  context.fillStyle = '#cbd5e1';
+  context.fillText('点', pointSeparatorX + 18, 67);
+  context.font = '900 39px "JetBrains Mono", ui-monospace, monospace';
+  context.fillStyle = '#fde68a';
+  context.fillText(String(Math.max(0, Math.floor(Number(anchor.skillPoints) || 0))), pointSeparatorX + 55, 67);
+
+  const barX = 44;
+  const barY = 116;
+  const barWidth = width - barX - 84;
+  const barHeight = 24;
+  context.fillStyle = 'rgba(2, 6, 23, 0.84)';
+  context.fillRect(barX, barY, barWidth, barHeight);
+  context.fillStyle = Number(anchor.ratio) <= 0.25 ? '#fb7185' : (Number(anchor.ratio) <= 0.5 ? '#fbbf24' : '#4ade80');
+  const healthWidth = (barWidth - 6) * clamp(Number(anchor.ratio) || 0, 0, 1);
+  if (healthWidth > 0) context.fillRect(barX + 3, barY + 3, healthWidth, barHeight - 6);
+  context.strokeStyle = 'rgba(226, 232, 240, 0.38)';
+  context.lineWidth = 2;
+  context.strokeRect(barX, barY, barWidth, barHeight);
+};
+
+const trainingFlagTextureSignature = (anchor = {}) => [
+  anchor.team,
+  anchor.remain,
+  anchor.startCount,
+  Number(anchor.ratio || 0).toFixed(3),
+  anchor.skillPoints,
+  anchor.selected ? 'selected' : 'normal'
+].join(':');
 
 const getSnapshotCount = (bucket) => Math.max(0, Math.floor(Number(bucket?.count) || 0));
 
@@ -221,6 +415,7 @@ export default class TrainingThreeRenderPipeline {
     this.renderer.sortObjects = true;
     this.pixelRatio = Math.min(2, Math.max(1, window.devicePixelRatio || 1));
     this.renderer.setPixelRatio(this.pixelRatio);
+    this.viewportCssHeight = 1;
 
     this.scene = new THREE.Scene();
     this.scene.fog = new THREE.Fog(0x07111d, 900, 2800);
@@ -289,56 +484,37 @@ export default class TrainingThreeRenderPipeline {
     this.hoverRingMesh = null;
     this.hoverRingCapacity = 0;
 
-    this.flagGroundGeometry = createGroundFlagGeometry();
-    this.flagGroundMaterial = new THREE.MeshBasicMaterial({
+    this.directionArcGeometry = createTrainingDirectionArcGeometry();
+    this.directionArcMaterial = new THREE.MeshBasicMaterial({
       color: 0xffffff,
       vertexColors: true,
       transparent: true,
-      opacity: 1,
+      opacity: 0.78,
       side: THREE.DoubleSide,
+      depthTest: false,
       depthWrite: false,
       fog: false
     });
-    this.flagTopDownGeometry = createTopDownFlagGeometry();
-    this.flagTopDownMaterial = this.flagGroundMaterial.clone();
-    this.flagPoleGeometry = new THREE.CylinderGeometry(0.055, 0.075, 3.45, 6);
-    this.flagPoleGeometry.rotateX(Math.PI / 2);
-    this.flagPoleGeometry.translate(0, 0, 1.725);
-    this.flagPoleMaterial = new THREE.MeshStandardMaterial({
-      color: 0x253447,
-      transparent: true,
-      opacity: 0,
-      roughness: 0.64,
-      metalness: 0.14,
-      depthWrite: false
+    this.worldFlagPoleGeometry = new THREE.CylinderGeometry(0.32, 0.42, 1, 10);
+    this.worldFlagPoleGeometry.rotateX(Math.PI / 2);
+    this.worldFlagPoleGeometry.translate(0, 0, 0.5);
+    this.worldFlagPoleMaterial = new THREE.MeshStandardMaterial({
+      color: 0xb8c7d9,
+      roughness: 0.3,
+      metalness: 0.68
     });
-    this.flagClothGeometry = prepareInstanceColorGeometry(new THREE.PlaneGeometry(1.72, 1.04, 1, 1));
-    this.flagClothGeometry.rotateX(Math.PI / 2);
-    this.flagClothGeometry.translate(0.86, 0, 2.72);
-    this.flagClothCrossGeometry = this.flagClothGeometry.clone();
-    this.flagClothCrossGeometry.rotateZ(Math.PI / 2);
-    this.flagClothMaterial = new THREE.MeshBasicMaterial({
-      color: 0xffffff,
-      vertexColors: true,
-      transparent: true,
-      opacity: 0,
-      side: THREE.DoubleSide,
-      depthWrite: false,
-      fog: false
+    this.worldFlagClothGeometry = createTrainingFlagClothGeometry();
+    this.worldFlagFinialGeometry = new THREE.SphereGeometry(1, 12, 8);
+    this.worldFlagFinialMaterial = new THREE.MeshStandardMaterial({
+      color: 0xf5d481,
+      roughness: 0.26,
+      metalness: 0.72
     });
-    this.flagGroundMesh = null;
-    this.flagTopDownMesh = null;
-    this.flagPoleMesh = null;
-    this.flagClothMesh = null;
-    this.flagClothCrossMesh = null;
-    this.flagCapacity = 0;
-    this.flagGroundVisibility = 1;
-    this.flagGroundScale = 1.18;
-    this.flagTopDownVisibility = 0;
-    this.flagTopDownScale = 1.18;
-    this.flagVisibility = 0;
-    this.flagScale = 0.92;
-    this.flagPresentationUpdatedAt = 0;
+    this.directionArcMesh = null;
+    this.worldFlagPoleMesh = null;
+    this.worldFlagFinialMesh = null;
+    this.worldFlagClothPool = [];
+    this.directionMarkerCapacity = 0;
 
     this.buildingGeometry = prepareInstanceColorGeometry(new THREE.BoxGeometry(1, 1, 1));
     this.buildingMaterial = new THREE.MeshStandardMaterial({
@@ -375,6 +551,7 @@ export default class TrainingThreeRenderPipeline {
     if (!canvas) return { width: 0, height: 0 };
     const width = Math.max(1, Math.floor(canvas.clientWidth || canvas.parentElement?.clientWidth || 1));
     const height = Math.max(1, Math.floor(canvas.clientHeight || canvas.parentElement?.clientHeight || 1));
+    this.viewportCssHeight = height;
     const needResize = canvas.width !== Math.floor(width * this.pixelRatio)
       || canvas.height !== Math.floor(height * this.pixelRatio);
     if (needResize) {
@@ -507,67 +684,60 @@ export default class TrainingThreeRenderPipeline {
     this.hoverRingCapacity = nextCapacity;
   }
 
-  ensureFlagCapacity(count) {
+  ensureDirectionMarkerCapacity(count) {
     if (
-      count <= this.flagCapacity
-      && this.flagGroundMesh
-      && this.flagTopDownMesh
-      && this.flagPoleMesh
-      && this.flagClothMesh
-      && this.flagClothCrossMesh
-    ) return;
+      count <= this.directionMarkerCapacity
+      && this.directionArcMesh
+      && this.worldFlagPoleMesh
+      && this.worldFlagFinialMesh
+    ) {
+      this.ensureWorldFlagClothPool(count);
+      return;
+    }
     const nextCapacity = Math.max(32, Math.ceil(count * 1.35));
-    if (this.flagGroundMesh) this.unitGroup.remove(this.flagGroundMesh);
-    if (this.flagTopDownMesh) this.unitGroup.remove(this.flagTopDownMesh);
-    if (this.flagPoleMesh) this.unitGroup.remove(this.flagPoleMesh);
-    if (this.flagClothMesh) this.unitGroup.remove(this.flagClothMesh);
-    if (this.flagClothCrossMesh) this.unitGroup.remove(this.flagClothCrossMesh);
-    this.flagGroundMesh = makeInstancedMesh(this.flagGroundGeometry, this.flagGroundMaterial, nextCapacity);
-    this.flagTopDownMesh = makeInstancedMesh(this.flagTopDownGeometry, this.flagTopDownMaterial, nextCapacity);
-    this.flagPoleMesh = makeInstancedMesh(this.flagPoleGeometry, this.flagPoleMaterial, nextCapacity);
-    this.flagClothMesh = makeInstancedMesh(this.flagClothGeometry, this.flagClothMaterial, nextCapacity);
-    this.flagClothCrossMesh = makeInstancedMesh(this.flagClothCrossGeometry, this.flagClothMaterial, nextCapacity);
-    this.flagGroundMesh.renderOrder = 2;
-    this.flagTopDownMesh.renderOrder = 2;
-    this.flagPoleMesh.renderOrder = 3;
-    this.flagClothMesh.renderOrder = 3;
-    this.flagClothCrossMesh.renderOrder = 3;
+    if (this.directionArcMesh) this.unitGroup.remove(this.directionArcMesh);
+    if (this.worldFlagPoleMesh) this.unitGroup.remove(this.worldFlagPoleMesh);
+    if (this.worldFlagFinialMesh) this.unitGroup.remove(this.worldFlagFinialMesh);
+    this.directionArcMesh = makeInstancedMesh(this.directionArcGeometry, this.directionArcMaterial, nextCapacity);
+    this.worldFlagPoleMesh = makeInstancedMesh(this.worldFlagPoleGeometry, this.worldFlagPoleMaterial, nextCapacity);
+    this.worldFlagFinialMesh = makeInstancedMesh(this.worldFlagFinialGeometry, this.worldFlagFinialMaterial, nextCapacity);
+    this.directionArcMesh.renderOrder = 3;
+    this.worldFlagPoleMesh.renderOrder = 2;
+    this.worldFlagFinialMesh.renderOrder = 4;
     this.unitGroup.add(
-      this.flagGroundMesh,
-      this.flagTopDownMesh,
-      this.flagPoleMesh,
-      this.flagClothMesh,
-      this.flagClothCrossMesh
+      this.directionArcMesh,
+      this.worldFlagPoleMesh,
+      this.worldFlagFinialMesh
     );
-    this.flagCapacity = nextCapacity;
+    this.directionMarkerCapacity = nextCapacity;
+    this.ensureWorldFlagClothPool(nextCapacity);
   }
 
-  updateFlagPresentation(cameraState) {
-    const target = resolveTrainingFlagPresentation(
-      cameraState?.distance,
-      cameraState?.pitchDeg,
-      cameraState?.overviewZoomProgress
-    );
-    const now = typeof performance === 'undefined' ? Date.now() : performance.now();
-    const previous = this.flagPresentationUpdatedAt || (now - (1000 / 60));
-    const elapsedSec = clamp((now - previous) / 1000, 0, 0.1);
-    const blend = 1 - Math.exp(-elapsedSec / 0.18);
-    this.flagPresentationUpdatedAt = now;
-    this.flagVisibility = lerp(this.flagVisibility, target.opacity, blend);
-    this.flagScale = lerp(this.flagScale, target.scale, blend);
-    this.flagGroundVisibility = lerp(this.flagGroundVisibility, target.groundOpacity, blend);
-    this.flagGroundScale = lerp(this.flagGroundScale, target.groundScale, blend);
-    this.flagTopDownVisibility = lerp(this.flagTopDownVisibility, target.topDownOpacity, blend);
-    this.flagTopDownScale = lerp(this.flagTopDownScale, target.topDownScale, blend);
-    this.flagPoleMaterial.opacity = this.flagVisibility * 0.88;
-    this.flagClothMaterial.opacity = this.flagVisibility * 0.96;
-    this.flagGroundMaterial.opacity = this.flagGroundVisibility * 0.94;
-    this.flagTopDownMaterial.opacity = this.flagTopDownVisibility * 0.94;
-    return {
-      uprightScale: this.flagScale,
-      groundScale: this.flagGroundScale,
-      topDownScale: this.flagTopDownScale
-    };
+  ensureWorldFlagClothPool(count) {
+    while (this.worldFlagClothPool.length < count) {
+      const canvas = createTrainingFlagCanvas();
+      const texture = canvas ? new THREE.CanvasTexture(canvas) : null;
+      if (texture) {
+        texture.colorSpace = THREE.SRGBColorSpace;
+        texture.minFilter = THREE.LinearFilter;
+        texture.magFilter = THREE.LinearFilter;
+        texture.generateMipmaps = false;
+      }
+      const material = new THREE.MeshStandardMaterial({
+        color: 0xffffff,
+        map: texture,
+        side: THREE.DoubleSide,
+        transparent: true,
+        alphaTest: 0.04,
+        roughness: 0.76,
+        metalness: 0.02
+      });
+      const mesh = new THREE.Mesh(this.worldFlagClothGeometry, material);
+      mesh.frustumCulled = false;
+      mesh.renderOrder = 3;
+      this.unitGroup.add(mesh);
+      this.worldFlagClothPool.push({ canvas, texture, material, mesh, signature: '' });
+    }
   }
 
   updateUnits(units) {
@@ -648,64 +818,108 @@ export default class TrainingThreeRenderPipeline {
     this.hoverRingMesh.instanceMatrix.needsUpdate = true;
   }
 
-  updateFlags(runtime, presentation = {}) {
-    const anchors = resolveTrainingFlagAnchors(runtime);
-    const flagCount = anchors.length;
-    this.ensureFlagCapacity(flagCount);
-    const uprightScale = Math.max(0.1, Number(presentation?.uprightScale) || 0.92);
-    const groundScale = Math.max(0.1, Number(presentation?.groundScale) || 1.18);
-    const topDownScale = Math.max(0.1, Number(presentation?.topDownScale) || 1.18);
+  updateDirectionMarkers(runtime, cameraState = {}) {
+    const anchors = resolveTrainingDirectionArcAnchors(runtime);
+    const markerCount = anchors.length;
+    this.ensureDirectionMarkerCapacity(markerCount);
+    const flagLod = resolveTrainingFlagLod(cameraState?.pitchDeg);
+    const viewportHeight = Math.max(
+      1,
+      finiteOr(this.viewportCssHeight, finiteOr(this.canvas?.clientHeight, 1))
+    );
+    tempWorldFlagCameraForward.set(0, 0, -1).transformDirection(this.camera.matrixWorld);
+    tempWorldFlagCameraUp.set(0, 1, 0).transformDirection(this.camera.matrixWorld);
+    const verticalScreenFactor = clamp(Math.abs(tempWorldFlagCameraUp.z), 0.35, 1);
     anchors.forEach((anchor, index) => {
-      const markerScale = Math.max(1, Number(anchor.scale) || 11);
       const yaw = Number(anchor.yaw) || 0;
       tempEuler.set(0, 0, yaw);
       tempQuat.setFromEuler(tempEuler);
 
-      tempPos.set(anchor.x, anchor.y, 0.18);
-      tempScale.setScalar(markerScale * uprightScale);
+      const arcCenterOffset = Number(anchor.arcCenterOffset) || 0;
+      tempPos.set(
+        anchor.x + (Math.cos(yaw) * arcCenterOffset),
+        anchor.y + (Math.sin(yaw) * arcCenterOffset),
+        0.24
+      );
+      tempScale.setScalar(Math.max(1, Number(anchor.arcRadius) || 8));
       tempMatrix.compose(tempPos, tempQuat, tempScale);
-      this.flagPoleMesh.setMatrixAt(index, tempMatrix);
-      this.flagClothMesh.setMatrixAt(index, tempMatrix);
-      this.flagClothCrossMesh.setMatrixAt(index, tempMatrix);
+      this.directionArcMesh.setMatrixAt(index, tempMatrix);
 
-      tempPos.set(anchor.x, anchor.y, Math.max(3.6, markerScale * 0.32));
-      tempScale.setScalar(markerScale * groundScale);
+      const clothBottom = Math.max(1.2, Number(anchor.clothBottom) || 2.2);
+      const clothHeight = Math.max(1, Number(anchor.clothHeight) || 4);
+      const clothWidth = Math.max(1, Number(anchor.clothWidth) || 5);
+      const poleHeight = Math.max(clothBottom + 1, Number(anchor.poleHeight) || 10);
+      const poleHeadroom = Math.max(0.7, poleHeight - clothBottom - clothHeight);
+      tempWorldFlagAnchor.set(anchor.x, anchor.y, clothBottom).sub(this.camera.position);
+      const cameraDepth = Math.max(1, tempWorldFlagAnchor.dot(tempWorldFlagCameraForward));
+      this.camera.getViewSize(cameraDepth, tempWorldFlagViewSize);
+      const worldFlagScale = resolveTrainingWorldFlagScreenScale({
+        clothHeight,
+        viewHeight: tempWorldFlagViewSize.y,
+        viewportHeight,
+        verticalScreenFactor
+      });
+      const scaledPoleHeight = clothBottom + ((clothHeight + poleHeadroom) * worldFlagScale);
+      tempPos.set(anchor.x, anchor.y, -0.35);
+      tempQuat.identity();
+      tempScale.set(
+        worldFlagScale,
+        worldFlagScale,
+        scaledPoleHeight + (0.35 * worldFlagScale)
+      );
       tempMatrix.compose(tempPos, tempQuat, tempScale);
-      this.flagGroundMesh.setMatrixAt(index, tempMatrix);
+      this.worldFlagPoleMesh.setMatrixAt(index, tempMatrix);
 
-      tempScale.setScalar(markerScale * topDownScale);
+      const cameraYaw = Math.atan2(
+        this.camera.position.y - anchor.y,
+        this.camera.position.x - anchor.x
+      );
+      tempEuler.set(0, 0, cameraYaw + (Math.PI / 2));
+      tempQuat.setFromEuler(tempEuler);
+      tempPos.set(anchor.x, anchor.y, clothBottom);
+      tempScale.set(
+        clothWidth * worldFlagScale,
+        1,
+        clothHeight * worldFlagScale
+      );
+      const clothEntry = this.worldFlagClothPool[index];
+      if (clothEntry) {
+        clothEntry.mesh.position.copy(tempPos);
+        clothEntry.mesh.quaternion.copy(tempQuat);
+        clothEntry.mesh.scale.copy(tempScale);
+        clothEntry.mesh.visible = markerCount > 0 && flagLod.worldFlag;
+        const textureSignature = trainingFlagTextureSignature(anchor);
+        if (textureSignature !== clothEntry.signature) {
+          drawTrainingFlagCanvas(clothEntry.canvas, anchor);
+          if (clothEntry.texture) clothEntry.texture.needsUpdate = true;
+          clothEntry.signature = textureSignature;
+        }
+      }
+
+      tempPos.set(anchor.x, anchor.y, scaledPoleHeight + (0.4 * worldFlagScale));
+      tempQuat.identity();
+      tempScale.setScalar(0.64 * worldFlagScale);
       tempMatrix.compose(tempPos, tempQuat, tempScale);
-      this.flagTopDownMesh.setMatrixAt(index, tempMatrix);
+      this.worldFlagFinialMesh.setMatrixAt(index, tempMatrix);
 
       tempColor.copy(anchor.teamIndex < 0.5 ? TEAM_ATTACKER_COLOR : TEAM_DEFENDER_COLOR);
-      this.flagGroundMesh.setColorAt(index, tempColor);
-      this.flagTopDownMesh.setColorAt(index, tempColor);
-      this.flagClothMesh.setColorAt(index, tempColor);
-      this.flagClothCrossMesh.setColorAt(index, tempColor);
+      if (anchor.selected) tempColor.lerp(SELECTED_COLOR, 0.4);
+      this.directionArcMesh.setColorAt(index, tempColor);
     });
 
-    const groundVisible = flagCount > 0 && this.flagGroundVisibility > 0.01;
-    const topDownVisible = flagCount > 0 && this.flagTopDownVisibility > 0.01;
-    const uprightVisible = flagCount > 0 && this.flagVisibility > 0.01;
-    this.flagGroundMesh.visible = groundVisible;
-    this.flagTopDownMesh.visible = topDownVisible;
-    this.flagPoleMesh.visible = uprightVisible;
-    this.flagClothMesh.visible = uprightVisible;
-    this.flagClothCrossMesh.visible = uprightVisible;
-    this.flagGroundMesh.count = flagCount;
-    this.flagTopDownMesh.count = flagCount;
-    this.flagPoleMesh.count = flagCount;
-    this.flagClothMesh.count = flagCount;
-    this.flagClothCrossMesh.count = flagCount;
-    this.flagGroundMesh.instanceMatrix.needsUpdate = true;
-    this.flagTopDownMesh.instanceMatrix.needsUpdate = true;
-    this.flagPoleMesh.instanceMatrix.needsUpdate = true;
-    this.flagClothMesh.instanceMatrix.needsUpdate = true;
-    this.flagClothCrossMesh.instanceMatrix.needsUpdate = true;
-    if (this.flagGroundMesh.instanceColor) this.flagGroundMesh.instanceColor.needsUpdate = true;
-    if (this.flagTopDownMesh.instanceColor) this.flagTopDownMesh.instanceColor.needsUpdate = true;
-    if (this.flagClothMesh.instanceColor) this.flagClothMesh.instanceColor.needsUpdate = true;
-    if (this.flagClothCrossMesh.instanceColor) this.flagClothCrossMesh.instanceColor.needsUpdate = true;
+    this.directionArcMesh.visible = markerCount > 0;
+    this.worldFlagPoleMesh.visible = markerCount > 0 && flagLod.worldFlag;
+    this.worldFlagFinialMesh.visible = markerCount > 0 && flagLod.worldFlag;
+    this.directionArcMesh.count = markerCount;
+    this.worldFlagPoleMesh.count = markerCount;
+    this.worldFlagFinialMesh.count = markerCount;
+    this.directionArcMesh.instanceMatrix.needsUpdate = true;
+    this.worldFlagPoleMesh.instanceMatrix.needsUpdate = true;
+    this.worldFlagFinialMesh.instanceMatrix.needsUpdate = true;
+    if (this.directionArcMesh.instanceColor) this.directionArcMesh.instanceColor.needsUpdate = true;
+    for (let index = markerCount; index < this.worldFlagClothPool.length; index += 1) {
+      this.worldFlagClothPool[index].mesh.visible = false;
+    }
   }
 
   ensureBuildingCapacity(count) {
@@ -832,11 +1046,10 @@ export default class TrainingThreeRenderPipeline {
   render({ cameraState, snapshot, runtime }) {
     if (!cameraState || !snapshot) return;
     this.updateCamera(cameraState);
-    const flagPresentation = this.updateFlagPresentation(cameraState);
     this.updateGround(runtime);
     this.updateBuildings(snapshot.buildings);
     this.updateUnits(snapshot.units);
-    this.updateFlags(runtime, flagPresentation);
+    this.updateDirectionMarkers(runtime, cameraState);
     this.updateProjectiles(snapshot.projectiles);
     this.updateEffects(snapshot.effects);
     this.renderer.render(this.scene, this.camera);
@@ -848,11 +1061,14 @@ export default class TrainingThreeRenderPipeline {
     this.unitMesh = null;
     this.selectedRingMesh = null;
     this.hoverRingMesh = null;
-    this.flagGroundMesh = null;
-    this.flagTopDownMesh = null;
-    this.flagPoleMesh = null;
-    this.flagClothMesh = null;
-    this.flagClothCrossMesh = null;
+    this.directionArcMesh = null;
+    this.worldFlagPoleMesh = null;
+    this.worldFlagFinialMesh = null;
+    this.worldFlagClothPool.forEach((entry) => {
+      entry.texture?.dispose?.();
+      entry.material?.dispose?.();
+    });
+    this.worldFlagClothPool = [];
     this.buildingMesh = null;
     this.projectilePool = [];
     this.effectPool = [];

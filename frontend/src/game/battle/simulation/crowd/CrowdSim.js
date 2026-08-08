@@ -50,6 +50,9 @@ const CROWD_HARD_CONTACT_STRENGTH = 1.18;
 const CROWD_ENEMY_TARGET_GAP = AGENT_RADIUS * 1.12;
 const CROWD_HARD_CONTACT_GAP = AGENT_RADIUS * 0.58;
 const AGENT_IDLE_DEADZONE = 0.72;
+const AGENT_IDLE_RELEASE_RADIUS = 1.72;
+const AGENT_SLOT_ARRIVAL_RADIUS = 10.8;
+const AGENT_MIN_FORMATION_SEPARATION_GAP = AGENT_RADIUS * 1.55;
 const STATIONARY_SEPARATION_SCALE = 0.2;
 const STATIONARY_FLAG_SEPARATION_SCALE = 0.08;
 const AGENT_MAX_ACCEL = 220;
@@ -269,6 +272,38 @@ const assignFormationSpacingSlots = (agents = [], baseSpacing = (AGENT_RADIUS * 
       return out;
     }, {});
   });
+};
+
+export const applyCrowdSquadFormation = (crowd, squad, deploySlots = [], formationRect = null) => {
+  if (!crowd || !squad?.id) return false;
+  const agents = crowd.agentsBySquad?.get(squad.id);
+  if (!Array.isArray(agents) || agents.length <= 0) return false;
+  const activeAgents = agents
+    .filter((agent) => agent && !agent.dead && (Number(agent.weight) || 0) > 0.001)
+    .sort((left, right) => (Number(left.slotOrder) || 0) - (Number(right.slotOrder) || 0));
+  if (activeAgents.length <= 0) return false;
+  const spacing = Math.max(
+    0.1,
+    Number(formationRect?.spacing) || ((AGENT_RADIUS * 2) + AGENT_GAP)
+  );
+  const columns = Math.max(
+    1,
+    Math.round(Math.max(1, Number(formationRect?.width) || spacing) / spacing)
+  );
+  const normalizedSlots = (Array.isArray(deploySlots) ? deploySlots : [])
+    .map((slot) => normalizeFormationSlot(slot));
+  activeAgents.forEach((agent, index) => {
+    const fallback = slotOffsetForIndex(index, columns, spacing);
+    agent.formationSlot = normalizedSlots[index] || {
+      side: fallback.side,
+      front: -fallback.back
+    };
+    agent._formationHold = false;
+    agent._formationHoldSpacing = '';
+  });
+  assignFormationSpacingSlots(activeAgents, spacing);
+  squad._crowdBaseColumns = columns;
+  return true;
 };
 
 const resolveAgentFormationSlot = (agent, index, columns, spacing, mode) => {
@@ -816,6 +851,10 @@ const updateSquadBehaviorPlan = (squad, sim, nowSec = 0) => {
     squad.action = '调整队形';
     return;
   }
+  if ((Number(squad?.formationChange?.remainingSec) || 0) > 0) {
+    squad.action = '换阵中';
+    return;
+  }
   const orderType = resolveSquadOrderType(squad);
   const chargeCommitted = orderType === ORDER_CHARGE && (Number(squad?.order?.commitUntil) || 0) > nowSec;
   if (orderType === ORDER_MOVE) {
@@ -1024,6 +1063,8 @@ const createAgent = ({
   formationSpacingSlots: formationSpacingSlots && typeof formationSpacingSlots === 'object'
     ? formationSpacingSlots
     : null,
+  _formationHold: false,
+  _formationHoldSpacing: '',
   moveSpeedMul: clamp(Number(moveSpeedMul) || 1, 0.6, 1.8),
   isFlagBearer: !!isFlagBearer,
   hitTimer: 0,
@@ -1495,6 +1536,19 @@ const trimOrGrowAgents = (squad, agents = [], crowd, dt) => {
 
 const updateSquadSpeedPolicyState = (squad, agents = [], dt = 0) => {
   if (!squad) return;
+  if (squad.formationChange && typeof squad.formationChange === 'object') {
+    const remainingSec = Math.max(0, (Number(squad.formationChange.remainingSec) || 0) - dt);
+    if (remainingSec > 0) {
+      squad.formationChange.remainingSec = remainingSec;
+      squad.speedPolicy = SPEED_POLICY_REFORM;
+      squad.reformUntil = remainingSec;
+      return;
+    }
+    squad.formationChange = null;
+    squad.speedPolicy = SPEED_POLICY_MARCH;
+    squad.reformUntil = 0;
+    return;
+  }
   const speedMode = squad.speedMode === SPEED_MODE_C ? SPEED_MODE_C : SPEED_MODE_B;
   const policy = typeof squad.speedPolicy === 'string' ? squad.speedPolicy : SPEED_POLICY_MARCH;
   if (speedMode === SPEED_MODE_C) {
@@ -2009,14 +2063,41 @@ export const updateCrowdSim = (crowd, sim, dt) => {
       const isMelee = isMeleeAgent(agent);
       const hasAnchor = engagementEnabled && isMelee && !!agent.engagePairKey
         && Number.isFinite(Number(agent.engageAx)) && Number.isFinite(Number(agent.engageAy));
+      const leaderSettling = !leaderMoving || (Math.hypot(Number(squad.vx) || 0, Number(squad.vy) || 0) <= AGENT_SETTLE_SPEED);
+      const shouldKeepFormationHold = agent._formationHold
+        && agent._formationHoldSpacing === formationSpacing
+        && toDesired.len <= AGENT_IDLE_RELEASE_RADIUS;
+      const shouldHoldFormation = !hasAnchor && stationaryHold && (
+        toDesired.len <= AGENT_IDLE_DEADZONE || shouldKeepFormationHold
+      );
+
+      if (shouldHoldFormation) {
+        agent._formationHold = true;
+        agent._formationHoldSpacing = formationSpacing;
+        clearAvoidanceMemory(agent);
+        agent.vx = 0;
+        agent.vy = 0;
+        agent.hitTimer = Math.max(0, (Number(agent.hitTimer) || 0) - safeDt);
+        agent.state = agent.attackCd > 0 ? 'attack' : 'idle';
+        return;
+      }
+      agent._formationHold = false;
+      agent._formationHoldSpacing = '';
 
       const neighbors = querySpatialNearby(spatial, agent.x, agent.y, 12);
-      const separationDistance = Math.max((AGENT_RADIUS * 2) + 0.3, spacing * formationSpacingScale * 0.94);
+      const separationDistance = Math.max(AGENT_MIN_FORMATION_SEPARATION_GAP, spacing * formationSpacingScale * 0.94);
       const sep = computeTeamAwareSeparation(agent, neighbors, separationDistance);
       const sepScale = stationaryHold
         ? (agent.isFlagBearer ? STATIONARY_FLAG_SEPARATION_SCALE : STATIONARY_SEPARATION_SCALE)
         : 1;
-      const leaderSettling = !leaderMoving || (Math.hypot(Number(squad.vx) || 0, Number(squad.vy) || 0) <= AGENT_SETTLE_SPEED);
+      const arrivalDeadzone = stationaryHold ? AGENT_IDLE_DEADZONE : AGENT_SETTLE_DEADZONE;
+      const slotArrivalRate = leaderSettling
+        ? smoothstep01(clamp(
+          (toDesired.len - arrivalDeadzone) / Math.max(0.2, AGENT_SLOT_ARRIVAL_RADIUS - arrivalDeadzone),
+          0,
+          1
+        ))
+        : 1;
       const settleBlend = leaderSettling
         ? clamp((toDesired.len - AGENT_SETTLE_DEADZONE) / Math.max(0.2, AGENT_SETTLE_RADIUS - AGENT_SETTLE_DEADZONE), 0, 1)
         : 1;
@@ -2028,10 +2109,11 @@ export const updateCrowdSim = (crowd, sim, dt) => {
       const pressureW = Math.max(0, Number(steeringWeights?.pressure) || DEFAULT_STEERING_WEIGHTS.pressure);
       const sepGainLocal = sepGain * settleBlend;
       const avoidGainLocal = avoidGain * (leaderSettling ? settleBlend : 1);
-      let desiredVx = (toDesired.x * speed * slotGain * slotW)
+      const slotSpeed = speed * slotGain * slotArrivalRate;
+      let desiredVx = (toDesired.x * slotSpeed * slotW)
         + (sep.x * 40 * sepScale * sepGainLocal * sepW)
         + (avoid.x * speed * avoidGainLocal * 0.5 * avoidW);
-      let desiredVy = (toDesired.y * speed * slotGain * slotW)
+      let desiredVy = (toDesired.y * slotSpeed * slotW)
         + (sep.y * 40 * sepScale * sepGainLocal * sepW)
         + (avoid.y * speed * avoidGainLocal * 0.5 * avoidW);
       if (hasAnchor) {
@@ -2135,4 +2217,5 @@ export const updateCrowdSim = (crowd, sim, dt) => {
   stepEffectPool(crowd.effectsPool, safeDt);
   sim.projectiles = crowd.effectsPool.projectileLive;
   sim.hitEffects = crowd.effectsPool.hitLive;
+  sim.damageNumbers = crowd.effectsPool.damageNumberLive;
 };

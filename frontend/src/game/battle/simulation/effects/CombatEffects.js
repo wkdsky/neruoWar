@@ -10,6 +10,8 @@ export const createCombatEffectsPool = () => ({
   projectileLive: [],
   hitFree: [],
   hitLive: [],
+  damageNumberFree: [],
+  damageNumberLive: [],
   nextId: 1
 });
 
@@ -66,6 +68,23 @@ const resetHitEffect = (item, payload = {}) => {
   return next;
 };
 
+const resetDamageNumber = (item, payload = {}) => {
+  const next = item || {};
+  next.id = `damage_${payload.id || 0}`;
+  next.squadId = String(payload.squadId || '');
+  next.team = payload.team || '';
+  next.x = Number(payload.x) || 0;
+  next.y = Number(payload.y) || 0;
+  next.z = Number(payload.z) || 2;
+  next.amount = Math.max(0, Number(payload.amount) || 0);
+  next.ttl = Math.max(0.08, Number(payload.ttl) || 0.82);
+  next.elapsed = 0;
+  next.revision = 1;
+  next.spawnedAt = payload.spawnedAt || nowMs();
+  next.updatedAt = next.spawnedAt;
+  return next;
+};
+
 export const acquireProjectile = (pool, payload = {}) => {
   if (!pool) return null;
   const node = pool.projectileFree.pop() || {};
@@ -85,6 +104,35 @@ export const acquireHitEffect = (pool, payload = {}) => {
     id: pool.nextId += 1
   });
   pool.hitLive.push(built);
+  return built;
+};
+
+export const acquireDamageNumber = (pool, payload = {}) => {
+  if (!pool) return null;
+  const now = nowMs();
+  const squadId = String(payload.squadId || '');
+  const pending = pool.damageNumberLive.find((item) => (
+    item?.squadId === squadId
+    && (now - (Number(item.updatedAt) || 0)) < 110
+  ));
+  if (pending) {
+    pending.amount += Math.max(0, Number(payload.amount) || 0);
+    pending.x = Number(payload.x) || pending.x || 0;
+    pending.y = Number(payload.y) || pending.y || 0;
+    pending.z = Number(payload.z) || pending.z || 2;
+    pending.ttl = Math.max(pending.ttl, 0.72);
+    pending.elapsed = 0;
+    pending.revision = Math.max(1, Number(pending.revision) || 1) + 1;
+    pending.updatedAt = now;
+    return pending;
+  }
+  const node = pool.damageNumberFree.pop() || {};
+  const built = resetDamageNumber(node, {
+    ...payload,
+    id: pool.nextId += 1,
+    spawnedAt: now
+  });
+  pool.damageNumberLive.push(built);
   return built;
 };
 
@@ -108,5 +156,14 @@ export const stepEffectPool = (pool, dt = 0) => {
     if (e.ttl > 0) continue;
     pool.hitLive.splice(i, 1);
     pool.hitFree.push(e);
+  }
+
+  for (let i = pool.damageNumberLive.length - 1; i >= 0; i -= 1) {
+    const number = pool.damageNumberLive[i];
+    number.elapsed += safeDt;
+    number.ttl -= safeDt;
+    if (number.ttl > 0) continue;
+    pool.damageNumberLive.splice(i, 1);
+    pool.damageNumberFree.push(number);
   }
 };

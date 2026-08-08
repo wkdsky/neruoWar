@@ -277,7 +277,6 @@ export const createBattleInputController = ({
 
     const pickedSquadId = runtime.pickSquadAtPoint(world.x, world.y, {
       team: 'any',
-      controllable: true,
       maxDist: 34
     });
     if (pickedSquadId) {
@@ -449,6 +448,7 @@ export const createBattleInputController = ({
       }
     }
 
+    const closeDistanceMin = constants.CAMERA_DISTANCE_CLOSE_MIN || constants.CAMERA_DISTANCE_MIN || 360;
     const baseDistanceMax = constants.CAMERA_DISTANCE_MAX || 980;
     const overviewDistanceMax = getters.isTrainingMode?.()
       ? resolveTrainingOverviewDistance({
@@ -467,12 +467,13 @@ export const createBattleInputController = ({
     if (typeof cameraControllerRef.current.setDistanceWithDynamicPitch === 'function') {
       cameraControllerRef.current.setDistanceWithDynamicPitch(
         nextDistance,
-        constants.CAMERA_DISTANCE_MIN || 360,
+        closeDistanceMin,
         baseDistanceMax,
-        overviewDistanceMax
+        overviewDistanceMax,
+        constants.CAMERA_DISTANCE_MIN || closeDistanceMin
       );
     } else {
-      cameraControllerRef.current.distance = clamp(nextDistance, constants.CAMERA_DISTANCE_MIN || 360, overviewDistanceMax);
+      cameraControllerRef.current.distance = clamp(nextDistance, closeDistanceMin, overviewDistanceMax);
     }
   };
 

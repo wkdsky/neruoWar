@@ -26,12 +26,18 @@ const selectedSquad = {
     { unitTypeId: 'archer', unitName: '弓兵', count: 6, startCount: 8 }
   ],
   formationName: '横向阵',
+  templateFormations: [{
+    formationId: 'line',
+    name: '横向阵',
+    placements: [{ unitTypeId: 'infantry', x: 0, y: 0 }]
+  }],
+  activeFormationId: 'line',
   formationRect: { width: 48, depth: 24 },
   unitMetrics: { cohesiveSpeed: 1.1, totalAtk: 42, totalDef: 24, range: 3 }
 };
 
 describe('SquadCards training controls', () => {
-  test('renders compact troop status with per-slot skill trees', () => {
+  test('renders the skill row without the removed unit information strip', () => {
     const onOpenSkillTree = jest.fn();
     render(
       <SquadCards
@@ -44,10 +50,10 @@ describe('SquadCards training controls', () => {
     );
 
     const commandPanel = screen.getByRole('region', { name: '当前选中部队信息与技能' });
-    expect(commandPanel.textContent).toContain('混编先锋队');
-    expect(commandPanel.textContent).toContain('18/20');
-    expect(commandPanel.textContent).toContain('横向阵');
+    expect(commandPanel.querySelector('.pve2-training-squad-meta-row')).toBeNull();
     expect(commandPanel.querySelectorAll('.pve2-training-skill-pair')).toHaveLength(3);
+    expect(commandPanel.querySelectorAll('.pve2-training-skill-tree-toggle')).toHaveLength(3);
+    expect(commandPanel.querySelector('.pve2-formation-popover-trigger')).not.toBeNull();
 
     fireEvent.click(screen.getByRole('button', { name: '辅助技能树 · 槽位 3' }));
     expect(onOpenSkillTree).toHaveBeenCalledWith(
@@ -58,51 +64,66 @@ describe('SquadCards training controls', () => {
     );
   });
 
-  test('animates local gain and loss feedback when troop and skill-point values change', () => {
-    const { container, rerender } = render(
+  test('keeps the skill row above the command row', () => {
+    const { container } = render(
       <SquadCards
         squads={[selectedSquad]}
-        phase="battle"
-        isTrainingMode
-        trainingState={{ points: 0 }}
-      />
-    );
-
-    rerender(
-      <SquadCards
-        squads={[selectedSquad]}
-        phase="battle"
+        phase="deploy"
         isTrainingMode
         trainingState={{ points: 2 }}
       />
     );
 
-    const pointMetric = container.querySelector('[data-training-metric="skill-points"]');
-    expect(pointMetric.textContent).toContain('技能点');
-    expect(pointMetric.querySelector('.pve2-training-metric-delta.is-gain').textContent).toBe('+2');
+    const skillRow = container.querySelector('.pve2-training-squad-skill-row');
+    const commandRow = container.querySelector('.pve2-training-squad-command-row');
+    const pointBadge = container.querySelector('.pve2-training-skill-point-badge');
+    expect(skillRow.compareDocumentPosition(commandRow) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(pointBadge.textContent).toBe('2');
+  });
 
-    rerender(
+  test('keeps training battle commands and spacing choices together in the selected command strip', () => {
+    const onBattleAction = jest.fn();
+    const onFormationSpacingPick = jest.fn();
+    const onFormationPick = jest.fn();
+    const formations = [
+      ...selectedSquad.templateFormations,
+      {
+        formationId: 'column',
+        name: '纵深阵',
+        placements: [{ unitTypeId: 'infantry', x: 0, y: 0 }]
+      }
+    ];
+    render(
       <SquadCards
-        squads={[{ ...selectedSquad, remain: 16 }]}
+        squads={[{
+          ...selectedSquad,
+          action: '待命',
+          formationSpacing: 'standard',
+          templateFormations: formations
+        }]}
         phase="battle"
         isTrainingMode
-        trainingState={{ points: 2 }}
+        onBattleAction={onBattleAction}
+        onFormationSpacingPick={onFormationSpacingPick}
+        onFormationPick={onFormationPick}
       />
     );
 
-    const troopMetric = container.querySelector('[data-training-metric="troops"]');
-    expect(troopMetric.textContent).toContain('16/20');
-    expect(troopMetric.querySelector('.pve2-training-metric-delta.is-loss').textContent).toBe('-2');
+    fireEvent.click(screen.getByRole('button', { name: '规划路径' }));
+    expect(onBattleAction).toHaveBeenCalledWith('training_squad_1', 'planPath', expect.anything());
 
-    rerender(
-      <SquadCards
-        squads={[{ ...selectedSquad, id: 'training_squad_2', remain: 12 }]}
-        phase="battle"
-        isTrainingMode
-        trainingState={{ points: 9 }}
-      />
+    fireEvent.click(screen.getByRole('button', { name: '自由攻击' }));
+    expect(onBattleAction).toHaveBeenCalledWith('training_squad_1', 'freeAttack', expect.anything());
+
+    fireEvent.click(screen.getByRole('button', { name: '紧凑' }));
+    expect(onFormationSpacingPick).toHaveBeenCalledWith('training_squad_1', 'compact');
+
+    fireEvent.click(screen.getByRole('button', { name: '阵型选择' }));
+    fireEvent.click(screen.getByRole('button', { name: '2 · 纵深阵' }));
+    expect(onFormationPick).toHaveBeenCalledWith(
+      'training_squad_1',
+      expect.objectContaining({ formationId: 'column' })
     );
-    expect(container.querySelector('[data-training-metric="skill-points"] .pve2-training-metric-delta')).toBeNull();
   });
 
   test('uses separate compact actions for templates and troop creation', () => {

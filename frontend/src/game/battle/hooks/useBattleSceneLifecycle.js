@@ -3,6 +3,7 @@ import {
   BATTLE_PITCH_HIGH_DEG,
   BATTLE_PITCH_LOW_DEG,
   BATTLE_UI_MODE_NONE,
+  CAMERA_DISTANCE_CLOSE_MIN,
   CAMERA_DISTANCE_MAX,
   CAMERA_DISTANCE_MIN,
   DEPLOY_DEFAULT_WORLD_YAW_DEG,
@@ -86,7 +87,13 @@ export default function useBattleSceneLifecycle({
     cameraRef.current.pitchHigh = BATTLE_PITCH_HIGH_DEG;
     const overviewDistance = computeDeployOverviewDistance(runtime.getField?.());
     if (typeof cameraRef.current.setDistanceWithDynamicPitch === 'function') {
-      cameraRef.current.setDistanceWithDynamicPitch(overviewDistance, CAMERA_DISTANCE_MIN, CAMERA_DISTANCE_MAX);
+      cameraRef.current.setDistanceWithDynamicPitch(
+        overviewDistance,
+        CAMERA_DISTANCE_CLOSE_MIN,
+        CAMERA_DISTANCE_MAX,
+        CAMERA_DISTANCE_MAX,
+        CAMERA_DISTANCE_MIN
+      );
     } else {
       cameraRef.current.distance = overviewDistance;
     }

@@ -20,7 +20,9 @@ const BattleActionButtons = ({
   skills = [],
   showSkills = false,
   onSkillPick = null,
-  isTrainingMode = false
+  isTrainingMode = false,
+  actionIds = BATTLE_ACTION_IDS,
+  className = ''
 }) => {
   const anchorPos = useMemo(() => {
     if (mode !== 'world') return null;
@@ -28,12 +30,19 @@ const BattleActionButtons = ({
     return camera(anchorWorldPos);
   }, [visible, anchorWorldPos, camera, mode]);
 
+  const visibleActionIds = (Array.isArray(actionIds) ? actionIds : BATTLE_ACTION_IDS)
+    .filter((actionId, index, list) => (
+      !!ACTION_META[actionId]
+      && list.indexOf(actionId) === index
+      && !(isTrainingMode && actionId === 'skills')
+    ));
+
   if (!visible) return null;
   if (mode === 'world') {
     if (!anchorPos?.visible) return null;
     return (
       <div
-        className="pve2-battle-actions pve2-battle-actions-world"
+        className={`pve2-battle-actions pve2-battle-actions-world ${className}`}
         style={{ left: `${anchorPos.x}px`, top: `${anchorPos.y}px` }}
         onMouseDown={(event) => event.stopPropagation()}
         onClick={(event) => event.stopPropagation()}
@@ -62,7 +71,7 @@ const BattleActionButtons = ({
             ))}
           </div>
         ) : null}
-        {BATTLE_ACTION_IDS.filter((actionId) => !(isTrainingMode && actionId === 'skills')).map((actionId) => (
+        {visibleActionIds.map((actionId) => (
           <button
             key={actionId}
             type="button"
@@ -86,7 +95,7 @@ const BattleActionButtons = ({
 
   return (
     <div
-      className="pve2-battle-actions pve2-battle-actions-card"
+      className={`pve2-battle-actions pve2-battle-actions-card ${className}`}
       onMouseDown={(event) => event.stopPropagation()}
       onClick={(event) => event.stopPropagation()}
     >
@@ -114,7 +123,7 @@ const BattleActionButtons = ({
           ))}
         </div>
       ) : null}
-      {BATTLE_ACTION_IDS.filter((actionId) => !(isTrainingMode && actionId === 'skills')).map((actionId) => (
+      {visibleActionIds.map((actionId) => (
         <button
           key={actionId}
           type="button"

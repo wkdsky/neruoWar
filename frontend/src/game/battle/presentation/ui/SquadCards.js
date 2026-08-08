@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useState } from 'react';
 import { ArrowUpDown, Ban, Bot, Pencil, Plus, Trash2, User, UserPlus } from 'lucide-react';
 import DeployActionButtons from './DeployActionButtons';
 import BattleActionButtons from './BattleActionButtons';
@@ -32,55 +32,35 @@ const cardSizeClassByCount = (count = 0) => {
   return 'is-large';
 };
 
-const normalizeMetricValue = (value = 0) => Math.max(0, Math.floor(Number(value) || 0));
+const FORMATION_SPACING_OPTIONS = [
+  { value: 'loose', label: '松散' },
+  { value: 'standard', label: '标准' },
+  { value: 'compact', label: '紧凑' }
+];
 
-const TrainingMetric = ({
-  id,
-  label,
-  value,
-  displayValue = value,
-  trackerId,
-  tone = 'neutral'
-}) => {
-  const normalizedValue = normalizeMetricValue(value);
-  const previousRef = useRef({ trackerId, value: normalizedValue });
-  const sequenceRef = useRef(0);
-  const [delta, setDelta] = useState(null);
-
-  useEffect(() => {
-    const previous = previousRef.current;
-    if (previous.trackerId !== trackerId) {
-      previousRef.current = { trackerId, value: normalizedValue };
-      setDelta(null);
-      return undefined;
-    }
-
-    const change = normalizedValue - previous.value;
-    previousRef.current = { trackerId, value: normalizedValue };
-    if (change === 0) return undefined;
-
-    sequenceRef.current += 1;
-    setDelta({ value: change, key: sequenceRef.current });
-    const clearId = window.setTimeout(() => setDelta(null), 980);
-    return () => window.clearTimeout(clearId);
-  }, [normalizedValue, trackerId]);
-
-  const deltaClassName = delta?.value > 0 ? 'is-gain' : 'is-loss';
-  return (
-    <span
-      className={`pve2-training-metric is-${tone} ${delta ? deltaClassName : ''}`}
-      data-training-metric={id}
-    >
-      <span className="pve2-training-metric-label">{label}</span>
-      <strong className="pve2-training-metric-value">{displayValue}</strong>
-      {delta ? (
-        <span className={`pve2-training-metric-delta ${deltaClassName}`} key={delta.key} aria-live="polite">
-          {delta.value > 0 ? `+${delta.value}` : String(delta.value)}
-        </span>
-      ) : null}
-    </span>
-  );
-};
+const TrainingFormationSpacingControl = ({ value = 'standard', disabled = false, onPick }) => (
+  <div className="pve2-training-spacing-control" aria-label="士兵间隔">
+    <span>士兵间隔</span>
+    <div>
+      {FORMATION_SPACING_OPTIONS.map((option) => (
+        <button
+          key={option.value}
+          type="button"
+          className={option.value === value ? 'is-active' : ''}
+          disabled={disabled}
+          aria-pressed={option.value === value}
+          onMouseDown={(event) => event.stopPropagation()}
+          onClick={(event) => {
+            event.stopPropagation();
+            onPick?.(option.value);
+          }}
+        >
+          {option.label}
+        </button>
+      ))}
+    </div>
+  </div>
+);
 
 const SquadCards = ({
   squads = [],
@@ -101,11 +81,13 @@ const SquadCards = ({
   onPlacementAction,
   onOpenSkillTree,
   onCastSkillSlot,
+  onFormationSpacingPick,
   onFormationPick,
   onFormationReorder,
   trainingSkillTreeOpen = false,
   trainingSkillTreeSlotIndex = -1,
   trainingState = null,
+  trainingSkillTreeProgress = {},
   armyTemplates = [],
   armyTemplatesLoading = false,
   armyTemplatesError = '',
@@ -123,16 +105,21 @@ const SquadCards = ({
   const canConfigureSkills = phase === 'deploy' && isTrainingMode && !disabled;
   const canShowDeployActions = (
     phase === 'deploy'
-    && actionAnchorMode === 'card'
     && selectedRow
     && (!deployActionTeam || selectedRow.team === deployActionTeam)
     && !disabled
+    && (isTrainingMode || actionAnchorMode === 'card')
   );
   const canShowBattleActions = (
     phase === 'battle'
     && selectedRow?.controlMode !== 'AI'
     && selectedRow?.alive
     && !disabled
+  );
+  const canShowFormationPicker = (
+    isTrainingMode
+    && selectedRow
+    && (phase === 'deploy' || (phase === 'battle' && selectedRow.alive && selectedRow.controlMode !== 'AI'))
   );
 
   const renderTemplateCard = (template, index) => {
@@ -347,36 +334,36 @@ const SquadCards = ({
         aria-label="当前选中部队信息与技能"
         {...renderPanelEvents}
       >
-        <div className="pve2-training-squad-meta-row">
-          <span className="pve2-training-squad-class" title={labelByClass[selectedRow.classTag] || '部队'}>
-            {iconByClass[selectedRow.classTag] || '兵'}
-          </span>
-          <strong title={selectedRow.name}>{selectedRow.name}</strong>
-          <span className={`pve2-training-squad-team is-${selectedRow.team}`}>
-            {selectedRow.team === 'attacker' ? '我方' : '敌方'}
-          </span>
-          <TrainingMetric
-            key={`${selectedRow.id}:troops`}
-            id="troops"
-            label="兵力"
-            value={selectedRow.remain}
-            displayValue={`${selectedRow.remain}/${selectedRow.startCount}`}
-            trackerId={`${selectedRow.id}:troops`}
-            tone="troops"
+        <div className="pve2-training-squad-skill-row">
+          <TrainingSkillSlots
+            unitCategories={selectedRow.unitCategories}
+            skillSlots={selectedRow.skillSlots}
+            skills={isBattle ? selectedRow.skills : []}
+            phase={phase}
+            isTrainingMode={isTrainingMode}
+            trainingState={trainingState}
+            skillTreeProgress={trainingSkillTreeProgress}
+            treeOpenSlotIndex={trainingSkillTreeOpen ? trainingSkillTreeSlotIndex : -1}
+            onOpenTree={(slotIndex, treeCategory, event) => onOpenSkillTree?.(selectedRow.id, slotIndex, treeCategory, event)}
+            onCastSlot={(slotIndex, event) => onCastSkillSlot?.(selectedRow.id, slotIndex, event)}
+            disabled={phase === 'deploy' ? !canConfigureSkills : false}
           />
-          <TrainingMetric
-            key={`${selectedRow.id}:skill-points`}
-            id="skill-points"
-            label="技能点"
-            value={trainingState?.points}
-            displayValue={Math.max(0, Number(trainingState?.points) || 0)}
-            trackerId={`${selectedRow.id}:skill-points`}
-            tone="points"
-          />
-          <span className="pve2-training-squad-formation" title={selectedRow.formationName || '默认阵型'}>
-            {selectedRow.formationName || '默认阵型'}
-          </span>
-          <span className="pve2-training-squad-action">{selectedRow.action || '待命'}</span>
+        </div>
+        {(phase === 'deploy' || canShowBattleActions || canShowFormationPicker) ? (
+          <div className="pve2-training-squad-command-row">
+          {canShowFormationPicker ? (
+            <BattleFormationSlots
+              formations={selectedRow.templateFormations}
+              activeFormationId={selectedRow.activeFormationId || selectedRow.formationId}
+              editable={isTrainingMode && phase === 'deploy'}
+              disabled={disabled}
+              showHoverGrid={isTrainingMode}
+              onPick={(formation) => onFormationPick?.(selectedRow.id, formation)}
+              onReorder={phase === 'deploy'
+                ? (formations) => onFormationReorder?.(selectedRow.id, formations)
+                : undefined}
+            />
+          ) : null}
           {canShowDeployActions ? (
             <DeployActionButtons
               layout="line"
@@ -388,31 +375,25 @@ const SquadCards = ({
               showDelete={false}
             />
           ) : null}
-        </div>
-        <div className="pve2-training-squad-skill-row">
-          {phase === 'deploy' && isTrainingMode ? (
-            <BattleFormationSlots
-              formations={selectedRow.templateFormations}
-              activeFormationId={selectedRow.activeFormationId || selectedRow.formationId}
-              editable={isTrainingMode}
-              disabled={disabled}
-              onPick={(formation) => onFormationPick?.(selectedRow.id, formation)}
-              onReorder={(formations) => onFormationReorder?.(selectedRow.id, formations)}
-            />
+          {canShowBattleActions ? (
+            <>
+              <BattleActionButtons
+                visible
+                mode="card"
+                isTrainingMode={isTrainingMode}
+                actionIds={['planPath', 'freeAttack', 'standby', 'retreat']}
+                className="pve2-training-command-actions"
+                onAction={(actionId, payload) => onBattleAction?.(selectedRow.id, actionId, payload)}
+              />
+              <TrainingFormationSpacingControl
+                value={selectedRow.formationSpacing || 'standard'}
+                disabled={disabled}
+                onPick={(spacing) => onFormationSpacingPick?.(selectedRow.id, spacing)}
+              />
+            </>
           ) : null}
-          <TrainingSkillSlots
-            unitCategories={selectedRow.unitCategories}
-            skillSlots={selectedRow.skillSlots}
-            skills={isBattle ? selectedRow.skills : []}
-            phase={phase}
-            isTrainingMode={isTrainingMode}
-            trainingState={trainingState}
-            treeOpenSlotIndex={trainingSkillTreeOpen ? trainingSkillTreeSlotIndex : -1}
-            onOpenTree={(slotIndex, treeCategory, event) => onOpenSkillTree?.(selectedRow.id, slotIndex, treeCategory, event)}
-            onCastSlot={(slotIndex, event) => onCastSkillSlot?.(selectedRow.id, slotIndex, event)}
-            disabled={phase === 'deploy' ? !canConfigureSkills : false}
-          />
-        </div>
+          </div>
+        ) : null}
       </section>
     );
   };

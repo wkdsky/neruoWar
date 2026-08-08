@@ -11,7 +11,9 @@ const createSkill = (config) => Object.freeze({
   powerLabel: config.powerLabel || '威力',
   cooldown: config.cooldown || '—',
   cooldownSeconds: Math.max(0, Number(config.cooldownSeconds) || 0),
-  unlockCost: Math.max(0, Math.floor(Number(config.unlockCost) || (config.tier > 0 ? 1 : 0))),
+  unlockCost: Number.isFinite(Number(config.unlockCost))
+    ? Math.max(0, Math.floor(Number(config.unlockCost)))
+    : Math.max(0, Math.floor(Number(config.tier) || 0)),
   range: config.range || '—',
   duration: config.duration || '—',
   description: config.description,
@@ -560,6 +562,19 @@ export const getSkillCooldownSeconds = (skill = null, fallback = 6) => {
 export const getSkillUnlockCost = (skill = null) => (
   Math.max(0, Math.floor(Number(skill?.unlockCost) || (Number(skill?.tier) > 0 ? 1 : 0)))
 );
+
+export const getSkillTreeRemainingUnlockCost = (treeCategory = '', progress = null) => {
+  const tree = getSkillTreeById(treeCategory);
+  if (!tree) return 0;
+  const unlocked = new Set(
+    (Array.isArray(progress?.unlocked) ? progress.unlocked : [])
+      .map((skillId) => String(skillId || '').trim())
+      .filter(Boolean)
+  );
+  return tree.skills.reduce((total, skill) => (
+    unlocked.has(skill.id) ? total : total + getSkillUnlockCost(skill)
+  ), 0);
+};
 
 export const getSkillTreeRoot = (treeCategory = '') => {
   const tree = getSkillTreeById(treeCategory);
