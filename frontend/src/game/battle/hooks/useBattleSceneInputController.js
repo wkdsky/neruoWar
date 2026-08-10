@@ -12,8 +12,10 @@ export default function useBattleSceneInputController({
   panDragRef,
   deployYawDragRef,
   deployRectDragRef,
+  deployDirectionArcDragRef,
   spacePressedRef,
   selectedSquadId = '',
+  paused = false,
   battleUiMode = '',
   skillConfirmState = null,
   aimState = null,
@@ -74,6 +76,7 @@ export default function useBattleSceneInputController({
     panDragRef,
     deployYawDragRef,
     deployRectDragRef,
+    deployDirectionArcDragRef,
     spacePressedRef,
     constants: {
       ORDER_MOVE,
@@ -98,6 +101,7 @@ export default function useBattleSceneInputController({
     },
     getters: {
       getSelectedSquadId: () => selectedSquadId,
+      isClockPaused: () => paused,
       getBattleUiMode: () => battleUiMode,
       getSkillConfirmState: () => skillConfirmState,
       getAimState: () => aimState,
@@ -136,6 +140,7 @@ export default function useBattleSceneInputController({
     runtimeRef,
     worldToScreenRef,
     selectedSquadId,
+    paused,
     battleUiMode,
     skillConfirmState,
     aimState,
@@ -159,6 +164,7 @@ export default function useBattleSceneInputController({
     panDragRef,
     deployYawDragRef,
     deployRectDragRef,
+    deployDirectionArcDragRef,
     spacePressedRef,
     setIsPanning,
     setDeployNotice,
@@ -203,6 +209,7 @@ export default function useBattleSceneInputController({
     battleInputController.clearPanDrag();
     battleInputController.clearDeployYawDrag();
     battleInputController.clearDeployRectDrag();
+    battleInputController.clearDeployDirectionArcDrag();
     runtimeRef.current?.setHoveredDeployGroup?.('');
   }, [battleInputController, interactionLocked, runtimeRef]);
 

@@ -9,11 +9,13 @@
 import {
   applyCrowdSquadFormation,
   createCrowdSim,
+  releaseCrowdSquadFormationLock,
   updateCrowdSim,
   triggerCrowdSkill
 } from '../../simulation/crowd/CrowdSim';
 import { degToRad, normalizeDeg } from '../../shared/angle';
 import { limitNameByDisplayWidth } from '../../shared/nameLimits';
+import { snapTrainingDirectionOffset } from '../../shared/trainingDirectionArc';
 import { buildBattleSummary } from './BattleSummary';
 import {
   buildRepConfig,
@@ -994,6 +996,24 @@ const normalizeFormationFacing = (team = TEAM_ATTACKER, rawFacing = null) => {
   return candidate;
 };
 
+const normalizeDirectionOffset = (value = 0) => {
+  return snapTrainingDirectionOffset(value);
+};
+
+const resolveFormationDirectionState = (team = TEAM_ATTACKER, rect = {}) => {
+  const facingRad = normalizeFormationFacing(team, rect?.facingRad);
+  const explicitOffset = Number(rect?.directionOffsetRad);
+  const legacyDirection = Number(rect?.directionRad);
+  const directionOffsetRad = Number.isFinite(explicitOffset)
+    ? normalizeDirectionOffset(explicitOffset)
+    : (Number.isFinite(legacyDirection) ? normalizeDirectionOffset(legacyDirection - facingRad) : 0);
+  return {
+    facingRad,
+    directionOffsetRad,
+    directionRad: facingRad + directionOffsetRad
+  };
+};
+
 const normalizeTemplateFormationPlacements = (placements = [], units = {}) => {
   const remaining = normalizeUnitsMap(units || {});
   const occupied = new Set();
@@ -1021,7 +1041,10 @@ const buildTemplateFormationState = (formation = {}, group = {}, team = TEAM_ATT
   const maxY = Math.max(...placements.map((placement) => placement.y));
   const centerX = (minX + maxX) * 0.5;
   const centerY = (minY + maxY) * 0.5;
-  const facingRad = normalizeFormationFacing(team, group?.formationRect?.facingRad);
+  const { facingRad, directionOffsetRad, directionRad } = resolveFormationDirectionState(
+    team,
+    group?.formationRect
+  );
   const slotCount = Math.max(resolveDeploySlotCount(group?.units || {}, repConfig), placements.length);
   const width = Math.max(DEPLOY_FORMATION_MIN_EDGE, ((maxX - minX) + 1) * TEMPLATE_FORMATION_CELL_SPACING);
   const depth = Math.max(DEPLOY_FORMATION_MIN_EDGE, ((maxY - minY) + 1) * TEMPLATE_FORMATION_CELL_SPACING);
@@ -1039,6 +1062,8 @@ const buildTemplateFormationState = (formation = {}, group = {}, team = TEAM_ATT
     area: width * depth,
     spacing: TEMPLATE_FORMATION_CELL_SPACING,
     facingRad,
+    directionOffsetRad,
+    directionRad,
     slotCount
   };
   const fallbackSlots = buildFormationSlots(slotCount, fallbackRect);
@@ -1137,8 +1162,8 @@ const buildDeployGroupFormationState = (group = {}, team = TEAM_ATTACKER, repCon
   const units = normalizeUnitsMap(group?.units || {});
   const slotCount = resolveDeploySlotCount(units, repConfig);
   const spacing = Math.max(4, Number(group?.formationRect?.spacing) || DEPLOY_FORMATION_SPACING_DEFAULT);
-  const facingRad = normalizeFormationFacing(team, group?.formationRect?.facingRad);
   const prevRect = group?.formationRect && typeof group.formationRect === 'object' ? group.formationRect : {};
+  const { facingRad, directionOffsetRad, directionRad } = resolveFormationDirectionState(team, prevRect);
   const fallbackCols = Math.max(1, Math.ceil(Math.sqrt(slotCount)));
   const fallbackRows = Math.max(1, Math.ceil(slotCount / fallbackCols));
   const baseRect = clampFormationByArea({
@@ -1153,6 +1178,8 @@ const buildDeployGroupFormationState = (group = {}, team = TEAM_ATTACKER, repCon
     depth: baseRect.depth,
     spacing,
     facingRad,
+    directionOffsetRad,
+    directionRad,
     slotCount,
     formationId: typeof prevRect.formationId === 'string' ? prevRect.formationId : '',
     formationName: typeof prevRect.formationName === 'string' ? prevRect.formationName : ''
@@ -1442,16 +1469,21 @@ const createSquad = ({
     tier: Math.max(1, Number(stats.tier) || 1),
     mainUnitTypeId: stats.mainTypeId || '',
     formationRect: group?.formationRect && typeof group.formationRect === 'object'
-      ? {
+      ? (() => {
+        const direction = resolveFormationDirectionState(team, group.formationRect);
+        return {
         area: Math.max(1, Number(group.formationRect.area) || 1),
         width: Math.max(1, Number(group.formationRect.width) || 1),
         depth: Math.max(1, Number(group.formationRect.depth) || 1),
         spacing: Math.max(1, Number(group.formationRect.spacing) || DEPLOY_FORMATION_SPACING_DEFAULT),
-        facingRad: normalizeFormationFacing(team, group.formationRect.facingRad),
+        facingRad: direction.facingRad,
+        directionOffsetRad: direction.directionOffsetRad,
+        directionRad: direction.directionRad,
         slotCount: Math.max(1, Math.floor(Number(group.formationRect.slotCount) || 1)),
         formationId: typeof group.formationRect.formationId === 'string' ? group.formationRect.formationId : '',
         formationName: typeof group.formationRect.formationName === 'string' ? group.formationRect.formationName : ''
-      }
+        };
+      })()
       : null,
     deploySlots: Array.isArray(group?.deploySlots)
       ? group.deploySlots
@@ -1665,6 +1697,7 @@ export default class BattleRuntime {
 
     this.selectedDeploySquadId = '';
     this.hoveredDeploySquadId = '';
+    this.hoveredDeployDirectionArcId = '';
     this.focusSquadId = '';
     this.selectedBattleSquadId = '';
 
@@ -1879,6 +1912,7 @@ export default class BattleRuntime {
     this.selectedBattleSquadId = '';
     this.focusSquadId = '';
     this.hoveredDeploySquadId = '';
+    this.hoveredDeployDirectionArcId = '';
     this.trainingSessionActive = false;
     this.updateCameraAnchor(0);
     return { ok: true, state: this.getTrainingState() };
@@ -1898,6 +1932,9 @@ export default class BattleRuntime {
 
   setSelectedDeployGroup(groupId = '') {
     this.selectedDeploySquadId = String(groupId || '');
+    if (this.hoveredDeployDirectionArcId !== this.selectedDeploySquadId) {
+      this.hoveredDeployDirectionArcId = '';
+    }
   }
 
   setHoveredDeployGroup(groupId = '') {
@@ -1913,10 +1950,34 @@ export default class BattleRuntime {
     return true;
   }
 
+  setHoveredDeployDirectionArc(groupId = '') {
+    const isDeploy = this.phase === 'deploy';
+    const isBattle = this.phase === 'battle';
+    if (!isDeploy && !isBattle) {
+      this.hoveredDeployDirectionArcId = '';
+      return false;
+    }
+    const requestedId = String(groupId || '');
+    const group = requestedId
+      ? (isBattle ? this.getSquadById(requestedId) : this.getDeployGroupById(requestedId, TEAM_ANY))
+      : null;
+    const selectedId = isBattle ? this.selectedBattleSquadId : this.selectedDeploySquadId;
+    const nextId = (
+      group
+      && (isBattle || group.placed !== false)
+      && group.id === selectedId
+      && (!isBattle || this.canControlSquad(group))
+    ) ? group.id : '';
+    if (this.hoveredDeployDirectionArcId === nextId) return false;
+    this.hoveredDeployDirectionArcId = nextId;
+    return true;
+  }
+
   clearSelection() {
     this.selectedDeploySquadId = '';
     this.selectedBattleSquadId = '';
     this.hoveredDeploySquadId = '';
+    this.hoveredDeployDirectionArcId = '';
     this.focusSquadId = '';
   }
 
@@ -2098,6 +2159,13 @@ export default class BattleRuntime {
     const nextFacing = Number.isFinite(Number(partialRect?.facingRad))
       ? Number(partialRect.facingRad)
       : normalizeFormationFacing(group.team, current.facingRad);
+    const currentDirection = resolveFormationDirectionState(group.team, current);
+    const nextDirectionOffset = Number.isFinite(Number(partialRect?.directionOffsetRad))
+      ? normalizeDirectionOffset(partialRect.directionOffsetRad)
+      : (Number.isFinite(Number(partialRect?.directionRad))
+        ? normalizeDirectionOffset(Number(partialRect.directionRad) - nextFacing)
+        : currentDirection.directionOffsetRad);
+    const nextDirection = nextFacing + nextDirectionOffset;
     const spacing = Math.max(4, Number(partialRect?.spacing) || Number(current.spacing) || DEPLOY_FORMATION_SPACING_DEFAULT);
     const slotCount = Math.max(1, Math.floor(Number(current.slotCount) || resolveDeploySlotCount(group.units || {}, this.repConfig)));
     const requestedArea = Number.isFinite(Number(partialRect?.area))
@@ -2119,6 +2187,8 @@ export default class BattleRuntime {
       depth: normalizedRect.depth,
       spacing,
       facingRad: nextFacing,
+      directionOffsetRad: nextDirectionOffset,
+      directionRad: nextDirection,
       slotCount,
       formationId: typeof partialRect?.formationId === 'string'
         ? partialRect.formationId.trim()
@@ -2136,6 +2206,45 @@ export default class BattleRuntime {
       ok: true,
       formationRect: { ...group.formationRect },
       slotCount: group.deploySlots.length
+    };
+  }
+
+  setDeployGroupDirection(groupId = '', directionOffsetRad = null, team = TEAM_ANY) {
+    const isDeploy = this.phase === 'deploy';
+    const isBattle = this.phase === 'battle';
+    if (!isDeploy && !isBattle) return { ok: false, reason: '当前阶段不可调整前进方向' };
+    const group = isBattle
+      ? this.getFormationGroupById(groupId, team)
+      : this.getDeployGroupById(groupId, team);
+    if (!group) return { ok: false, reason: '未找到部队' };
+    if (isBattle && !this.canControlSquad(group)) return { ok: false, reason: '该部队由 AI 接管' };
+    const nextOffset = Number(directionOffsetRad);
+    if (!Number.isFinite(nextOffset)) return { ok: false, reason: '前进方向无效' };
+    if (isDeploy) this.hydrateDeployGroupFormation(group, group.team);
+    const direction = resolveFormationDirectionState(group.team, group.formationRect);
+    const normalizedOffset = normalizeDirectionOffset(nextOffset);
+    group.formationRect = {
+      ...group.formationRect,
+      facingRad: direction.facingRad,
+      directionOffsetRad: normalizedOffset,
+      directionRad: direction.facingRad + normalizedOffset
+    };
+    if (isBattle) {
+      const movementForward = {
+        x: Math.cos(group.formationRect.directionRad),
+        y: Math.sin(group.formationRect.directionRad)
+      };
+      group._crowdForward = movementForward;
+      group.dirX = movementForward.x;
+      group.dirY = movementForward.y;
+      group.smoothedDirX = movementForward.x;
+      group.smoothedDirY = movementForward.y;
+      this.markCommandIssued('formation_direction');
+    }
+    return {
+      ok: true,
+      directionOffsetRad: normalizedOffset,
+      directionRad: group.formationRect.directionRad
     };
   }
 
@@ -2162,9 +2271,13 @@ export default class BattleRuntime {
         slotCount: Array.isArray(group.deploySlots) ? group.deploySlots.length : 0
       };
     }
+    const direction = resolveFormationDirectionState(group.team, group.formationRect);
+    const facingRad = normalizeFormationFacing(group.team, group.formationRect?.facingRad);
     group.formationRect = {
       ...nextFormation.formationRect,
-      facingRad: normalizeFormationFacing(group.team, group.formationRect?.facingRad)
+      facingRad,
+      directionOffsetRad: direction.directionOffsetRad,
+      directionRad: facingRad + direction.directionOffsetRad
     };
     group.deploySlots = normalizeDeploySlotsForCount(
       nextFormation.deploySlots,
@@ -2404,6 +2517,7 @@ export default class BattleRuntime {
     const fallbackId = this.attackerDeployGroups[0]?.id || this.defenderDeployGroups[0]?.id || '';
     if (this.selectedDeploySquadId === safeGroupId) this.selectedDeploySquadId = fallbackId;
     if (this.hoveredDeploySquadId === safeGroupId) this.hoveredDeploySquadId = '';
+    if (this.hoveredDeployDirectionArcId === safeGroupId) this.hoveredDeployDirectionArcId = '';
     if (this.focusSquadId === safeGroupId) this.focusSquadId = fallbackId;
     return { ok: true };
   }
@@ -2416,6 +2530,7 @@ export default class BattleRuntime {
     target.placed = !!placed;
     target.placementActive = !target.placed;
     if (!target.placed && this.hoveredDeploySquadId === target.id) this.hoveredDeploySquadId = '';
+    if (!target.placed && this.hoveredDeployDirectionArcId === target.id) this.hoveredDeployDirectionArcId = '';
     return true;
   }
 
@@ -2427,6 +2542,7 @@ export default class BattleRuntime {
     target.placed = false;
     target.placementActive = false;
     if (this.hoveredDeploySquadId === target.id) this.hoveredDeploySquadId = '';
+    if (this.hoveredDeployDirectionArcId === target.id) this.hoveredDeployDirectionArcId = '';
     return { ok: true };
   }
 
@@ -2798,6 +2914,9 @@ export default class BattleRuntime {
       } else {
         this.selectedBattleSquadId = '';
       }
+      if (this.hoveredDeployDirectionArcId !== this.selectedBattleSquadId) {
+        this.hoveredDeployDirectionArcId = '';
+      }
       this.updateCameraAnchor(0);
     }
   }
@@ -2807,6 +2926,9 @@ export default class BattleRuntime {
     if (!this.canSelectSquad(squad)) return false;
     this.selectedBattleSquadId = squad.id;
     this.focusSquadId = squad.id;
+    if (this.hoveredDeployDirectionArcId !== squad.id) {
+      this.hoveredDeployDirectionArcId = '';
+    }
     return true;
   }
 
@@ -3181,6 +3303,7 @@ export default class BattleRuntime {
     const squad = this.getSquadById(squadId);
     if (!this.canControlSquad(squad)) return false;
     squad.formationSpacing = normalizeFormationSpacing(spacing);
+    releaseCrowdSquadFormationLock(this.crowd, squad.id);
     this.markCommandIssued('formation_spacing');
     return true;
   }

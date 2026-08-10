@@ -203,6 +203,21 @@ describe('BattleRuntime training control', () => {
 
     expect(squad.formationChange).toBeNull();
     expect(squad.speedPolicy).toBe('MARCH');
+    const agents = runtime.crowd.agentsBySquad.get(squad.id)
+      .filter((agent) => !agent.dead && !agent.isFlagBearer);
+    const formationForward = {
+      x: Math.cos(squad.formationRect.facingRad),
+      y: Math.sin(squad.formationRect.facingRad)
+    };
+    const formationSide = { x: -formationForward.y, y: formationForward.x };
+    const largestSlotError = Math.max(...agents.map((agent) => {
+      const slot = agent.formationSlot;
+      const expectedX = squad.x + (formationSide.x * slot.side) + (formationForward.x * slot.front);
+      const expectedY = squad.y + (formationSide.y * slot.side) + (formationForward.y * slot.front);
+      return Math.hypot(agent.x - expectedX, agent.y - expectedY);
+    }));
+
+    expect(largestSlotError).toBeLessThan(1e-5);
   });
 
   test('reforms formations after a regular battle begins', () => {
@@ -269,6 +284,193 @@ describe('BattleRuntime training control', () => {
     expect(group.deploySlots.map((slot) => [slot.side, slot.front, slot.unitTypeId])).toEqual(
       before.map((slot) => [slot.side, slot.front, slot.unitTypeId])
     );
+  });
+
+  test('stores a selectable forward direction without rotating the deployment rectangle', () => {
+    const runtime = new BattleRuntime(buildInit());
+    const created = runtime.createDeployGroup('attacker', {
+      units: { infantry_basic: 20 },
+      x: -420,
+      y: 40,
+      placed: true,
+      controlMode: 'USER'
+    });
+    const group = runtime.getDeployGroupById(created.groupId, 'attacker');
+    const formationFacing = group.formationRect.facingRad;
+
+    const result = runtime.setDeployGroupDirection(created.groupId, Math.PI / 2, 'attacker');
+
+    expect(result).toEqual({
+      ok: true,
+      directionOffsetRad: Math.PI / 2,
+      directionRad: formationFacing + (Math.PI / 2)
+    });
+    expect(group.formationRect.facingRad).toBeCloseTo(formationFacing);
+    expect(group.formationRect.directionOffsetRad).toBeCloseTo(Math.PI / 2);
+    expect(group.formationRect.directionRad).toBeCloseTo(formationFacing + (Math.PI / 2));
+
+    runtime.setDeployGroupRect(created.groupId, { facingRad: formationFacing + (Math.PI / 4) }, 'attacker');
+    expect(group.formationRect.directionOffsetRad).toBeCloseTo(Math.PI / 2);
+    expect(group.formationRect.directionRad).toBeCloseTo(formationFacing + (Math.PI * 3 / 4));
+
+    expect(runtime.startBattle().ok).toBe(true);
+    expect(runtime.getSquadById('attacker_squad_1').formationRect.directionOffsetRad).toBeCloseTo(Math.PI / 2);
+  });
+
+  test('snaps a battle direction to eight formation-relative headings and applies it to the crowd', () => {
+    const runtime = new BattleRuntime(buildInit());
+    const created = runtime.createDeployGroup('attacker', {
+      units: { infantry_basic: 20 },
+      x: -420,
+      y: 40,
+      placed: true,
+      controlMode: 'USER'
+    });
+
+    expect(created.ok).toBe(true);
+    expect(runtime.startBattle().ok).toBe(true);
+    const squad = runtime.getSquadById('attacker_squad_1');
+    const result = runtime.setDeployGroupDirection(squad.id, Math.PI * 0.62, 'attacker');
+
+    expect(result).toMatchObject({
+      ok: true,
+      directionOffsetRad: Math.PI / 2,
+      directionRad: Math.PI / 2
+    });
+    expect(squad.formationRect.directionOffsetRad).toBeCloseTo(Math.PI / 2, 6);
+    expect(squad._crowdForward.x).toBeCloseTo(0, 6);
+    expect(squad._crowdForward.y).toBeCloseTo(1, 6);
+    expect(squad.dirX).toBeCloseTo(0, 6);
+    expect(squad.dirY).toBeCloseTo(1, 6);
+  });
+
+  test('keeps the formation body at its chosen local offset when battle movement begins', () => {
+    const runtime = new BattleRuntime(buildInit());
+    const created = runtime.createDeployGroup('attacker', {
+      units: { infantry_basic: 100 },
+      x: -420,
+      y: 40,
+      placed: true,
+      controlMode: 'USER'
+    });
+    const group = runtime.getDeployGroupById(created.groupId, 'attacker');
+    runtime.setDeployGroupRect(group.id, { facingRad: 0, width: 96 }, 'attacker');
+    runtime.setDeployGroupDirection(group.id, Math.PI / 2, 'attacker');
+
+    expect(runtime.startBattle().ok).toBe(true);
+    const squad = runtime.getSquadById('attacker_squad_1');
+    const agents = runtime.crowd.agentsBySquad.get(squad.id);
+    const formationAgent = agents.find((agent) => (
+      !agent.isFlagBearer
+      && (Math.abs(Number(agent.formationSlot?.side) || 0) > 0.01
+        || Math.abs(Number(agent.formationSlot?.front) || 0) > 0.01)
+    ));
+    const expectFormationPosition = () => {
+      const formationForward = { x: 1, y: 0 };
+      const formationSide = { x: 0, y: 1 };
+      const slot = formationAgent.formationSlot;
+      expect(formationAgent.x).toBeCloseTo(
+        squad.x + (formationSide.x * slot.side) + (formationForward.x * slot.front),
+        6
+      );
+      expect(formationAgent.y).toBeCloseTo(
+        squad.y + (formationSide.y * slot.side) + (formationForward.y * slot.front),
+        6
+      );
+    };
+
+    expect(formationAgent).toBeTruthy();
+    expect(squad._crowdForward.x).toBeCloseTo(0, 6);
+    expect(squad._crowdForward.y).toBeCloseTo(1, 6);
+    expect(squad._crowdFormationForward.x).toBeCloseTo(1, 6);
+    expect(squad._crowdFormationForward.y).toBeCloseTo(0, 6);
+    expectFormationPosition();
+
+    runtime.step(0.05);
+    expect(squad._crowdForward.x).toBeCloseTo(0, 6);
+    expect(squad._crowdForward.y).toBeCloseTo(1, 6);
+    expect(squad._crowdFormationForward.x).toBeCloseTo(1, 6);
+    expect(squad._crowdFormationForward.y).toBeCloseTo(0, 6);
+    expectFormationPosition();
+  });
+
+  test('turns the formation and direction arc together while preserving their local offset', () => {
+    const runtime = new BattleRuntime(buildInit());
+    const created = runtime.createDeployGroup('attacker', {
+      units: { infantry_basic: 100 },
+      x: -420,
+      y: 40,
+      placed: true,
+      controlMode: 'USER'
+    });
+    const group = runtime.getDeployGroupById(created.groupId, 'attacker');
+    runtime.setDeployGroupRect(group.id, { facingRad: 0, width: 96 }, 'attacker');
+    runtime.setDeployGroupDirection(group.id, Math.PI / 2, 'attacker');
+
+    expect(runtime.startBattle().ok).toBe(true);
+    const squad = runtime.getSquadById('attacker_squad_1');
+    expect(runtime.commandMove(squad.id, { x: squad.x + 220, y: squad.y })).toBe(true);
+    for (let index = 0; index < 16; index += 1) runtime.step(0.05);
+
+    const movementYaw = Math.atan2(squad._crowdForward.y, squad._crowdForward.x);
+    const expectedFacing = movementYaw - (Math.PI / 2);
+    expect(Math.abs(squad._crowdForward.x)).toBeGreaterThan(0.1);
+    expect(squad.formationRect.directionOffsetRad).toBeCloseTo(Math.PI / 2, 6);
+    expect(squad.formationRect.directionRad).toBeCloseTo(movementYaw, 6);
+    expect(squad.formationRect.facingRad).toBeLessThan(0);
+    expect(squad.formationRect.facingRad).toBeGreaterThan(expectedFacing);
+    expect(squad._crowdFormationForward.x).toBeCloseTo(Math.cos(squad.formationRect.facingRad), 6);
+    expect(squad._crowdFormationForward.y).toBeCloseTo(Math.sin(squad.formationRect.facingRad), 6);
+  });
+
+  test('keeps every soldier in its slot through a single-direction marching turn', () => {
+    const runtime = new BattleRuntime(buildInit());
+    const created = runtime.createDeployGroup('attacker', {
+      units: { infantry_basic: 100 },
+      x: -420,
+      y: 40,
+      placed: true,
+      controlMode: 'USER'
+    });
+    const group = runtime.getDeployGroupById(created.groupId, 'attacker');
+    runtime.setDeployGroupRect(group.id, { facingRad: 0, width: 96 }, 'attacker');
+
+    expect(runtime.startBattle().ok).toBe(true);
+    const squad = runtime.getSquadById('attacker_squad_1');
+    expect(runtime.commandMove(squad.id, { x: squad.x + 680, y: squad.y })).toBe(true);
+    for (let index = 0; index < 12; index += 1) runtime.step(0.05);
+
+    expect(runtime.setDeployGroupDirection(squad.id, Math.PI / 2, 'attacker')).toMatchObject({ ok: true });
+    let largestSlotError = 0;
+    let previousYaw = squad.formationRect.facingRad;
+    const turnSteps = [];
+    for (let index = 0; index < 80; index += 1) {
+      runtime.step(0.05);
+      const currentYaw = squad.formationRect.facingRad;
+      const turnStep = currentYaw - previousYaw;
+      if (Math.abs(turnStep) > 1e-6) turnSteps.push(turnStep);
+      previousYaw = currentYaw;
+      const agents = runtime.crowd.agentsBySquad.get(squad.id)
+        .filter((agent) => !agent.dead && !agent.isFlagBearer);
+      const formationForward = {
+        x: Math.cos(currentYaw),
+        y: Math.sin(currentYaw)
+      };
+      const formationSide = { x: -formationForward.y, y: formationForward.x };
+      agents.forEach((agent) => {
+        const slot = agent.formationSlot;
+        const expectedX = squad.x + (formationSide.x * slot.side) + (formationForward.x * slot.front);
+        const expectedY = squad.y + (formationSide.y * slot.side) + (formationForward.y * slot.front);
+        largestSlotError = Math.max(largestSlotError, Math.hypot(agent.x - expectedX, agent.y - expectedY));
+        expect(agent.yaw).toBeCloseTo(currentYaw, 6);
+      });
+    }
+
+    expect(squad.waypoints.length).toBeGreaterThan(0);
+    expect(squad.speed).toBeGreaterThan(0);
+    expect(turnSteps.length).toBeGreaterThan(0);
+    expect(turnSteps.every((step) => step <= 1e-6)).toBe(true);
+    expect(largestSlotError).toBeLessThan(1e-5);
   });
 
   test('picks the full rotated deployment footprint and rejects invalid camera points', () => {

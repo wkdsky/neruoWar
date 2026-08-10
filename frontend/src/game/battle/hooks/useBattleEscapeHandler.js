@@ -20,6 +20,7 @@ export default function useBattleEscapeHandler({
   deployDraggingGroupId = '',
   deployDraggingTeam = '',
   deployRectDragRef,
+  deployDirectionArcDragRef,
   battleUiMode = BATTLE_UI_MODE_NONE,
   worldActionsVisibleForSquadId = '',
   aimStateActive = false,
@@ -72,6 +73,13 @@ export default function useBattleEscapeHandler({
       setDeployNotice('已取消阵型调整');
       return;
     }
+    if (deployDirectionArcDragRef?.current) {
+      const directionDrag = deployDirectionArcDragRef.current;
+      deployDirectionArcDragRef.current = null;
+      if (directionDrag.resumeClockOnRelease) setClockPaused(false);
+      setDeployNotice('已取消前进方向调整');
+      return;
+    }
     if (battleUiMode === BATTLE_UI_MODE_SKILL_CONFIRM) {
       closeSkillConfirm(true);
       return;
@@ -105,6 +113,7 @@ export default function useBattleEscapeHandler({
     confirmDeleteGroupId,
     deployDraggingGroupId,
     deployDraggingTeam,
+    deployDirectionArcDragRef,
     deployInfoOpen,
     deployRectDragRef,
     handleCloseQuickDeploy,

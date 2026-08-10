@@ -1,4 +1,8 @@
 import { normalizeDeg } from '../shared/angle';
+import {
+  isPointOnTrainingDirectionArc,
+  resolveTrainingDirectionOffsetFromPoint
+} from '../shared/trainingDirectionArc';
 
 const clamp = (value, min, max) => Math.min(max, Math.max(min, value));
 const PAN_DRAG_THRESHOLD_PX = 4;
@@ -7,6 +11,11 @@ const CAMERA_VERTICAL_FOV_DEG = 48;
 const DEFAULT_TRAINING_OVERVIEW_DISTANCE_EXTRA = 900;
 const DEFAULT_TRAINING_OVERVIEW_DISTANCE_MAX = 4600;
 const DEFAULT_TRAINING_OVERVIEW_VIEW_PADDING = 1.08;
+const TRAINING_DIRECTION_ARC_PRIORITY_HIT_OPTIONS = Object.freeze({
+  minimumHitRadius: 24,
+  maximumHitRadius: 42,
+  extraPadding: 14
+});
 const INTERACTIVE_UI_SELECTOR = [
   '.pve2-world-actions',
   '.pve2-battle-actions',
@@ -85,6 +94,7 @@ export const createBattleInputController = ({
   panDragRef,
   deployYawDragRef,
   deployRectDragRef,
+  deployDirectionArcDragRef,
   spacePressedRef,
   constants = {},
   getters = {},
@@ -151,6 +161,88 @@ export const createBattleInputController = ({
 
   const clearDeployRectDrag = () => {
     deployRectDragRef.current = null;
+  };
+
+  const setDirectionArcCursor = (cursor = '') => {
+    const canvas = canvasRef?.current;
+    if (canvas?.style) canvas.style.cursor = cursor;
+  };
+
+  const clearDeployDirectionArcDrag = () => {
+    const directionDrag = deployDirectionArcDragRef.current;
+    deployDirectionArcDragRef.current = null;
+    if (directionDrag?.resumeClockOnRelease) callbacks.setClockPaused?.(false);
+    setDirectionArcCursor('');
+    runtimeRef.current?.setHoveredDeployDirectionArc?.('');
+  };
+
+  const resolveSelectedDirectionArcGroup = (world = null) => {
+    const runtime = runtimeRef.current;
+    const phase = runtime?.getPhase?.();
+    const isDeploy = phase === 'deploy';
+    const isBattle = phase === 'battle';
+    if (
+      !runtime
+      || !world
+      || world.valid === false
+      || (!isDeploy && !isBattle)
+      || (isDeploy && getters.getDeployDraggingGroupId?.())
+      || (isBattle && getters.getBattleUiMode?.() && getters.getBattleUiMode?.() !== constants.BATTLE_UI_MODE_NONE)
+    ) return null;
+    const groupId = getters.getSelectedSquadId?.()
+      || (isBattle ? runtime.selectedBattleSquadId : runtime.getDeployGroups?.()?.selectedId)
+      || '';
+    const group = groupId
+      ? (isBattle ? runtime.getSquadById?.(groupId) : runtime.getDeployGroupById?.(groupId, TEAM_ANY))
+      : null;
+    if (!group || (isDeploy && group.placed === false)) return null;
+    if (isBattle && runtime.canControlSquad?.(group) === false) return null;
+    return isPointOnTrainingDirectionArc(
+      world,
+      group,
+      group.team,
+      TRAINING_DIRECTION_ARC_PRIORITY_HIT_OPTIONS
+    ) ? group : null;
+  };
+
+  const resolveDirectionArcDragGroup = (directionDrag = null, runtime = runtimeRef.current) => {
+    if (!directionDrag || !runtime || runtime.getPhase?.() !== directionDrag.phase) return null;
+    return directionDrag.phase === 'battle'
+      ? runtime.getSquadById?.(directionDrag.groupId)
+      : runtime.getDeployGroupById?.(directionDrag.groupId, directionDrag.team);
+  };
+
+  const updateDirectionArcFromWorld = (directionDrag = null, world = null, runtime = runtimeRef.current) => {
+    const group = resolveDirectionArcDragGroup(directionDrag, runtime);
+    if (!group || !world) return false;
+    const directionOffsetRad = resolveTrainingDirectionOffsetFromPoint(group, world, directionDrag.team);
+    if (directionOffsetRad === null || typeof runtime?.setDeployGroupDirection !== 'function') return false;
+    if (directionDrag.directionOffsetRad !== directionOffsetRad) {
+      const result = runtime.setDeployGroupDirection(group.id, directionOffsetRad, directionDrag.team);
+      if (result === false || result?.ok === false) return false;
+      directionDrag.directionOffsetRad = directionOffsetRad;
+    }
+    runtime.setHoveredDeployDirectionArc?.(group.id);
+    setDirectionArcCursor('grabbing');
+    return true;
+  };
+
+  const beginDirectionArcDrag = (group = null, world = null, phase = '') => {
+    const runtime = runtimeRef.current;
+    if (!group?.id || !world || !runtime || (phase !== 'deploy' && phase !== 'battle')) return false;
+    const directionDrag = {
+      groupId: group.id,
+      team: group.team === 'defender' ? 'defender' : 'attacker',
+      phase,
+      resumeClockOnRelease: phase === 'battle' && !getters.isClockPaused?.()
+    };
+    deployDirectionArcDragRef.current = directionDrag;
+    if (!updateDirectionArcFromWorld(directionDrag, world, runtime)) {
+      deployDirectionArcDragRef.current = null;
+      return false;
+    }
+    if (phase === 'battle') callbacks.setClockPaused?.(true);
+    return true;
   };
 
   const syncCardsAndMinimap = () => {
@@ -361,6 +453,12 @@ export const createBattleInputController = ({
         return;
       }
       if (event.button === 0) {
+        const world = resolveEventWorldPoint(event);
+        const directionGroup = resolveSelectedDirectionArcGroup(world);
+        if (directionGroup && beginDirectionArcDrag(directionGroup, world, currentPhase)) {
+          event.preventDefault();
+          return;
+        }
         beginPanDrag(event, 1, spacePressedRef.current ? '' : 'map');
         return;
       }
@@ -376,6 +474,12 @@ export const createBattleInputController = ({
       return;
     }
     if (event.button === 0) {
+      const world = resolveEventWorldPoint(event);
+      const directionGroup = resolveSelectedDirectionArcGroup(world);
+      if (directionGroup && beginDirectionArcDrag(directionGroup, world, currentPhase)) {
+        event.preventDefault();
+        return;
+      }
       beginPanDrag(event, 1, 'battle');
       return;
     }
@@ -499,22 +603,40 @@ export const createBattleInputController = ({
     const canvas = canvasRef?.current;
     if (!runtime || !canvas) return;
     if (interactionLocked) {
-      if (runtime.getPhase?.() === 'deploy') runtime.setHoveredDeployGroup?.('');
+      if (runtime.getPhase?.() === 'deploy') {
+        runtime.setHoveredDeployGroup?.('');
+      }
+      if (runtime.getPhase?.() === 'deploy' || runtime.getPhase?.() === 'battle') {
+        runtime.setHoveredDeployDirectionArc?.('');
+        setDirectionArcCursor('');
+      }
       return;
     }
     const target = event.target;
     if (isInteractiveUiTarget(target)) {
-      if (runtime.getPhase?.() === 'deploy') runtime.setHoveredDeployGroup?.('');
+      if (runtime.getPhase?.() === 'deploy') {
+        runtime.setHoveredDeployGroup?.('');
+      }
+      if (runtime.getPhase?.() === 'deploy' || runtime.getPhase?.() === 'battle') {
+        runtime.setHoveredDeployDirectionArc?.('');
+        setDirectionArcCursor('');
+      }
       return;
     }
-    if (panDragRef.current || deployYawDragRef.current) return;
+    if (panDragRef.current || deployYawDragRef.current || deployDirectionArcDragRef.current) return;
     const rect = canvas.getBoundingClientRect();
     const px = ((event.clientX - rect.left) / Math.max(1, rect.width)) * canvas.width;
     const py = ((event.clientY - rect.top) / Math.max(1, rect.height)) * canvas.height;
     cameraControllerRef.current.buildMatrices?.(canvas.width, canvas.height);
     const world = cameraControllerRef.current.screenToGround(px, py, { width: canvas.width, height: canvas.height });
     if (world?.valid === false) {
-      if (runtime.getPhase?.() === 'deploy') runtime.setHoveredDeployGroup?.('');
+      if (runtime.getPhase?.() === 'deploy') {
+        runtime.setHoveredDeployGroup?.('');
+      }
+      if (runtime.getPhase?.() === 'deploy' || runtime.getPhase?.() === 'battle') {
+        runtime.setHoveredDeployDirectionArc?.('');
+        setDirectionArcCursor('');
+      }
       return;
     }
     pointerWorldRef.current = world;
@@ -523,12 +645,22 @@ export const createBattleInputController = ({
     const deployDraggingTeam = getters.getDeployDraggingTeam?.() || 'attacker';
     if (runtime.getPhase() === 'deploy' && deployDraggingGroupId) {
       runtime.setHoveredDeployGroup?.('');
+      runtime.setHoveredDeployDirectionArc?.('');
+      setDirectionArcCursor('');
       runtime.moveDeployGroup(deployDraggingGroupId, world, deployDraggingTeam);
       syncCardsAndMinimap();
       return;
     }
 
     if (runtime.getPhase() === 'deploy') {
+      const directionGroup = resolveSelectedDirectionArcGroup(world);
+      runtime.setHoveredDeployDirectionArc?.(directionGroup?.id || '');
+      if (directionGroup) {
+        runtime.setHoveredDeployGroup?.('');
+        setDirectionArcCursor('grab');
+        return;
+      }
+      setDirectionArcCursor('');
       const hovered = runtime.pickDeployGroup?.(
         world,
         getters.isTrainingMode?.() ? 'any' : 'attacker'
@@ -540,6 +672,13 @@ export const createBattleInputController = ({
     }
 
     if (runtime.getPhase() !== 'battle') return;
+    const directionGroup = resolveSelectedDirectionArcGroup(world);
+    runtime.setHoveredDeployDirectionArc?.(directionGroup?.id || '');
+    if (directionGroup) {
+      setDirectionArcCursor('grab');
+      return;
+    }
+    setDirectionArcCursor('');
     const battleUiMode = getters.getBattleUiMode?.();
     const skillConfirmState = getters.getSkillConfirmState?.();
     const aimState = getters.getAimState?.();
@@ -594,6 +733,10 @@ export const createBattleInputController = ({
   const onMouseLeave = () => {
     if (interactionLocked) return;
     runtimeRef.current?.setHoveredDeployGroup?.('');
+    if (!deployDirectionArcDragRef.current) {
+      runtimeRef.current?.setHoveredDeployDirectionArc?.('');
+      setDirectionArcCursor('');
+    }
   };
 
   const onContextMenu = (event) => {
@@ -607,6 +750,7 @@ export const createBattleInputController = ({
         clearPanDrag();
         clearDeployYawDrag();
         clearDeployRectDrag();
+        clearDeployDirectionArcDrag();
         return;
       }
       const canvas = canvasRef?.current;
@@ -616,14 +760,40 @@ export const createBattleInputController = ({
       const runtime = runtimeRef.current;
       const phase = runtime?.getPhase?.();
       const isDeploy = phase === 'deploy';
+      const canEditDirectionArc = isDeploy || phase === 'battle';
       const canPan = isDeploy || phase === 'battle';
       if (!canPan) {
         clearPanDrag();
         clearDeployYawDrag();
         clearDeployRectDrag();
+        clearDeployDirectionArcDrag();
         return;
       }
       if (!isDeploy) clearDeployRectDrag();
+      if (!canEditDirectionArc) clearDeployDirectionArcDrag();
+      const directionDrag = deployDirectionArcDragRef.current;
+      if (canEditDirectionArc && directionDrag && runtime) {
+        if (directionDrag.phase !== phase) {
+          clearDeployDirectionArcDrag();
+          return;
+        }
+        if ((event.buttons & 1) !== 1) {
+          clearDeployDirectionArcDrag();
+          return;
+        }
+        const px = ((event.clientX - rect.left) / Math.max(1, rect.width)) * canvas.width;
+        const py = ((event.clientY - rect.top) / Math.max(1, rect.height)) * canvas.height;
+        const camera = cameraControllerRef.current;
+        camera.buildMatrices?.(canvas.width, canvas.height);
+        const world = camera.screenToGround(px, py, { width: canvas.width, height: canvas.height });
+        if (world?.valid !== false && Number.isFinite(Number(world?.x)) && Number.isFinite(Number(world?.y))) {
+          pointerWorldRef.current = world;
+          if (!updateDirectionArcFromWorld(directionDrag, world, runtime)) {
+            clearDeployDirectionArcDrag();
+          }
+        }
+        return;
+      }
       const rectDrag = deployRectDragRef.current;
       if (isDeploy && rectDrag && runtime) {
         if ((event.buttons & 1) !== 1) {
@@ -698,6 +868,7 @@ export const createBattleInputController = ({
         clearPanDrag();
         clearDeployYawDrag();
         clearDeployRectDrag();
+        clearDeployDirectionArcDrag();
         return;
       }
       const pan = panDragRef.current;
@@ -713,6 +884,7 @@ export const createBattleInputController = ({
       clearPanDrag();
       clearDeployYawDrag();
       clearDeployRectDrag();
+      clearDeployDirectionArcDrag();
       if (!pan?.primaryAction || pan.moved || event.button !== 0) return;
       if (pan.primaryAction === 'map') {
         handleMapCommand(pan.primaryEvent);
@@ -724,6 +896,7 @@ export const createBattleInputController = ({
       clearPanDrag();
       clearDeployYawDrag();
       clearDeployRectDrag();
+      clearDeployDirectionArcDrag();
       runtimeRef.current?.setHoveredDeployGroup?.('');
       spacePressedRef.current = false;
     };
@@ -743,6 +916,7 @@ export const createBattleInputController = ({
     clearPanDrag,
     clearDeployYawDrag,
     clearDeployRectDrag,
+    clearDeployDirectionArcDrag,
     resolveEventWorldPoint,
     handleMapCommand,
     onDoubleClick,

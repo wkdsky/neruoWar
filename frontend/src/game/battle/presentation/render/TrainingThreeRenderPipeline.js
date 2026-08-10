@@ -5,6 +5,10 @@ import {
   PROJECTILE_INSTANCE_STRIDE,
   UNIT_INSTANCE_STRIDE
 } from '../snapshot/BattleSnapshotSchema';
+import {
+  resolveTrainingDirectionArcLayout,
+  sampleTrainingDirectionArc
+} from '../../shared/trainingDirectionArc';
 
 const clamp = (value, min, max) => Math.min(max, Math.max(min, value));
 const lerp = (a, b, t) => a + ((b - a) * t);
@@ -34,6 +38,7 @@ export const TRAINING_WORLD_FLAG_MAX_PITCH_DEG = 50;
 export const TRAINING_WORLD_FLAG_TARGET_SCREEN_HEIGHT = 76;
 export const TRAINING_WORLD_FLAG_MIN_SCREEN_SCALE = 0.85;
 export const TRAINING_WORLD_FLAG_MAX_SCREEN_SCALE = 8;
+export const TRAINING_DIRECTION_ARC_GROUND_ELEVATION = 0.1;
 
 export const resolveTrainingFlagLod = (pitchDeg = 90) => {
   const normalizedPitch = Number.isFinite(Number(pitchDeg)) ? Number(pitchDeg) : 90;
@@ -105,53 +110,21 @@ export const resolveTrainingInfoLabelElevation = (source = null) => {
   return clamp(Math.max(6, radius * 0.1, 4 + (Math.sqrt(count) * 0.1)), 6, 14);
 };
 
-const resolveDirectionArcDimensions = (source = null) => {
-  const rect = source?.formationRect || {};
-  const strength = Math.max(1, resolveMarkerStrength(source));
-  const squadRadius = Math.max(0, finiteOr(source?.radius));
-  const inferredSpan = Math.sqrt(strength) * 3;
-  const formationWidth = Math.max(
-    10,
-    finiteOr(rect.width),
-    squadRadius * 1.9,
-    inferredSpan
-  );
-  const formationDepth = Math.max(
-    8,
-    finiteOr(rect.depth),
-    squadRadius,
-    inferredSpan * 0.68
-  );
-  const arcRadius = clamp(Math.max(8, (formationWidth * 0.5) + 2.5), 8, 112);
-  const frontEdgeOffset = (formationDepth * 0.5) + clamp(arcRadius * 0.08, 1.2, 5.4);
-  return {
-    arcRadius,
-    arcCenterOffset: frontEdgeOffset - arcRadius
-  };
-};
-
-const resolveDirectionYaw = (source = null, team = TEAM_ATTACKER, preferFormationFacing = false) => {
-  const facing = Number(source?.formationRect?.facingRad);
-  if (preferFormationFacing && Number.isFinite(facing)) return facing;
-  const primaryX = finiteOr(source?.dirX, finiteOr(source?.vx));
-  const primaryY = finiteOr(source?.dirY, finiteOr(source?.vy));
-  if (Math.hypot(primaryX, primaryY) > 0.1) return Math.atan2(primaryY, primaryX);
-  if (Number.isFinite(facing)) return facing;
-  return team === TEAM_DEFENDER ? Math.PI : 0;
-};
-
 const buildDirectionArcAnchor = (
   source = null,
   team = TEAM_ATTACKER,
+  skillPoints = 0,
+  hoveredDirectionArcId = '',
   preferFormationFacing = false,
-  skillPoints = 0
+  selectedId = ''
 ) => {
   const startCount = Math.max(1, Math.floor(finiteOr(source?.startCount, resolveMarkerStrength(source))));
   const remain = Math.max(0, Math.floor(finiteOr(source?.remain, startCount)));
+  const arcLayout = resolveTrainingDirectionArcLayout(source, team, { preferFormationFacing });
   return {
     x: finiteOr(source?.centerX, finiteOr(source?.x)),
     y: finiteOr(source?.centerY, finiteOr(source?.y)),
-    yaw: resolveDirectionYaw(source, team, preferFormationFacing),
+    yaw: arcLayout.directionYaw,
     teamIndex: team === TEAM_DEFENDER ? 1 : 0,
     team,
     name: String(source?.name || '部队'),
@@ -159,15 +132,17 @@ const buildDirectionArcAnchor = (
     startCount,
     ratio: clamp(remain / startCount, 0, 1),
     skillPoints: Math.max(0, Math.floor(Number(skillPoints) || 0)),
-    selected: !!source?.selected,
+    selected: !!source?.selected || String(source?.id || '') === String(selectedId || ''),
+    hovered: String(source?.id || '') === String(hoveredDirectionArcId || ''),
     ...resolveTrainingWorldFlagDimensions(source),
-    ...resolveDirectionArcDimensions(source)
+    arcLayout
   };
 };
 
 export const resolveTrainingDirectionArcAnchors = (runtime = null) => {
   const phase = runtime?.getPhase?.() || runtime?.phase || 'deploy';
   const skillPoints = runtime?.getTrainingState?.()?.points || 0;
+  const hoveredDirectionArcId = runtime?.hoveredDeployDirectionArcId || '';
   if (phase === 'battle' || phase === 'ended') {
     return (Array.isArray(runtime?.sim?.squads) ? runtime.sim.squads : [])
       .filter((squad) => (
@@ -175,15 +150,30 @@ export const resolveTrainingDirectionArcAnchors = (runtime = null) => {
         && finiteOr(squad.remain) > 0
         && !(squad.team === TEAM_DEFENDER && squad.hiddenFromAttacker)
       ))
-      .map((squad) => buildDirectionArcAnchor(squad, squad.team, false, skillPoints));
+      .map((squad) => buildDirectionArcAnchor(
+        squad,
+        squad.team,
+        skillPoints,
+        hoveredDirectionArcId,
+        false,
+        runtime?.selectedBattleSquadId || ''
+      ));
   }
 
   const anchors = [];
+  const selectedDeployGroupId = runtime?.selectedDeploySquadId || '';
   const appendTeam = (groups, team) => {
     if (team === TEAM_DEFENDER && runtime?.intelVisible === false) return;
     (Array.isArray(groups) ? groups : [])
       .filter((group) => group && group.placed !== false)
-      .forEach((group) => anchors.push(buildDirectionArcAnchor(group, team, true, skillPoints)));
+      .forEach((group) => anchors.push(buildDirectionArcAnchor(
+        group,
+        team,
+        skillPoints,
+        hoveredDirectionArcId,
+        true,
+        selectedDeployGroupId
+      )));
   };
   appendTeam(runtime?.attackerDeployGroups, TEAM_ATTACKER);
   appendTeam(runtime?.defenderDeployGroups, TEAM_DEFENDER);
@@ -242,9 +232,58 @@ const createUnitGeometry = () => {
   return prepareInstanceColorGeometry(geometry);
 };
 
-export const createTrainingDirectionArcGeometry = () => prepareInstanceColorGeometry(
-  new THREE.RingGeometry(0.955, 1, 56, 1, -1.16, 2.32)
-);
+export const updateTrainingDirectionArcGeometry = (geometry, anchors = []) => {
+  if (!geometry) return geometry;
+  const positions = [];
+  const colors = [];
+  (Array.isArray(anchors) ? anchors : []).forEach((anchor) => {
+    const samples = sampleTrainingDirectionArc(anchor?.arcLayout);
+    const color = Array.isArray(anchor?.color) ? anchor.color : [1, 1, 1];
+    for (let index = 1; index < samples.length; index += 1) {
+      const prev = samples[index - 1];
+      const next = samples[index];
+      [
+        prev.sideA,
+        prev.sideB,
+        next.sideA,
+        next.sideA,
+        prev.sideB,
+        next.sideB
+      ].forEach((point) => {
+        positions.push(point.x, point.y, TRAINING_DIRECTION_ARC_GROUND_ELEVATION);
+        colors.push(color[0], color[1], color[2]);
+      });
+    }
+  });
+  geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+  geometry.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
+  geometry.computeBoundingSphere();
+  return geometry;
+};
+
+export const createTrainingDirectionArcGeometry = (anchors = null) => {
+  const geometry = new THREE.BufferGeometry();
+  const source = Array.isArray(anchors)
+    ? anchors
+    : [{
+      arcLayout: resolveTrainingDirectionArcLayout({
+        formationRect: { width: 60, depth: 18, facingRad: 0, directionOffsetRad: 0 }
+      }, TEAM_ATTACKER),
+      color: [1, 1, 1]
+    }];
+  return updateTrainingDirectionArcGeometry(geometry, source);
+};
+
+export const createTrainingDirectionArcMaterial = () => new THREE.MeshBasicMaterial({
+  color: 0xffffff,
+  vertexColors: true,
+  transparent: true,
+  opacity: 0.94,
+  side: THREE.DoubleSide,
+  depthTest: true,
+  depthWrite: false,
+  fog: false
+});
 
 export const createTrainingFlagClothGeometry = () => {
   const shape = new THREE.Shape();
@@ -484,17 +523,8 @@ export default class TrainingThreeRenderPipeline {
     this.hoverRingMesh = null;
     this.hoverRingCapacity = 0;
 
-    this.directionArcGeometry = createTrainingDirectionArcGeometry();
-    this.directionArcMaterial = new THREE.MeshBasicMaterial({
-      color: 0xffffff,
-      vertexColors: true,
-      transparent: true,
-      opacity: 0.78,
-      side: THREE.DoubleSide,
-      depthTest: false,
-      depthWrite: false,
-      fog: false
-    });
+    this.directionArcGeometry = createTrainingDirectionArcGeometry([]);
+    this.directionArcMaterial = createTrainingDirectionArcMaterial();
     this.worldFlagPoleGeometry = new THREE.CylinderGeometry(0.32, 0.42, 1, 10);
     this.worldFlagPoleGeometry.rotateX(Math.PI / 2);
     this.worldFlagPoleGeometry.translate(0, 0, 0.5);
@@ -510,7 +540,10 @@ export default class TrainingThreeRenderPipeline {
       roughness: 0.26,
       metalness: 0.72
     });
-    this.directionArcMesh = null;
+    this.directionArcMesh = new THREE.Mesh(this.directionArcGeometry, this.directionArcMaterial);
+    this.directionArcMesh.frustumCulled = false;
+    this.directionArcMesh.renderOrder = 3;
+    this.unitGroup.add(this.directionArcMesh);
     this.worldFlagPoleMesh = null;
     this.worldFlagFinialMesh = null;
     this.worldFlagClothPool = [];
@@ -687,7 +720,6 @@ export default class TrainingThreeRenderPipeline {
   ensureDirectionMarkerCapacity(count) {
     if (
       count <= this.directionMarkerCapacity
-      && this.directionArcMesh
       && this.worldFlagPoleMesh
       && this.worldFlagFinialMesh
     ) {
@@ -695,17 +727,13 @@ export default class TrainingThreeRenderPipeline {
       return;
     }
     const nextCapacity = Math.max(32, Math.ceil(count * 1.35));
-    if (this.directionArcMesh) this.unitGroup.remove(this.directionArcMesh);
     if (this.worldFlagPoleMesh) this.unitGroup.remove(this.worldFlagPoleMesh);
     if (this.worldFlagFinialMesh) this.unitGroup.remove(this.worldFlagFinialMesh);
-    this.directionArcMesh = makeInstancedMesh(this.directionArcGeometry, this.directionArcMaterial, nextCapacity);
     this.worldFlagPoleMesh = makeInstancedMesh(this.worldFlagPoleGeometry, this.worldFlagPoleMaterial, nextCapacity);
     this.worldFlagFinialMesh = makeInstancedMesh(this.worldFlagFinialGeometry, this.worldFlagFinialMaterial, nextCapacity);
-    this.directionArcMesh.renderOrder = 3;
     this.worldFlagPoleMesh.renderOrder = 2;
     this.worldFlagFinialMesh.renderOrder = 4;
     this.unitGroup.add(
-      this.directionArcMesh,
       this.worldFlagPoleMesh,
       this.worldFlagFinialMesh
     );
@@ -822,6 +850,16 @@ export default class TrainingThreeRenderPipeline {
     const anchors = resolveTrainingDirectionArcAnchors(runtime);
     const markerCount = anchors.length;
     this.ensureDirectionMarkerCapacity(markerCount);
+    const arcAnchors = anchors.map((anchor) => {
+      tempColor.copy(anchor.teamIndex < 0.5 ? TEAM_ATTACKER_COLOR : TEAM_DEFENDER_COLOR);
+      if (anchor.selected) tempColor.lerp(SELECTED_COLOR, 0.4);
+      if (anchor.hovered) tempColor.lerp(HOVER_COLOR, 0.72);
+      return {
+        ...anchor,
+        color: [tempColor.r, tempColor.g, tempColor.b]
+      };
+    });
+    updateTrainingDirectionArcGeometry(this.directionArcGeometry, arcAnchors);
     const flagLod = resolveTrainingFlagLod(cameraState?.pitchDeg);
     const viewportHeight = Math.max(
       1,
@@ -831,20 +869,6 @@ export default class TrainingThreeRenderPipeline {
     tempWorldFlagCameraUp.set(0, 1, 0).transformDirection(this.camera.matrixWorld);
     const verticalScreenFactor = clamp(Math.abs(tempWorldFlagCameraUp.z), 0.35, 1);
     anchors.forEach((anchor, index) => {
-      const yaw = Number(anchor.yaw) || 0;
-      tempEuler.set(0, 0, yaw);
-      tempQuat.setFromEuler(tempEuler);
-
-      const arcCenterOffset = Number(anchor.arcCenterOffset) || 0;
-      tempPos.set(
-        anchor.x + (Math.cos(yaw) * arcCenterOffset),
-        anchor.y + (Math.sin(yaw) * arcCenterOffset),
-        0.24
-      );
-      tempScale.setScalar(Math.max(1, Number(anchor.arcRadius) || 8));
-      tempMatrix.compose(tempPos, tempQuat, tempScale);
-      this.directionArcMesh.setMatrixAt(index, tempMatrix);
-
       const clothBottom = Math.max(1.2, Number(anchor.clothBottom) || 2.2);
       const clothHeight = Math.max(1, Number(anchor.clothHeight) || 4);
       const clothWidth = Math.max(1, Number(anchor.clothWidth) || 5);
@@ -904,19 +928,15 @@ export default class TrainingThreeRenderPipeline {
 
       tempColor.copy(anchor.teamIndex < 0.5 ? TEAM_ATTACKER_COLOR : TEAM_DEFENDER_COLOR);
       if (anchor.selected) tempColor.lerp(SELECTED_COLOR, 0.4);
-      this.directionArcMesh.setColorAt(index, tempColor);
     });
 
     this.directionArcMesh.visible = markerCount > 0;
     this.worldFlagPoleMesh.visible = markerCount > 0 && flagLod.worldFlag;
     this.worldFlagFinialMesh.visible = markerCount > 0 && flagLod.worldFlag;
-    this.directionArcMesh.count = markerCount;
     this.worldFlagPoleMesh.count = markerCount;
     this.worldFlagFinialMesh.count = markerCount;
-    this.directionArcMesh.instanceMatrix.needsUpdate = true;
     this.worldFlagPoleMesh.instanceMatrix.needsUpdate = true;
     this.worldFlagFinialMesh.instanceMatrix.needsUpdate = true;
-    if (this.directionArcMesh.instanceColor) this.directionArcMesh.instanceColor.needsUpdate = true;
     for (let index = markerCount; index < this.worldFlagClothPool.length; index += 1) {
       this.worldFlagClothPool[index].mesh.visible = false;
     }

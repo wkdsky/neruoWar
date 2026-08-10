@@ -530,13 +530,29 @@ const normalizeArmyFormationSnapshots = (rawFormations, unitTypeMap = {}) => {
 const normalizeArmyFormationRect = (rawRect) => {
   if (!rawRect || typeof rawRect !== 'object') return null;
   const clampPositive = (value) => Math.max(0, Math.min(MAX_ARMY_COORD, Number(value) || 0));
+  const normalizeDirectionOffset = (value) => {
+    let offset = Number(value) || 0;
+    while (offset > Math.PI) offset -= Math.PI * 2;
+    while (offset < -Math.PI) offset += Math.PI * 2;
+    const step = Math.PI / 4;
+    const snapped = Math.round(offset / step) * step;
+    return Math.abs(snapped + Math.PI) <= 1e-6 ? Math.PI : snapped;
+  };
   const formationId = typeof rawRect?.formationId === 'string' ? rawRect.formationId.trim().slice(0, 96) : '';
+  const facingRad = Math.max(-Math.PI * 2, Math.min(Math.PI * 2, Number(rawRect.facingRad) || 0));
+  const rawDirectionOffsetRad = Number(rawRect.directionOffsetRad);
+  const rawDirectionRad = Number(rawRect.directionRad);
+  const directionOffsetRad = Number.isFinite(rawDirectionOffsetRad)
+    ? normalizeDirectionOffset(rawDirectionOffsetRad)
+    : (Number.isFinite(rawDirectionRad) ? normalizeDirectionOffset(rawDirectionRad - facingRad) : 0);
   return {
     area: clampPositive(rawRect.area),
     width: clampPositive(rawRect.width),
     depth: clampPositive(rawRect.depth),
     spacing: clampPositive(rawRect.spacing),
-    facingRad: Math.max(-Math.PI * 2, Math.min(Math.PI * 2, Number(rawRect.facingRad) || 0)),
+    facingRad,
+    directionOffsetRad,
+    directionRad: facingRad + directionOffsetRad,
     slotCount: Math.max(0, Math.min(MAX_ARMY_DEPLOY_SLOT_COUNT, Math.floor(Number(rawRect.slotCount) || 0))),
     formationId,
     formationName: normalizeFormationName(rawRect.formationName, '').slice(0, MAX_TEMPLATE_FORMATION_NAME_LEN)

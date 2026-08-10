@@ -227,6 +227,8 @@ const ArmyInstanceFormationRectSchema = new mongoose.Schema({
   depth: { type: Number, default: 0, min: 0 },
   spacing: { type: Number, default: 0, min: 0 },
   facingRad: { type: Number, default: 0 },
+  directionOffsetRad: { type: Number },
+  directionRad: { type: Number },
   slotCount: { type: Number, default: 0, min: 0 },
   formationId: { type: String, default: '' },
   formationName: { type: String, default: '' }

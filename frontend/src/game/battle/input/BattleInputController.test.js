@@ -1,6 +1,7 @@
 import createBattleInputController, { resolveTrainingOverviewDistance } from './BattleInputController';
 import CameraController from '../presentation/render/CameraController';
 import { CAMERA_ZOOM_STEP } from '../screens/battleSceneConstants';
+import { resolveTrainingDirectionArcLayout } from '../shared/trainingDirectionArc';
 
 const createCanvas = () => ({
   width: 1000,
@@ -53,6 +54,7 @@ const createFixture = ({
     panDragRef: { current: null },
     deployYawDragRef: { current: null },
     deployRectDragRef: { current: null },
+    deployDirectionArcDragRef: { current: null },
     spacePressedRef: { current: false }
   };
   const controller = createBattleInputController({
@@ -66,6 +68,7 @@ const createFixture = ({
     panDragRef: refs.panDragRef,
     deployYawDragRef: refs.deployYawDragRef,
     deployRectDragRef: refs.deployRectDragRef,
+    deployDirectionArcDragRef: refs.deployDirectionArcDragRef,
     spacePressedRef: refs.spacePressedRef,
     constants: {
       BATTLE_UI_MODE_NONE: 'none',
@@ -624,5 +627,135 @@ describe('BattleInputController training placement', () => {
     expect(runtime.setDeployGroupPlaced).toHaveBeenCalledWith('attacker', 'attacker-pending', true);
     expect(resolveDeployPlacementTeam).not.toHaveBeenCalled();
     expect(switchDeployGroupTeamForTraining).not.toHaveBeenCalled();
+  });
+});
+
+describe('BattleInputController training direction arc', () => {
+  test('highlights the selected formation arc and drags its snapped forward direction', () => {
+    const group = {
+      id: 'direction-group',
+      team: 'attacker',
+      x: 100,
+      y: 100,
+      placed: true,
+      formationRect: { width: 80, depth: 40, facingRad: 0, directionOffsetRad: 0 }
+    };
+    const layout = resolveTrainingDirectionArcLayout(group, 'attacker');
+    const setHoveredDeployDirectionArc = jest.fn();
+    const setDeployGroupDirection = jest.fn(() => ({ ok: true }));
+    const { controller, refs, runtime } = createFixture({
+      phase: 'deploy',
+      getters: {
+        getSelectedSquadId: () => group.id,
+        isTrainingMode: () => true
+      },
+      runtimeOverrides: {
+        getDeployGroupById: jest.fn(() => group),
+        setHoveredDeployDirectionArc,
+        setDeployGroupDirection
+      }
+    });
+    const cleanup = controller.bindWindow();
+    const target = { closest: () => null };
+
+    controller.onMouseMove({
+      clientX: layout.apex.x,
+      clientY: layout.apex.y,
+      target
+    });
+
+    expect(setHoveredDeployDirectionArc).toHaveBeenLastCalledWith(group.id);
+
+    controller.onMouseDown(sceneMouseDown({
+      clientX: layout.apex.x,
+      clientY: layout.apex.y,
+      target
+    }));
+
+    expect(refs.deployDirectionArcDragRef.current).toMatchObject({
+      groupId: group.id,
+      team: 'attacker',
+      phase: 'deploy',
+      resumeClockOnRelease: false
+    });
+    expect(runtime.pickDeployGroup).not.toHaveBeenCalled();
+
+    window.dispatchEvent(new MouseEvent('mousemove', {
+      bubbles: true,
+      buttons: 1,
+      clientX: 100,
+      clientY: 180
+    }));
+
+    expect(setDeployGroupDirection).toHaveBeenCalledWith(group.id, expect.any(Number), 'attacker');
+    expect(setDeployGroupDirection.mock.calls[setDeployGroupDirection.mock.calls.length - 1][1])
+      .toBeCloseTo(Math.PI / 2, 6);
+
+    window.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, button: 0 }));
+    expect(refs.deployDirectionArcDragRef.current).toBeNull();
+    cleanup();
+  });
+
+  test('pauses a battle while a selected direction arc is held and resumes on release', () => {
+    const group = {
+      id: 'battle-direction-group',
+      team: 'attacker',
+      x: 100,
+      y: 100,
+      remain: 20,
+      formationRect: { width: 80, depth: 40, facingRad: 0, directionOffsetRad: 0 }
+    };
+    const layout = resolveTrainingDirectionArcLayout(group, 'attacker');
+    const setClockPaused = jest.fn();
+    const setDeployGroupDirection = jest.fn(() => ({ ok: true }));
+    const { controller, refs } = createFixture({
+      phase: 'battle',
+      getters: {
+        getSelectedSquadId: () => group.id,
+        isClockPaused: () => false
+      },
+      runtimeOverrides: {
+        getSquadById: jest.fn(() => group),
+        canControlSquad: jest.fn(() => true),
+        setHoveredDeployDirectionArc: jest.fn(),
+        setDeployGroupDirection,
+        callbacks: { setClockPaused }
+      }
+    });
+    const cleanup = controller.bindWindow();
+    const target = { closest: () => null };
+
+    controller.onMouseMove({
+      clientX: layout.apex.x,
+      clientY: layout.apex.y,
+      target
+    });
+    controller.onMouseDown(sceneMouseDown({
+      clientX: layout.apex.x,
+      clientY: layout.apex.y,
+      target
+    }));
+
+    expect(refs.deployDirectionArcDragRef.current).toMatchObject({
+      groupId: group.id,
+      phase: 'battle',
+      resumeClockOnRelease: true
+    });
+    expect(setClockPaused).toHaveBeenCalledWith(true);
+
+    window.dispatchEvent(new MouseEvent('mousemove', {
+      bubbles: true,
+      buttons: 1,
+      clientX: 180,
+      clientY: 180
+    }));
+
+    expect(setDeployGroupDirection.mock.calls[setDeployGroupDirection.mock.calls.length - 1][1])
+      .toBeCloseTo(Math.PI / 4, 6);
+
+    window.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, button: 0 }));
+    expect(refs.deployDirectionArcDragRef.current).toBeNull();
+    expect(setClockPaused).toHaveBeenLastCalledWith(false);
+    cleanup();
   });
 });

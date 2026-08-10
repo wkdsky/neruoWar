@@ -69,7 +69,14 @@ test('User army state keeps combat armies separate from training armies', () => 
       units: [{ unitTypeId: 'infantry', count: 10000 }],
       x: 120,
       y: -20,
-      placed: true
+      placed: true,
+      formationRect: {
+        width: 80,
+        depth: 32,
+        facingRad: Math.PI,
+        directionOffsetRad: -Math.PI / 2,
+        directionRad: Math.PI / 2
+      }
     }]
   });
 
@@ -79,4 +86,6 @@ test('User army state keeps combat armies separate from training armies', () => 
   assert.equal(state.combatArmies[0].templateFormations[0].formationId, 'fmt_combat');
   assert.equal(state.trainingArmies[0].team, 'defender');
   assert.equal(state.trainingArmies[0].units[0].count, 10000);
+  assert.equal(state.trainingArmies[0].formationRect.directionOffsetRad, -Math.PI / 2);
+  assert.equal(state.trainingArmies[0].formationRect.directionRad, Math.PI / 2);
 });

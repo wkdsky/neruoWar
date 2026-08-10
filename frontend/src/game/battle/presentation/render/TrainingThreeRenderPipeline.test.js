@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import {
+  createTrainingDirectionArcMaterial,
   createTrainingDirectionArcGeometry,
   createTrainingFlagClothGeometry,
   prepareInstanceColorGeometry,
@@ -8,7 +9,8 @@ import {
   resolveTrainingWorldFlagScreenScale,
   resolveTrainingWorldFlagDimensions,
   TRAINING_WORLD_FLAG_MAX_PITCH_DEG,
-  TRAINING_WORLD_FLAG_TARGET_SCREEN_HEIGHT
+  TRAINING_WORLD_FLAG_TARGET_SCREEN_HEIGHT,
+  TRAINING_DIRECTION_ARC_GROUND_ELEVATION
 } from './TrainingThreeRenderPipeline';
 
 describe('training direction markers', () => {
@@ -42,7 +44,7 @@ describe('training direction markers', () => {
       expect.objectContaining({ x: 160, y: -12, teamIndex: 1 })
     ]));
     expect(anchors.every((anchor) => (
-      anchor.arcRadius >= 8
+      anchor.arcLayout?.bulgeDepth > 0
       && anchor.poleHeight > anchor.clothHeight
       && anchor.clothBottom > 0
     ))).toBe(true);
@@ -58,6 +60,29 @@ describe('training direction markers', () => {
       }
     });
 
+    expect(anchor.yaw).toBeCloseTo(Math.PI / 2);
+  });
+
+  test('highlights the selected battle direction arc while it is ready to drag', () => {
+    const [anchor] = resolveTrainingDirectionArcAnchors({
+      getPhase: () => 'battle',
+      selectedBattleSquadId: 'northbound',
+      hoveredDeployDirectionArcId: 'northbound',
+      sim: {
+        squads: [
+          {
+            id: 'northbound',
+            team: 'attacker',
+            remain: 20,
+            x: 0,
+            y: 0,
+            formationRect: { width: 60, depth: 16, facingRad: 0, directionOffsetRad: Math.PI / 2 }
+          }
+        ]
+      }
+    });
+
+    expect(anchor).toMatchObject({ selected: true, hovered: true });
     expect(anchor.yaw).toBeCloseTo(Math.PI / 2);
   });
 
@@ -132,7 +157,7 @@ describe('prepareInstanceColorGeometry', () => {
     expect(Array.from(colors.array).every((value) => value === 1)).toBe(true);
   });
 
-  test('creates a curved forward arc instead of an arrow or rectangle marker', () => {
+  test('creates a curved, vertex-colored direction ribbon instead of an arrow or rectangle marker', () => {
     const geometry = createTrainingDirectionArcGeometry();
     const positions = geometry.getAttribute('position');
     const xValues = Array.from({ length: positions.count }, (_, index) => positions.getX(index));
@@ -142,6 +167,16 @@ describe('prepareInstanceColorGeometry', () => {
     expect(Math.max(...yValues)).toBeGreaterThan(0.9);
     expect(Math.min(...yValues)).toBeLessThan(-0.9);
     expect(geometry.getAttribute('color').count).toBe(positions.count);
+    Array.from({ length: positions.count }, (_, index) => positions.getZ(index))
+      .forEach((z) => expect(z).toBeCloseTo(TRAINING_DIRECTION_ARC_GROUND_ELEVATION, 6));
+  });
+
+  test('keeps the direction arc on the ground and behind opaque soldiers', () => {
+    const material = createTrainingDirectionArcMaterial();
+
+    expect(material.depthTest).toBe(true);
+    expect(material.depthWrite).toBe(false);
+    material.dispose();
   });
 
   test('creates an upright cloth shape fixed to a flagpole edge', () => {

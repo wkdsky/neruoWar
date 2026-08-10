@@ -169,6 +169,7 @@ const BattleSceneContainer = ({
   const panDragRef = useRef(null);
   const deployYawDragRef = useRef(null);
   const deployRectDragRef = useRef(null);
+  const deployDirectionArcDragRef = useRef(null);
   const spacePressedRef = useRef(false);
   const mapKeyCommandsRef = useRef(new Set());
   const runtimeInitRef = useRef(null);
@@ -1034,8 +1035,10 @@ const BattleSceneContainer = ({
     panDragRef,
     deployYawDragRef,
     deployRectDragRef,
+    deployDirectionArcDragRef,
     spacePressedRef,
     selectedSquadId,
+    paused,
     battleUiMode,
     skillConfirmState,
     aimState,
@@ -1478,6 +1481,7 @@ const BattleSceneContainer = ({
     deployDraggingGroupId,
     deployDraggingTeam,
     deployRectDragRef,
+    deployDirectionArcDragRef,
     battleUiMode,
     worldActionsVisibleForSquadId,
     aimStateActive: aimState.active,
