@@ -120,6 +120,15 @@ const resolveRpsMul = (attackerSquad, defenderSquad) => {
   return RPS_MUL.neutral;
 };
 
+const resolveStatusMultiplier = (squad = null, key = 'atkMul') => {
+  const effects = Array.isArray(squad?.statusEffects) ? squad.statusEffects : [];
+  return effects.reduce((value, effect) => {
+    if (!effect || (Number(effect.ttl) || 0) <= 0) return value;
+    const multiplier = Number(effect?.[key]);
+    return Number.isFinite(multiplier) && multiplier > 0 ? value * multiplier : value;
+  }, 1);
+};
+
 export const triggerSquadStagger = (squad, severity = 'medium') => {
   const actionState = ensureActionState(squad);
   const prevKind = actionState.kind || 'none';
@@ -283,7 +292,15 @@ export const applyDamageToAgent = (sim, crowd, sourceAgent, targetAgent, amount 
   const targetSquad = squadMap ? (squadMap.get(targetAgent.squadId) || null) : (sim?.squads?.find((row) => row.id === targetAgent.squadId) || null);
   const sourceSquad = squadMap ? (squadMap.get(sourceAgent?.squadId) || null) : (sim?.squads?.find((row) => row.id === sourceAgent?.squadId) || null);
   const rps = resolveRpsMul(sourceSquad, targetSquad);
-  const safeAmount = Math.max(0.06, (Number(amount) || 0) * (rps.damageMul || 1));
+  const attackMultiplier = resolveStatusMultiplier(sourceSquad, 'atkMul');
+  const defenseMultiplier = resolveStatusMultiplier(targetSquad, 'defMul');
+  const safeAmount = Math.max(
+    0.06,
+    (Number(amount) || 0)
+      * (rps.damageMul || 1)
+      * attackMultiplier
+      / Math.max(0.1, defenseMultiplier)
+  );
   targetAgent.hpWeight = Math.max(0, (Number(targetAgent.hpWeight) || targetAgent.weight || 1) - safeAmount);
   targetAgent.weight = Math.max(0, (Number(targetAgent.weight) || 0) - safeAmount);
   targetAgent.hitTimer = 0.14;

@@ -28,7 +28,8 @@ describe('training direction arc geometry', () => {
 
     expect(layout.start.edges).toEqual(['front']);
     expect(layout.end.edges).toEqual(['front']);
-    expect(layout.boundary.x).toBeCloseTo(140);
+    expect(layout.boundary.x).toBeCloseTo(134.4);
+    expect(layout.arcInset).toBeCloseTo(5.6);
     expect(layout.apex.x).toBeGreaterThan(layout.boundary.x);
     expect(layout.bandWidth).toBeGreaterThanOrEqual(5);
   });
@@ -55,7 +56,7 @@ describe('training direction arc geometry', () => {
     expect(isPointOnTrainingDirectionArc({ x: group.x, y: group.y }, group, 'attacker')).toBe(false);
   });
 
-  test('supports a wider invisible hit band for a selected arc under soldiers', () => {
+  test('keeps selected arc picking inside the visible ribbon plus a small margin', () => {
     const group = buildGroup();
     const layout = resolveTrainingDirectionArcLayout(group, 'attacker');
     const occludedPoint = {
@@ -65,10 +66,10 @@ describe('training direction arc geometry', () => {
 
     expect(isPointOnTrainingDirectionArc(occludedPoint, group, 'attacker')).toBe(false);
     expect(isPointOnTrainingDirectionArc(occludedPoint, group, 'attacker', {
-      minimumHitRadius: 24,
-      maximumHitRadius: 42,
-      extraPadding: 14
-    })).toBe(true);
+      minimumHitRadius: 3,
+      maximumHitRadius: 8,
+      extraPadding: 2
+    })).toBe(false);
   });
 
   test('uses one fixed circular curvature while the rectangular attachment changes', () => {

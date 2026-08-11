@@ -1,6 +1,9 @@
 import {
   getSkillById,
+  getSkillLevel,
+  getSkillPointCostSchedule,
   getSkillTreeRemainingUnlockCost,
+  getSkillUpgradeCost,
   getSkillUnlockCost,
   SKILL_TREE_CATALOG
 } from './skillTreeData';
@@ -11,6 +14,19 @@ describe('training skill unlock costs', () => {
     expect(getSkillUnlockCost(getSkillById('melee', 'melee_heavy_blow'))).toBe(1);
     expect(getSkillUnlockCost(getSkillById('melee', 'melee_weapon_aura'))).toBe(2);
     expect(getSkillUnlockCost(getSkillById('melee', 'melee_wave_sweep'))).toBe(3);
+  });
+
+  test('exposes a point cost for activation and every upgrade level', () => {
+    const skill = getSkillById('melee', 'melee_heavy_blow');
+
+    expect(getSkillPointCostSchedule(skill)).toEqual([
+      { level: 1, cost: 1 },
+      { level: 2, cost: 2 },
+      { level: 3, cost: 3 }
+    ]);
+    expect(getSkillUpgradeCost(skill, 3)).toBe(0);
+    expect(getSkillLevel({ unlocked: [skill.id] }, skill)).toBe(1);
+    expect(getSkillLevel({ unlocked: [skill.id], levels: { [skill.id]: 2 } }, skill)).toBe(2);
   });
 
   test('reports only the remaining point cost for a partially learned tree', () => {

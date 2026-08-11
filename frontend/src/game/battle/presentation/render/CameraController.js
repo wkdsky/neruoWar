@@ -252,6 +252,7 @@ export default class CameraController {
     this.lookAheadSpeedEps = 2.6;
     this.followTau = 0.19;
     this.followSquadId = '';
+    this.followActive = false;
     this.focusTransitionSec = 0;
     this.focusTransitionDurationSec = 0.48;
     this.focusStartX = 0;
@@ -262,6 +263,10 @@ export default class CameraController {
     this.eye = [0, 0, 0];
     this.target = [0, 0, 0];
     this.up = [0, 0, 1];
+    this.renderEye = [0, 0, 0];
+    this.renderTarget = [0, 0, 0];
+    this.renderForward = [0, 0, -1];
+    this.renderUp = [0, 0, 1];
 
     this.view = mat4Identity();
     this.viewWorld = mat4Identity();
@@ -331,8 +336,24 @@ export default class CameraController {
 
   clearFollow() {
     this.followSquadId = '';
+    this.followActive = false;
     this.followSnapRequested = false;
     this.focusTransitionSec = 0;
+  }
+
+  startFollowing(anchor = null) {
+    if (!anchor || !String(anchor.squadId || '')) {
+      this.clearFollow();
+      return false;
+    }
+    this.followActive = true;
+    this.followSnapRequested = true;
+    this.followSquadId = String(anchor.squadId || '');
+    return true;
+  }
+
+  isFollowing() {
+    return !!this.followActive && !!String(this.followSquadId || '');
   }
 
   update(dtSec, anchor = null) {
@@ -465,6 +486,23 @@ export default class CameraController {
       (-rightBase[0] * sinWorld) + (rightBase[1] * cosWorld),
       0
     ];
+    const renderMatrixWorld = mat4Invert(this.viewWorld);
+    this.renderEye = [
+      renderMatrixWorld[12],
+      renderMatrixWorld[13],
+      renderMatrixWorld[14]
+    ];
+    this.renderTarget = [this.centerX, this.centerY, 0];
+    this.renderForward = normalize3([
+      -renderMatrixWorld[8],
+      -renderMatrixWorld[9],
+      -renderMatrixWorld[10]
+    ]);
+    this.renderUp = normalize3([
+      renderMatrixWorld[4],
+      renderMatrixWorld[5],
+      renderMatrixWorld[6]
+    ]);
     const forward = forwardFromView;
     return {
       view: this.view,
@@ -485,7 +523,11 @@ export default class CameraController {
       forwardZ: Number(forward[2]) || 0,
       flipFixApplied,
       eye: this.eye,
-      target: this.target
+      target: this.target,
+      renderEye: this.renderEye,
+      renderTarget: this.renderTarget,
+      renderForward: this.renderForward,
+      renderUp: this.renderUp
     };
   }
 

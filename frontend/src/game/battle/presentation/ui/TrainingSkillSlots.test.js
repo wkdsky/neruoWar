@@ -22,7 +22,7 @@ describe('TrainingSkillSlots', () => {
           cooldownTotal: 1
         }]}
         phase="battle"
-        trainingState={{ points: 3 }}
+        availableSkillPoints={3}
         onCastSlot={onCastSlot}
         onOpenTree={onOpenTree}
       />
@@ -53,7 +53,7 @@ describe('TrainingSkillSlots', () => {
           { slotIndex: 2, treeCategory: 'support' }
         ]}
         phase="deploy"
-        trainingState={{ points: 5 }}
+        availableSkillPoints={5}
         skillTreeProgress={{
           melee: {
             unlocked: meleeTree.skills

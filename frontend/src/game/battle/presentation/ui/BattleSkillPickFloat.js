@@ -48,6 +48,7 @@ const BattleSkillPickFloat = ({
             <span className="pve2-skill-float-tip">
               <strong>{skill.name || '技能'}</strong>
               <em>{skill.description || ''}</em>
+              <em>{skill.targetHint || ''}</em>
               <i>{`兵力 ${Math.max(0, Number(skill.count) || 0)} | ${remain > 0.01 ? `冷却 ${remain.toFixed(1)}s` : '可释放'}`}</i>
             </span>
           </button>

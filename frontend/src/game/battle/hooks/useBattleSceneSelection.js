@@ -108,6 +108,7 @@ export default function useBattleSceneSelection({
     const focusedSquadId = String(anchor?.squadId || '');
     const focusedSquad = focusedSquadId ? runtime.getSquadById?.(focusedSquadId) : null;
     const canControlFocusedSquad = !!focusedSquad && runtime.canControlSquad?.(focusedSquad);
+    cameraRef.current.clearFollow?.();
     if (focusedSquadId) {
       setSelectedSquadId(focusedSquadId);
       cameraRef.current.centerX = Number(anchor?.x) || 0;
@@ -122,7 +123,6 @@ export default function useBattleSceneSelection({
       cameraRef.current.pitchTo = cameraRef.current.pitchLow;
       cameraRef.current.pitchTweenSec = cameraRef.current.pitchTweenDurationSec;
     } else {
-      cameraRef.current.clearFollow?.();
       setSelectedSquadId('');
     }
     setPhase(runtime.getPhase());
@@ -179,8 +179,8 @@ export default function useBattleSceneSelection({
       const row = runtime.getCardRows().find((item) => item.id === squadId);
       if (row?.team === TEAM_DEFENDER) return;
     }
-    runtime.setFocusSquad(squadId);
     if (runtime.getPhase() === 'deploy') {
+      runtime.setFocusSquad(squadId);
       setDeployActionAnchorMode('card');
     } else {
       const squad = runtime.getSquadById?.(squadId);
@@ -218,11 +218,13 @@ export default function useBattleSceneSelection({
     }
     const squad = runtime.getSquadById?.(squadId);
     const canControl = runtime.canControlSquad?.(squad);
+    const previousId = String(runtime.selectedBattleSquadId || '');
+    if (previousId !== String(squadId || '') && cameraRef.current?.isFollowing?.()) {
+      cameraRef.current.clearFollow?.();
+    }
     if (!squad || !runtime.setSelectedBattleSquad?.(squadId)) return;
 
     runtime.setFocusSquad(squadId);
-    const anchor = runtime.getFocusAnchor();
-    cameraRef.current.beginFocusTransition(anchor);
     setSelectedSquadId(squadId);
     setWorldActionsVisibleForSquadId(!isTrainingMode && canControl ? squadId : '');
     setBattleUiMode((prev) => (

@@ -4,7 +4,6 @@ import {
   QUICK_DEPLOY_MAX_TOTAL,
   TEAM_ATTACKER,
   TEAM_DEFENDER,
-  createDefaultConfirmDeletePos,
   createDefaultDeployDraggingGroup
 } from '../screens/battleSceneConstants';
 import {
@@ -30,7 +29,6 @@ export default function useBattleQuickDeploy({
   setDeployDraggingGroup,
   setDeployActionAnchorMode,
   setConfirmDeleteGroupId,
-  setConfirmDeletePos,
   setSelectedPaletteItemId,
   setDeployNotice
 } = {}) {
@@ -176,7 +174,6 @@ export default function useBattleQuickDeploy({
       setDeployDraggingGroup(createDefaultDeployDraggingGroup());
       setDeployActionAnchorMode('');
       setConfirmDeleteGroupId('');
-      setConfirmDeletePos(createDefaultConfirmDeletePos());
       setSelectedPaletteItemId('');
 
       const existing = runtime.getDeployGroups();
@@ -230,7 +227,6 @@ export default function useBattleQuickDeploy({
     isTrainingMode,
     runtimeRef,
     setConfirmDeleteGroupId,
-    setConfirmDeletePos,
     setDeployActionAnchorMode,
     setDeployDraggingGroup,
     setDeployNotice,

@@ -22,6 +22,40 @@ const inferClassFromUnitType = (unitType = {}) => {
   return 'infantry';
 };
 
+const inferSkillCategoryFromUnitType = (unitType = {}, fallback = 'melee') => {
+  const category = typeof unitType?.unitCategory === 'string'
+    ? unitType.unitCategory.trim().toLowerCase()
+    : (typeof unitType?.rpsType === 'string' ? unitType.rpsType.trim().toLowerCase() : '');
+  if (category === 'ranged' || category === 'support' || category === 'melee') return category;
+  return fallback === 'ranged' || fallback === 'support' ? fallback : 'melee';
+};
+
+const skillCategoryIndex = (category = 'melee') => (
+  category === 'ranged' ? 1 : (category === 'support' ? 2 : 0)
+);
+
+const skillSubtypeIndex = (category = 'melee', subtype = '') => {
+  const value = String(subtype || '').trim().toLowerCase();
+  if (category === 'support') {
+    return value === 'combination' ? 0 : (value === 'intervention' ? 2 : 1);
+  }
+  return value === 'mobility' ? 0 : (value === 'defense' ? 1 : 2);
+};
+
+const resolveSkillVisualState = (agent = null) => {
+  const category = inferSkillCategoryFromUnitType({ unitCategory: agent?.unitCategory }, 'melee');
+  const cast = agent?.castState;
+  const style = String(cast?.style || '');
+  const skillActionIndex = style === 'ranged' ? 2 : (style === 'support' ? 3 : (style === 'melee' ? 1 : 0));
+  const duration = Math.max(0.01, Number(cast?.durationSec) || 0.01);
+  return {
+    categoryIndex: skillCategoryIndex(category),
+    subtypeIndex: skillSubtypeIndex(category, agent?.unitSubtype),
+    skillActionIndex,
+    skillProgress: cast ? clamp((Number(cast.elapsedSec) || 0) / duration, 0, 1) : 0
+  };
+};
+
 const normalizeFormationFacing = (team = TEAM_ATTACKER, rawFacing = null) => {
   const fallback = team === TEAM_DEFENDER ? Math.PI : 0;
   const candidate = Number(rawFacing);
@@ -103,6 +137,7 @@ export default class BattleSnapshotBuilder {
 
   build(runtime, outSnapshot = this.pool.acquire()) {
     const unitsSchema = this.schema.units;
+    const skillStatesSchema = this.schema.skillStates;
     const buildingsSchema = this.schema.buildings;
     const projectilesSchema = this.schema.projectiles;
     const effectsSchema = this.schema.effects;
@@ -116,6 +151,7 @@ export default class BattleSnapshotBuilder {
       }, 0);
 
     this.pool.ensureCapacity('units', runtime?.crowd?.allAgents?.length || deployUnitCount);
+    this.pool.ensureCapacity('skillStates', runtime?.crowd?.allAgents?.length || deployUnitCount);
     const hideDefenderIntelInDeploy = !runtime?.intelVisible && (!runtime?.sim || runtime?.phase === 'deploy');
     const activeBuildings = hideDefenderIntelInDeploy
       ? []
@@ -126,6 +162,7 @@ export default class BattleSnapshotBuilder {
     this.pool.ensureCapacity('effects', runtime?.sim?.hitEffects?.length || 0);
 
     const units = outSnapshot.units;
+    const skillStates = outSnapshot.skillStates;
     const buildings = outSnapshot.buildings;
     const projectiles = outSnapshot.projectiles;
     const effects = outSnapshot.effects;
@@ -189,6 +226,15 @@ export default class BattleSnapshotBuilder {
           units.data[base + 17] = visual.gearTopIndex;
           units.data[base + 18] = visual.vehicleTopIndex;
           units.data[base + 19] = visual.silhouetteTopIndex;
+          const previewSkillVisual = resolveSkillVisualState({
+            unitCategory: runtime.unitTypeMap.get(pickedTypeId)?.unitCategory,
+            unitSubtype: runtime.unitTypeMap.get(pickedTypeId)?.unitSubtype
+          });
+          const skillBase = previewCount * skillStatesSchema.stride;
+          skillStates.data[skillBase + 0] = previewSkillVisual.categoryIndex;
+          skillStates.data[skillBase + 1] = previewSkillVisual.subtypeIndex;
+          skillStates.data[skillBase + 2] = 0;
+          skillStates.data[skillBase + 3] = 0;
           previewCount += 1;
         }
       };
@@ -197,6 +243,7 @@ export default class BattleSnapshotBuilder {
         (runtime.defenderDeployGroups || []).forEach((group) => fillPreviewGroup(group, TEAM_DEFENDER, group.id === runtime.selectedDeploySquadId));
       }
       units.count = previewCount;
+      skillStates.count = previewCount;
 
       let wallCount = 0;
       for (let i = 0; i < activeBuildingParts.length; i += 1) {
@@ -253,14 +300,24 @@ export default class BattleSnapshotBuilder {
       units.data[base + 12] = agent.squadId === runtime.selectedBattleSquadId ? 1 : 0;
       units.data[base + 13] = agent.isFlagBearer ? 1 : 0;
       units.data[base + 14] = 0;
-      units.data[base + 15] = 0;
+      units.data[base + 15] = runtime.hoveredBattleSquadId
+        && agent.squadId === runtime.hoveredBattleSquadId
+        ? 1
+        : 0;
       units.data[base + 16] = visual.bodyTopIndex;
       units.data[base + 17] = visual.gearTopIndex;
       units.data[base + 18] = visual.vehicleTopIndex;
       units.data[base + 19] = visual.silhouetteTopIndex;
+      const skillVisual = resolveSkillVisualState(agent);
+      const skillBase = unitCount * skillStatesSchema.stride;
+      skillStates.data[skillBase + 0] = skillVisual.categoryIndex;
+      skillStates.data[skillBase + 1] = skillVisual.subtypeIndex;
+      skillStates.data[skillBase + 2] = skillVisual.skillActionIndex;
+      skillStates.data[skillBase + 3] = skillVisual.skillProgress;
       unitCount += 1;
     }
     units.count = unitCount;
+    skillStates.count = unitCount;
 
     let wallCount = 0;
     for (let i = 0; i < activeBuildingParts.length; i += 1) {
@@ -320,6 +377,8 @@ export default class BattleSnapshotBuilder {
       else if (e.type === 'buff_aura') effects.data[base + 5] = 2;
       else if (e.type === 'charge_dust') effects.data[base + 5] = 3;
       else if (e.type === 'smoke') effects.data[base + 5] = 4;
+      else if (e.type === 'debuff_aura') effects.data[base + 5] = 5;
+      else if (e.type === 'cast_pulse') effects.data[base + 5] = 6;
       else effects.data[base + 5] = 0;
       effects.data[base + 6] = clamp((Number(e.ttl) || 0) / Math.max(0.01, (Number(e.elapsed) || 0) + (Number(e.ttl) || 0)), 0, 1);
       effects.data[base + 7] = 0;

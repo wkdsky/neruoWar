@@ -4,7 +4,6 @@ import {
   TEAM_ATTACKER,
   TEAM_DEFENDER,
   createDefaultAimState,
-  createDefaultConfirmDeletePos,
   createDefaultDeployDraggingGroup,
   createDefaultDeployInfoState,
   createDefaultPopupPos,
@@ -34,7 +33,6 @@ const useBattleSceneUiState = () => {
   const [deployNotice, setDeployNotice] = useState('');
   const [selectedPaletteItemId, setSelectedPaletteItemId] = useState('');
   const [confirmDeleteGroupId, setConfirmDeleteGroupId] = useState('');
-  const [confirmDeletePos, setConfirmDeletePos] = useState(createDefaultConfirmDeletePos);
   const [deployInfoState, setDeployInfoState] = useState(createDefaultDeployInfoState);
   const [quickDeployOpen, setQuickDeployOpen] = useState(false);
   const [quickDeployTab, setQuickDeployTab] = useState('standard');
@@ -89,8 +87,6 @@ const useBattleSceneUiState = () => {
     setSelectedPaletteItemId,
     confirmDeleteGroupId,
     setConfirmDeleteGroupId,
-    confirmDeletePos,
-    setConfirmDeletePos,
     deployInfoState,
     setDeployInfoState,
     quickDeployOpen,

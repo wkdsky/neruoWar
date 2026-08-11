@@ -12,13 +12,16 @@ import {
   acquireHitEffect,
   stepEffectPool
 } from '../effects/CombatEffects';
-import { updateCrowdCombat } from './crowdCombat';
+import { applyDamageToAgent, updateCrowdCombat } from './crowdCombat';
 import { syncMeleeEngagement } from './engagement';
 import itemInteractionSystem from '../items/ItemInteractionSystem';
 import { snapTrainingDirectionOffset } from '../../shared/trainingDirectionArc';
 
 const TEAM_ATTACKER = 'attacker';
 const TEAM_DEFENDER = 'defender';
+const SKILL_CATEGORY_MELEE = 'melee';
+const SKILL_CATEGORY_RANGED = 'ranged';
+const SKILL_CATEGORY_SUPPORT = 'support';
 const ORDER_IDLE = 'IDLE';
 const ORDER_MOVE = 'MOVE';
 const ORDER_ATTACK_MOVE = 'ATTACK_MOVE';
@@ -209,6 +212,27 @@ const inferCategoryFromUnitType = (unitType = {}, fallbackClass = 'infantry') =>
   if (/(骑|骑兵|铁骑|龙骑)/.test(name) || speed >= 2.1) return 'cavalry';
   if (roleTag === '近战') return 'infantry';
   return fallbackClass || 'infantry';
+};
+
+const inferSkillCategoryFromUnitType = (unitType = {}, fallback = SKILL_CATEGORY_MELEE) => {
+  const category = typeof unitType?.unitCategory === 'string'
+    ? unitType.unitCategory.trim().toLowerCase()
+    : (typeof unitType?.rpsType === 'string' ? unitType.rpsType.trim().toLowerCase() : '');
+  if (category === SKILL_CATEGORY_RANGED || category === SKILL_CATEGORY_SUPPORT) return category;
+  if (category === SKILL_CATEGORY_MELEE) return category;
+  return fallback === SKILL_CATEGORY_RANGED || fallback === SKILL_CATEGORY_SUPPORT
+    ? fallback
+    : SKILL_CATEGORY_MELEE;
+};
+
+const inferSkillSubtypeFromUnitType = (unitType = {}, skillCategory = SKILL_CATEGORY_MELEE) => {
+  const subtype = typeof unitType?.unitSubtype === 'string' ? unitType.unitSubtype.trim().toLowerCase() : '';
+  if (skillCategory === SKILL_CATEGORY_SUPPORT) {
+    if (subtype === 'combination' || subtype === 'comprehensive' || subtype === 'intervention') return subtype;
+    return 'comprehensive';
+  }
+  if (subtype === 'mobility' || subtype === 'defense' || subtype === 'balance') return subtype;
+  return 'balance';
 };
 
 const slotOffsetForIndex = (index, columns, spacing = (AGENT_RADIUS * 2) + AGENT_GAP) => {
@@ -541,6 +565,243 @@ const ensureSquadActionState = (squad) => {
   return squad.actionState;
 };
 
+const ensureSquadStatusEffects = (squad) => {
+  if (!squad || typeof squad !== 'object') return [];
+  if (!Array.isArray(squad.statusEffects)) squad.statusEffects = [];
+  return squad.statusEffects;
+};
+
+const resolveSquadStatusMultipliers = (squad = null) => {
+  const multipliers = {
+    atkMul: 1,
+    defMul: 1,
+    speedMul: 1,
+    skillMul: 1,
+    rangeMul: 1
+  };
+  const effects = ensureSquadStatusEffects(squad);
+  effects.forEach((effect) => {
+    if (!effect || (Number(effect.ttl) || 0) <= 0) return;
+    Object.keys(multipliers).forEach((key) => {
+      const value = Number(effect[key]);
+      if (Number.isFinite(value) && value > 0) multipliers[key] *= value;
+    });
+  });
+  return multipliers;
+};
+
+const applySquadStatusEffect = (squad, effect = {}) => {
+  if (!squad || !effect || typeof effect !== 'object') return null;
+  const effects = ensureSquadStatusEffects(squad);
+  const type = effect.type === 'debuff' ? 'debuff' : 'buff';
+  if (effect.type === 'purify') {
+    squad.statusEffects = effects.filter((entry) => entry?.type !== 'debuff');
+    return null;
+  }
+  const durationSec = Math.max(0.1, Number(effect.durationSec) || Number(effect.ttl) || 1);
+  const id = String(effect.id || `${type}:${effect.sourceSkillId || 'skill'}`);
+  const next = {
+    id,
+    type,
+    sourceSkillId: String(effect.sourceSkillId || ''),
+    ttl: durationSec,
+    durationSec,
+    atkMul: Math.max(0.05, Number(effect.atkMul) || 1),
+    defMul: Math.max(0.05, Number(effect.defMul) || 1),
+    speedMul: Math.max(0.05, Number(effect.speedMul) || 1),
+    skillMul: Math.max(0.05, Number(effect.skillMul) || 1),
+    rangeMul: Math.max(0.05, Number(effect.rangeMul) || 1)
+  };
+  const existingIndex = effects.findIndex((entry) => entry?.id === id);
+  if (existingIndex >= 0) effects[existingIndex] = next;
+  else effects.push(next);
+  return next;
+};
+
+const stepSquadStatusEffects = (squad, dt = 0) => {
+  if (!squad || !Array.isArray(squad.statusEffects)) return;
+  squad.statusEffects = squad.statusEffects
+    .map((effect) => ({
+      ...effect,
+      ttl: Math.max(0, (Number(effect?.ttl) || 0) - Math.max(0, Number(dt) || 0))
+    }))
+    .filter((effect) => (Number(effect?.ttl) || 0) > 0);
+};
+
+const beginAgentCast = (agent, spec = {}) => {
+  if (!agent || agent.dead) return;
+  const durationSec = Math.max(0.16, Number(spec.durationSec) || 0.8);
+  const requestedDash = Math.max(0, Number(spec.dashDistance) || 0);
+  const dashSpeedMul = Math.max(1, Number(spec.dashSpeedMul) || 1);
+  const practicalDashLimit = Math.max(
+    2,
+    (Number(agent.moveSpeedMul) || 1) * 20 * durationSec * dashSpeedMul * 0.52
+  );
+  const direction = normalizeVec(Number(spec.dirX) || 0, Number(spec.dirY) || 0);
+  agent.castState = {
+    style: String(spec.style || 'melee'),
+    motion: String(spec.motion || ''),
+    ttl: durationSec,
+    durationSec,
+    elapsedSec: 0,
+    dirX: direction.len > 0.0001 ? direction.x : (Number(agent.yaw) ? Math.cos(agent.yaw) : 1),
+    dirY: direction.len > 0.0001 ? direction.y : (Number(agent.yaw) ? Math.sin(agent.yaw) : 0),
+    dashDistance: Math.min(requestedDash, practicalDashLimit),
+    dashSpeedMul: requestedDash > 0 ? dashSpeedMul : 1,
+    phaseOffset: ((Number(agent.slotOrder) || 0) % 7) * 0.27,
+    targetX: Number(spec.targetX) || 0,
+    targetY: Number(spec.targetY) || 0
+  };
+};
+
+const stepAgentCast = (agent, dt = 0) => {
+  const cast = agent?.castState;
+  if (!cast) return null;
+  const safeDt = Math.max(0, Number(dt) || 0);
+  cast.ttl = Math.max(0, (Number(cast.ttl) || 0) - safeDt);
+  cast.elapsedSec = Math.max(0, (Number(cast.elapsedSec) || 0) + safeDt);
+  if (cast.ttl <= 0) {
+    agent.castState = null;
+    return null;
+  }
+  return cast;
+};
+
+const resolveAgentCastOffset = (agent) => {
+  const cast = agent?.castState;
+  if (!cast || cast.style !== 'melee') return { x: 0, y: 0, active: false };
+  const duration = Math.max(0.01, Number(cast.durationSec) || 0.01);
+  const progress = clamp((Number(cast.elapsedSec) || 0) / duration, 0, 1);
+  const distance = Math.max(0, Number(cast.dashDistance) || 0);
+  if (distance <= 0.01) return { x: 0, y: 0, active: false };
+  if (cast.motion === 'orbit') {
+    const angle = (progress * Math.PI * 4) + (Number(cast.phaseOffset) || 0);
+    const radius = distance * (0.45 + (0.55 * Math.sin(Math.min(1, progress) * Math.PI)));
+    return {
+      x: (Math.cos(angle) * radius),
+      y: (Math.sin(angle) * radius),
+      active: true
+    };
+  }
+  const reach = Math.sin(progress * Math.PI) * distance;
+  return {
+    x: (Number(cast.dirX) || 0) * reach,
+    y: (Number(cast.dirY) || 0) * reach,
+    active: reach > 0.02
+  };
+};
+
+const moveMeleeChargeAgent = (agent, destination, squad, sim, walls, dt) => {
+  const target = {
+    x: Number(destination?.x) || 0,
+    y: Number(destination?.y) || 0
+  };
+  const toTarget = normalizeVec(target.x - (Number(agent?.x) || 0), target.y - (Number(agent?.y) || 0));
+  if (toTarget.len <= LEADER_ARRIVAL_RADIUS * 0.82) {
+    agent.vx = 0;
+    agent.vy = 0;
+    return toTarget.len;
+  }
+  const speed = Math.max(
+    10,
+    (Number(squad?.stats?.speed) || 1) * 20 * clamp(Number(agent?.moveSpeedMul) || 1, 0.6, 1.8) * 1.38
+  );
+  const step = Math.min(toTarget.len, speed * Math.max(0.001, Number(dt) || 0));
+  const previousX = Number(agent.x) || 0;
+  const previousY = Number(agent.y) || 0;
+  let nextX = previousX + (toTarget.x * step);
+  let nextY = previousY + (toTarget.y * step);
+  (Array.isArray(walls) ? walls : []).forEach((wall) => {
+    const pushed = pushOutOfRect({ x: nextX, y: nextY }, wall, (agent.radius || AGENT_RADIUS) + 0.5);
+    nextX = pushed.x;
+    nextY = pushed.y;
+  });
+  const halfW = (Number(sim?.field?.width) || 2700) / 2;
+  const halfH = (Number(sim?.field?.height) || 1488) / 2;
+  agent.x = clamp(nextX, -halfW + 2, halfW - 2);
+  agent.y = clamp(nextY, -halfH + 2, halfH - 2);
+  agent.vx = (agent.x - previousX) / Math.max(0.001, Number(dt) || 0.001);
+  agent.vy = (agent.y - previousY) / Math.max(0.001, Number(dt) || 0.001);
+  if (Math.abs(agent.vx) + Math.abs(agent.vy) > 0.08) agent.yaw = Math.atan2(agent.vy, agent.vx);
+  return Math.hypot(target.x - agent.x, target.y - agent.y);
+};
+
+const stepMeleeChargeAgent = (agent, squad, order, sim, walls, dt, nowSec) => {
+  const state = agent?.meleeChargeState;
+  if (!state || !order || order.active === false) return false;
+  const alertRect = order.alertRect || {};
+  const chargePoint = state.chargePoint || order.targetPoint || { x: squad.x, y: squad.y };
+  if (state.phase === 'charge') {
+    const distance = moveMeleeChargeAgent(agent, chargePoint, squad, sim, walls, dt);
+    agent.state = distance <= LEADER_ARRIVAL_RADIUS ? 'idle' : 'move';
+    if (distance <= LEADER_ARRIVAL_RADIUS) {
+      state.phase = 'attack';
+      state.attackStartedAt = nowSec;
+      if ((Number(order.holdUntil) || 0) <= nowSec) {
+        order.holdUntil = nowSec + Math.max(1.4, Number(order.attackWindowSec) || 2.2);
+      }
+    }
+    return true;
+  }
+  if (state.phase === 'attack') {
+    const insideAlert = pointInsideMeleeAlertRect(agent, alertRect);
+    const enemy = pickEnemyInsideMeleeAlert(squad, sim, alertRect, agent);
+    if (!insideAlert || (!enemy && nowSec >= (Number(order.holdUntil) || 0))) {
+      state.phase = 'return';
+    } else {
+      agent.vx = 0;
+      agent.vy = 0;
+      agent.targetAgentId = enemy?.id || '';
+      agent.state = enemy ? 'attack' : 'idle';
+      return true;
+    }
+  }
+  if (state.phase === 'return') {
+    const distance = moveMeleeChargeAgent(agent, state.returnPoint, squad, sim, walls, dt);
+    agent.state = distance <= LEADER_ARRIVAL_RADIUS ? 'idle' : 'move';
+    agent.targetAgentId = '';
+    if (distance <= LEADER_ARRIVAL_RADIUS) {
+      agent.meleeChargeState = null;
+      agent.vx = 0;
+      agent.vy = 0;
+    }
+    return true;
+  }
+  agent.meleeChargeState = null;
+  return false;
+};
+
+const refreshMeleeAttackOrder = (squad, agents = [], nowSec = 0) => {
+  const order = squad?.meleeAttackOrder;
+  if (!order || order.active === false) return;
+  const casterIds = new Set(Array.isArray(order.casterAgentIds) ? order.casterAgentIds : []);
+  const casters = (Array.isArray(agents) ? agents : [])
+    .filter((agent) => agent && !agent.dead && casterIds.has(agent.id));
+  const activeStates = casters.map((agent) => agent.meleeChargeState).filter(Boolean);
+  if (activeStates.length <= 0) {
+    squad.meleeAttackOrder = null;
+    squad.targetSquadId = '';
+    squad.waypoints = [];
+    const resumeBehavior = order.resumeBehavior === 'auto' ? 'auto' : 'idle';
+    squad.behavior = resumeBehavior;
+    squad.action = resumeBehavior === 'auto' ? '自动攻击' : '待命';
+    squad.order = {
+      type: resumeBehavior === 'auto' ? ORDER_ATTACK_MOVE : ORDER_IDLE,
+      issuedAt: nowSec,
+      commitUntil: 0,
+      targetPoint: null,
+      targetSquadId: ''
+    };
+    return;
+  }
+  const hasCharge = activeStates.some((state) => state.phase === 'charge');
+  const hasAttack = activeStates.some((state) => state.phase === 'attack');
+  order.phase = hasCharge ? 'charge' : (hasAttack ? 'attack' : 'return');
+  squad.action = order.phase === 'charge'
+    ? '近战突进'
+    : (order.phase === 'attack' ? '近战警戒' : '回阵');
+};
+
 const ensureSquadStability = (squad) => {
   if (!squad || typeof squad !== 'object') return null;
   if (!squad.stability || typeof squad.stability !== 'object') {
@@ -758,6 +1019,58 @@ const pointInPolygon = (point, polygon = []) => {
   return inside;
 };
 
+const resolveMeleeAlertRect = (squad = {}, center = null) => {
+  const formation = squad?.formationRect && typeof squad.formationRect === 'object'
+    ? squad.formationRect
+    : {};
+  const radius = Math.max(12, Number(squad?.radius) || 24);
+  const fallbackYaw = Math.atan2(
+    Number(squad?.dirY) || 0,
+    Number.isFinite(Number(squad?.dirX)) ? Number(squad.dirX) : (squad?.team === TEAM_DEFENDER ? -1 : 1)
+  );
+  return {
+    x: Number.isFinite(Number(center?.x)) ? Number(center.x) : (Number(squad?.x) || 0),
+    y: Number.isFinite(Number(center?.y)) ? Number(center.y) : (Number(squad?.y) || 0),
+    width: Math.max(32, Number(formation?.width) || radius * 1.8) + 32,
+    depth: Math.max(24, Number(formation?.depth) || radius * 1.2) + 32,
+    yaw: Number.isFinite(Number(formation?.facingRad)) ? Number(formation.facingRad) : fallbackYaw
+  };
+};
+
+const pointInsideMeleeAlertRect = (point = {}, rect = {}) => {
+  const dx = (Number(point?.x) || 0) - (Number(rect?.x) || 0);
+  const dy = (Number(point?.y) || 0) - (Number(rect?.y) || 0);
+  const yaw = Number(rect?.yaw) || 0;
+  const localX = (dx * Math.cos(yaw)) + (dy * Math.sin(yaw));
+  const localY = (-dx * Math.sin(yaw)) + (dy * Math.cos(yaw));
+  return Math.abs(localX) <= Math.max(1, Number(rect?.width) || 1) * 0.5
+    && Math.abs(localY) <= Math.max(1, Number(rect?.depth) || 1) * 0.5;
+};
+
+const pickEnemyInsideMeleeAlert = (squad = {}, sim = null, rect = {}, origin = squad) => {
+  const enemyTeam = squad?.team === TEAM_ATTACKER ? TEAM_DEFENDER : TEAM_ATTACKER;
+  let best = null;
+  let bestDistance = Infinity;
+  (Array.isArray(sim?.squads) ? sim.squads : []).forEach((candidate) => {
+    if (!candidate || candidate.team !== enemyTeam || (Number(candidate.remain) || 0) <= 0) return;
+    if (isEnemyHiddenForViewer(candidate, squad?.team)) return;
+    const candidateRadius = Math.max(0, Number(candidate?.radius) || 0);
+    const expandedRect = candidateRadius > 0
+      ? { ...rect, width: (Number(rect?.width) || 0) + (candidateRadius * 2), depth: (Number(rect?.depth) || 0) + (candidateRadius * 2) }
+      : rect;
+    if (!pointInsideMeleeAlertRect(candidate, expandedRect)) return;
+    const distance = Math.hypot(
+      (Number(candidate.x) || 0) - (Number(origin?.x) || 0),
+      (Number(candidate.y) || 0) - (Number(origin?.y) || 0)
+    );
+    if (distance < bestDistance) {
+      best = candidate;
+      bestDistance = distance;
+    }
+  });
+  return best;
+};
+
 const samplePointInCircle = (center, radius) => {
   const theta = Math.random() * Math.PI * 2;
   const r = Math.sqrt(Math.random()) * Math.max(0, Number(radius) || 0);
@@ -809,8 +1122,12 @@ const clipGroundPointByWalls = (origin, target, walls = []) => {
 
 const normalizeGroundSkillTargetSpec = (sim, squad, classTag, targetInput = {}) => {
   const fallback = GROUND_SKILL_CONFIG[classTag] || GROUND_SKILL_CONFIG.archer;
-  const sourceX = Number(squad?.x) || 0;
-  const sourceY = Number(squad?.y) || 0;
+  const sourceX = Number.isFinite(Number(targetInput?.originX))
+    ? Number(targetInput.originX)
+    : (Number(squad?.x) || 0);
+  const sourceY = Number.isFinite(Number(targetInput?.originY))
+    ? Number(targetInput.originY)
+    : (Number(squad?.y) || 0);
   const inputX = Number(targetInput?.x);
   const inputY = Number(targetInput?.y);
   const inputMaxRange = Number(targetInput?.maxRange);
@@ -884,8 +1201,9 @@ const emitGroundSkillWave = (sim, crowd, squad, activeSkill, waveIndex = 0) => {
   const classTag = activeSkill?.classTag === 'artillery' ? 'artillery' : 'archer';
   const config = activeSkill.config || GROUND_SKILL_CONFIG[classTag];
   const targetSpec = activeSkill.targetSpec || {};
+  const casterIds = new Set(Array.isArray(activeSkill?.casterAgentIds) ? activeSkill.casterAgentIds : []);
   const rankedShooters = [...agents]
-    .filter((agent) => !agent.dead)
+    .filter((agent) => !agent.dead && (casterIds.size <= 0 || casterIds.has(agent.id)))
     .sort((a, b) => (Number(b.weight) || 0) - (Number(a.weight) || 0));
   const shooterCount = classTag === 'artillery'
     ? Math.max(2, Math.min(6, Math.floor(Math.sqrt(rankedShooters.length)) + 1))
@@ -924,7 +1242,10 @@ const emitGroundSkillWave = (sim, crowd, squad, activeSkill, waveIndex = 0) => {
     const repConfig = resolveRepConfig(sim, crowd);
     const weightMul = Math.max(1, Math.pow(Math.max(1, Number(shooter.weight) || 1), repConfig.damageExponent));
     const damageBase = Math.max(0.22, (Number(squad.stats?.atk) || 10) * (classTag === 'artillery' ? 0.11 : 0.065));
-    const damage = damageBase * weightMul * Math.max(1, Number(config?.damageMul) || 1);
+    const damage = damageBase
+      * weightMul
+      * Math.max(0.1, Number(config?.damageMul) || 1)
+      * (activeSkill?.profile ? 1 : Math.max(0.1, Number(activeSkill?.profile?.damageMul) || 1));
     acquireProjectile(crowd.effectsPool, {
       type: classTag === 'artillery' ? 'shell' : 'arrow',
       team: squad.team,
@@ -974,6 +1295,10 @@ const emitGroundSkillWave = (sim, crowd, squad, activeSkill, waveIndex = 0) => {
 const updateActiveGroundSkill = (sim, crowd, squad, dt) => {
   const active = squad?.activeSkill;
   if (!active) return;
+  if (active.mode === 'melee') {
+    updateConfiguredMeleeSkill(sim, crowd, squad, active, dt);
+    return;
+  }
   if ((Number(squad?.remain) || 0) <= 0) {
     squad.activeSkill = null;
     return;
@@ -1046,6 +1371,15 @@ const updateSquadBehaviorPlan = (squad, sim, nowSec = 0) => {
   }
   if ((Number(squad?.skillRush?.ttl) || 0) > 0) {
     squad.action = '兵种攻击';
+    return;
+  }
+  const meleeAttackOrder = squad?.meleeAttackOrder;
+  if (meleeAttackOrder && meleeAttackOrder.active !== false) {
+    squad.waypoints = [];
+    squad.targetSquadId = '';
+    squad.action = meleeAttackOrder.phase === 'attack'
+      ? '近战警戒'
+      : (meleeAttackOrder.phase === 'return' ? '回阵' : '近战突进');
     return;
   }
   if (!Array.isArray(squad.waypoints)) squad.waypoints = [];
@@ -1210,6 +1544,8 @@ const createAgent = ({
   team,
   unitTypeId,
   category,
+  unitCategory = SKILL_CATEGORY_MELEE,
+  unitSubtype = 'balance',
   x,
   y,
   weight,
@@ -1224,6 +1560,8 @@ const createAgent = ({
   team,
   unitTypeId,
   typeCategory: category,
+  unitCategory,
+  unitSubtype,
   x: Number(x) || 0,
   y: Number(y) || 0,
   vx: 0,
@@ -1245,6 +1583,8 @@ const createAgent = ({
   _formationHoldSpacing: '',
   _formationLocked: true,
   moveSpeedMul: clamp(Number(moveSpeedMul) || 1, 0.6, 1.8),
+  castState: null,
+  meleeChargeState: null,
   isFlagBearer: !!isFlagBearer,
   hitTimer: 0,
   dead: false
@@ -1326,6 +1666,8 @@ const createAgentsForSquad = (squad, crowd) => {
     );
     const unitType = unitMap.get(unitTypeId) || {};
     const category = inferCategoryFromUnitType(unitType, squad?.classTag || 'infantry');
+    const unitCategory = inferSkillCategoryFromUnitType(unitType);
+    const unitSubtype = inferSkillSubtypeFromUnitType(unitType, unitCategory);
     const moveSpeedMul = resolveAgentSpeedMul(unitType, category);
     for (let i = 0; i < safeCount; i += 1) {
       const offset = slotOffsetForIndex(slotOrder, baseCols);
@@ -1337,6 +1679,8 @@ const createAgentsForSquad = (squad, crowd) => {
         team: squad.team,
         unitTypeId,
         category,
+        unitCategory,
+        unitSubtype,
         x: spawnPoint.x,
         y: spawnPoint.y,
         weight: perAgentWeight,
@@ -1355,6 +1699,8 @@ const createAgentsForSquad = (squad, crowd) => {
       team: squad.team,
       unitTypeId: '__fallback__',
       category: squad?.classTag || 'infantry',
+      unitCategory: inferSkillCategoryFromUnitType(squad, SKILL_CATEGORY_MELEE),
+      unitSubtype: inferSkillSubtypeFromUnitType(squad, inferSkillCategoryFromUnitType(squad, SKILL_CATEGORY_MELEE)),
       x: Number(squad.x) || 0,
       y: Number(squad.y) || 0,
       weight: Math.min(remain, repConfig.maxAgentWeight),
@@ -1384,12 +1730,22 @@ const leaderMoveStep = (squad, sim, crowd, dt, forwardVec, steeringWeights = DEF
   const actionState = ensureSquadActionState(squad);
   const actionKind = typeof actionState.kind === 'string' ? actionState.kind : 'none';
   const fatiguePenalty = squad.fatigueTimer > 0 ? 0.72 : 1;
-  const buffSpeed = squad.effectBuff?.speedMul ? Number(squad.effectBuff.speedMul) : 1;
+  const statusMultipliers = resolveSquadStatusMultipliers(squad);
+  const buffSpeed = (squad.effectBuff?.speedMul ? Number(squad.effectBuff.speedMul) : 1)
+    * statusMultipliers.speedMul;
   const rushSpeed = squad.skillRush?.ttl > 0 ? 1.45 : 1;
   const speedMode = squad.speedMode === SPEED_MODE_C ? SPEED_MODE_C : SPEED_MODE_B;
   const speedPolicy = typeof squad.speedPolicy === 'string' ? squad.speedPolicy : SPEED_POLICY_MARCH;
   const orderType = resolveSquadOrderType(squad);
   const nowSec = Number(sim?.timeElapsed) || 0;
+  if (squad.meleeAttackOrder && squad.meleeAttackOrder.active !== false) {
+    squad.vx = 0;
+    squad.vy = 0;
+    squad.speed = 0;
+    squad.waypoints = [];
+    squad.stamina = clamp((Number(squad.stamina) || 0) + (STAMINA_RECOVER * dt), 0, STAMINA_MAX);
+    return forwardVec;
+  }
   const chargingCommitted = orderType === ORDER_CHARGE && (Number(squad?.order?.commitUntil) || 0) > nowSec;
   const baseGroupSpeed = speedMode === SPEED_MODE_C
     ? computeRetreatGroupSpeed(squad, crowd)
@@ -1401,8 +1757,7 @@ const leaderMoveStep = (squad, sim, crowd, dt, forwardVec, steeringWeights = DEF
   const speedTargetMax = speedBase * fatiguePenalty * buffSpeed * rushSpeed * policyMul * (chargingCommitted ? 1.15 : 1);
   const walls = Array.isArray(sim?.buildings) ? sim.buildings.filter((row) => !row?.destroyed) : [];
   let target = null;
-  const activeSkillClass = typeof squad?.activeSkill?.classTag === 'string' ? squad.activeSkill.classTag : '';
-  const lockRangedSkill = activeSkillClass === 'archer' || activeSkillClass === 'artillery';
+  const lockRangedSkill = !!squad?.activeSkill?.lockMovement;
 
   if (squad.skillRush?.ttl > 0) {
     const remainDistance = Math.max(0, Number(squad.skillRush.remainDistance) || 0);
@@ -1422,7 +1777,6 @@ const leaderMoveStep = (squad, sim, crowd, dt, forwardVec, steeringWeights = DEF
     squad.skillRush.ttl = Math.max(0, squad.skillRush.ttl - dt);
   } else if (lockRangedSkill) {
     target = null;
-    squad.waypoints = [];
   } else if (Array.isArray(squad.waypoints) && squad.waypoints.length > 0) {
     target = squad.waypoints[0];
   }
@@ -1585,6 +1939,11 @@ const aggregateSquadFromAgents = (squad, agents = []) => {
     archer: { x: 0, y: 0, w: 0 },
     artillery: { x: 0, y: 0, w: 0 }
   };
+  const skillCategoryAcc = {
+    [SKILL_CATEGORY_MELEE]: { x: 0, y: 0, w: 0 },
+    [SKILL_CATEGORY_RANGED]: { x: 0, y: 0, w: 0 },
+    [SKILL_CATEGORY_SUPPORT]: { x: 0, y: 0, w: 0 }
+  };
   const anchorX = Number(squad.x) || 0;
   const anchorY = Number(squad.y) || 0;
   let maxDist = 0;
@@ -1612,6 +1971,13 @@ const aggregateSquadFromAgents = (squad, agents = []) => {
     classAcc[cls].x += ax * weight;
     classAcc[cls].y += ay * weight;
     classAcc[cls].w += weight;
+    const skillCategory = inferSkillCategoryFromUnitType(
+      { unitCategory: agent.unitCategory },
+      SKILL_CATEGORY_MELEE
+    );
+    skillCategoryAcc[skillCategory].x += ax * weight;
+    skillCategoryAcc[skillCategory].y += ay * weight;
+    skillCategoryAcc[skillCategory].w += weight;
   }
 
   if (alive.length <= 0) {
@@ -1626,6 +1992,16 @@ const aggregateSquadFromAgents = (squad, agents = []) => {
       cavalry: { x: anchorX, y: anchorY, count: 0 },
       archer: { x: anchorX, y: anchorY, count: 0 },
       artillery: { x: anchorX, y: anchorY, count: 0 }
+    };
+    squad.skillCenters = {
+      [SKILL_CATEGORY_MELEE]: { x: anchorX, y: anchorY, count: 0 },
+      [SKILL_CATEGORY_RANGED]: { x: anchorX, y: anchorY, count: 0 },
+      [SKILL_CATEGORY_SUPPORT]: { x: anchorX, y: anchorY, count: 0 }
+    };
+    squad.skillCategoryCounts = {
+      [SKILL_CATEGORY_MELEE]: 0,
+      [SKILL_CATEGORY_RANGED]: 0,
+      [SKILL_CATEGORY_SUPPORT]: 0
     };
     return;
   }
@@ -1668,6 +2044,17 @@ const aggregateSquadFromAgents = (squad, agents = []) => {
     ? { x: classAcc.artillery.x / classAcc.artillery.w, y: classAcc.artillery.y / classAcc.artillery.w, count: Math.round(classAcc.artillery.w) }
     : { x: squad.centerX, y: squad.centerY, count: 0 };
   squad.classCenters = classCenters;
+  const skillCenters = {};
+  const skillCategoryCounts = {};
+  Object.entries(skillCategoryAcc).forEach(([category, row]) => {
+    const count = Math.round(Math.max(0, Number(row.w) || 0));
+    skillCenters[category] = count > 0
+      ? { x: row.x / row.w, y: row.y / row.w, count }
+      : { x: squad.centerX, y: squad.centerY, count: 0 };
+    skillCategoryCounts[category] = count;
+  });
+  squad.skillCenters = skillCenters;
+  squad.skillCategoryCounts = skillCategoryCounts;
 };
 
 const trimOrGrowAgents = (squad, agents = [], crowd, dt) => {
@@ -1709,6 +2096,8 @@ const trimOrGrowAgents = (squad, agents = [], crowd, dt) => {
         team: squad.team,
         unitTypeId: source.unitTypeId,
         category: source.typeCategory,
+        unitCategory: source.unitCategory,
+        unitSubtype: source.unitSubtype,
         x: (source.x || 0) + ((Math.random() - 0.5) * 2.4),
         y: (source.y || 0) + ((Math.random() - 0.5) * 2.4),
         weight: splitWeight,
@@ -1872,7 +2261,8 @@ const ensureSkillCooldownMap = (squad) => {
     infantry: 0,
     cavalry: 0,
     archer: 0,
-    artillery: 0
+    artillery: 0,
+    support: 0
   };
   if (!squad.skillCooldowns || typeof squad.skillCooldowns !== 'object') {
     const seedCooldown = Math.max(0, Number(squad.attackCooldown) || 0);
@@ -1883,7 +2273,8 @@ const ensureSkillCooldownMap = (squad) => {
       infantry: seedKind === 'infantry' ? seedCooldown : 0,
       cavalry: seedKind === 'cavalry' ? seedCooldown : 0,
       archer: seedKind === 'archer' ? seedCooldown : 0,
-      artillery: seedKind === 'artillery' ? seedCooldown : 0
+      artillery: seedKind === 'artillery' ? seedCooldown : 0,
+      support: 0
     };
     return squad.skillCooldowns;
   }
@@ -1891,6 +2282,7 @@ const ensureSkillCooldownMap = (squad) => {
   if (!Number.isFinite(Number(squad.skillCooldowns.cavalry))) squad.skillCooldowns.cavalry = 0;
   if (!Number.isFinite(Number(squad.skillCooldowns.archer))) squad.skillCooldowns.archer = 0;
   if (!Number.isFinite(Number(squad.skillCooldowns.artillery))) squad.skillCooldowns.artillery = 0;
+  if (!Number.isFinite(Number(squad.skillCooldowns.support))) squad.skillCooldowns.support = 0;
   return squad.skillCooldowns;
 };
 
@@ -1901,15 +2293,444 @@ const updateAttackCooldownFromSkills = (squad) => {
     Number(cooldowns.infantry) || 0,
     Number(cooldowns.cavalry) || 0,
     Number(cooldowns.archer) || 0,
-    Number(cooldowns.artillery) || 0
+    Number(cooldowns.artillery) || 0,
+    Number(cooldowns.support) || 0
   );
   squad.attackCooldown = maxCooldown;
   return maxCooldown;
 };
 
+const getSkillCasterAgents = (crowd, squad, sourceCategory = SKILL_CATEGORY_MELEE) => (
+  getCrowdAgentsForSquad(crowd, squad?.id)
+    .filter((agent) => inferSkillCategoryFromUnitType(
+      { unitCategory: agent?.unitCategory },
+      SKILL_CATEGORY_MELEE
+    ) === sourceCategory)
+);
+
+const getCasterCenter = (casters = [], squad = null) => {
+  if (!Array.isArray(casters) || casters.length <= 0) {
+    return { x: Number(squad?.x) || 0, y: Number(squad?.y) || 0 };
+  }
+  const totalWeight = casters.reduce((sum, agent) => sum + Math.max(0.1, Number(agent?.weight) || 0.1), 0);
+  return casters.reduce((center, agent) => {
+    const weight = Math.max(0.1, Number(agent?.weight) || 0.1);
+    return {
+      x: center.x + ((Number(agent?.x) || 0) * weight / totalWeight),
+      y: center.y + ((Number(agent?.y) || 0) * weight / totalWeight)
+    };
+  }, { x: 0, y: 0 });
+};
+
+const resolveConfiguredSkillDirection = (squad, casters, targetInput = {}, profile = {}) => {
+  const source = getCasterCenter(casters, squad);
+  const inputDir = normalizeVec(Number(targetInput?.dirX) || 0, Number(targetInput?.dirY) || 0);
+  const targetX = Number(targetInput?.x);
+  const targetY = Number(targetInput?.y);
+  const toTarget = normalizeVec(
+    Number.isFinite(targetX) ? targetX - source.x : 0,
+    Number.isFinite(targetY) ? targetY - source.y : 0
+  );
+  const fallback = normalizeVec(Number(squad?.dirX) || 1, Number(squad?.dirY) || 0);
+  const direction = inputDir.len > 0.0001
+    ? inputDir
+    : (toTarget.len > 0.0001 ? toTarget : fallback);
+  const minRange = Math.max(0, Number(profile?.minRange) || 0);
+  const maxRange = Math.max(minRange || 1, Number(profile?.maxRange) || 180);
+  const requestedDistance = Number.isFinite(Number(targetInput?.distance))
+    ? Number(targetInput.distance)
+    : toTarget.len;
+  return {
+    source,
+    dirX: direction.x,
+    dirY: direction.y,
+    distance: clamp(Math.max(minRange, requestedDistance || minRange), minRange, maxRange),
+    maxRange
+  };
+};
+
+const resolveConfiguredTargetSquad = (sim, squad, targetInput = {}) => {
+  const targetSquadId = String(targetInput?.targetSquadId || '').trim();
+  const target = (sim?.squads || []).find((row) => row?.id === targetSquadId) || null;
+  if (!target || (Number(target?.remain) || 0) <= 0) return null;
+  if (target.team === squad?.team) return null;
+  return target;
+};
+
+const scheduleCasterActions = (casters = [], profile = {}, direction = {}, target = {}) => {
+  casters.forEach((agent) => beginAgentCast(agent, {
+    style: profile?.castStyle,
+    motion: profile?.motion,
+    durationSec: profile?.durationSec,
+    dashDistance: profile?.dashDistance,
+    dashSpeedMul: profile?.dashSpeedMul,
+    dirX: direction?.dirX,
+    dirY: direction?.dirY,
+    targetX: target?.x,
+    targetY: target?.y
+  }));
+};
+
+const getAllCrowdAgents = (crowd) => {
+  const current = Array.isArray(crowd?.allAgents) ? crowd.allAgents.filter(Boolean) : [];
+  if (current.length > 0) return current;
+  const agents = [];
+  crowd?.agentsBySquad?.forEach?.((rows) => {
+    if (Array.isArray(rows)) agents.push(...rows);
+  });
+  return agents;
+};
+
+const applyConfiguredMeleeWave = (sim, crowd, squad, activeSkill, waveIndex = 0) => {
+  const profile = activeSkill?.profile || {};
+  const casterIds = new Set(Array.isArray(activeSkill?.casterAgentIds) ? activeSkill.casterAgentIds : []);
+  const casters = getCrowdAgentsForSquad(crowd, squad?.id)
+    .filter((agent) => casterIds.size <= 0 || casterIds.has(agent.id));
+  if (casters.length <= 0) return 0;
+  const direction = {
+    x: Number(activeSkill?.dirX) || 1,
+    y: Number(activeSkill?.dirY) || 0
+  };
+  const source = activeSkill?.source || getCasterCenter(casters, squad);
+  const maxRange = Math.max(4, Number(profile?.maxRange) || 40);
+  const radius = Math.max(4, Number(profile?.aoeRadius) || 20);
+  const coneAngle = Math.max(8, Math.min(180, Number(profile?.coneAngleDeg) || 90));
+  const minDot = Math.cos((coneAngle * Math.PI / 180) * 0.5);
+  const shape = String(profile?.shape || 'cone');
+  const damageExponent = Math.max(0.2, Number(sim?.repConfig?.damageExponent) || DEFAULT_DAMAGE_EXPONENT);
+  const casterPower = casters.reduce((sum, agent) => (
+    sum + Math.pow(Math.max(1, Number(agent?.weight) || 1), damageExponent)
+  ), 0);
+  const damage = Math.max(
+    0.12,
+    (Number(squad?.stats?.atk) || 10)
+      * 0.036
+      * Math.max(0.1, Number(profile?.damageMul) || 1)
+      * Math.max(1, casterPower / Math.max(1, Math.sqrt(casters.length)))
+  );
+  const targets = getAllCrowdAgents(crowd)
+    .filter((agent) => agent && !agent.dead && agent.team !== squad?.team)
+    .sort((left, right) => {
+      const leftDist = Math.hypot((left.x || 0) - source.x, (left.y || 0) - source.y);
+      const rightDist = Math.hypot((right.x || 0) - source.x, (right.y || 0) - source.y);
+      return leftDist - rightDist;
+    });
+  const impactedSquads = new Set();
+  let hitCount = 0;
+  const hitLimit = Math.max(6, Math.min(48, casters.length * 4));
+  for (let index = 0; index < targets.length && hitCount < hitLimit; index += 1) {
+    const target = targets[index];
+    const dx = (Number(target.x) || 0) - source.x;
+    const dy = (Number(target.y) || 0) - source.y;
+    const dist = Math.hypot(dx, dy);
+    const inShape = shape === 'circle'
+      ? dist <= radius
+      : (dist <= maxRange && dist > 0.001 && (((dx / dist) * direction.x) + ((dy / dist) * direction.y)) >= minDot);
+    if (!inShape) continue;
+    const sourceAgent = casters[(hitCount + waveIndex) % casters.length];
+    applyDamageToAgent(sim, crowd, sourceAgent, target, damage, 'slash', { poiseDamageMul: 1.25 });
+    const knockback = Math.max(0, Number(profile?.knockback) || 0);
+    if (knockback > 0 && !target.dead) {
+      target.x = (Number(target.x) || 0) + (direction.x * knockback);
+      target.y = (Number(target.y) || 0) + (direction.y * knockback);
+    }
+    impactedSquads.add(target.squadId);
+    hitCount += 1;
+  }
+  if (profile?.statusEffect && impactedSquads.size > 0) {
+    impactedSquads.forEach((targetSquadId) => {
+      const targetSquad = (sim?.squads || []).find((row) => row?.id === targetSquadId);
+      if (!targetSquad) return;
+      applySquadStatusEffect(targetSquad, {
+        ...profile.statusEffect,
+        sourceSkillId: activeSkill.skillId
+      });
+    });
+  }
+  acquireHitEffect(crowd.effectsPool, {
+    type: 'slash',
+    x: source.x + (direction.x * Math.min(maxRange * 0.42, 24)),
+    y: source.y + (direction.y * Math.min(maxRange * 0.42, 24)),
+    z: 1.2,
+    radius: Math.max(4, shape === 'circle' ? radius : Math.min(radius, maxRange * 0.55)),
+    ttl: 0.24,
+    team: squad?.team
+  });
+  return hitCount;
+};
+
+const updateConfiguredMeleeSkill = (sim, crowd, squad, activeSkill, dt = 0) => {
+  activeSkill.ttlSec = Math.max(0, (Number(activeSkill?.ttlSec) || 0) - Math.max(0, Number(dt) || 0));
+  activeSkill.nextWaveSec = (Number(activeSkill?.nextWaveSec) || 0) - Math.max(0, Number(dt) || 0);
+  while (
+    activeSkill.wavesFired < activeSkill.wavesTotal
+    && activeSkill.nextWaveSec <= 0
+    && activeSkill.ttlSec > 0
+  ) {
+    applyConfiguredMeleeWave(sim, crowd, squad, activeSkill, activeSkill.wavesFired);
+    activeSkill.wavesFired += 1;
+    activeSkill.nextWaveSec += Math.max(0.06, Number(activeSkill.intervalSec) || 0.2);
+  }
+  squad.action = '兵种攻击';
+  if (activeSkill.ttlSec <= 0 || activeSkill.wavesFired >= activeSkill.wavesTotal) {
+    squad.activeSkill = null;
+    if (squad.actionState?.kind === 'skill') {
+      squad.actionState = { kind: 'none', from: 'none', to: 'none', ttl: 0, dur: 0 };
+    }
+  }
+};
+
+const triggerConfiguredCrowdSkill = (sim, crowd, squad, targetInput = {}) => {
+  const profile = targetInput?.castProfile && typeof targetInput.castProfile === 'object'
+    ? targetInput.castProfile
+    : null;
+  const sourceCategory = profile?.sourceCategory === SKILL_CATEGORY_RANGED
+    || profile?.sourceCategory === SKILL_CATEGORY_SUPPORT
+    ? profile.sourceCategory
+    : SKILL_CATEGORY_MELEE;
+  const casters = getSkillCasterAgents(crowd, squad, sourceCategory);
+  if (casters.length <= 0) return { ok: false, reason: '该技能树当前没有可施法的小兵' };
+  const direction = resolveConfiguredSkillDirection(squad, casters, targetInput, profile);
+  const targetMode = String(profile?.targetMode || 'self');
+  const targetSquad = targetMode === 'enemy'
+    ? resolveConfiguredTargetSquad(sim, squad, targetInput)
+    : null;
+  if (targetMode === 'enemy' && !targetSquad) return { ok: false, reason: '请选择一支存活的敌方部队' };
+  const target = targetSquad
+    ? { x: Number(targetSquad.x) || 0, y: Number(targetSquad.y) || 0 }
+    : {
+      x: Number.isFinite(Number(targetInput?.x)) ? Number(targetInput.x) : direction.source.x,
+      y: Number.isFinite(Number(targetInput?.y)) ? Number(targetInput.y) : direction.source.y
+    };
+  const effectiveMeleeTarget = sourceCategory === SKILL_CATEGORY_MELEE && targetMode === 'ground'
+    ? {
+        x: direction.source.x + (direction.dirX * direction.distance),
+        y: direction.source.y + (direction.dirY * direction.distance)
+      }
+    : target;
+  if (targetSquad && !profile?.globalTarget) {
+    const targetDistance = Math.hypot(target.x - direction.source.x, target.y - direction.source.y);
+    const maxRange = Math.max(8, Number(profile?.maxRange) || 180);
+    if (targetDistance > maxRange + Math.max(0, Number(targetSquad.radius) || 0)) {
+      return { ok: false, reason: '目标超出该兵种的施法范围' };
+    }
+  }
+  const skillId = String(targetInput?.skillId || 'configured_skill');
+  scheduleCasterActions(
+    casters,
+    profile,
+    direction,
+    sourceCategory === SKILL_CATEGORY_MELEE && targetMode === 'ground' ? effectiveMeleeTarget : target
+  );
+
+  if (sourceCategory === SKILL_CATEGORY_SUPPORT) {
+    const statusTarget = targetSquad || squad;
+    if (profile?.statusEffect) {
+      applySquadStatusEffect(statusTarget, {
+        ...profile.statusEffect,
+        sourceSkillId: skillId
+      });
+    }
+    acquireHitEffect(crowd.effectsPool, {
+      type: targetSquad ? 'debuff_aura' : 'buff_aura',
+      x: target.x,
+      y: target.y,
+      z: 1.4,
+      radius: Math.max(5, Number(targetSquad?.radius) || Number(squad?.radius) * 0.55 || 8),
+      ttl: Math.max(0.28, Number(profile?.durationSec) || 0.8),
+      team: squad?.team
+    });
+    acquireHitEffect(crowd.effectsPool, {
+      type: 'cast_pulse',
+      x: direction.source.x,
+      y: direction.source.y,
+      z: 1.5,
+      radius: Math.max(4, Number(squad?.radius) * 0.34),
+      ttl: 0.3,
+      team: squad?.team
+    });
+    squad.actionState = {
+      kind: 'skill',
+      from: 'none',
+      to: 'support',
+      ttl: Math.max(0.2, Number(profile?.durationSec) || 0.8),
+      dur: Math.max(0.2, Number(profile?.durationSec) || 0.8)
+    };
+    squad.action = '辅助施法';
+    return { ok: true, sourceCategory, targetSquadId: targetSquad?.id || '' };
+  }
+
+  if (sourceCategory === SKILL_CATEGORY_MELEE) {
+    const isGroundCharge = targetMode === 'ground';
+    const returnPoint = { x: Number(squad.x) || 0, y: Number(squad.y) || 0 };
+    const alertRect = isGroundCharge
+      ? resolveMeleeAlertRect(squad, effectiveMeleeTarget)
+      : null;
+    const activeSkill = {
+      id: `skill_${squad.id}_${Date.now()}`,
+      mode: 'melee',
+      skillId,
+      profile,
+      source: direction.source,
+      dirX: direction.dirX,
+      dirY: direction.dirY,
+      casterAgentIds: casters.map((agent) => agent.id),
+      wavesTotal: Math.max(1, Math.floor(Number(profile?.waves) || 1)),
+      wavesFired: 0,
+      intervalSec: Math.max(0.06, Number(profile?.intervalSec) || 0.2),
+      nextWaveSec: 0,
+      ttlSec: Math.max(0.2, Number(profile?.durationSec) || 0.8)
+    };
+    applyConfiguredMeleeWave(sim, crowd, squad, activeSkill, 0);
+    activeSkill.wavesFired = 1;
+    activeSkill.nextWaveSec = Math.max(0.06, Number(profile?.intervalSec) || 0.2);
+    squad.activeSkill = activeSkill;
+    if (isGroundCharge) {
+      const chargePoints = {};
+      const chargeSpreadRadius = clamp(
+        Math.max(3, Number(profile?.aoeRadius) || 14) * 0.34,
+        2.4,
+        10
+      );
+      casters.forEach((agent, index) => {
+        const angle = ((index / Math.max(1, casters.length)) * Math.PI * 2) + (Math.PI * 0.18);
+        const chargePoint = {
+          x: effectiveMeleeTarget.x + (Math.cos(angle) * chargeSpreadRadius),
+          y: effectiveMeleeTarget.y + (Math.sin(angle) * chargeSpreadRadius)
+        };
+        chargePoints[agent.id] = chargePoint;
+        agent.meleeChargeState = {
+          phase: 'charge',
+          chargePoint,
+          returnPoint: { x: Number(agent.x) || 0, y: Number(agent.y) || 0 },
+          attackStartedAt: 0
+        };
+      });
+      squad.meleeAttackOrder = {
+        active: true,
+        phase: 'charge',
+        targetPoint: { x: effectiveMeleeTarget.x, y: effectiveMeleeTarget.y },
+        returnPoint,
+        alertRect,
+        casterAgentIds: casters.map((agent) => agent.id),
+        chargePoints,
+        resumeBehavior: squad.behavior === 'auto' ? 'auto' : 'idle',
+        attackWindowSec: Math.max(1.4, Number(profile?.durationSec) * 2.4 || 2.2),
+        phaseStartedAt: Math.max(0, Number(sim?.timeElapsed) || 0),
+        holdUntil: 0
+      };
+      squad.behavior = 'skill';
+      squad.targetSquadId = '';
+      squad.waypoints = [];
+    } else {
+      squad.meleeAttackOrder = null;
+    }
+    squad.actionState = {
+      kind: 'skill',
+      from: 'none',
+      to: 'melee',
+      ttl: activeSkill.ttlSec,
+      dur: activeSkill.ttlSec
+    };
+    squad.action = '近战突击';
+    return { ok: true, sourceCategory };
+  }
+
+  const projectileClass = profile?.projectileClass === 'artillery' ? 'artillery' : 'archer';
+  const hasFixedRangedCaster = casters.some((agent) => (
+    agent?.typeCategory === 'artillery' || agent?.unitSubtype === 'defense'
+  ));
+  if (profile?.statusEffect?.type === 'buff') {
+    applySquadStatusEffect(squad, {
+      ...profile.statusEffect,
+      sourceSkillId: skillId
+    });
+  }
+  const activeSkill = {
+    id: `skill_${squad.id}_${Date.now()}`,
+    mode: 'ground',
+    skillId,
+    classTag: projectileClass,
+    sourceCategory,
+    casterAgentIds: casters.map((agent) => agent.id),
+    targetSpec: normalizeGroundSkillTargetSpec(sim, squad, projectileClass, {
+      ...targetInput,
+      originX: direction.source.x,
+      originY: direction.source.y,
+      x: target.x,
+      y: target.y,
+      radius: Math.max(8, Number(profile?.aoeRadius) || 24),
+      maxRange: Math.max(8, Number(profile?.maxRange) || skillRangeByClass(projectileClass))
+    }),
+    wavesTotal: Math.max(1, Math.floor(Number(profile?.waves) || 1)),
+    wavesFired: 0,
+    intervalSec: Math.max(0.05, Number(profile?.intervalSec) || 0.24),
+    nextWaveSec: 0,
+    ttlSec: Math.max(0.2, Number(profile?.durationSec) || 0.8),
+    lockMovement: !!profile?.requiresSetup && hasFixedRangedCaster,
+    profile,
+    config: {
+      ...(GROUND_SKILL_CONFIG[projectileClass] || GROUND_SKILL_CONFIG.archer),
+      radius: Math.max(8, Number(profile?.aoeRadius) || 24),
+      waves: Math.max(1, Math.floor(Number(profile?.waves) || 1)),
+      intervalSec: Math.max(0.05, Number(profile?.intervalSec) || 0.24),
+      durationSec: Math.max(0.2, Number(profile?.durationSec) || 0.8),
+      shotsPerWave: Math.max(1, Math.floor(Number(profile?.shotsPerWave) || 8)),
+      impactRadius: Math.max(0.8, Number(profile?.impactRadius) || 2.8),
+      blastRadius: Math.max(0, Number(profile?.blastRadius) || 0),
+      blastFalloff: Math.max(0, Number(profile?.blastFalloff) || 0),
+      damageMul: Math.max(0.1, Number(profile?.damageMul) || 1)
+    }
+  };
+  if (profile?.statusEffect?.type === 'debuff') {
+    const targetRadius = Math.max(8, Number(profile?.aoeRadius) || 24);
+    (sim?.squads || []).forEach((enemySquad) => {
+      if (!enemySquad || enemySquad.team === squad.team || (Number(enemySquad.remain) || 0) <= 0) return;
+      const dist = Math.hypot(
+        (Number(enemySquad.x) || 0) - activeSkill.targetSpec.x,
+        (Number(enemySquad.y) || 0) - activeSkill.targetSpec.y
+      );
+      if (dist <= targetRadius + Math.max(8, Number(enemySquad.radius) || 8)) {
+        applySquadStatusEffect(enemySquad, {
+          ...profile.statusEffect,
+          sourceSkillId: skillId
+        });
+      }
+    });
+  }
+  emitGroundSkillWave(sim, crowd, squad, activeSkill, 0);
+  activeSkill.wavesFired = 1;
+  activeSkill.nextWaveSec = activeSkill.intervalSec;
+  squad.activeSkill = activeSkill;
+  squad.actionState = {
+    kind: 'skill',
+    from: 'none',
+    to: 'ranged',
+    ttl: activeSkill.ttlSec,
+    dur: activeSkill.ttlSec
+  };
+  squad.action = activeSkill.lockMovement ? '架设火力' : '远程齐射';
+  return { ok: true, sourceCategory, target: activeSkill.targetSpec };
+};
+
 export const triggerCrowdSkill = (sim, crowd, squadId, targetInput) => {
   const squad = (sim?.squads || []).find((row) => row.id === squadId);
   if (!squad || squad.remain <= 0) return { ok: false, reason: '部队不可用' };
+  if (targetInput?.castProfile && typeof targetInput.castProfile === 'object') {
+    const configuredResult = triggerConfiguredCrowdSkill(sim, crowd, squad, targetInput);
+    if (configuredResult?.ok) {
+      const sourceCategory = configuredResult.sourceCategory || SKILL_CATEGORY_MELEE;
+      const cooldownMap = ensureSkillCooldownMap(squad);
+      const profileCooldown = Math.max(
+        0.5,
+        Number(targetInput?.castProfile?.cooldownSec)
+          || (sourceCategory === SKILL_CATEGORY_SUPPORT ? 8.2 : sourceCategory === SKILL_CATEGORY_RANGED ? 8.6 : 2.4)
+      );
+      cooldownMap[sourceCategory] = Math.max(Number(cooldownMap[sourceCategory]) || 0, profileCooldown);
+      updateAttackCooldownFromSkills(squad);
+    }
+    return configuredResult;
+  }
   const agents = getCrowdAgentsForSquad(crowd, squad.id);
   if (agents.length <= 0) return { ok: false, reason: '无可用士兵' };
   const inputKind = typeof targetInput?.kind === 'string' ? targetInput.kind.trim() : '';
@@ -2056,6 +2877,11 @@ export const updateCrowdSim = (crowd, sim, dt) => {
   squads.forEach((squad) => {
     if (!squad || squad.remain <= 0) return;
     const agents = crowd.agentsBySquad.get(squad.id) || [];
+    if (!squad.meleeAttackOrder) {
+      agents.forEach((agent) => {
+        if (agent?.meleeChargeState) agent.meleeChargeState = null;
+      });
+    }
     if (agents.length <= 0) {
       squad.remain = 0;
       squad.health = 0;
@@ -2110,6 +2936,7 @@ export const updateCrowdSim = (crowd, sim, dt) => {
       squad.effectBuff.ttl = Math.max(0, Number(squad.effectBuff.ttl) - safeDt);
       if (squad.effectBuff.ttl <= 0) squad.effectBuff = null;
     }
+    stepSquadStatusEffects(squad, safeDt);
     squad._buffFxCd = Math.max(0, Number(squad._buffFxCd) || 0);
     if (squad.effectBuff) {
       squad._buffFxCd = Math.max(0, squad._buffFxCd - safeDt);
@@ -2124,6 +2951,26 @@ export const updateCrowdSim = (crowd, sim, dt) => {
           team: squad.team
         });
         squad._buffFxCd = 0.24;
+      }
+    }
+    const activeStatusEffects = Array.isArray(squad.statusEffects)
+      ? squad.statusEffects.filter((effect) => (Number(effect?.ttl) || 0) > 0)
+      : [];
+    squad._statusFxCd = Math.max(0, Number(squad._statusFxCd) || 0);
+    if (activeStatusEffects.length > 0) {
+      squad._statusFxCd = Math.max(0, squad._statusFxCd - safeDt);
+      if (squad._statusFxCd <= 0) {
+        const isDebuffed = activeStatusEffects.some((effect) => effect?.type === 'debuff');
+        acquireHitEffect(crowd.effectsPool, {
+          type: isDebuffed ? 'debuff_aura' : 'buff_aura',
+          x: Number(squad.x) || 0,
+          y: Number(squad.y) || 0,
+          z: 1.1,
+          radius: Math.max(4, Number(squad.radius) * 0.58),
+          ttl: 0.28,
+          team: squad.team
+        });
+        squad._statusFxCd = 0.36;
       }
     }
     squad._rushDustCd = Math.max(0, Number(squad._rushDustCd) || 0);
@@ -2151,6 +2998,7 @@ export const updateCrowdSim = (crowd, sim, dt) => {
     skillCooldowns.cavalry = Math.max(0, (Number(skillCooldowns.cavalry) || 0) - safeDt);
     skillCooldowns.archer = Math.max(0, (Number(skillCooldowns.archer) || 0) - safeDt);
     skillCooldowns.artillery = Math.max(0, (Number(skillCooldowns.artillery) || 0) - safeDt);
+    skillCooldowns.support = Math.max(0, (Number(skillCooldowns.support) || 0) - safeDt);
     updateAttackCooldownFromSkills(squad);
     squad.underAttackTimer = Math.max(0, (Number(squad.underAttackTimer) || 0) - safeDt);
     updateSquadBehaviorPlan(squad, sim, Number(sim?.timeElapsed) || 0);
@@ -2224,6 +3072,19 @@ export const updateCrowdSim = (crowd, sim, dt) => {
 
     sorted.forEach((agent, index) => {
       if (!agent || agent.dead) return;
+      stepAgentCast(agent, safeDt);
+      if (squad.meleeAttackOrder && agent.meleeChargeState) {
+        const handled = stepMeleeChargeAgent(
+          agent,
+          squad,
+          squad.meleeAttackOrder,
+          sim,
+          walls,
+          safeDt,
+          nowSec
+        );
+        if (handled) return;
+      }
       if (agent.isFlagBearer) {
         const flagOffsetX = -formationForward.x * flagBack;
         const flagOffsetY = -formationForward.y * flagBack;
@@ -2241,12 +3102,20 @@ export const updateCrowdSim = (crowd, sim, dt) => {
         return;
       }
       const slot = resolveAgentFormationSlot(agent, index, baseCols, spacing, formationSpacing);
-      const desiredX = (Number(squad.x) || 0) + (formationSide.x * slot.side) + (formationForward.x * slot.front);
-      const desiredY = (Number(squad.y) || 0) + (formationSide.y * slot.side) + (formationForward.y * slot.front);
+      const castOffset = resolveAgentCastOffset(agent);
+      const desiredX = (Number(squad.x) || 0) + (formationSide.x * slot.side) + (formationForward.x * slot.front) + castOffset.x;
+      const desiredY = (Number(squad.y) || 0) + (formationSide.y * slot.side) + (formationForward.y * slot.front) + castOffset.y;
       const toDesired = normalizeVec(desiredX - (agent.x || 0), desiredY - (agent.y || 0));
       const fatigueMul = squad.fatigueTimer > 0 ? 0.72 : 1;
       const weightSlow = 1;
-      const speedMul = (squad.effectBuff?.speedMul ? Number(squad.effectBuff.speedMul) : 1) * ((squad.skillRush?.ttl || 0) > 0 ? 1.45 : 1);
+      const statusMultipliers = resolveSquadStatusMultipliers(squad);
+      const castSpeedMul = Number(agent?.castState?.dashSpeedMul) > 0
+        ? Number(agent.castState.dashSpeedMul)
+        : 1;
+      const speedMul = (squad.effectBuff?.speedMul ? Number(squad.effectBuff.speedMul) : 1)
+        * statusMultipliers.speedMul
+        * ((squad.skillRush?.ttl || 0) > 0 ? 1.45 : 1)
+        * castSpeedMul;
       const modeSpeedMul = resolveAgentModeSpeedMul(agent, squad, crowd);
       const speed = Math.max(6, (Number(squad._groupSpeedScalar) || Number(squad.stats?.speed) || 1) * 20 * fatigueMul * weightSlow * speedMul * modeSpeedMul);
       const engagementCfg = crowd?.engagement?.config || {};
@@ -2265,7 +3134,7 @@ export const updateCrowdSim = (crowd, sim, dt) => {
         && other.squadId !== agent.squadId
         && Math.hypot((agent.x || 0) - (other.x || 0), (agent.y || 0) - (other.y || 0)) < separationDistance
       ));
-      if (!hasAnchor && !slotBlocked && !hasForeignNeighbor) {
+      if (!castOffset.active && !hasAnchor && !slotBlocked && !hasForeignNeighbor) {
         const previousX = Number(agent.x) || 0;
         const previousY = Number(agent.y) || 0;
         const formationStep = advanceAgentFormationPosition(
@@ -2288,7 +3157,8 @@ export const updateCrowdSim = (crowd, sim, dt) => {
       agent._formationLocked = false;
       agent._formationHold = false;
       agent._formationHoldSpacing = '';
-      const stationaryHold = !leaderMoving
+      const stationaryHold = !castOffset.active
+        && !leaderMoving
         && (squad.behavior === 'idle' || squad.behavior === 'move' || squad.behavior === 'standby');
       const leaderSettling = !leaderMoving || (Math.hypot(Number(squad.vx) || 0, Number(squad.vy) || 0) <= AGENT_SETTLE_SPEED);
       const shouldKeepFormationHold = agent._formationHold
@@ -2428,6 +3298,8 @@ export const updateCrowdSim = (crowd, sim, dt) => {
         agent.state = agent.attackCd > 0 ? 'attack' : 'idle';
       }
     });
+
+    refreshMeleeAttackOrder(squad, sorted, nowSec);
 
     if (squad.skillRush) {
       applyCavalryRushImpact(sim, crowd, squad, sorted, rushFromPoint, {

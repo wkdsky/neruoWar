@@ -17,6 +17,7 @@ export default class BattleSnapshotPool {
     this.snapshot = {
       schemaVersion: schema.version,
       units: createChannel(schema.units.stride),
+      skillStates: createChannel(schema.skillStates.stride),
       buildings: createChannel(schema.buildings.stride),
       projectiles: createChannel(schema.projectiles.stride),
       effects: createChannel(schema.effects.stride)

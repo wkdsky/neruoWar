@@ -43,6 +43,20 @@ describe('CameraController focus transition', () => {
     expect(camera.centerY).toBe(centerY);
   });
 
+  test('starts explicit following without making selection itself a follow request', () => {
+    const camera = new CameraController({ distance: 560 });
+    const anchor = { x: 220, y: 80, vx: 0, vy: 0, squadId: 'target-squad' };
+
+    expect(camera.isFollowing()).toBe(false);
+    expect(camera.startFollowing(anchor)).toBe(true);
+    expect(camera.isFollowing()).toBe(true);
+    expect(camera.followSquadId).toBe('target-squad');
+
+    camera.clearFollow();
+    expect(camera.isFollowing()).toBe(false);
+    expect(camera.followSquadId).toBe('');
+  });
+
   test('publishes the current pitch for pitch-aware render presentation', () => {
     const camera = new CameraController({ pitchLow: 40, pitchHigh: 90 });
     camera.setPitchImmediate(75);
@@ -92,5 +106,17 @@ describe('CameraController focus transition', () => {
 
     expect(Math.abs(bottomRight.x - topLeft.x)).toBeGreaterThanOrEqual(2700);
     expect(Math.abs(bottomRight.y - topLeft.y)).toBeGreaterThanOrEqual(1488);
+  });
+
+  test('publishes the world-yaw-adjusted render pose for screen-space picking', () => {
+    const camera = new CameraController({ yawDeg: 0, pitchLow: 40, pitchHigh: 90, distance: 560 });
+    camera.setPitchImmediate(40);
+    camera.worldYawDeg = 90;
+    const state = camera.buildMatrices(1000, 500);
+
+    expect(state.renderEye[0]).not.toBeCloseTo(state.eye[0], 6);
+    expect(state.renderEye[1]).not.toBeCloseTo(state.eye[1], 6);
+    expect(state.renderForward[0]).toBeGreaterThan(0.7);
+    expect(state.renderUp[2]).toBeGreaterThan(0.5);
   });
 });

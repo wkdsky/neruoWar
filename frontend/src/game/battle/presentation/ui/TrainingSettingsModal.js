@@ -2,9 +2,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import {
   Check,
   Grid,
-  Minus,
   Monitor,
-  Plus,
   Settings2,
   Swords,
   X
@@ -27,50 +25,41 @@ const TrainingSettingsModal = ({
   state = null,
   settings = null,
   onClose,
-  onAdjustPoints,
+  onChangeAutoSkillPointGain,
   onChangeInterval,
   onApply
 }) => {
   const [activeTab, setActiveTab] = useState('battle');
-  const [customDelta, setCustomDelta] = useState('1');
-  const [pointDelta, setPointDelta] = useState(0);
+  const [draftAutoSkillPointGain, setDraftAutoSkillPointGain] = useState(false);
   const [draftInterval, setDraftInterval] = useState(60);
   const [draftFontSize, setDraftFontSize] = useState('medium');
   const [draftShowGrid, setDraftShowGrid] = useState(true);
   const wasOpenRef = useRef(false);
 
-  const points = Math.max(0, Number(state?.points) || 0);
   const intervals = Array.isArray(state?.pointIntervals) && state.pointIntervals.length > 0
     ? state.pointIntervals
     : [10, 30, 60, 120, 300];
   const currentInterval = Math.max(1, Number(state?.pointIntervalSec) || intervals[0] || 60);
-  const shownPoints = Math.max(0, Math.min(9999, points + pointDelta));
+  const currentAutoSkillPointGain = state?.autoSkillPointGainEnabled === true;
 
   useEffect(() => {
     if (open && !wasOpenRef.current) {
       setActiveTab('battle');
-      setCustomDelta('1');
-      setPointDelta(0);
+      setDraftAutoSkillPointGain(currentAutoSkillPointGain);
       setDraftInterval(currentInterval);
       setDraftFontSize(normalizeFontSize(settings?.fontSize));
       setDraftShowGrid(settings?.showGrid !== false);
     }
     wasOpenRef.current = open;
-  }, [currentInterval, open, settings?.fontSize, settings?.showGrid]);
+  }, [currentAutoSkillPointGain, currentInterval, open, settings?.fontSize, settings?.showGrid]);
 
   if (!open) return null;
 
-  const adjustDraftPoints = (direction) => {
-    const step = Math.max(1, Number(customDelta) || 1);
-    setPointDelta((previous) => Math.max(
-      -points,
-      Math.min(9999 - points, previous + (direction * step))
-    ));
-  };
-
   const handleApply = () => {
-    if (pointDelta !== 0) onAdjustPoints?.(pointDelta);
-    if (draftInterval !== currentInterval) onChangeInterval?.(draftInterval);
+    if (draftAutoSkillPointGain !== currentAutoSkillPointGain) {
+      onChangeAutoSkillPointGain?.(draftAutoSkillPointGain);
+    }
+    if (draftAutoSkillPointGain && draftInterval !== currentInterval) onChangeInterval?.(draftInterval);
     onApply?.({
       fontSize: normalizeFontSize(draftFontSize),
       showGrid: draftShowGrid !== false
@@ -129,43 +118,45 @@ const TrainingSettingsModal = ({
         <div className="pve2-training-settings-body">
           {activeTab === 'battle' ? (
             <>
-              <section className="pve2-training-settings-section pve2-training-settings-points">
-                <div>
-                  <span className="pve2-training-settings-label">技能点</span>
-                  <strong>{shownPoints}</strong>
-                </div>
-                <div className="pve2-training-settings-stepper">
-                  <button type="button" onClick={() => adjustDraftPoints(-1)} title="减少技能点" aria-label="减少技能点"><Minus size={15} /></button>
-                  <input
-                    value={customDelta}
-                    inputMode="numeric"
-                    aria-label="技能点调整数值"
-                    onChange={(event) => setCustomDelta(event.target.value.replace(/[^0-9]/g, '').slice(0, 4))}
-                  />
-                  <button type="button" onClick={() => adjustDraftPoints(1)} title="增加技能点" aria-label="增加技能点"><Plus size={15} /></button>
-                </div>
-              </section>
-
               <section className="pve2-training-settings-section pve2-training-settings-rate">
                 <div className="pve2-training-settings-rate-head">
-                  <span className="pve2-training-settings-label">技能点获取速度</span>
-                  <strong>{formatInterval(draftInterval)}</strong>
+                  <div>
+                    <span className="pve2-training-settings-label">自动获得技能点</span>
+                    <small>开启后，每支可操作部队独立获得技能点</small>
+                  </div>
+                  <button
+                    type="button"
+                    role="switch"
+                    aria-checked={draftAutoSkillPointGain}
+                    aria-label="自动获得技能点"
+                    className={`pve2-training-settings-ios-switch ${draftAutoSkillPointGain ? 'is-on' : ''}`}
+                    onClick={() => setDraftAutoSkillPointGain((enabled) => !enabled)}
+                  >
+                    <i aria-hidden="true" />
+                  </button>
                 </div>
-                <div className="pve2-training-settings-rate-options" role="radiogroup" aria-label="技能点获取速度">
-                  {intervals.map((interval) => (
-                    <button
-                      key={interval}
-                      type="button"
-                      role="radio"
-                      aria-checked={draftInterval === Number(interval)}
-                      className={draftInterval === Number(interval) ? 'is-active' : ''}
-                      onClick={() => setDraftInterval(Number(interval))}
-                    >
-                      {formatInterval(interval)}
-                    </button>
-                  ))}
-                </div>
-                <span className="pve2-training-settings-next">下一点：{Math.ceil(Math.max(0, Number(state?.nextPointInSec) || 0))} 秒</span>
+                {draftAutoSkillPointGain ? (
+                  <>
+                    <div className="pve2-training-settings-rate-head is-interval">
+                      <span className="pve2-training-settings-label">获取速度</span>
+                      <strong>{formatInterval(draftInterval)}</strong>
+                    </div>
+                    <div className="pve2-training-settings-rate-options" role="radiogroup" aria-label="技能点获取速度">
+                      {intervals.map((interval) => (
+                        <button
+                          key={interval}
+                          type="button"
+                          role="radio"
+                          aria-checked={draftInterval === Number(interval)}
+                          className={draftInterval === Number(interval) ? 'is-active' : ''}
+                          onClick={() => setDraftInterval(Number(interval))}
+                        >
+                          {formatInterval(interval)}
+                        </button>
+                      ))}
+                    </div>
+                  </>
+                ) : null}
               </section>
             </>
           ) : null}

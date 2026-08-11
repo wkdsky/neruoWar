@@ -1,5 +1,6 @@
 import BattleRuntime from './BattleRuntime';
 import CameraController from '../render/CameraController';
+import { resolveTrainingAgentSelectionRadius } from '../../shared/trainingUnitSelection';
 
 const buildInit = () => ({
   mode: 'training',
@@ -128,7 +129,8 @@ describe('BattleRuntime training control', () => {
       units: { ranged_a: 10, support_a: 10 }
     });
 
-    expect(runtime.getTrainingState().points).toBe(0);
+    expect(runtime.getTrainingState().autoSkillPointGainEnabled).toBe(false);
+    expect(runtime.getTrainingSquadSkillPointState(defaultGroup.groupId).points).toBe(0);
     expect(runtime.getDeployGroupSkillSlots(defaultGroup.groupId).map((slot) => slot.treeCategory)).toEqual([
       'ranged', 'ranged', 'support'
     ]);
@@ -473,7 +475,7 @@ describe('BattleRuntime training control', () => {
     expect(largestSlotError).toBeLessThan(1e-5);
   });
 
-  test('picks the full rotated deployment footprint and rejects invalid camera points', () => {
+  test('picks training deployment groups only from visible soldier-ring ranges', () => {
     const runtime = new BattleRuntime(buildInit());
     const result = runtime.createDeployGroup('attacker', {
       units: { infantry_basic: 20 },
@@ -485,8 +487,15 @@ describe('BattleRuntime training control', () => {
     expect(result.ok).toBe(true);
     const group = runtime.getDeployGroupById(result.groupId, 'attacker');
     group.formationRect = { width: 120, depth: 20, facingRad: Math.PI / 2 };
+    group.deploySlots = [
+      { side: 0, front: -20 },
+      { side: 0, front: 20 }
+    ];
+    const selectionRadius = resolveTrainingAgentSelectionRadius({ weight: 10 });
 
-    expect(runtime.pickDeployGroup({ x: group.x, y: group.y + 45 }, 'attacker')).toBe(group);
+    expect(runtime.pickDeployGroup({ x: group.x, y: group.y + 20 + (selectionRadius * 0.9) }, 'attacker')).toBe(group);
+    expect(runtime.pickDeployGroup({ x: group.x, y: group.y }, 'attacker')).toBeNull();
+    expect(runtime.pickDeployGroup({ x: group.x, y: group.y + 20 + (selectionRadius * 1.1) }, 'attacker')).toBeNull();
     expect(runtime.pickDeployGroup({ x: group.x, y: group.y, valid: false }, 'attacker')).toBeNull();
   });
 
@@ -771,7 +780,7 @@ describe('BattleRuntime training control', () => {
 
     expect(runtime.resetTraining().ok).toBe(true);
     expect(runtime.getPhase()).toBe('deploy');
-    expect(runtime.getTrainingState().points).toBe(0);
+    expect(runtime.getTrainingSquadSkillPointState(created.groupId).points).toBe(0);
     const restored = runtime.getDeployGroupById(created.groupId, 'attacker');
     expect(restored.x).toBe(-420);
     expect(restored.y).toBe(64);
@@ -966,8 +975,12 @@ describe('BattleRuntime training control', () => {
 
     runtime.step(1);
     expect(runtime.getSkillMetaForSquad(squadId).skills[0].cooldownRemain).toBeLessThan(cooldownAfterCast);
-    expect(runtime.adjustTrainingSkillPoints(1).ok).toBe(true);
+    expect(runtime.adjustTrainingSquadSkillPoints(squadId, 1).ok).toBe(true);
     expect(runtime.unlockTrainingSkill(squadId, 'melee', 'melee_rapid_slash').ok).toBe(true);
+    expect(runtime.getTrainingSkillTreeProgress(squadId, 'melee').levels.melee_rapid_slash).toBe(1);
+    expect(runtime.adjustTrainingSquadSkillPoints(squadId, 2).ok).toBe(true);
+    expect(runtime.upgradeTrainingSkill(squadId, 'melee', 'melee_rapid_slash').ok).toBe(true);
+    expect(runtime.getTrainingSkillTreeProgress(squadId, 'melee').levels.melee_rapid_slash).toBe(2);
     expect(runtime.equipTrainingSkill(squadId, 0, 'melee_rapid_slash').ok).toBe(true);
   });
 
@@ -988,21 +1001,65 @@ describe('BattleRuntime training control', () => {
     ]);
   });
 
-  test('awards skill points by the selected training interval', () => {
+  test('awards skill points to each controllable troop only after auto gain is enabled', () => {
+    const runtime = new BattleRuntime(buildInit());
+    const first = runtime.createDeployGroup('attacker', {
+      units: { infantry_basic: 20 },
+      x: -440,
+      y: 0,
+      placed: true,
+      controlMode: 'USER'
+    });
+    const second = runtime.createDeployGroup('attacker', {
+      units: { infantry_basic: 20 },
+      x: -360,
+      y: 0,
+      placed: true,
+      controlMode: 'AI'
+    });
+    expect(first.ok).toBe(true);
+    expect(second.ok).toBe(true);
+    expect(runtime.startBattle().ok).toBe(true);
+    expect(runtime.setTrainingSkillPointInterval(10).ok).toBe(true);
+
+    for (let index = 0; index < 200; index += 1) runtime.step(0.05);
+
+    expect(runtime.getTrainingSquadSkillPointState('attacker_squad_1').points).toBe(0);
+    expect(runtime.setTrainingAutoSkillPointGainEnabled(true).ok).toBe(true);
+    for (let index = 0; index < 200; index += 1) runtime.step(0.05);
+
+    expect(runtime.getTrainingSquadSkillPointState('attacker_squad_1').points).toBe(1);
+    expect(runtime.getTrainingSquadSkillPointState('attacker_squad_2').points).toBe(0);
+    expect(runtime.getTrainingState().autoSkillPointGainEnabled).toBe(true);
+    expect(runtime.getTrainingState().pointIntervalSec).toBe(10);
+  });
+
+  test('picks training hover from a living soldier instead of a squad center radius', () => {
     const runtime = new BattleRuntime(buildInit());
     expect(runtime.createDeployGroup('attacker', {
-      units: { infantry_basic: 20 },
+      units: { infantry_basic: 1 },
       x: -440,
       y: 0,
       placed: true,
       controlMode: 'USER'
     }).ok).toBe(true);
     expect(runtime.startBattle().ok).toBe(true);
-    expect(runtime.setTrainingSkillPointInterval(10).ok).toBe(true);
 
-    for (let index = 0; index < 200; index += 1) runtime.step(0.05);
+    const squad = runtime.getSquadById('attacker_squad_1');
+    const [agent] = runtime.crowd.agentsBySquad.get(squad.id);
+    const selectionRadius = resolveTrainingAgentSelectionRadius(agent);
 
-    expect(runtime.getTrainingState().points).toBe(1);
-    expect(runtime.getTrainingState().pointIntervalSec).toBe(10);
+    expect(runtime.pickSquadAtAgentPoint(agent.x, agent.y, { team: 'any' })).toBe(squad.id);
+    expect(runtime.pickSquadAtAgentPoint(
+      agent.x + (selectionRadius * 0.95),
+      agent.y,
+      { team: 'any' }
+    )).toBe(squad.id);
+    expect(runtime.pickSquadAtAgentPoint(
+      agent.x + (selectionRadius * 1.05),
+      agent.y,
+      { team: 'any' }
+    )).toBe('');
+    expect(runtime.pickSquadAtAgentPoint(agent.x + 16, agent.y, { team: 'any' })).toBe('');
   });
 });

@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { ArrowUpDown, Ban, Bot, Pencil, Plus, Trash2, User, UserPlus } from 'lucide-react';
+import { ArrowUpDown, Ban, Bot, Check, Pencil, Plus, Trash2, User, UserPlus, X } from 'lucide-react';
 import DeployActionButtons from './DeployActionButtons';
 import BattleActionButtons from './BattleActionButtons';
 import TrainingSkillSlots from './TrainingSkillSlots';
@@ -31,6 +31,10 @@ const cardSizeClassByCount = (count = 0) => {
   if (safeCount > 8) return 'is-medium';
   return 'is-large';
 };
+
+const cardLayoutClassByCount = (count = 0) => (
+  Math.max(0, Math.floor(Number(count) || 0)) > 8 ? 'is-two-column' : ''
+);
 
 const FORMATION_SPACING_OPTIONS = [
   { value: 'loose', label: '松散' },
@@ -69,12 +73,16 @@ const SquadCards = ({
   deployActionTeam = 'attacker',
   onFocus,
   onSelect,
+  onFollow,
   onBattleAction = null,
   onDeployInfo,
   onDeployMove,
   onDeployEdit,
   onDeployFormation,
   onDeployDelete,
+  confirmDeleteGroupId = '',
+  onConfirmDelete,
+  onCancelDelete,
   onControlModeToggle,
   onBattleControlModeToggle,
   onReorder,
@@ -86,7 +94,6 @@ const SquadCards = ({
   onFormationReorder,
   trainingSkillTreeOpen = false,
   trainingSkillTreeSlotIndex = -1,
-  trainingState = null,
   trainingSkillTreeProgress = {},
   armyTemplates = [],
   armyTemplatesLoading = false,
@@ -291,6 +298,11 @@ const SquadCards = ({
           if (typeof onFocus === 'function') onFocus(row.id);
           if (typeof onSelect === 'function') onSelect(row.id);
         }}
+        onDoubleClick={(event) => {
+          event.stopPropagation();
+          if (disabled || phase !== 'battle') return;
+          onFollow?.(row.id, event);
+        }}
       >
         <div className="pve2-card-head">
           <strong title={row.name}>{row.name}</strong>
@@ -317,6 +329,36 @@ const SquadCards = ({
         )}
       </button>
       {renderTrainingControls(row)}
+      {row.id === confirmDeleteGroupId && !disabled ? (
+        <div
+          className="pve2-card-confirm-overlay"
+          role="dialog"
+          aria-label={`确认删除部队「${row.name || '未命名部队'}」`}
+          onPointerDown={(event) => event.stopPropagation()}
+          onMouseDown={(event) => event.stopPropagation()}
+          onClick={(event) => event.stopPropagation()}
+        >
+          <button
+            type="button"
+            className="pve2-card-confirm-button is-confirm"
+            title="确认删除部队"
+            aria-label="确认删除部队"
+            autoFocus
+            onClick={() => onConfirmDelete?.(row.id)}
+          >
+            <Check size={16} aria-hidden="true" />
+          </button>
+          <button
+            type="button"
+            className="pve2-card-confirm-button is-cancel"
+            title="取消删除部队"
+            aria-label="取消删除部队"
+            onClick={() => onCancelDelete?.(row.id)}
+          >
+            <X size={16} aria-hidden="true" />
+          </button>
+        </div>
+      ) : null}
     </div>
   );
 
@@ -341,7 +383,7 @@ const SquadCards = ({
             skills={isBattle ? selectedRow.skills : []}
             phase={phase}
             isTrainingMode={isTrainingMode}
-            trainingState={trainingState}
+            availableSkillPoints={selectedRow.trainingSkillPoints}
             skillTreeProgress={trainingSkillTreeProgress}
             treeOpenSlotIndex={trainingSkillTreeOpen ? trainingSkillTreeSlotIndex : -1}
             onOpenTree={(slotIndex, treeCategory, event) => onOpenSkillTree?.(selectedRow.id, slotIndex, treeCategory, event)}
@@ -440,13 +482,13 @@ const SquadCards = ({
         </section>
       ) : null}
       <div
-        className={`pve2-card-strip left ${cardSizeClassByCount(attacker.length)} ${disabled ? 'is-disabled' : ''}`}
+        className={`pve2-card-strip left ${cardSizeClassByCount(attacker.length)} ${cardLayoutClassByCount(attacker.length)} ${disabled ? 'is-disabled' : ''}`}
         onWheelCapture={(event) => event.stopPropagation()}
       >
         {attacker.map(renderCard)}
       </div>
       <div
-        className={`pve2-card-strip right ${cardSizeClassByCount(defender.length)} ${disabled ? 'is-disabled' : ''}`}
+        className={`pve2-card-strip right ${cardSizeClassByCount(defender.length)} ${cardLayoutClassByCount(defender.length)} ${disabled ? 'is-disabled' : ''}`}
         onWheelCapture={(event) => event.stopPropagation()}
       >
         {defender.map(renderCard)}

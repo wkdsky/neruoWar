@@ -13,12 +13,13 @@
  */
 
 export const UNIT_INSTANCE_STRIDE = 20;
+export const UNIT_SKILL_STATE_STRIDE = 4;
 export const BUILDING_INSTANCE_STRIDE = 16;
 export const PROJECTILE_INSTANCE_STRIDE = 8;
 export const EFFECT_INSTANCE_STRIDE = 8;
 
 const BattleSnapshotSchema = {
-  version: 'battle-snapshot-v1',
+  version: 'battle-snapshot-v2',
   coordinates: {
     world: 'X right+, Y up+, Z up+',
     localAxes: 'width -> local X, depth -> local Y, height -> local Z',
@@ -36,6 +37,11 @@ const BattleSnapshotSchema = {
       'bodyTopIndex', 'gearTopIndex', 'vehicleTopIndex', 'silhouetteTopIndex'
     ],
     notes: 'Compatible with ImpostorRenderer attribute layout locations 2..6'
+  },
+  skillStates: {
+    stride: UNIT_SKILL_STATE_STRIDE,
+    typedArray: 'Float32Array',
+    fields: ['skillCategoryIndex', 'skillSubtypeIndex', 'skillActionIndex', 'skillProgress']
   },
   buildings: {
     stride: BUILDING_INSTANCE_STRIDE,

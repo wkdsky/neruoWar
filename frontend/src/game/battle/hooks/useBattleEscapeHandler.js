@@ -7,7 +7,6 @@ import {
   BATTLE_UI_MODE_SKILL_CONFIRM,
   BATTLE_UI_MODE_SKILL_PICK,
   createDefaultAimState,
-  createDefaultConfirmDeletePos,
   createDefaultDeployDraggingGroup,
   createDefaultDeployInfoState
 } from '../screens/battleSceneConstants';
@@ -25,7 +24,6 @@ export default function useBattleEscapeHandler({
   worldActionsVisibleForSquadId = '',
   aimStateActive = false,
   setConfirmDeleteGroupId,
-  setConfirmDeletePos,
   setDeployInfoState,
   handleCloseQuickDeploy,
   handleCloseTemplateFillPreview,
@@ -45,7 +43,6 @@ export default function useBattleEscapeHandler({
   const handleEscape = useCallback(() => {
     if (confirmDeleteGroupId) {
       setConfirmDeleteGroupId('');
-      setConfirmDeletePos(createDefaultConfirmDeletePos());
       return;
     }
     if (deployInfoOpen) {
@@ -123,7 +120,6 @@ export default function useBattleEscapeHandler({
     setBattleUiMode,
     setClockPaused,
     setConfirmDeleteGroupId,
-    setConfirmDeletePos,
     setDeployNotice,
     setDeployDraggingGroup,
     setDeployInfoState,

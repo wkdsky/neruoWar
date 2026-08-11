@@ -14,6 +14,12 @@ const createSkill = (config) => Object.freeze({
   unlockCost: Number.isFinite(Number(config.unlockCost))
     ? Math.max(0, Math.floor(Number(config.unlockCost)))
     : Math.max(0, Math.floor(Number(config.tier) || 0)),
+  maxLevel: Number.isFinite(Number(config.maxLevel))
+    ? Math.max(1, Math.min(5, Math.floor(Number(config.maxLevel))))
+    : (config.kind === 'passive' ? 1 : 3),
+  upgradeCosts: Array.isArray(config.upgradeCosts)
+    ? config.upgradeCosts.map((cost) => Math.max(0, Math.floor(Number(cost) || 0)))
+    : [],
   range: config.range || '—',
   duration: config.duration || '—',
   description: config.description,
@@ -563,6 +569,33 @@ export const getSkillUnlockCost = (skill = null) => (
   Math.max(0, Math.floor(Number(skill?.unlockCost) || (Number(skill?.tier) > 0 ? 1 : 0)))
 );
 
+export const getSkillMaxLevel = (skill = null) => (
+  Math.max(1, Math.min(5, Math.floor(Number(skill?.maxLevel) || 3)))
+);
+
+export const getSkillLevel = (progress = null, skill = null) => {
+  const skillId = typeof skill === 'string' ? skill : String(skill?.id || '');
+  if (!skillId) return 0;
+  const rawLevel = Number(progress?.levels?.[skillId]);
+  const unlocked = Array.isArray(progress?.unlocked) && progress.unlocked.includes(skillId);
+  const normalized = Number.isFinite(rawLevel) ? Math.floor(rawLevel) : (unlocked ? 1 : 0);
+  return Math.max(0, Math.min(getSkillMaxLevel(skill), normalized));
+};
+
+export const getSkillUpgradeCost = (skill = null, currentLevel = 0) => {
+  const level = Math.max(0, Math.min(getSkillMaxLevel(skill), Math.floor(Number(currentLevel) || 0)));
+  if (level >= getSkillMaxLevel(skill)) return 0;
+  const configuredCost = Number(skill?.upgradeCosts?.[level]);
+  if (Number.isFinite(configuredCost)) return Math.max(0, Math.floor(configuredCost));
+  if (level <= 0) return getSkillUnlockCost(skill);
+  return Math.max(1, getSkillUnlockCost(skill) + level);
+};
+
+export const getSkillPointCostSchedule = (skill = null) => Array.from(
+  { length: getSkillMaxLevel(skill) },
+  (_, index) => ({ level: index + 1, cost: getSkillUpgradeCost(skill, index) })
+);
+
 export const getSkillTreeRemainingUnlockCost = (treeCategory = '', progress = null) => {
   const tree = getSkillTreeById(treeCategory);
   if (!tree) return 0;
@@ -632,8 +665,23 @@ export const normalizeSkillTreeProgress = (progress = {}) => {
       ? source[tree.id].unlocked
       : (Array.isArray(source?.[tree.id]) ? source[tree.id] : []);
     const unlocked = new Set(rawUnlocked.map((id) => String(id || '').trim()).filter((id) => known.has(id)));
+    const rawLevels = source?.[tree.id]?.levels && typeof source[tree.id].levels === 'object'
+      ? source[tree.id].levels
+      : {};
     const root = getSkillTreeRoot(tree.id);
     if (root) unlocked.add(root.id);
-    return [tree.id, { unlocked: Array.from(unlocked) }];
+    const levels = {};
+    tree.skills.forEach((skill) => {
+      const rawLevel = Number(rawLevels?.[skill.id]);
+      const fallbackLevel = unlocked.has(skill.id) ? 1 : 0;
+      const level = Math.max(
+        skill.id === root?.id ? 1 : 0,
+        Math.min(getSkillMaxLevel(skill), Number.isFinite(rawLevel) ? Math.floor(rawLevel) : fallbackLevel)
+      );
+      if (level <= 0) return;
+      unlocked.add(skill.id);
+      levels[skill.id] = level;
+    });
+    return [tree.id, { unlocked: Array.from(unlocked), levels }];
   }));
 };

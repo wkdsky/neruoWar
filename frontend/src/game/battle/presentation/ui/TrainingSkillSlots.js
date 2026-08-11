@@ -7,6 +7,8 @@ import {
 } from 'lucide-react';
 import {
   getAllowedSkillTreeCategories,
+  getSkillLevel,
+  getSkillMaxLevel,
   getSkillTreeById,
   getSkillTreeRemainingUnlockCost,
   normalizeSkillSlots,
@@ -32,7 +34,7 @@ const TrainingSkillSlots = ({
   skills = [],
   phase = 'deploy',
   isTrainingMode = true,
-  trainingState = null,
+  availableSkillPoints = 0,
   skillTreeProgress = {},
   onOpenTree,
   onCastSlot,
@@ -61,7 +63,7 @@ const TrainingSkillSlots = ({
     || effectiveSlots[0]
     || normalizedSlots[0]
     || { slotIndex: 0, treeCategory: '' };
-  const unspentSkillPoints = Math.max(0, Math.floor(Number(trainingState?.points) || 0));
+  const unspentSkillPoints = Math.max(0, Math.floor(Number(availableSkillPoints) || 0));
 
   useEffect(() => {
     if (effectiveSlots.some((slot) => slot.slotIndex === activeSlotIndex)) return;
@@ -87,8 +89,16 @@ const TrainingSkillSlots = ({
           const displaySkill = runtimeSkill?.skillId ? runtimeSkill : selectedSkill;
           const TreeIcon = TREE_ICONS[slot.treeCategory] || Sparkles;
           const skillLevel = displaySkill
-            ? Math.max(1, Math.min(3, Math.floor(Number(displaySkill?.tier) || 0) + 1))
+            ? (Number.isFinite(Number(runtimeSkill?.level))
+              ? Math.max(0, Math.floor(Number(runtimeSkill.level)))
+              : (runtimeSkill
+                ? Math.max(1, Math.min(getSkillMaxLevel(displaySkill), Math.floor(Number(runtimeSkill?.tier) || 0) + 1))
+              : Math.max(
+                phase === 'deploy' ? 1 : 0,
+                getSkillLevel(skillTreeProgress?.[slot.treeCategory], selectedSkill)
+              )))
             : 0;
+          const maxSkillLevel = getSkillMaxLevel(displaySkill || selectedSkill);
           const cooldownRemain = Math.max(0, Number(runtimeSkill?.cooldownRemain ?? slot.cooldownRemain) || 0);
           const cooldownTotal = Math.max(0.1, Number(runtimeSkill?.cooldownTotal) || 1);
           const cooldownRatio = Math.max(0, Math.min(1, cooldownRemain / cooldownTotal));
@@ -127,7 +137,8 @@ const TrainingSkillSlots = ({
                   : <TreeIcon size={21} strokeWidth={1.9} aria-hidden="true" />}
                 {skillLevel > 0 ? (
                   <span className="pve2-training-skill-level" aria-label={`技能等级 ${skillLevel}`}>
-                    {[1, 2, 3].map((level) => <i key={level} className={level <= skillLevel ? 'is-filled' : ''} />)}
+                    {Array.from({ length: maxSkillLevel }, (_, index) => index + 1)
+                      .map((level) => <i key={level} className={level <= skillLevel ? 'is-filled' : ''} />)}
                   </span>
                 ) : null}
                 <span className="pve2-training-skill-slot-hotkey">{slot.slotIndex + 1}</span>

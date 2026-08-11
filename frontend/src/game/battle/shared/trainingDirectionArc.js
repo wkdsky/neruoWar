@@ -7,14 +7,17 @@ export const TRAINING_DIRECTION_ARC_SEGMENTS = 22;
 export const TRAINING_DIRECTION_ARC_CORNER_EPSILON_RAD = 0.12;
 export const TRAINING_DIRECTION_ARC_MAX_HALF_SPREAD_RAD = 1.15;
 export const TRAINING_DIRECTION_ARC_CENTRAL_ANGLE_RAD = Math.PI / 2;
+export const TRAINING_DIRECTION_ARC_INSET_RATIO = 0.14;
+export const TRAINING_DIRECTION_ARC_MIN_INSET = 3;
+export const TRAINING_DIRECTION_ARC_MAX_INSET = 9;
 export const TRAINING_DIRECTION_ARC_DIRECTION_COUNT = 8;
 export const TRAINING_DIRECTION_ARC_DIRECTION_STEP_RAD = (
   Math.PI * 2
 ) / TRAINING_DIRECTION_ARC_DIRECTION_COUNT;
 export const TRAINING_DIRECTION_ARC_DEFAULT_HIT_OPTIONS = Object.freeze({
-  minimumHitRadius: 15,
-  maximumHitRadius: 30,
-  extraPadding: 7
+  minimumHitRadius: 3,
+  maximumHitRadius: 8,
+  extraPadding: 2
 });
 
 const normalizeAngleDelta = (value = 0) => {
@@ -113,15 +116,31 @@ const resolveFormationFrame = (source = null, team = 'attacker', preferFormation
   };
 };
 
-const resolveRayRectIntersection = (frame, yaw) => {
+export const resolveTrainingDirectionArcInset = (frame = {}) => {
+  const desiredInset = clamp(
+    Math.min(Number(frame.width) || 0, Number(frame.depth) || 0)
+      * TRAINING_DIRECTION_ARC_INSET_RATIO,
+    TRAINING_DIRECTION_ARC_MIN_INSET,
+    TRAINING_DIRECTION_ARC_MAX_INSET
+  );
+  const minimumHalfEdge = Math.min(
+    Math.max(0, Number(frame.halfWidth) || 0),
+    Math.max(0, Number(frame.halfDepth) || 0)
+  );
+  return Math.min(desiredInset, minimumHalfEdge * 0.45);
+};
+
+const resolveRayRectIntersection = (frame, yaw, inset = 0) => {
   const delta = normalizeAngleDelta(yaw - frame.formationYaw);
   const localFront = Math.cos(delta);
   const localSide = Math.sin(delta);
+  const halfDepth = Math.max(0.5, frame.halfDepth - inset);
+  const halfWidth = Math.max(0.5, frame.halfWidth - inset);
   const frontDistance = Math.abs(localFront) > 1e-6
-    ? frame.halfDepth / Math.abs(localFront)
+    ? halfDepth / Math.abs(localFront)
     : Number.POSITIVE_INFINITY;
   const sideDistance = Math.abs(localSide) > 1e-6
-    ? frame.halfWidth / Math.abs(localSide)
+    ? halfWidth / Math.abs(localSide)
     : Number.POSITIVE_INFINITY;
   const distance = Math.min(frontDistance, sideDistance);
   const tolerance = 1e-5;
@@ -184,9 +203,10 @@ export const resolveTrainingDirectionArcLayout = (
 ) => {
   const frame = resolveFormationFrame(source, team, preferFormationFacing);
   const halfSpreadRad = resolveHalfSpread(frame);
-  const start = resolveRayRectIntersection(frame, frame.directionYaw - halfSpreadRad);
-  const end = resolveRayRectIntersection(frame, frame.directionYaw + halfSpreadRad);
-  const boundary = resolveRayRectIntersection(frame, frame.directionYaw);
+  const arcInset = resolveTrainingDirectionArcInset(frame);
+  const start = resolveRayRectIntersection(frame, frame.directionYaw - halfSpreadRad, arcInset);
+  const end = resolveRayRectIntersection(frame, frame.directionYaw + halfSpreadRad, arcInset);
+  const boundary = resolveRayRectIntersection(frame, frame.directionYaw, arcInset);
   const chord = Math.hypot(end.x - start.x, end.y - start.y);
   const outward = { x: Math.cos(frame.directionYaw), y: Math.sin(frame.directionYaw) };
   const chordMidpoint = {
@@ -225,6 +245,7 @@ export const resolveTrainingDirectionArcLayout = (
   return {
     ...frame,
     halfSpreadRad,
+    arcInset,
     start,
     end,
     boundary,
@@ -235,7 +256,7 @@ export const resolveTrainingDirectionArcLayout = (
     startAngle,
     sweepRad,
     bulgeDepth,
-    bandWidth: clamp(Math.min(frame.width, frame.depth) * 0.25, 5, 14)
+    bandWidth: clamp(Math.min(frame.width, frame.depth) * 0.22, 4, 12)
   };
 };
 
@@ -316,14 +337,8 @@ export const isPointOnTrainingDirectionArc = (
     0,
     finiteOr(hitOptions?.extraPadding, TRAINING_DIRECTION_ARC_DEFAULT_HIT_OPTIONS.extraPadding)
   );
-  const hitRadius = Math.min(
-    maximumHitRadius,
-    Math.max(
-      minimumHitRadius,
-      Math.min(maximumHitRadius, Math.min(layout.width, layout.depth) * 0.5),
-      layout.bandWidth + extraPadding
-    )
-  );
+  const visibleHalfBand = Math.max(0.5, layout.bandWidth * 0.5);
+  const hitRadius = clamp(visibleHalfBand + extraPadding, minimumHitRadius, maximumHitRadius);
   for (let index = 1; index < samples.length; index += 1) {
     if (pointToSegmentDistance({ x, y }, samples[index - 1].point, samples[index].point) <= hitRadius) {
       return true;

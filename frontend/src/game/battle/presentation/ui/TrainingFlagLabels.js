@@ -1,7 +1,9 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   resolveTrainingFlagLod,
-  resolveTrainingInfoLabelElevation
+  resolveTrainingInfoLabelElevation,
+  resolveTrainingWorldFlagDimensions,
+  resolveTrainingWorldFlagStackLayout
 } from '../render/TrainingThreeRenderPipeline';
 
 const clamp = (value, min, max) => Math.min(max, Math.max(min, value));
@@ -33,8 +35,7 @@ export const resolveTrainingTroopState = (ratio = 1) => {
   return 'healthy';
 };
 
-export const buildTrainingFlagRows = (squads = [], trainingState = null) => {
-  const skillPoints = Math.max(0, Math.floor(Number(trainingState?.points) || 0));
+export const buildTrainingFlagRows = (squads = []) => {
   return (Array.isArray(squads) ? squads : [])
     .filter((row) => row && row.placed !== false && (Number(row.remain) || 0) > 0)
     .map((row) => {
@@ -45,7 +46,7 @@ export const buildTrainingFlagRows = (squads = [], trainingState = null) => {
         team: row.team === 'defender' ? 'defender' : 'attacker',
         remain: Math.max(0, Math.floor(Number(row.remain) || 0)),
         startCount: Math.max(0, Math.floor(Number(row.startCount) || 0)),
-        skillPoints,
+        skillPoints: Math.max(0, Math.floor(Number(row?.trainingSkillPoints) || 0)),
         x: Number.isFinite(Number(row.centerX)) ? Number(row.centerX) : (Number(row.x) || 0),
         y: Number.isFinite(Number(row.centerY)) ? Number(row.centerY) : (Number(row.y) || 0),
         radius: Math.max(0, Number(row.radius) || 0),
@@ -59,6 +60,13 @@ export const buildTrainingFlagRows = (squads = [], trainingState = null) => {
 
 const TRAINING_FLAG_LABEL_NEAR_DISTANCE = 460;
 const TRAINING_FLAG_LABEL_FAR_DISTANCE = 760;
+
+export const resolveTrainingHoveredSquadId = (runtime = null, phase = 'battle') => (
+  String(
+    (phase === 'deploy' ? runtime?.hoveredDeploySquadId : runtime?.hoveredBattleSquadId)
+      || ''
+  ).trim()
+);
 
 export const resolveTrainingFlagLabelPresentation = (row = {}, cameraDistance = 0, cameraPitch = 90) => {
   const zoomProgress = clamp(
@@ -75,33 +83,98 @@ export const resolveTrainingFlagLabelPresentation = (row = {}, cameraDistance = 
   };
 };
 
-const placeWorldNode = (node, source, worldToDomRef, anchor = 'flag', cameraDistance = 0, cameraPitch = 90) => {
+export const resolveTrainingFlagLabelStackLayout = (items = [], {
+  horizontalThreshold = 118,
+  verticalThreshold = 34,
+  verticalGap = 38
+} = {}) => {
+  const entries = (Array.isArray(items) ? items : [])
+    .map((item) => ({
+      id: String(item?.id || ''),
+      point: item?.point,
+      visible: item?.point?.visible !== false
+    }))
+    .filter((item) => item.id && item.visible && Number.isFinite(Number(item.point?.x)) && Number.isFinite(Number(item.point?.y)));
+  const groups = [];
+  entries.forEach((entry) => {
+    const matches = groups.filter((group) => group.some((member) => (
+      Math.abs(Number(member.point.x) - Number(entry.point.x)) <= horizontalThreshold
+      && Math.abs(Number(member.point.y) - Number(entry.point.y)) <= verticalThreshold
+    )));
+    if (matches.length <= 0) {
+      groups.push([entry]);
+      return;
+    }
+    const merged = [entry];
+    matches.forEach((group) => merged.push(...group));
+    matches.forEach((group) => {
+      const index = groups.indexOf(group);
+      if (index >= 0) groups.splice(index, 1);
+    });
+    groups.push(merged);
+  });
+
+  const layout = {};
+  groups.forEach((group) => {
+    if (group.length <= 1) {
+      const item = group[0];
+      layout[item.id] = { x: Number(item.point.x), y: Number(item.point.y) };
+      return;
+    }
+    const centerX = group.reduce((sum, item) => sum + Number(item.point.x), 0) / group.length;
+    const centerY = group.reduce((sum, item) => sum + Number(item.point.y), 0) / group.length;
+    const sorted = [...group].sort((left, right) => (
+      (Number(left.point.y) - Number(right.point.y))
+      || left.id.localeCompare(right.id)
+    ));
+    sorted.forEach((item, index) => {
+      layout[item.id] = {
+        x: centerX,
+        y: centerY + ((index - ((sorted.length - 1) * 0.5)) * verticalGap)
+      };
+    });
+  });
+  return layout;
+};
+
+const placeWorldNode = (
+  node,
+  source,
+  worldToDomRef,
+  anchor = 'flag',
+  cameraDistance = 0,
+  cameraPitch = 90,
+  projectedPoint = null
+) => {
   if (!node) return;
   const project = worldToDomRef?.current;
   if (typeof project !== 'function') {
     node.style.opacity = '0';
+    node.style.pointerEvents = 'none';
     return;
   }
   const flagPresentation = anchor === 'flag'
     ? resolveTrainingFlagLabelPresentation(source, cameraDistance, cameraPitch)
     : null;
-  if (anchor === 'flag' && !flagPresentation.visible) {
-    node.style.display = 'none';
-    return;
-  }
   if (anchor === 'flag') node.style.display = 'block';
-  const point = project({
+  const point = projectedPoint || project({
     x: Number(source?.x) || 0,
     y: Number(source?.y) || 0,
-    z: flagPresentation?.elevation ?? Math.max(8, Number(source?.z) || 3)
+    z: flagPresentation
+      ? flagPresentation.elevation + (flagPresentation.visible ? 0 : 14)
+      : Math.max(8, Number(source?.z) || 3)
   });
   if (!point?.visible) {
     node.style.opacity = '0';
+    node.style.pointerEvents = 'none';
     return;
   }
-  node.style.opacity = '1';
+  const isWorldHidden = anchor === 'flag' && !flagPresentation.visible;
+  node.style.pointerEvents = anchor === 'flag' && !isWorldHidden ? 'auto' : 'none';
+  node.style.opacity = isWorldHidden ? '0' : '1';
+  if (anchor === 'flag') node.classList.toggle('is-world-hidden', isWorldHidden);
   if (anchor === 'flag') {
-    node.style.transform = `translate3d(${Math.round(point.x)}px, ${Math.round(point.y)}px, 0) translate(-50%, -100%) scale(${flagPresentation.scale.toFixed(3)})`;
+    node.style.transform = `translate3d(${Math.round(point.x)}px, ${Math.round(point.y)}px, 0) translate(-50%, ${isWorldHidden ? '-50%' : '-100%'}) scale(${flagPresentation.scale.toFixed(3)})`;
     return;
   }
   node.style.setProperty('--pve2-world-x', `${Math.round(point.x)}px`);
@@ -112,21 +185,24 @@ const displayDamage = (amount = 0) => Math.max(1, Math.round(Number(amount) || 0
 
 const TrainingFlagLabels = ({
   squads = [],
-  trainingState = null,
   phase = 'deploy',
   runtimeRef,
   worldToDomRef,
-  cameraRef
+  cameraRef,
+  onHoverSquad = null,
+  onSelectSquad = null
 }) => {
   const flagRows = useMemo(
-    () => buildTrainingFlagRows(squads, trainingState),
-    [squads, trainingState]
+    () => buildTrainingFlagRows(squads),
+    [squads]
   );
   const flagNodesRef = useRef(new Map());
   const damageNodesRef = useRef(new Map());
   const seenDamageRef = useRef(new Map());
   const removeTimersRef = useRef(new Set());
+  const hoveredSquadRef = useRef('');
   const [damageNumbers, setDamageNumbers] = useState([]);
+  const [hoveredSquadId, setHoveredSquadId] = useState('');
 
   useEffect(() => {
     if (phase !== 'battle') {
@@ -176,11 +252,92 @@ const TrainingFlagLabels = ({
   useEffect(() => {
     let frameId = 0;
     const positionNodes = () => {
+      const runtime = runtimeRef?.current;
+      const runtimeHoveredSquadId = resolveTrainingHoveredSquadId(runtime, phase);
+      if (hoveredSquadRef.current !== runtimeHoveredSquadId) {
+        hoveredSquadRef.current = runtimeHoveredSquadId;
+        setHoveredSquadId(runtimeHoveredSquadId);
+      }
+      const liveFlagRows = flagRows.map((row) => {
+        const source = phase === 'battle'
+          ? runtime?.getSquadById?.(row.id)
+          : runtime?.getDeployGroupById?.(row.id, 'any');
+        if (!source) return row;
+        return {
+          ...row,
+          x: Number.isFinite(Number(source.centerX)) ? Number(source.centerX) : (Number(source.x) || 0),
+          y: Number.isFinite(Number(source.centerY)) ? Number(source.centerY) : (Number(source.y) || 0)
+        };
+      });
       const cameraDistance = Number(cameraRef?.current?.distance) || 0;
       const requestedCameraPitch = Number(cameraRef?.current?.currentPitch);
       const cameraPitch = Number.isFinite(requestedCameraPitch) ? requestedCameraPitch : 90;
-      flagRows.forEach((row) => {
-        placeWorldNode(flagNodesRef.current.get(row.id), row, worldToDomRef, 'flag', cameraDistance, cameraPitch);
+      const worldFlagBasePoints = {};
+      const cameraEye = Array.isArray(cameraRef?.current?.eye) ? cameraRef.current.eye : [0, 0, 0];
+      const worldFlagStackLayout = resolveTrainingWorldFlagStackLayout(
+        liveFlagRows,
+        (row) => {
+          const dimensions = resolveTrainingWorldFlagDimensions(row);
+          const point = typeof worldToDomRef?.current === 'function'
+            ? worldToDomRef.current({
+                x: Number(row.x) || 0,
+                y: Number(row.y) || 0,
+                z: dimensions.clothBottom
+              })
+            : null;
+          if (point) worldFlagBasePoints[row.id] = point;
+          return point
+            ? {
+                ...point,
+                distance: Math.hypot(
+                  (Number(row.x) || 0) - (Number(cameraEye[0]) || 0),
+                  (Number(row.y) || 0) - (Number(cameraEye[1]) || 0),
+                  dimensions.clothBottom - (Number(cameraEye[2]) || 0)
+                )
+              }
+            : point;
+        }
+      );
+      const projectedFlags = liveFlagRows.map((row) => {
+        const presentation = resolveTrainingFlagLabelPresentation(row, cameraDistance, cameraPitch);
+        const worldFlagDimensions = resolveTrainingWorldFlagDimensions(row);
+        let point = typeof worldToDomRef?.current === 'function'
+          ? worldToDomRef.current({
+              x: Number(row.x) || 0,
+              y: Number(row.y) || 0,
+              z: presentation.visible ? presentation.elevation : worldFlagDimensions.clothBottom
+            })
+          : null;
+        if (point?.visible && !presentation.visible) {
+          const leaderId = worldFlagStackLayout.leaderById[row.id] || row.id;
+          const leaderPoint = worldFlagBasePoints[leaderId] || point;
+          const stackLevel = Math.max(0, Math.floor(Number(worldFlagStackLayout.levels[row.id]) || 0));
+          point = {
+            ...leaderPoint,
+            y: Number(leaderPoint.y) - 38 - (stackLevel * 34)
+          };
+        }
+        return { id: row.id, point, worldFlag: !presentation.visible };
+      });
+      const stackLayout = resolveTrainingFlagLabelStackLayout(
+        projectedFlags.filter((item) => !item.worldFlag),
+        { verticalGap: 38 }
+      );
+      liveFlagRows.forEach((row) => {
+        const sourcePoint = projectedFlags.find((item) => item.id === row.id)?.point;
+        const stackedPoint = stackLayout[row.id] || sourcePoint;
+        const point = sourcePoint && stackedPoint
+          ? { ...sourcePoint, x: stackedPoint.x, y: stackedPoint.y }
+          : sourcePoint;
+        placeWorldNode(
+          flagNodesRef.current.get(row.id),
+          row,
+          worldToDomRef,
+          'flag',
+          cameraDistance,
+          cameraPitch,
+          point
+        );
       });
       damageNumbers.forEach((event) => {
         placeWorldNode(damageNodesRef.current.get(event.id), event, worldToDomRef, 'damage');
@@ -189,7 +346,7 @@ const TrainingFlagLabels = ({
     };
     positionNodes();
     return () => cancelFrame(frameId);
-  }, [cameraRef, damageNumbers, flagRows, worldToDomRef]);
+  }, [cameraRef, damageNumbers, flagRows, phase, runtimeRef, worldToDomRef]);
 
   useEffect(() => () => {
     removeTimersRef.current.forEach((timerId) => window.clearTimeout(timerId));
@@ -205,9 +362,26 @@ const TrainingFlagLabels = ({
             if (node) flagNodesRef.current.set(row.id, node);
             else flagNodesRef.current.delete(row.id);
           }}
-          className={`pve2-training-flag-label is-${row.team} is-${row.troopState} ${row.selected ? 'is-selected' : ''}`}
+          className={`pve2-training-flag-label is-${row.team} is-${row.troopState} ${row.selected ? 'is-selected' : ''} ${hoveredSquadId === row.id ? 'is-hovered' : ''}`}
           data-training-flag={row.id}
           aria-label={`${row.name}：兵力 ${row.remain}/${row.startCount}，技能点 ${row.skillPoints}`}
+          onPointerDown={(event) => event.stopPropagation()}
+          onMouseDown={(event) => event.stopPropagation()}
+          onMouseEnter={() => {
+            hoveredSquadRef.current = row.id;
+            setHoveredSquadId(row.id);
+            onHoverSquad?.(row.id);
+          }}
+          onMouseLeave={() => {
+            if (hoveredSquadRef.current !== row.id) return;
+            hoveredSquadRef.current = '';
+            setHoveredSquadId('');
+            onHoverSquad?.('');
+          }}
+          onClick={(event) => {
+            event.stopPropagation();
+            onSelectSquad?.(row.id);
+          }}
         >
           <div className="pve2-training-flag-banner">
             <div className="pve2-training-flag-troops">

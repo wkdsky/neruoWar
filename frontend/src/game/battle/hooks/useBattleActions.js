@@ -10,7 +10,12 @@ import {
   SPEED_MODE_B,
   SPEED_MODE_CYCLE
 } from '../screens/battleSceneConstants';
-import { clamp, skillAoeRadiusByClass } from '../screens/battleSceneUtils';
+import { clamp, skillAoeRadiusByClass, skillRangeByClass } from '../screens/battleSceneUtils';
+import {
+  getSkillCastProfile,
+  skillNeedsTargetSelection,
+  SKILL_TARGET_MODE
+} from '../../../components/game/skillTree/skillCastProfiles';
 
 export default function useBattleActions({
   runtimeRef,
@@ -19,6 +24,7 @@ export default function useBattleActions({
   worldToDomRef,
   isTrainingMode = false,
   selectedSquadId = '',
+  paused = false,
   battleUiMode = BATTLE_UI_MODE_NONE,
   pendingPathPoints = [],
   setCards,
@@ -70,12 +76,15 @@ export default function useBattleActions({
   const selectBattleSquad = useCallback((squadId, showActions = true) => {
     const runtime = runtimeRef.current;
     if (!runtime || runtime.getPhase() !== 'battle') return false;
+    const nextId = String(squadId || '');
+    const previousId = String(runtime.selectedBattleSquadId || '');
+    if (previousId !== nextId && cameraRef.current?.isFollowing?.()) {
+      cameraRef.current.clearFollow?.();
+    }
     if (!runtime.setSelectedBattleSquad(squadId)) return false;
     const squad = runtime.getSquadById(squadId);
     const canControl = runtime.canControlSquad?.(squad);
     runtime.setFocusSquad(squadId);
-    const anchor = runtime.getFocusAnchor();
-    cameraRef.current.beginFocusTransition(anchor);
     setSelectedSquadId(squadId);
     if (showActions && canControl && !isTrainingMode) {
       setWorldActionsVisibleForSquadId(squadId);
@@ -85,6 +94,24 @@ export default function useBattleActions({
     syncBattleCards();
     return true;
   }, [cameraRef, isTrainingMode, runtimeRef, setSelectedSquadId, setWorldActionsVisibleForSquadId, syncBattleCards]);
+
+  const followBattleSquad = useCallback((squadId) => {
+    const runtime = runtimeRef.current;
+    if (!runtime || runtime.getPhase() !== 'battle') return false;
+    if (!selectBattleSquad(squadId, true)) return false;
+    const squad = runtime.getSquadById?.(squadId);
+    if (!squad) return false;
+    const anchor = runtime.getSquadCameraAnchor?.(squadId) || {
+      x: Number(squad.x) || 0,
+      y: Number(squad.y) || 0,
+      vx: Number(squad.vx) || 0,
+      vy: Number(squad.vy) || 0,
+      squadId: String(squad.id || squadId),
+      team: squad.team || ''
+    };
+    if (typeof cameraRef.current?.startFollowing !== 'function') return false;
+    return cameraRef.current.startFollowing(anchor) !== false;
+  }, [cameraRef, runtimeRef, selectBattleSquad]);
 
   const closeSkillConfirm = useCallback((resumeBattle = true) => {
     setSkillConfirmState(null);
@@ -131,6 +158,10 @@ export default function useBattleActions({
   const executeBattleAction = useCallback((squadId, actionId, payload = null) => {
     const runtime = runtimeRef.current;
     if (!runtime || runtime.getPhase() !== 'battle') return;
+    if (actionId === 'follow') {
+      followBattleSquad(squadId);
+      return;
+    }
     if (!selectBattleSquad(squadId, true)) return;
     const squad = runtime.getSquadById(squadId);
     if (!squad) return;
@@ -190,6 +221,7 @@ export default function useBattleActions({
   }, [
     closeSpacingPick,
     closeSkillPick,
+    followBattleSquad,
     resolvePopupPos,
     runtimeRef,
     selectBattleSquad,
@@ -243,63 +275,96 @@ export default function useBattleActions({
     }
     if (!skill?.available) return;
     closeSkillPick();
+    const fallbackTreeCategory = skill?.treeCategory
+      || (skill?.kind === 'archer' || skill?.kind === 'artillery' ? 'ranged' : (skill?.kind === 'support' ? 'support' : 'melee'));
+    const profile = skill?.castProfile && typeof skill.castProfile === 'object'
+      ? skill.castProfile
+      : getSkillCastProfile(skill, fallbackTreeCategory);
+    const sourceCategory = profile?.sourceCategory
+      || (skill?.treeCategory === 'ranged' ? 'ranged' : (skill?.treeCategory === 'support' ? 'support' : 'melee'));
     const kind = (skill.kind === 'infantry' || skill.kind === 'cavalry' || skill.kind === 'archer' || skill.kind === 'artillery')
       ? skill.kind
       : (selected.classTag || 'infantry');
     const center = skill?.anchor && Number.isFinite(Number(skill.anchor.x)) && Number.isFinite(Number(skill.anchor.y))
       ? { x: Number(skill.anchor.x), y: Number(skill.anchor.y) }
       : (
-        selected?.classCenters?.[kind]
+        selected?.skillCenters?.[sourceCategory]
+          ? {
+              x: Number(selected.skillCenters[sourceCategory].x) || Number(selected.x) || 0,
+              y: Number(selected.skillCenters[sourceCategory].y) || Number(selected.y) || 0
+            }
+          : selected?.classCenters?.[kind]
           ? {
               x: Number(selected.classCenters[kind].x) || Number(selected.x) || 0,
               y: Number(selected.classCenters[kind].y) || Number(selected.y) || 0
             }
           : { x: Number(selected.x) || 0, y: Number(selected.y) || 0 }
       );
-    if (kind === 'infantry') {
-      runtime.commandSkill(selected.id, {
-        kind: 'infantry',
-        x: center.x,
-        y: center.y
-      });
+    const commitSkill = (targetSpec = {}) => {
+      const slotIndex = Number.isFinite(Number(skill?.slotIndex)) ? Number(skill.slotIndex) : null;
+      const payload = {
+        ...targetSpec,
+        sourceCategory,
+        skillId: skill?.skillId || skill?.id || '',
+        treeCategory: skill?.treeCategory || '',
+        castProfile: profile,
+        kind
+      };
+      const result = slotIndex === null
+        ? runtime.commandSkill(selected.id, payload)
+        : runtime.commandSkillSlot(selected.id, slotIndex, payload);
+      if (!result?.ok) return false;
       setSkillConfirmState(null);
       setBattleUiMode(BATTLE_UI_MODE_NONE);
-      setClockPaused(false);
+      setClockPaused(paused);
       syncBattleCards();
+      return true;
+    };
+
+    if (!skillNeedsTargetSelection(profile) || profile?.targetMode === SKILL_TARGET_MODE.SELF) {
+      commitSkill({ x: center.x, y: center.y });
       return;
     }
-    if (kind === 'cavalry') {
-      const dirX = Number(selected.dirX) || 1;
-      const dirY = Number(selected.dirY) || 0;
-      const len = 82;
-      setSkillConfirmState({
-        squadId: selected.id,
-        kind: 'cavalry',
-        center,
-        dir: { x: dirX, y: dirY },
-        len,
-        aoeRadius: 0,
-        hoverPoint: { x: center.x + (dirX * len), y: center.y + (dirY * len) }
-      });
-      setBattleUiMode(BATTLE_UI_MODE_SKILL_CONFIRM);
-      setClockPaused(true);
-      return;
-    }
-    const aoeRadius = skillAoeRadiusByClass(kind);
+    const dirX = Number(selected.dirX) || 1;
+    const dirY = Number(selected.dirY) || 0;
+    const defaultDistance = Math.max(
+      Number(profile?.minRange) || 0,
+      Number(profile?.dashDistance) || Math.min(64, Number(profile?.maxRange) || 180)
+    );
+    const initialDirection = {
+      x: dirX,
+      y: dirY
+    };
+    const initialHoverPoint = profile?.castStyle === 'melee'
+      ? {
+          x: center.x + (dirX * defaultDistance),
+          y: center.y + (dirY * defaultDistance)
+        }
+      : (profile?.targetMode === SKILL_TARGET_MODE.GROUND ? { x: center.x, y: center.y } : null);
     setSkillConfirmState({
       squadId: selected.id,
-      kind: kind === 'artillery' ? 'artillery' : 'archer',
+      slotIndex: Number.isFinite(Number(skill?.slotIndex)) ? Number(skill.slotIndex) : null,
+      skillId: skill?.skillId || skill?.id || '',
+      treeCategory: skill?.treeCategory || '',
+      sourceCategory,
+      kind,
+      targetMode: profile?.targetMode || SKILL_TARGET_MODE.GROUND,
+      profile,
       center,
-      dir: { x: 1, y: 0 },
-      len: 0,
-      aoeRadius,
-      hoverPoint: { x: center.x, y: center.y }
+      dir: initialDirection,
+      len: defaultDistance,
+      maxRange: Math.max(8, Number(profile?.maxRange) || skillRangeByClass(kind)),
+      aoeRadius: Math.max(8, Number(profile?.aoeRadius) || skillAoeRadiusByClass(kind)),
+      targetSquadId: '',
+      hoverPoint: initialHoverPoint,
+      resumeOnConfirm: !paused
     });
     setBattleUiMode(BATTLE_UI_MODE_SKILL_CONFIRM);
     setClockPaused(true);
   }, [
     closeSkillPick,
     runtimeRef,
+    paused,
     selectBattleSquad,
     selectedSquadId,
     setBattleUiMode,
@@ -324,6 +389,7 @@ export default function useBattleActions({
   return {
     syncBattleCards,
     selectBattleSquad,
+    followBattleSquad,
     closeSkillConfirm,
     closeSkillPick,
     commitPathPlanning,

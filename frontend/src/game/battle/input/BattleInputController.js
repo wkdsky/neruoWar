@@ -3,6 +3,11 @@ import {
   isPointOnTrainingDirectionArc,
   resolveTrainingDirectionOffsetFromPoint
 } from '../shared/trainingDirectionArc';
+import {
+  pickTrainingWorldFlagId,
+  resolveTrainingDirectionArcAnchors,
+  resolveTrainingWorldFlagHitRects
+} from '../presentation/render/TrainingThreeRenderPipeline';
 
 const clamp = (value, min, max) => Math.min(max, Math.max(min, value));
 const PAN_DRAG_THRESHOLD_PX = 4;
@@ -12,9 +17,9 @@ const DEFAULT_TRAINING_OVERVIEW_DISTANCE_EXTRA = 900;
 const DEFAULT_TRAINING_OVERVIEW_DISTANCE_MAX = 4600;
 const DEFAULT_TRAINING_OVERVIEW_VIEW_PADDING = 1.08;
 const TRAINING_DIRECTION_ARC_PRIORITY_HIT_OPTIONS = Object.freeze({
-  minimumHitRadius: 24,
-  maximumHitRadius: 42,
-  extraPadding: 14
+  minimumHitRadius: 3,
+  maximumHitRadius: 8,
+  extraPadding: 2
 });
 const INTERACTIVE_UI_SELECTOR = [
   '.pve2-world-actions',
@@ -27,6 +32,7 @@ const INTERACTIVE_UI_SELECTOR = [
   '.pve2-training-squad-info-panel',
   '.pve2-training-squad-skills-panel',
   '.pve2-training-skill-slots',
+  '.pve2-training-flag-label',
   '.pve2-formation-slots',
   '.pve2-template-strip',
   '.pve2-template-row-main',
@@ -41,7 +47,6 @@ const INTERACTIVE_UI_SELECTOR = [
   '.pve2-formation-spacing-float',
   '.pve2-path-confirm-btn',
   '.pve2-hud',
-  '.pve2-confirm',
   '.pve2-quick-deploy-backdrop',
   '.pve2-quick-deploy-panel',
   '.pve2-deploy-info',
@@ -55,6 +60,32 @@ const isInteractiveUiTarget = (target) => (
   && typeof target.closest === 'function'
   && !!target.closest(INTERACTIVE_UI_SELECTOR)
 );
+
+const resolveTrainingFlagIdFromTarget = (target) => {
+  if (!target || typeof target.closest !== 'function') return '';
+  const flagTarget = target.closest('[data-training-flag]');
+  return String(
+    flagTarget?.dataset?.trainingFlag
+    || flagTarget?.getAttribute?.('data-training-flag')
+    || ''
+  ).trim();
+};
+
+const resolveTrainingWorldFlagIdAtScreen = (runtime, camera, canvas, px, py) => {
+  if (!runtime || !camera || !canvas) return '';
+  camera.buildMatrices?.(canvas.width, canvas.height);
+  const anchors = resolveTrainingDirectionArcAnchors(runtime);
+  if (anchors.length <= 0) return '';
+  const rect = canvas.getBoundingClientRect?.();
+  const hitRects = resolveTrainingWorldFlagHitRects({
+    anchors,
+    camera,
+    viewportWidth: canvas.width,
+    viewportHeight: canvas.height,
+    viewportCssHeight: Math.max(1, Number(rect?.height) || canvas.height)
+  });
+  return pickTrainingWorldFlagId(hitRects, px, py);
+};
 
 export const resolveTrainingOverviewDistance = ({
   field = null,
@@ -89,6 +120,7 @@ export const createBattleInputController = ({
   canvasRef,
   runtimeRef,
   cameraControllerRef,
+  pipelineRef,
   worldToScreenRef,
   pointerWorldRef,
   panDragRef,
@@ -100,12 +132,24 @@ export const createBattleInputController = ({
   getters = {},
   callbacks = {}
 } = {}) => {
-  const resolveEventWorldPoint = (event) => {
+  const resolveEventCanvasPoint = (event) => {
     const canvas = canvasRef?.current;
     if (!canvas) return null;
-    const rect = canvas.getBoundingClientRect();
-    const px = ((event.clientX - rect.left) / Math.max(1, rect.width)) * canvas.width;
-    const py = ((event.clientY - rect.top) / Math.max(1, rect.height)) * canvas.height;
+    const rect = canvas.getBoundingClientRect?.();
+    const clientX = Number(event?.clientX);
+    const clientY = Number(event?.clientY);
+    if (!rect || !Number.isFinite(clientX) || !Number.isFinite(clientY) || !rect.width || !rect.height) return null;
+    return {
+      canvas,
+      px: ((clientX - rect.left) / Math.max(1, rect.width)) * canvas.width,
+      py: ((clientY - rect.top) / Math.max(1, rect.height)) * canvas.height
+    };
+  };
+
+  const resolveEventWorldPoint = (event) => {
+    const screenPoint = resolveEventCanvasPoint(event);
+    if (!screenPoint) return null;
+    const { canvas, px, py } = screenPoint;
     const camera = cameraControllerRef.current;
     camera?.buildMatrices?.(canvas.width, canvas.height);
     const world = camera.screenToGround(px, py, { width: canvas.width, height: canvas.height });
@@ -113,6 +157,24 @@ export const createBattleInputController = ({
     pointerWorldRef.current = world;
     if (!Number.isFinite(Number(world?.x)) || !Number.isFinite(Number(world?.y))) return null;
     return world;
+  };
+
+  const resolveTrainingWorldFlagIdForEvent = (event, runtime = runtimeRef.current) => {
+    if (!getters.isTrainingMode?.()) return '';
+    const screenPoint = resolveEventCanvasPoint(event);
+    if (!screenPoint) return '';
+    const { canvas, px, py } = screenPoint;
+    const threePipeline = pipelineRef?.current?.threePipeline;
+    if (typeof threePipeline?.pickTrainingWorldFlagIdAtScreen === 'function') {
+      return String(threePipeline.pickTrainingWorldFlagIdAtScreen(px, py) || '');
+    }
+    return resolveTrainingWorldFlagIdAtScreen(
+      runtime,
+      cameraControllerRef.current,
+      canvas,
+      px,
+      py
+    );
   };
 
   const beginPanDrag = (event, buttonMask = 1, primaryAction = '') => {
@@ -256,13 +318,15 @@ export const createBattleInputController = ({
     if (interactionLocked) return;
     if (event.button !== 0) return;
     const runtime = runtimeRef.current;
+    const trainingFlagHitId = resolveTrainingWorldFlagIdForEvent(event, runtime);
     const world = resolveEventWorldPoint(event);
-    if (!runtime || !world) return;
+    if (!runtime || (!world && !trainingFlagHitId)) return;
 
     if (runtime.getPhase() !== 'deploy') return;
     const deployDraggingGroupId = getters.getDeployDraggingGroupId?.() || '';
     const deployDraggingTeam = getters.getDeployDraggingTeam?.() || 'attacker';
     if (deployDraggingGroupId) {
+      if (!world) return;
       if (!runtime.canDeployGroupFitAt(deployDraggingGroupId, world, deployDraggingTeam)) {
         callbacks.setDeployNotice?.(deployDraggingTeam === 'defender'
           ? '当前阵型超出右侧红色部署区，请调整位置或切换阵型'
@@ -282,6 +346,7 @@ export const createBattleInputController = ({
     }
     const selectedPaletteItemId = getters.getSelectedPaletteItemId?.() || '';
     if (getters.isTrainingMode?.() && selectedPaletteItemId) {
+      if (!world) return;
       const placeResult = runtime.placeBuilding({
         itemId: selectedPaletteItemId,
         x: world.x,
@@ -297,6 +362,18 @@ export const createBattleInputController = ({
       callbacks.setMinimapSnapshot?.(runtime.getMinimapSnapshot?.() || null);
       return;
     }
+    if (trainingFlagHitId) {
+      const pickedFlagGroup = runtime.getDeployGroupById?.(trainingFlagHitId, 'any');
+      if (pickedFlagGroup?.id && pickedFlagGroup.placed !== false) {
+        runtime.setSelectedDeployGroup(pickedFlagGroup.id);
+        runtime.setFocusSquad(pickedFlagGroup.id);
+        callbacks.setSelectedSquadId?.(pickedFlagGroup.id);
+        callbacks.setDeployActionAnchorMode?.('world');
+        callbacks.setCards?.(runtime.getCardRows?.() || []);
+        return;
+      }
+    }
+    if (!world) return;
     const picked = runtime.pickDeployGroup(world, getters.isTrainingMode?.() ? 'any' : 'attacker');
     if (picked?.id) {
       runtime.setSelectedDeployGroup(picked.id);
@@ -317,8 +394,9 @@ export const createBattleInputController = ({
     if (event.button !== 0) return;
     const runtime = runtimeRef.current;
     if (!runtime || runtime.getPhase?.() !== 'battle') return;
+    const trainingFlagHitId = resolveTrainingWorldFlagIdForEvent(event, runtime);
     const world = resolveEventWorldPoint(event);
-    if (!world) return;
+    if (!world && !trainingFlagHitId) return;
     const selected = runtime.getSquadById(getters.getSelectedSquadId?.());
     const battleUiMode = getters.getBattleUiMode?.();
     const skillConfirmState = getters.getSkillConfirmState?.();
@@ -335,66 +413,125 @@ export const createBattleInputController = ({
       if (!skillConfirmState || !selected || selected.id !== skillConfirmState.squadId) return;
       const centerX = Number(skillConfirmState?.center?.x) || Number(selected.x) || 0;
       const centerY = Number(skillConfirmState?.center?.y) || Number(selected.y) || 0;
-      if (skillConfirmState.kind === 'infantry') {
-        runtime.commandSkill(selected.id, { kind: 'infantry', x: centerX, y: centerY });
-      } else if (skillConfirmState.kind === 'cavalry') {
+      const targetMode = skillConfirmState.targetMode
+        || (skillConfirmState.kind === 'cavalry' ? 'direction' : (
+          skillConfirmState.kind === 'archer' || skillConfirmState.kind === 'artillery' ? 'ground' : 'self'
+        ));
+      let targetSquadId = String(skillConfirmState.targetSquadId || '').trim();
+      if (targetMode === 'enemy' && !targetSquadId) {
+        const pickedEnemyId = trainingFlagHitId || (world && runtime.pickSquadAtPoint(world.x, world.y, {
+          team: 'any',
+          maxDist: Math.max(34, Number(selected.radius) || 34)
+        }));
+        const pickedEnemy = pickedEnemyId ? runtime.getSquadById(pickedEnemyId) : null;
+        if (!pickedEnemy || pickedEnemy.team === selected.team) {
+          callbacks.setDeployNotice?.('请点击敌方部队的核心标记');
+          return;
+        }
+        targetSquadId = pickedEnemy.id;
+      }
+      const payload = {
+        sourceCategory: skillConfirmState.sourceCategory,
+        skillId: skillConfirmState.skillId,
+        treeCategory: skillConfirmState.treeCategory,
+        castProfile: skillConfirmState.profile,
+        kind: skillConfirmState.kind,
+        targetMode
+      };
+      if (targetMode === 'direction') {
+        if (!world) return;
         const dirX = Number(skillConfirmState?.dir?.x) || 1;
         const dirY = Number(skillConfirmState?.dir?.y) || 0;
-        const len = Math.max(18, Number(skillConfirmState?.len) || 80);
-        runtime.commandSkill(selected.id, {
-          kind: 'cavalry',
-          x: centerX + (dirX * len),
-          y: centerY + (dirY * len),
-          dirX,
-          dirY,
-          distance: len
-        });
-      } else if (skillConfirmState.hoverPoint) {
-        runtime.commandSkill(selected.id, {
-          kind: skillConfirmState.kind,
-          x: skillConfirmState.hoverPoint.x,
-          y: skillConfirmState.hoverPoint.y
-        });
+        const len = Math.max(0, Number(skillConfirmState?.len) || 0);
+        payload.x = centerX + (dirX * len);
+        payload.y = centerY + (dirY * len);
+        payload.dirX = dirX;
+        payload.dirY = dirY;
+        payload.distance = len;
+      } else if (targetMode === 'ground') {
+        if (!world) return;
+        const point = skillConfirmState.hoverPoint || { x: centerX, y: centerY };
+        payload.x = Number(point.x) || centerX;
+        payload.y = Number(point.y) || centerY;
+        if (skillConfirmState?.profile?.castStyle === 'melee') {
+          payload.dirX = Number(skillConfirmState?.dir?.x) || 1;
+          payload.dirY = Number(skillConfirmState?.dir?.y) || 0;
+          payload.distance = Math.max(0, Number(skillConfirmState?.len) || 0);
+        }
+      } else if (targetMode === 'enemy') {
+        payload.targetSquadId = targetSquadId;
+        const target = runtime.getSquadById(targetSquadId);
+        payload.x = Number(target?.x) || centerX;
+        payload.y = Number(target?.y) || centerY;
+      } else {
+        payload.x = centerX;
+        payload.y = centerY;
       }
-      callbacks.closeSkillConfirm?.(true);
+      const result = Number.isFinite(Number(skillConfirmState.slotIndex))
+        ? runtime.commandSkillSlot(selected.id, Number(skillConfirmState.slotIndex), payload)
+        : runtime.commandSkill(selected.id, payload);
+      if (!result?.ok) {
+        callbacks.setDeployNotice?.(result?.reason || '技能施放失败');
+        return;
+      }
+      callbacks.closeSkillConfirm?.(skillConfirmState.resumeOnConfirm !== false);
       callbacks.syncBattleCards?.();
       return;
     }
 
     if (battleUiMode === constants.BATTLE_UI_MODE_PATH) {
+      if (!world) return;
       if (callbacks.isPathPointBlocked?.(world)) return;
       callbacks.setPendingPathPoints?.((prev) => [...prev, { x: world.x, y: world.y }]);
       return;
     }
 
-    const pickedSquadId = runtime.pickSquadAtPoint(world.x, world.y, {
-      team: 'any',
-      maxDist: 34
-    });
+    const pickedSquadId = trainingFlagHitId || (world && (
+      getters.isTrainingMode?.()
+        ? runtime.pickSquadAtAgentPoint?.(world.x, world.y, { team: 'any' })
+        : runtime.pickSquadAtPoint(world.x, world.y, { team: 'any', maxDist: 34 })
+    ));
     if (pickedSquadId) {
       callbacks.selectBattleSquad?.(pickedSquadId, true);
       return;
     }
     runtime.clearSelection?.();
+    cameraControllerRef.current?.clearFollow?.();
     callbacks.setSelectedSquadId?.('');
-    callbacks.syncBattleCards?.();
     callbacks.setWorldActionsVisibleForSquadId?.('');
-    if (battleUiMode !== constants.BATTLE_UI_MODE_NONE) {
-      callbacks.setBattleUiMode?.(constants.BATTLE_UI_MODE_NONE);
-      callbacks.setSkillPopupSquadId?.('');
-    }
+    callbacks.setPlanningHoverPoint?.(null);
+    callbacks.syncBattleCards?.();
+    return;
   };
 
   const onDoubleClick = (event) => {
     if (interactionLocked) return;
     if (event.button !== 0 || !getters.isTrainingMode?.()) return;
     const target = event.target;
-    if (isInteractiveUiTarget(target)) return;
+    const targetFlagId = resolveTrainingFlagIdFromTarget(target);
+    if (isInteractiveUiTarget(target) && !targetFlagId) return;
     const runtime = runtimeRef.current;
-    if (!runtime || runtime.getPhase?.() !== 'deploy') return;
+    if (!runtime) return;
+    const phase = runtime.getPhase?.();
+    const trainingFlagHitId = targetFlagId || resolveTrainingWorldFlagIdForEvent(event, runtime);
     const world = resolveEventWorldPoint(event);
-    if (!world) return;
-    const group = runtime.pickDeployGroup?.(world, 'any');
+    if (phase === 'battle') {
+      const pickedSquadId = trainingFlagHitId || (world && runtime.pickSquadAtAgentPoint?.(
+        world.x,
+        world.y,
+        { team: 'any' }
+      ));
+      if (!pickedSquadId) return;
+      const followed = callbacks.followBattleSquad?.(pickedSquadId);
+      if (followed === undefined) callbacks.selectBattleSquad?.(pickedSquadId, true);
+      event.preventDefault();
+      return;
+    }
+    if (phase !== 'deploy') return;
+    if (!world && !trainingFlagHitId) return;
+    const group = trainingFlagHitId
+      ? runtime.getDeployGroupById?.(trainingFlagHitId, TEAM_ANY)
+      : runtime.pickDeployGroup?.(world, 'any');
     if (!group?.id || group.placed === false) return;
 
     const camera = cameraControllerRef.current;
@@ -453,8 +590,9 @@ export const createBattleInputController = ({
         return;
       }
       if (event.button === 0) {
+        const trainingFlagHitId = resolveTrainingWorldFlagIdForEvent(event, runtime);
         const world = resolveEventWorldPoint(event);
-        const directionGroup = resolveSelectedDirectionArcGroup(world);
+        const directionGroup = trainingFlagHitId ? null : resolveSelectedDirectionArcGroup(world);
         if (directionGroup && beginDirectionArcDrag(directionGroup, world, currentPhase)) {
           event.preventDefault();
           return;
@@ -473,9 +611,19 @@ export const createBattleInputController = ({
       callbacks.closeSpacingPick?.();
       return;
     }
+    if (battleUiMode === constants.BATTLE_UI_MODE_SKILL_CONFIRM && event.button === 0) {
+      beginPanDrag(event, 1, 'battle');
+      return;
+    }
     if (event.button === 0) {
+      const trainingFlagHitId = resolveTrainingWorldFlagIdForEvent(event, runtime);
       const world = resolveEventWorldPoint(event);
-      const directionGroup = resolveSelectedDirectionArcGroup(world);
+      const soldierHitId = !trainingFlagHitId && getters.isTrainingMode?.() && world
+        ? runtime.pickSquadAtAgentPoint?.(world.x, world.y, { team: 'any' })
+        : '';
+      const directionGroup = trainingFlagHitId || soldierHitId
+        ? null
+        : resolveSelectedDirectionArcGroup(world);
       if (directionGroup && beginDirectionArcDrag(directionGroup, world, currentPhase)) {
         event.preventDefault();
         return;
@@ -488,7 +636,7 @@ export const createBattleInputController = ({
     const selected = runtime.getSquadById(getters.getSelectedSquadId?.());
     event.preventDefault();
     if (battleUiMode === constants.BATTLE_UI_MODE_SKILL_CONFIRM) {
-      callbacks.closeSkillConfirm?.(true);
+      callbacks.closeSkillConfirm?.(getters.getSkillConfirmState?.()?.resumeOnConfirm !== false);
       return;
     }
     if (battleUiMode === constants.BATTLE_UI_MODE_PATH) {
@@ -608,33 +756,41 @@ export const createBattleInputController = ({
       }
       if (runtime.getPhase?.() === 'deploy' || runtime.getPhase?.() === 'battle') {
         runtime.setHoveredDeployDirectionArc?.('');
+        runtime.setHoveredBattleSquad?.('');
         setDirectionArcCursor('');
       }
       return;
     }
     const target = event.target;
     if (isInteractiveUiTarget(target)) {
-      if (runtime.getPhase?.() === 'deploy') {
-        runtime.setHoveredDeployGroup?.('');
-      }
-      if (runtime.getPhase?.() === 'deploy' || runtime.getPhase?.() === 'battle') {
-        runtime.setHoveredDeployDirectionArc?.('');
-        setDirectionArcCursor('');
+      const isTrainingFlagTarget = typeof target?.closest === 'function'
+        && !!target.closest('.pve2-training-flag-label');
+      if (!isTrainingFlagTarget) {
+        if (runtime.getPhase?.() === 'deploy') {
+          runtime.setHoveredDeployGroup?.('');
+        }
+        if (runtime.getPhase?.() === 'deploy' || runtime.getPhase?.() === 'battle') {
+          runtime.setHoveredDeployDirectionArc?.('');
+          runtime.setHoveredBattleSquad?.('');
+          setDirectionArcCursor('');
+        }
       }
       return;
     }
     if (panDragRef.current || deployYawDragRef.current || deployDirectionArcDragRef.current) return;
-    const rect = canvas.getBoundingClientRect();
-    const px = ((event.clientX - rect.left) / Math.max(1, rect.width)) * canvas.width;
-    const py = ((event.clientY - rect.top) / Math.max(1, rect.height)) * canvas.height;
+    const screenPoint = resolveEventCanvasPoint(event);
+    if (!screenPoint) return;
+    const { px, py } = screenPoint;
     cameraControllerRef.current.buildMatrices?.(canvas.width, canvas.height);
+    const trainingFlagHitId = resolveTrainingWorldFlagIdForEvent(event, runtime);
     const world = cameraControllerRef.current.screenToGround(px, py, { width: canvas.width, height: canvas.height });
     if (world?.valid === false) {
       if (runtime.getPhase?.() === 'deploy') {
-        runtime.setHoveredDeployGroup?.('');
+        runtime.setHoveredDeployGroup?.(trainingFlagHitId);
       }
       if (runtime.getPhase?.() === 'deploy' || runtime.getPhase?.() === 'battle') {
         runtime.setHoveredDeployDirectionArc?.('');
+        runtime.setHoveredBattleSquad?.(runtime.getPhase?.() === 'battle' ? trainingFlagHitId : '');
         setDirectionArcCursor('');
       }
       return;
@@ -645,6 +801,7 @@ export const createBattleInputController = ({
     const deployDraggingTeam = getters.getDeployDraggingTeam?.() || 'attacker';
     if (runtime.getPhase() === 'deploy' && deployDraggingGroupId) {
       runtime.setHoveredDeployGroup?.('');
+      runtime.setHoveredBattleSquad?.('');
       runtime.setHoveredDeployDirectionArc?.('');
       setDirectionArcCursor('');
       runtime.moveDeployGroup(deployDraggingGroupId, world, deployDraggingTeam);
@@ -653,9 +810,10 @@ export const createBattleInputController = ({
     }
 
     if (runtime.getPhase() === 'deploy') {
+      runtime.setHoveredBattleSquad?.('');
       const directionGroup = resolveSelectedDirectionArcGroup(world);
       runtime.setHoveredDeployDirectionArc?.(directionGroup?.id || '');
-      if (directionGroup) {
+      if (directionGroup && !trainingFlagHitId) {
         runtime.setHoveredDeployGroup?.('');
         setDirectionArcCursor('grab');
         return;
@@ -665,22 +823,27 @@ export const createBattleInputController = ({
         world,
         getters.isTrainingMode?.() ? 'any' : 'attacker'
       );
-      runtime.setHoveredDeployGroup?.(hovered?.placed === false ? '' : (hovered?.id || ''));
+      runtime.setHoveredDeployGroup?.(trainingFlagHitId || (hovered?.placed === false ? '' : (hovered?.id || '')));
       // Hovering only changes the renderer preselection. Selection is
       // committed by a click in handleMapCommand.
       return;
     }
 
     if (runtime.getPhase() !== 'battle') return;
+    const battleUiMode = getters.getBattleUiMode?.();
+    const skillConfirmState = getters.getSkillConfirmState?.();
     const directionGroup = resolveSelectedDirectionArcGroup(world);
     runtime.setHoveredDeployDirectionArc?.(directionGroup?.id || '');
-    if (directionGroup) {
+    if (directionGroup && !trainingFlagHitId && battleUiMode !== constants.BATTLE_UI_MODE_SKILL_CONFIRM) {
+      runtime.setHoveredBattleSquad?.('');
       setDirectionArcCursor('grab');
       return;
     }
     setDirectionArcCursor('');
-    const battleUiMode = getters.getBattleUiMode?.();
-    const skillConfirmState = getters.getSkillConfirmState?.();
+    const hoveredBattleSquadId = getters.isTrainingMode?.()
+      ? (trainingFlagHitId || runtime.pickSquadAtAgentPoint?.(world.x, world.y, { team: 'any' }))
+      : '';
+    runtime.setHoveredBattleSquad?.(hoveredBattleSquadId || '');
     const aimState = getters.getAimState?.();
     if (battleUiMode === constants.BATTLE_UI_MODE_PATH) {
       if (callbacks.isPathPointBlocked?.(world)) callbacks.setPlanningHoverPoint?.(null);
@@ -692,29 +855,58 @@ export const createBattleInputController = ({
       if (!selected) return;
       const centerX = Number(skillConfirmState?.center?.x) || Number(selected.x) || 0;
       const centerY = Number(skillConfirmState?.center?.y) || Number(selected.y) || 0;
-      if (skillConfirmState.kind === 'cavalry') {
+      const targetMode = skillConfirmState.targetMode
+        || (skillConfirmState.kind === 'cavalry' ? 'direction' : (
+          skillConfirmState.kind === 'archer' || skillConfirmState.kind === 'artillery' ? 'ground' : 'self'
+        ));
+      if (targetMode === 'direction') {
         const dx = world.x - centerX;
         const dy = world.y - centerY;
         const len = Math.hypot(dx, dy) || 1;
-        const clampedLen = clamp(len, 18, constants.skillRangeByClass?.('cavalry') || 220);
+        const minRange = Math.max(0, Number(skillConfirmState?.profile?.minRange) || 0);
+        const maxRange = Math.max(minRange || 1, Number(skillConfirmState?.maxRange) || 220);
+        const clampedLen = clamp(len, minRange, maxRange);
         callbacks.setSkillConfirmState?.((prev) => (prev ? {
           ...prev,
           dir: { x: dx / len, y: dy / len },
           len: clampedLen,
-          hoverPoint: { x: world.x, y: world.y }
+          hoverPoint: {
+            x: centerX + ((dx / len) * clampedLen),
+            y: centerY + ((dy / len) * clampedLen)
+          }
         } : prev));
         return;
       }
-      if (skillConfirmState.kind === 'archer' || skillConfirmState.kind === 'artillery') {
-        const maxRange = constants.skillRangeByClass?.(skillConfirmState.kind) || 260;
+      if (targetMode === 'ground') {
+        const maxRange = Math.max(8, Number(skillConfirmState?.maxRange) || 260);
         const dx = world.x - centerX;
         const dy = world.y - centerY;
         const dist = Math.hypot(dx, dy) || 1;
         const tx = dist > maxRange ? centerX + (dx / dist) * maxRange : world.x;
         const ty = dist > maxRange ? centerY + (dy / dist) * maxRange : world.y;
+        const isMeleeGround = skillConfirmState?.profile?.castStyle === 'melee';
         callbacks.setSkillConfirmState?.((prev) => (prev ? {
           ...prev,
-          hoverPoint: { x: tx, y: ty }
+          hoverPoint: { x: tx, y: ty },
+          ...(isMeleeGround ? {
+            dir: { x: (tx - centerX) / (Math.hypot(tx - centerX, ty - centerY) || 1), y: (ty - centerY) / (Math.hypot(tx - centerX, ty - centerY) || 1) },
+            len: Math.min(maxRange, Math.max(0, Math.hypot(tx - centerX, ty - centerY)))
+          } : {})
+        } : prev));
+        return;
+      }
+      if (targetMode === 'enemy') {
+        const pickedSquadId = trainingFlagHitId || runtime.pickSquadAtPoint(world.x, world.y, {
+          team: 'any',
+          maxDist: Math.max(34, Number(selected.radius) || 34)
+        });
+        const picked = pickedSquadId ? runtime.getSquadById(pickedSquadId) : null;
+        callbacks.setSkillConfirmState?.((prev) => (prev ? {
+          ...prev,
+          targetSquadId: picked && picked.team !== selected.team ? picked.id : '',
+          hoverPoint: picked && picked.team !== selected.team
+            ? { x: Number(picked.x) || 0, y: Number(picked.y) || 0 }
+            : null
         } : prev));
         return;
       }
@@ -733,6 +925,7 @@ export const createBattleInputController = ({
   const onMouseLeave = () => {
     if (interactionLocked) return;
     runtimeRef.current?.setHoveredDeployGroup?.('');
+    runtimeRef.current?.setHoveredBattleSquad?.('');
     if (!deployDirectionArcDragRef.current) {
       runtimeRef.current?.setHoveredDeployDirectionArc?.('');
       setDirectionArcCursor('');
@@ -839,6 +1032,7 @@ export const createBattleInputController = ({
       );
       if (!pan.moved && dragDistance < PAN_DRAG_THRESHOLD_PX) return;
       pan.moved = true;
+      if ((pan.buttonMask & 1) === 1) cameraControllerRef.current?.clearFollow?.();
       const px = ((event.clientX - rect.left) / Math.max(1, rect.width)) * canvas.width;
       const py = ((event.clientY - rect.top) / Math.max(1, rect.height)) * canvas.height;
       cameraControllerRef.current.distance = Number(pan.startDistance) || cameraControllerRef.current.distance;
@@ -898,6 +1092,7 @@ export const createBattleInputController = ({
       clearDeployRectDrag();
       clearDeployDirectionArcDrag();
       runtimeRef.current?.setHoveredDeployGroup?.('');
+      runtimeRef.current?.setHoveredBattleSquad?.('');
       spacePressedRef.current = false;
     };
 

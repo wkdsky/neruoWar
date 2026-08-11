@@ -2,6 +2,10 @@ import createBattleInputController, { resolveTrainingOverviewDistance } from './
 import CameraController from '../presentation/render/CameraController';
 import { CAMERA_ZOOM_STEP } from '../screens/battleSceneConstants';
 import { resolveTrainingDirectionArcLayout } from '../shared/trainingDirectionArc';
+import {
+  resolveTrainingDirectionArcAnchors,
+  resolveTrainingWorldFlagHitRects
+} from '../presentation/render/TrainingThreeRenderPipeline';
 
 const createCanvas = () => ({
   width: 1000,
@@ -15,6 +19,7 @@ const createFixture = ({
   getters = {},
   runtimeOverrides = {},
   camera: suppliedCamera = null,
+  pipeline = null,
   constants: suppliedConstants = {}
 } = {}) => {
   const canvas = createCanvas();
@@ -30,6 +35,7 @@ const createFixture = ({
     getPhase: jest.fn(() => phase),
     getSquadById: jest.fn(() => null),
     pickSquadAtPoint: jest.fn(() => ''),
+    pickSquadAtAgentPoint: jest.fn(() => ''),
     pickDeployGroup: jest.fn(() => null),
     setSelectedDeployGroup: jest.fn(),
     setFocusSquad: jest.fn(),
@@ -49,6 +55,7 @@ const createFixture = ({
     canvasRef: { current: canvas },
     runtimeRef: { current: runtime },
     cameraRef: { current: camera },
+    pipelineRef: { current: pipeline },
     cameraViewRectRef: { current: { widthWorld: 100, heightWorld: 50 } },
     pointerWorldRef: { current: { x: 0, y: 0 } },
     panDragRef: { current: null },
@@ -63,6 +70,7 @@ const createFixture = ({
     canvasRef: refs.canvasRef,
     runtimeRef: refs.runtimeRef,
     cameraControllerRef: refs.cameraRef,
+    pipelineRef: refs.pipelineRef,
     cameraViewRectRef: refs.cameraViewRectRef,
     pointerWorldRef: refs.pointerWorldRef,
     panDragRef: refs.panDragRef,
@@ -110,6 +118,175 @@ test('uses a finer production wheel zoom increment', () => {
 });
 
 describe('BattleInputController primary-button panning', () => {
+  test('uses the current rendered flag polygon before the input-side fallback', () => {
+    const pickTrainingWorldFlagIdAtScreen = jest.fn(function pickTrainingWorldFlagIdAtScreen() {
+      return this.flagId;
+    });
+    const setHoveredBattleSquad = jest.fn();
+    const { controller, runtime } = createFixture({
+      getters: { isTrainingMode: () => true },
+      pipeline: {
+        threePipeline: { flagId: 'rendered-flag', pickTrainingWorldFlagIdAtScreen }
+      },
+      runtimeOverrides: {
+        pickSquadAtPoint: jest.fn(() => 'overlapping-soldier'),
+        setHoveredBattleSquad,
+        setHoveredDeployDirectionArc: jest.fn()
+      }
+    });
+
+    controller.onMouseMove({
+      clientX: 320,
+      clientY: 180,
+      target: { closest: () => null }
+    });
+
+    expect(pickTrainingWorldFlagIdAtScreen).toHaveBeenCalledWith(320, 180);
+    expect(setHoveredBattleSquad).toHaveBeenCalledWith('rendered-flag');
+    expect(runtime.pickSquadAtPoint).not.toHaveBeenCalled();
+    expect(runtime.pickSquadAtAgentPoint).not.toHaveBeenCalled();
+  });
+
+  test('clears training hover when the cursor misses every living soldier', () => {
+    const setHoveredBattleSquad = jest.fn();
+    const pickSquadAtAgentPoint = jest.fn(() => '');
+    const { controller, runtime } = createFixture({
+      getters: { isTrainingMode: () => true },
+      runtimeOverrides: {
+        pickSquadAtAgentPoint,
+        setHoveredBattleSquad,
+        setHoveredDeployDirectionArc: jest.fn()
+      }
+    });
+
+    controller.onMouseMove({
+      clientX: 320,
+      clientY: 180,
+      target: { closest: () => null }
+    });
+
+    expect(pickSquadAtAgentPoint).toHaveBeenCalledWith(320, 180, { team: 'any' });
+    expect(setHoveredBattleSquad).toHaveBeenLastCalledWith('');
+    expect(runtime.pickSquadAtPoint).not.toHaveBeenCalled();
+  });
+
+  test('uses an exact soldier hit only after flag hit testing misses', () => {
+    const setHoveredBattleSquad = jest.fn();
+    const pickSquadAtAgentPoint = jest.fn(() => 'soldier-squad');
+    const { controller, runtime } = createFixture({
+      getters: { isTrainingMode: () => true },
+      runtimeOverrides: {
+        pickSquadAtAgentPoint,
+        setHoveredBattleSquad,
+        setHoveredDeployDirectionArc: jest.fn()
+      }
+    });
+
+    controller.onMouseMove({
+      clientX: 320,
+      clientY: 180,
+      target: { closest: () => null }
+    });
+
+    expect(pickSquadAtAgentPoint).toHaveBeenCalledWith(320, 180, { team: 'any' });
+    expect(setHoveredBattleSquad).toHaveBeenLastCalledWith('soldier-squad');
+    expect(runtime.pickSquadAtPoint).not.toHaveBeenCalled();
+  });
+
+  test('uses the projected world flag under the cursor before ground squad picking', () => {
+    const camera = new CameraController({ yawDeg: 0, pitchLow: 40, pitchHigh: 90, distance: 560 });
+    camera.setPitchImmediate(40);
+    camera.buildMatrices(1000, 500);
+    const setHoveredBattleSquad = jest.fn();
+    const runtime = {
+      getPhase: jest.fn(() => 'battle'),
+      getTrainingState: jest.fn(() => ({ points: 0 })),
+      sim: {
+        squads: [
+          { id: 'flagged', team: 'attacker', x: 0, y: 0, remain: 100, radius: 20 }
+        ]
+      },
+      pickSquadAtPoint: jest.fn(() => 'wrong-ground-squad'),
+      setHoveredBattleSquad,
+      setHoveredDeployDirectionArc: jest.fn()
+    };
+    const anchors = resolveTrainingDirectionArcAnchors(runtime);
+    const [rect] = resolveTrainingWorldFlagHitRects({
+      anchors,
+      camera,
+      viewportWidth: 1000,
+      viewportHeight: 500,
+      viewportCssHeight: 500
+    });
+    const { controller } = createFixture({
+      camera,
+      getters: { isTrainingMode: () => true },
+      runtimeOverrides: {
+        ...runtime,
+        isTrainingMode: true
+      }
+    });
+
+    controller.onMouseMove({
+      clientX: (rect.left + rect.right) * 0.5,
+      clientY: (rect.top + rect.bottom) * 0.5,
+      target: { closest: () => null }
+    });
+
+    expect(setHoveredBattleSquad).toHaveBeenCalledWith('flagged');
+    expect(runtime.pickSquadAtPoint).not.toHaveBeenCalled();
+  });
+
+  test('selects the flagged squad before an overlapping soldier on click', () => {
+    const camera = new CameraController({ yawDeg: 0, pitchLow: 40, pitchHigh: 90, distance: 560 });
+    camera.setPitchImmediate(40);
+    camera.buildMatrices(1000, 500);
+    const runtime = {
+      getPhase: jest.fn(() => 'battle'),
+      getTrainingState: jest.fn(() => ({ points: 0 })),
+      sim: {
+        squads: [
+          { id: 'flagged', team: 'attacker', x: 0, y: 0, remain: 100, radius: 20 }
+        ]
+      },
+      pickSquadAtPoint: jest.fn(() => 'overlapping-soldier'),
+      setHoveredBattleSquad: jest.fn(),
+      setHoveredDeployDirectionArc: jest.fn()
+    };
+    const [rect] = resolveTrainingWorldFlagHitRects({
+      anchors: resolveTrainingDirectionArcAnchors(runtime),
+      camera,
+      viewportWidth: 1000,
+      viewportHeight: 500,
+      viewportCssHeight: 500
+    });
+    const selectBattleSquad = jest.fn();
+    const { controller } = createFixture({
+      camera,
+      getters: { isTrainingMode: () => true },
+      runtimeOverrides: {
+        ...runtime,
+        isTrainingMode: true,
+        callbacks: { selectBattleSquad }
+      }
+    });
+    const cleanup = controller.bindWindow();
+    const clientX = (rect.points[0].x + rect.points[2].x) * 0.5;
+    const clientY = rect.points[2].y;
+
+    controller.onMouseDown(sceneMouseDown({ clientX, clientY }));
+    window.dispatchEvent(new MouseEvent('mouseup', {
+      bubbles: true,
+      button: 0,
+      clientX,
+      clientY
+    }));
+
+    expect(selectBattleSquad).toHaveBeenCalledWith('flagged', true);
+    expect(runtime.pickSquadAtPoint).not.toHaveBeenCalled();
+    cleanup();
+  });
+
   test('selects a non-controllable battle squad from the battlefield', () => {
     const selectBattleSquad = jest.fn();
     const { controller, runtime } = createFixture({
@@ -385,6 +562,65 @@ describe('BattleInputController primary-button panning', () => {
     expect(callbacks.setSelectedSquadId).toHaveBeenCalledWith('defender-group');
   });
 
+  test('starts following the soldier squad after a training double click', () => {
+    const followBattleSquad = jest.fn(() => true);
+    const { controller, runtime } = createFixture({
+      getters: { isTrainingMode: () => true },
+      runtimeOverrides: {
+        pickSquadAtAgentPoint: jest.fn(() => 'soldier-squad'),
+        callbacks: { followBattleSquad }
+      }
+    });
+
+    controller.onDoubleClick(sceneMouseDown({ clientX: 320, clientY: 180 }));
+
+    expect(runtime.pickSquadAtAgentPoint).toHaveBeenCalledWith(320, 180, { team: 'any' });
+    expect(runtime.pickSquadAtPoint).not.toHaveBeenCalled();
+    expect(followBattleSquad).toHaveBeenCalledWith('soldier-squad');
+  });
+
+  test('starts following the flag owner before an overlapping soldier', () => {
+    const camera = new CameraController({ yawDeg: 0, pitchLow: 40, pitchHigh: 90, distance: 560 });
+    camera.setPitchImmediate(40);
+    camera.buildMatrices(1000, 500);
+    const runtime = {
+      getPhase: jest.fn(() => 'battle'),
+      getTrainingState: jest.fn(() => ({ points: 0 })),
+      sim: {
+        squads: [
+          { id: 'flagged', team: 'attacker', x: 0, y: 0, remain: 100, radius: 20 }
+        ]
+      },
+      pickSquadAtPoint: jest.fn(() => 'overlapping-soldier'),
+      setHoveredBattleSquad: jest.fn(),
+      setHoveredDeployDirectionArc: jest.fn()
+    };
+    const [rect] = resolveTrainingWorldFlagHitRects({
+      anchors: resolveTrainingDirectionArcAnchors(runtime),
+      camera,
+      viewportWidth: 1000,
+      viewportHeight: 500,
+      viewportCssHeight: 500
+    });
+    const followBattleSquad = jest.fn(() => true);
+    const { controller } = createFixture({
+      camera,
+      getters: { isTrainingMode: () => true },
+      runtimeOverrides: {
+        ...runtime,
+        callbacks: { followBattleSquad }
+      }
+    });
+
+    controller.onDoubleClick(sceneMouseDown({
+      clientX: (rect.points[0].x + rect.points[2].x) * 0.5,
+      clientY: rect.points[2].y
+    }));
+
+    expect(followBattleSquad).toHaveBeenCalledWith('flagged');
+    expect(runtime.pickSquadAtPoint).not.toHaveBeenCalled();
+  });
+
   test('pans while a deploy group is awaiting placement', () => {
     const { camera, controller, runtime } = createFixture({
       phase: 'deploy',
@@ -438,6 +674,37 @@ describe('BattleInputController primary-button panning', () => {
     expect(clearSelection).toHaveBeenCalledTimes(1);
     expect(callbacks.setSelectedSquadId).toHaveBeenCalledWith('');
     expect(runtime.pickDeployGroup).toHaveBeenCalled();
+    cleanup();
+  });
+
+  test('clears battle selection and follow on a blank training click', () => {
+    const clearSelection = jest.fn();
+    const clearFollow = jest.fn();
+    const syncBattleCards = jest.fn();
+    const { callbacks, camera, controller, runtime } = createFixture({
+      getters: { isTrainingMode: () => true },
+      runtimeOverrides: {
+        clearSelection,
+        pickSquadAtAgentPoint: jest.fn(() => '')
+      }
+    });
+    camera.clearFollow = clearFollow;
+    callbacks.syncBattleCards = syncBattleCards;
+    const cleanup = controller.bindWindow();
+
+    controller.onMouseDown(sceneMouseDown());
+    window.dispatchEvent(new MouseEvent('mouseup', {
+      bubbles: true,
+      button: 0,
+      clientX: 100,
+      clientY: 100
+    }));
+
+    expect(runtime.pickSquadAtAgentPoint).toHaveBeenCalledWith(100, 100, { team: 'any' });
+    expect(clearSelection).toHaveBeenCalledTimes(1);
+    expect(clearFollow).toHaveBeenCalledTimes(1);
+    expect(callbacks.setSelectedSquadId).toHaveBeenCalledWith('');
+    expect(syncBattleCards).toHaveBeenCalledTimes(1);
     cleanup();
   });
 
@@ -631,6 +898,54 @@ describe('BattleInputController training placement', () => {
 });
 
 describe('BattleInputController training direction arc', () => {
+  test('clears battle selection from a blank point outside the visible direction ribbon', () => {
+    const group = {
+      id: 'battle-direction-blank',
+      team: 'attacker',
+      x: 100,
+      y: 100,
+      remain: 20,
+      formationRect: { width: 80, depth: 40, facingRad: 0, directionOffsetRad: 0 }
+    };
+    const layout = resolveTrainingDirectionArcLayout(group, 'attacker');
+    const blankPoint = {
+      x: layout.apex.x + (layout.outward.x * 20),
+      y: layout.apex.y + (layout.outward.y * 20)
+    };
+    const clearSelection = jest.fn();
+    const { controller, refs } = createFixture({
+      phase: 'battle',
+      getters: {
+        getSelectedSquadId: () => group.id,
+        isTrainingMode: () => true
+      },
+      runtimeOverrides: {
+        getSquadById: jest.fn(() => group),
+        canControlSquad: jest.fn(() => true),
+        clearSelection,
+        pickSquadAtAgentPoint: jest.fn(() => ''),
+        setHoveredDeployDirectionArc: jest.fn()
+      }
+    });
+    const cleanup = controller.bindWindow();
+
+    controller.onMouseDown(sceneMouseDown({
+      clientX: blankPoint.x,
+      clientY: blankPoint.y,
+      target: { closest: () => null }
+    }));
+    window.dispatchEvent(new MouseEvent('mouseup', {
+      bubbles: true,
+      button: 0,
+      clientX: blankPoint.x,
+      clientY: blankPoint.y
+    }));
+
+    expect(refs.deployDirectionArcDragRef.current).toBeNull();
+    expect(clearSelection).toHaveBeenCalledTimes(1);
+    cleanup();
+  });
+
   test('highlights the selected formation arc and drags its snapped forward direction', () => {
     const group = {
       id: 'direction-group',

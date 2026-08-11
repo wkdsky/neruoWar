@@ -25,7 +25,6 @@ const useBattleSceneDerivedState = ({
   deployActionAnchorMode,
   worldActionsVisibleForSquadId,
   pendingPathPoints,
-  confirmDeleteGroupId,
   quickDeployRandomForm,
   debugEnabled,
   showMidlineDebug,
@@ -112,14 +111,6 @@ const useBattleSceneDerivedState = ({
     z: 0
   }) : null;
 
-  const confirmDeleteGroup = (
-    phase === 'deploy'
-    && confirmDeleteGroupId
-    && runtime
-  )
-    ? runtime.getDeployGroupById(confirmDeleteGroupId)
-    : null;
-
   const quickParsedAttackerTeams = parseQuickDeployNumber(quickDeployRandomForm.attackerTeamCount);
   const quickParsedDefenderTeams = parseQuickDeployNumber(quickDeployRandomForm.defenderTeamCount);
   const quickParsedAttackerTotal = parseQuickDeployNumber(quickDeployRandomForm.attackerTotal);
@@ -169,7 +160,6 @@ const useBattleSceneDerivedState = ({
     worldActionPos,
     selectedBattleActionSquad,
     pathPlanningTailDom,
-    confirmDeleteGroup,
     quickParsedAttackerTeams,
     quickParsedDefenderTeams,
     quickParsedAttackerTotal,

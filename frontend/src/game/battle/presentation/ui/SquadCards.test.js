@@ -33,7 +33,8 @@ const selectedSquad = {
   }],
   activeFormationId: 'line',
   formationRect: { width: 48, depth: 24 },
-  unitMetrics: { cohesiveSpeed: 1.1, totalAtk: 42, totalDef: 24, range: 3 }
+  unitMetrics: { cohesiveSpeed: 1.1, totalAtk: 42, totalDef: 24, range: 3 },
+  trainingSkillPoints: 4
 };
 
 describe('SquadCards training controls', () => {
@@ -44,7 +45,6 @@ describe('SquadCards training controls', () => {
         squads={[selectedSquad]}
         phase="deploy"
         isTrainingMode
-        trainingState={{ points: 4 }}
         onOpenSkillTree={onOpenSkillTree}
       />
     );
@@ -67,10 +67,9 @@ describe('SquadCards training controls', () => {
   test('keeps the skill row above the command row', () => {
     const { container } = render(
       <SquadCards
-        squads={[selectedSquad]}
+        squads={[{ ...selectedSquad, trainingSkillPoints: 2 }]}
         phase="deploy"
         isTrainingMode
-        trainingState={{ points: 2 }}
       />
     );
 
@@ -79,6 +78,21 @@ describe('SquadCards training controls', () => {
     const pointBadge = container.querySelector('.pve2-training-skill-point-badge');
     expect(skillRow.compareDocumentPosition(commandRow) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(pointBadge.textContent).toBe('2');
+  });
+
+  test('selects and follows a battle troop when its card is double clicked', () => {
+    const onFollow = jest.fn();
+    render(
+      <SquadCards
+        squads={[{ ...selectedSquad, action: '待命' }]}
+        phase="battle"
+        isTrainingMode
+        onFollow={onFollow}
+      />
+    );
+
+    fireEvent.doubleClick(screen.getByRole('button', { name: /混编先锋队/ }));
+    expect(onFollow).toHaveBeenCalledWith('training_squad_1', expect.anything());
   });
 
   test('keeps training battle commands and spacing choices together in the selected command strip', () => {
@@ -114,6 +128,8 @@ describe('SquadCards training controls', () => {
 
     fireEvent.click(screen.getByRole('button', { name: '自由攻击' }));
     expect(onBattleAction).toHaveBeenCalledWith('training_squad_1', 'freeAttack', expect.anything());
+
+    expect(screen.queryByRole('button', { name: '跟随部队' })).toBeNull();
 
     fireEvent.click(screen.getByRole('button', { name: '紧凑' }));
     expect(onFormationSpacingPick).toHaveBeenCalledWith('training_squad_1', 'compact');
@@ -158,5 +174,52 @@ describe('SquadCards training controls', () => {
     expect(onTemplateFill).toHaveBeenCalledWith(template, 'attacker');
     expect(onTemplateEdit).toHaveBeenCalledWith(template);
     expect(onTemplateDelete).toHaveBeenCalledWith(template);
+  });
+
+  test('switches each side to two columns after the single-column capacity', () => {
+    const squads = Array.from({ length: 9 }, (_, index) => ({
+      ...selectedSquad,
+      id: `training_squad_${index + 1}`,
+      name: `部队 ${index + 1}`,
+      selected: false
+    }));
+
+    const { container } = render(
+      <SquadCards
+        squads={[
+          ...squads,
+          ...squads.map((squad) => ({ ...squad, id: `defender_${squad.id}`, team: 'defender' }))
+        ]}
+        phase="deploy"
+        isTrainingMode
+      />
+    );
+
+    expect(container.querySelector('.pve2-card-strip.left').className).toContain('is-two-column');
+    expect(container.querySelector('.pve2-card-strip.right').className).toContain('is-two-column');
+  });
+
+  test('renders delete confirmation on the selected card', () => {
+    const onConfirmDelete = jest.fn();
+    const onCancelDelete = jest.fn();
+    const { container } = render(
+      <SquadCards
+        squads={[selectedSquad]}
+        phase="deploy"
+        confirmDeleteGroupId={selectedSquad.id}
+        onConfirmDelete={onConfirmDelete}
+        onCancelDelete={onCancelDelete}
+      />
+    );
+
+    const overlay = container.querySelector('.pve2-card-confirm-overlay');
+    expect(overlay).not.toBeNull();
+    expect(overlay.querySelectorAll('.pve2-card-confirm-button')).toHaveLength(2);
+
+    fireEvent.click(screen.getByRole('button', { name: '确认删除部队' }));
+    expect(onConfirmDelete).toHaveBeenCalledWith(selectedSquad.id);
+
+    fireEvent.click(screen.getByRole('button', { name: '取消删除部队' }));
+    expect(onCancelDelete).toHaveBeenCalledWith(selectedSquad.id);
   });
 });

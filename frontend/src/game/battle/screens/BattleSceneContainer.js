@@ -68,7 +68,6 @@ import {
   ORDER_MOVE,
   TEAM_ATTACKER,
   TEAM_DEFENDER,
-  createDefaultConfirmDeletePos,
   createDefaultDeployInfoState,
   createDefaultResultState,
   createDefaultTrainingPresentationSettings,
@@ -247,8 +246,6 @@ const BattleSceneContainer = ({
     setSelectedPaletteItemId,
     confirmDeleteGroupId,
     setConfirmDeleteGroupId,
-    confirmDeletePos,
-    setConfirmDeletePos,
     deployInfoState,
     setDeployInfoState,
     quickDeployOpen,
@@ -429,6 +426,7 @@ const BattleSceneContainer = ({
     runtimeRef,
     pipelineRef,
     cameraControllerRef: cameraRef,
+    skillConfirmState,
     idleFrameIntervalMs: isTrainingMode ? (1000 / 20) : 0,
     debugEnabled,
     callbacks: {
@@ -956,6 +954,7 @@ const BattleSceneContainer = ({
   const {
     syncBattleCards,
     selectBattleSquad,
+    followBattleSquad,
     closeSkillConfirm,
     closeSkillPick,
     commitPathPlanning,
@@ -973,6 +972,7 @@ const BattleSceneContainer = ({
     worldToDomRef,
     isTrainingMode,
     selectedSquadId,
+    paused,
     battleUiMode,
     pendingPathPoints,
     setCards,
@@ -1030,6 +1030,7 @@ const BattleSceneContainer = ({
     glCanvasRef,
     runtimeRef,
     cameraRef,
+    pipelineRef,
     worldToScreenRef,
     pointerWorldRef,
     panDragRef,
@@ -1049,6 +1050,7 @@ const BattleSceneContainer = ({
     isPathPointBlocked,
     syncBattleCards,
     selectBattleSquad,
+    followBattleSquad,
     closeSkillConfirm,
     closeSkillPick,
     closeSpacingPick,
@@ -1099,7 +1101,6 @@ const BattleSceneContainer = ({
     handleConfirmDeployDelete
   } = useBattleDeployGroupActions({
     runtimeRef,
-    glCanvasRef,
     pointerWorldRef,
     isTrainingMode,
     confirmDeleteGroupId,
@@ -1110,7 +1111,6 @@ const BattleSceneContainer = ({
     setMinimapSnapshot,
     setDeployNotice,
     setConfirmDeleteGroupId,
-    setConfirmDeletePos,
     onDeployGroupRemoved: handleDeployGroupRemoved
   });
 
@@ -1137,8 +1137,6 @@ const BattleSceneContainer = ({
     } else {
       runtime.setSelectedBattleSquad(result.squadId);
       runtime.setFocusSquad(result.squadId);
-      const anchor = runtime.getFocusAnchor();
-      cameraRef.current.beginFocusTransition(anchor);
       setSelectedSquadId(result.squadId);
       setWorldActionsVisibleForSquadId('');
       setPendingPathPoints([]);
@@ -1160,7 +1158,6 @@ const BattleSceneContainer = ({
     syncTrainingUi();
   }, [
     battleUiMode,
-    cameraRef,
     isTrainingMode,
     phase,
     runtimeRef,
@@ -1285,6 +1282,37 @@ const BattleSceneContainer = ({
     syncTrainingUi();
   }, [phase, runtimeRef, setDeployNotice, skillTreeModal.groupId, skillTreeModal.slotIndex, skillTreeModal.treeCategory, syncTrainingUi]);
 
+  const handleTrainingTreeSkillUpgrade = useCallback((skill, meta = {}) => {
+    const runtime = runtimeRef.current;
+    if (!runtime || !skill || !skillTreeModal.groupId || phase !== 'battle') return;
+    const category = skillTreeModal.treeCategory || meta.treeCategory;
+    const result = runtime.upgradeTrainingSkill?.(skillTreeModal.groupId, category, skill.id);
+    if (!result?.ok) {
+      setDeployNotice(result?.reason || '技能升级失败');
+      return;
+    }
+    const progress = runtime.getTrainingSkillTreeProgress?.(skillTreeModal.groupId, category) || { unlocked: [], levels: {} };
+    setSkillTreeModal((prev) => ({ ...prev, progress }));
+    setDeployNotice(`${skill.name} 已升级至 Lv${result.level}`);
+    syncTrainingUi();
+  }, [phase, runtimeRef, setDeployNotice, skillTreeModal.groupId, skillTreeModal.treeCategory, syncTrainingUi]);
+
+  const handleTrainingTreeAdjustSkillPoints = useCallback((delta) => {
+    const runtime = runtimeRef.current;
+    if (!runtime || !skillTreeModal.groupId) return;
+    const result = runtime.adjustTrainingSquadSkillPoints?.(skillTreeModal.groupId, delta);
+    if (!result?.ok) {
+      setDeployNotice(result?.reason || '技能点调整失败');
+      return;
+    }
+    const category = skillTreeModal.treeCategory;
+    const progress = category
+      ? runtime.getTrainingSkillTreeProgress?.(skillTreeModal.groupId, category) || { unlocked: [], levels: {} }
+      : { unlocked: [], levels: {}, points: result.pointState?.points || 0 };
+    setSkillTreeModal((prev) => ({ ...prev, progress }));
+    syncTrainingUi();
+  }, [runtimeRef, setDeployNotice, skillTreeModal.groupId, skillTreeModal.treeCategory, syncTrainingUi]);
+
   const handleTrainingTreeUnbind = useCallback(() => {
     const runtime = runtimeRef.current;
     if (!runtime || phase !== 'deploy' || !skillTreeModal.groupId) return;
@@ -1310,24 +1338,22 @@ const BattleSceneContainer = ({
   const handleCastTrainingSkillSlot = useCallback((groupId, slotIndex = 0) => {
     const runtime = runtimeRef.current;
     if (!runtime || phase !== 'battle') return;
-    const result = runtime.commandSkillSlot?.(groupId, slotIndex, {
-      x: Number(pointerWorldRef.current?.x) || 0,
-      y: Number(pointerWorldRef.current?.y) || 0
-    });
-    if (!result?.ok) {
-      setDeployNotice(result?.reason || '技能施放失败');
+    const skill = runtime.getSkillMetaForSquad?.(groupId)?.skills?.[slotIndex];
+    if (!skill || !skill.available) {
+      setDeployNotice(skill ? '技能冷却中或当前兵种不可施放' : '技能槽为空');
       return;
     }
+    handleSkillPick(skill, { squadId: groupId });
     syncTrainingUi();
-  }, [phase, pointerWorldRef, runtimeRef, setDeployNotice, syncTrainingUi]);
+  }, [handleSkillPick, phase, runtimeRef, setDeployNotice, syncTrainingUi]);
 
   const handleTrainingSkillHotkey = useCallback((slotIndex = 0) => {
     if (!isTrainingMode || phase !== 'battle' || !selectedSquadId) return;
     handleCastTrainingSkillSlot(selectedSquadId, slotIndex);
   }, [handleCastTrainingSkillSlot, isTrainingMode, phase, selectedSquadId]);
 
-  const handleTrainingAdjustSkillPoints = useCallback((delta) => {
-    const result = runtimeRef.current?.adjustTrainingSkillPoints?.(delta);
+  const handleTrainingPointIntervalChange = useCallback((intervalSec) => {
+    const result = runtimeRef.current?.setTrainingSkillPointInterval?.(intervalSec);
     if (!result?.ok) {
       if (result?.reason) setDeployNotice(result.reason);
       return;
@@ -1335,8 +1361,8 @@ const BattleSceneContainer = ({
     setTrainingState(result.state);
   }, [runtimeRef, setDeployNotice, setTrainingState]);
 
-  const handleTrainingPointIntervalChange = useCallback((intervalSec) => {
-    const result = runtimeRef.current?.setTrainingSkillPointInterval?.(intervalSec);
+  const handleTrainingAutoSkillPointGainChange = useCallback((enabled) => {
+    const result = runtimeRef.current?.setTrainingAutoSkillPointGainEnabled?.(enabled);
     if (!result?.ok) {
       if (result?.reason) setDeployNotice(result.reason);
       return;
@@ -1468,7 +1494,6 @@ const BattleSceneContainer = ({
     setDeployDraggingGroup,
     setDeployActionAnchorMode,
     setConfirmDeleteGroupId,
-    setConfirmDeletePos,
     setSelectedPaletteItemId,
     setDeployNotice
   });
@@ -1486,7 +1511,6 @@ const BattleSceneContainer = ({
     worldActionsVisibleForSquadId,
     aimStateActive: aimState.active,
     setConfirmDeleteGroupId,
-    setConfirmDeletePos,
     setDeployInfoState,
     handleCloseQuickDeploy,
     handleCloseTemplateFillPreview,
@@ -1554,7 +1578,6 @@ const BattleSceneContainer = ({
     worldActionPos,
     selectedBattleActionSquad,
     pathPlanningTailDom,
-    confirmDeleteGroup,
     quickParsedAttackerTeams,
     quickParsedDefenderTeams,
     quickParsedAttackerTotal,
@@ -1576,7 +1599,6 @@ const BattleSceneContainer = ({
     deployActionAnchorMode,
     worldActionsVisibleForSquadId,
     pendingPathPoints,
-    confirmDeleteGroupId,
     quickDeployRandomForm,
     debugEnabled,
     showMidlineDebug,
@@ -1621,26 +1643,26 @@ const BattleSceneContainer = ({
     }
   }, [deployInfoData, deployInfoState.open, phase, setDeployInfoState]);
 
-  const confirmOpen = phase === 'deploy' && !!confirmDeleteGroup && !deployPlacementLocked;
-  const confirmInitialPosition = useMemo(() => {
-    if (!confirmOpen) return null;
-    const sceneRect = sceneRef.current?.getBoundingClientRect();
-    if (!sceneRect) return null;
-    return {
-      x: sceneRect.left + (Number(confirmDeletePos?.x) || 0) - 160,
-      y: sceneRect.top + (Number(confirmDeletePos?.y) || 0) - 72
-    };
-  }, [confirmDeletePos?.x, confirmDeletePos?.y, confirmOpen]);
+  const clearDeleteConfirmation = useCallback(() => {
+    setConfirmDeleteGroupId('');
+  }, [setConfirmDeleteGroupId]);
 
-  const {
-    panelRef: confirmPanelRef,
-    panelStyle: confirmPanelStyle,
-    handleHeaderPointerDown: handleConfirmHeaderPointerDown
-  } = useDraggablePanel({
-    open: confirmOpen,
-    initialPosition: confirmInitialPosition,
-    defaultSize: { width: 360, height: 180 }
-  });
+  useEffect(() => {
+    if (!confirmDeleteGroupId) return undefined;
+    const dismissDeleteConfirmation = (event) => {
+      const target = event.target;
+      if (target && typeof target.closest === 'function' && target.closest('.pve2-card-confirm-overlay')) {
+        return;
+      }
+      clearDeleteConfirmation();
+    };
+    document.addEventListener('pointerdown', dismissDeleteConfirmation, true);
+    document.addEventListener('click', dismissDeleteConfirmation, true);
+    return () => {
+      document.removeEventListener('pointerdown', dismissDeleteConfirmation, true);
+      document.removeEventListener('click', dismissDeleteConfirmation, true);
+    };
+  }, [clearDeleteConfirmation, confirmDeleteGroupId]);
 
   const {
     panelRef: resultPanelRef,
@@ -1740,20 +1762,27 @@ const BattleSceneContainer = ({
               pendingPathPoints={pendingPathPoints}
               planningHoverPoint={planningHoverPoint}
               skillConfirmState={skillConfirmState}
+              isTrainingMode={isTrainingMode}
             />
 
             {isTrainingMode ? (
               <TrainingFlagLabels
                 squads={cards}
-                trainingState={trainingState}
                 phase={phase}
                 runtimeRef={runtimeRef}
                 worldToDomRef={worldToDomRef}
                 cameraRef={cameraRef}
+                onHoverSquad={(squadId) => {
+                  const runtime = runtimeRef.current;
+                  if (!runtime) return;
+                  if (phase === 'deploy') runtime.setHoveredDeployGroup?.(squadId);
+                  else runtime.setHoveredBattleSquad?.(squadId);
+                }}
+                onSelectSquad={(squadId) => handleCardSelect(squadId)}
               />
             ) : null}
 
-            {phase === 'deploy' && selectedDeployFormation && !deployPlacementLocked ? (
+            {!isTrainingMode && phase === 'deploy' && selectedDeployFormation && !deployPlacementLocked ? (
               <div className="pve2-formation-overlay">
                 {selectedDeployFormationLines.map((style, idx) => (
                   <div key={`formation-line-${idx}`} className="pve2-formation-line" style={style} />
@@ -1781,6 +1810,7 @@ const BattleSceneContainer = ({
               disabled={deployPlacementLocked}
               onFocus={handleCardFocus}
               onSelect={handleCardSelect}
+              onFollow={followBattleSquad}
               hoverSquadIdOnCard={hoverSquadIdOnCard}
               onCardHoverChange={setHoverSquadIdOnCard}
               onBattleAction={handleBattleActionClick}
@@ -1789,6 +1819,9 @@ const BattleSceneContainer = ({
               onDeployEdit={handleDeployEditWithInfoClose}
               onDeployFormation={(groupId, event) => openFormationWheelForGroup(groupId, event)}
               onDeployDelete={handleDeployDeleteWithInfoClose}
+              confirmDeleteGroupId={confirmDeleteGroupId}
+              onConfirmDelete={handleConfirmDeployDeleteWithInfoClose}
+              onCancelDelete={clearDeleteConfirmation}
               onControlModeToggle={handleDeployControlModeToggle}
               onBattleControlModeToggle={handleTrainingBattleControlModeToggle}
               onReorder={handleDeployReorder}
@@ -1800,7 +1833,6 @@ const BattleSceneContainer = ({
               onFormationReorder={isTrainingMode ? handleReorderDeployFormations : undefined}
               trainingSkillTreeOpen={skillTreeModal.open && skillTreeModal.groupId === selectedCardRow?.id}
               trainingSkillTreeSlotIndex={skillTreeModal.groupId === selectedCardRow?.id ? skillTreeModal.slotIndex : -1}
-              trainingState={trainingState}
               trainingSkillTreeProgress={selectedTrainingSkillTreeProgress}
               armyTemplates={armyTemplates}
               armyTemplatesLoading={armyTemplatesLoading}
@@ -1899,7 +1931,15 @@ const BattleSceneContainer = ({
               <div className="pve2-aim-tip">路径规划中：LMB 添加路点，RMB 撤销，点击最后路径点“√”执行</div>
             ) : null}
             {battleUiMode === BATTLE_UI_MODE_SKILL_CONFIRM ? (
-              <div className="pve2-aim-tip">技能确认态：LMB 确认释放，RMB 取消</div>
+              <div className="pve2-aim-tip">
+                {skillConfirmState?.targetMode === 'direction'
+                  ? '近战出击方向：移动鼠标旋转地面箭头，红环为可能命中目标，LMB 确认，RMB 取消'
+                  : skillConfirmState?.targetMode === 'enemy'
+                    ? '选择敌方部队：悬停目标后红环提示，LMB 确认，RMB 取消'
+                    : skillConfirmState?.profile?.castStyle === 'melee'
+                      ? '选择近战突击地点：圆形地点跟随鼠标，箭头表示突进方向，LMB 确认，RMB 取消'
+                      : '选择远程打击区域：地面圆圈跟随鼠标，红环为可能命中目标，LMB 确认，RMB 取消'}
+              </div>
             ) : null}
             {runtimeDebugOverlay.enabled ? (
               <div className="pve2-runtime-debug">
@@ -2016,44 +2056,6 @@ const BattleSceneContainer = ({
               <div className="pve2-deploy-notice" role="status" aria-live="polite">{deployNotice}</div>
             ) : null}
 
-            {confirmOpen ? (
-              <div
-                ref={confirmPanelRef}
-                className="pve2-confirm"
-                style={confirmPanelStyle}
-                onMouseDown={(event) => event.stopPropagation()}
-                onMouseUp={(event) => event.stopPropagation()}
-                onPointerDown={(event) => event.stopPropagation()}
-                onClick={(event) => event.stopPropagation()}
-              >
-                <div className="pve2-confirm-head pve2-drag-handle" onPointerDown={handleConfirmHeaderPointerDown}>
-                  <p>{`确认删除部队「${confirmDeleteGroup.name || '未命名部队'}」吗？`}</p>
-                </div>
-                <div className="pve2-confirm-actions">
-                  <button
-                    type="button"
-                    className="btn btn-secondary btn-small"
-                    data-no-drag
-                    onPointerDown={(event) => event.stopPropagation()}
-                    onClick={() => {
-                      setConfirmDeleteGroupId('');
-                      setConfirmDeletePos(createDefaultConfirmDeletePos());
-                    }}
-                  >
-                    取消
-                  </button>
-                  <button
-                    type="button"
-                    className="btn btn-warning btn-small"
-                    data-no-drag
-                    onPointerDown={(event) => event.stopPropagation()}
-                    onClick={handleConfirmDeployDeleteWithInfoClose}
-                  >
-                    确认删除
-                  </button>
-                </div>
-              </div>
-            ) : null}
           </div>
 
           {isTrainingMode ? (
@@ -2064,10 +2066,12 @@ const BattleSceneContainer = ({
               treeCategory={skillTreeModal.treeCategory}
               phase={phase}
               progress={skillTreeModal.progress}
-              trainingState={trainingState}
+              skillPoints={skillTreeModalGroup?.trainingSkillPoints || 0}
               onClose={closeTrainingSkillTree}
               onTreeChange={handleTrainingTreeCategoryChange}
               onSkillClick={handleTrainingTreeSkillClick}
+              onSkillUpgrade={handleTrainingTreeSkillUpgrade}
+              onAdjustPoints={handleTrainingTreeAdjustSkillPoints}
               onUnbind={handleTrainingTreeUnbind}
             />
           ) : null}
@@ -2078,7 +2082,7 @@ const BattleSceneContainer = ({
               state={trainingState}
               settings={trainingPresentationSettings}
               onClose={() => setTrainingSettingsOpen(false)}
-              onAdjustPoints={handleTrainingAdjustSkillPoints}
+              onChangeAutoSkillPointGain={handleTrainingAutoSkillPointGainChange}
               onChangeInterval={handleTrainingPointIntervalChange}
               onApply={handleApplyTrainingPresentationSettings}
             />

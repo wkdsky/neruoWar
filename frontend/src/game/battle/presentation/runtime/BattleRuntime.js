@@ -13,9 +13,14 @@ import {
   updateCrowdSim,
   triggerCrowdSkill
 } from '../../simulation/crowd/CrowdSim';
+import { querySpatialNearby } from '../../simulation/crowd/crowdPhysics';
 import { degToRad, normalizeDeg } from '../../shared/angle';
 import { limitNameByDisplayWidth } from '../../shared/nameLimits';
 import { snapTrainingDirectionOffset } from '../../shared/trainingDirectionArc';
+import {
+  TRAINING_SELECTED_UNIT_MAX_PICK_RADIUS,
+  resolveTrainingAgentSelectionRadius
+} from '../../shared/trainingUnitSelection';
 import { buildBattleSummary } from './BattleSummary';
 import {
   buildRepConfig,
@@ -37,12 +42,19 @@ import {
   getAllowedSkillTreeCategories,
   getSkillById,
   getSkillCooldownSeconds,
+  getSkillLevel,
+  getSkillMaxLevel,
   getSkillTreeFirstActiveSkill,
   getSkillTreeById,
+  getSkillUpgradeCost,
   getSkillUnlockCost,
   normalizeSkillSlots,
   normalizeSkillTreeProgress
 } from '../../../../components/game/skillTree/skillTreeData';
+import {
+  getSkillCastProfile,
+  getSkillTargetingHint
+} from '../../../../components/game/skillTree/skillCastProfiles';
 
 const DEFAULT_FIELD_WIDTH = 2700;
 const DEFAULT_FIELD_HEIGHT = 1488;
@@ -151,6 +163,39 @@ const resolveTrainingSkillClass = (treeCategory = '', squad = null) => {
     return classTag === 'cavalry' ? 'cavalry' : 'infantry';
   }
   return CLASS_TAG_SET.has(String(squad?.classTag || '').trim()) ? squad.classTag : 'infantry';
+};
+
+const resolveTrainingSkillCastProfile = (profile = {}, level = 1) => {
+  const safeLevel = Math.max(1, Math.floor(Number(level) || 1));
+  if (safeLevel <= 1) return profile;
+  const strengthMultiplier = 1 + ((safeLevel - 1) * 0.12);
+  const rangeMultiplier = 1 + ((safeLevel - 1) * 0.06);
+  const durationMultiplier = 1 + ((safeLevel - 1) * 0.08);
+  const statusEffect = profile?.statusEffect && typeof profile.statusEffect === 'object'
+    ? Object.fromEntries(Object.entries(profile.statusEffect).map(([key, value]) => {
+      if (!key.endsWith('Mul') || !Number.isFinite(Number(value))) return [key, value];
+      return [key, 1 + ((Number(value) - 1) * strengthMultiplier)];
+    }))
+    : null;
+  return {
+    ...profile,
+    damageMul: Math.max(0, Number(profile?.damageMul) || 0) * strengthMultiplier,
+    aoeRadius: Math.max(0, Number(profile?.aoeRadius) || 0) * rangeMultiplier,
+    maxRange: Math.max(0, Number(profile?.maxRange) || 0) * rangeMultiplier,
+    durationSec: Math.max(0, Number(profile?.durationSec) || 0) * durationMultiplier,
+    statusEffect,
+    skillLevel: safeLevel
+  };
+};
+
+const resolveSkillAnchor = (squad = null, sourceCategory = '', fallbackClassTag = 'infantry') => {
+  const categoryCenter = squad?.skillCenters?.[sourceCategory];
+  const classCenter = squad?.classCenters?.[fallbackClassTag];
+  const source = categoryCenter || classCenter || squad || {};
+  return {
+    x: Number(source?.x) || Number(squad?.x) || 0,
+    y: Number(source?.y) || Number(squad?.y) || 0
+  };
 };
 
 const normalizeTrainingSkillPointInterval = (value) => {
@@ -619,6 +664,8 @@ const buildSkillMetaFromSquad = (squad = null, unitTypeMap = new Map()) => {
     const count = Math.max(0, Number(classCounts[classTag]) || 0);
     if (count <= 0) return;
     const skillMeta = SKILL_META_BY_CLASS[classTag] || SKILL_META_BY_CLASS.infantry;
+    const treeCategory = classTag === 'archer' || classTag === 'artillery' ? 'ranged' : 'melee';
+    const castProfile = getSkillCastProfile(skillMeta.id, treeCategory);
     const cooldownTotal = Math.max(0.1, Number(SKILL_COOLDOWN_BY_CLASS[classTag]) || 6);
     const cooldownRemain = Math.max(
       0,
@@ -631,6 +678,10 @@ const buildSkillMetaFromSquad = (squad = null, unitTypeMap = new Map()) => {
       name: skillMeta.name,
       kind: classTag,
       classTag,
+      sourceCategory: castProfile.sourceCategory,
+      targetMode: castProfile.targetMode,
+      targetHint: getSkillTargetingHint(castProfile),
+      castProfile,
       count: Math.round(count),
       description: SKILL_DESC_BY_CLASS[classTag] || '',
       icon: skillMeta.icon,
@@ -1541,6 +1592,17 @@ const createSquad = ({
     underAttackTimer: 0,
     attackCooldown: 0,
     effectBuff: null,
+    statusEffects: [],
+    skillCenters: {
+      melee: { x: startX, y: startY, count: 0 },
+      ranged: { x: startX, y: startY, count: 0 },
+      support: { x: startX, y: startY, count: 0 }
+    },
+    skillCategoryCounts: {
+      melee: 0,
+      ranged: 0,
+      support: 0
+    },
     fatigueTimer: 0,
     unitsPerSoldier: Math.max(1, Number(unitsPerSoldier) || DEFAULT_UNITS_PER_SOLDIER),
     rallyPoint: {
@@ -1683,8 +1745,8 @@ export default class BattleRuntime {
     const trainingConfig = this.initData?.training && typeof this.initData.training === 'object'
       ? this.initData.training
       : {};
-    // A training session always enters preparation with no earned points.
-    this.trainingSkillPoints = 0;
+    this.trainingSkillPointsBySquad = new Map();
+    this.trainingAutoSkillPointGainEnabled = trainingConfig.autoSkillPointGainEnabled === true;
     this.trainingSkillPointIntervalSec = normalizeTrainingSkillPointInterval(
       trainingConfig.skillPointIntervalSec
         ?? this.initData?.rules?.skillPointIntervalSec
@@ -1697,6 +1759,7 @@ export default class BattleRuntime {
 
     this.selectedDeploySquadId = '';
     this.hoveredDeploySquadId = '';
+    this.hoveredBattleSquadId = '';
     this.hoveredDeployDirectionArcId = '';
     this.focusSquadId = '';
     this.selectedBattleSquadId = '';
@@ -1759,26 +1822,67 @@ export default class BattleRuntime {
     const interval = Math.max(1, Number(this.trainingSkillPointIntervalSec) || DEFAULT_TRAINING_SKILL_POINT_INTERVAL_SEC);
     const accumulator = Math.max(0, Number(this.trainingSkillPointAccumulatorSec) || 0);
     return {
-      points: Math.max(0, Math.floor(Number(this.trainingSkillPoints) || 0)),
+      autoSkillPointGainEnabled: this.trainingAutoSkillPointGainEnabled === true,
       pointIntervalSec: interval,
       pointIntervals: this.getTrainingSkillPointIntervals(),
-      nextPointInSec: this.phase === 'battle'
+      nextPointInSec: this.trainingAutoSkillPointGainEnabled && this.phase === 'battle'
         ? Math.max(0, interval - (accumulator % interval))
-        : interval,
+        : 0,
       accumulatorSec: accumulator,
-      sessionActive: this.isTrainingSessionActive()
+      sessionActive: this.isTrainingSessionActive(),
+      skillPointsBySquad: Object.fromEntries(
+        Array.from(this.trainingSkillPointsBySquad.entries()).map(([squadId, points]) => [
+          squadId,
+          Math.max(0, Math.floor(Number(points) || 0))
+        ])
+      )
+    };
+  }
+
+  getTrainingSkillPointOwnerId(groupId = '') {
+    const safeGroupId = String(groupId || '').trim();
+    if (!safeGroupId) return '';
+    const squad = this.getSquadById(safeGroupId);
+    const group = squad || this.getDeployGroupById(safeGroupId, TEAM_ANY);
+    return String(group?.sourceDeployGroupId || group?.id || safeGroupId).trim();
+  }
+
+  getTrainingSquadSkillPointState(groupId = '') {
+    const ownerId = this.getTrainingSkillPointOwnerId(groupId);
+    return {
+      groupId: ownerId,
+      points: ownerId
+        ? Math.max(0, Math.floor(Number(this.trainingSkillPointsBySquad.get(ownerId)) || 0))
+        : 0
+    };
+  }
+
+  adjustTrainingSquadSkillPoints(groupId = '', delta = 0) {
+    if (!this.isTrainingMode) return { ok: false, reason: '仅训练场可调整技能点' };
+    const safeGroupId = String(groupId || '').trim();
+    const group = this.getSquadById(safeGroupId) || this.getDeployGroupById(safeGroupId, TEAM_ANY);
+    if (!group) return { ok: false, reason: '未找到部队' };
+    const ownerId = this.getTrainingSkillPointOwnerId(group.id);
+    if (!ownerId) return { ok: false, reason: '部队技能点归属无效' };
+    const safeDelta = Math.trunc(Number(delta) || 0);
+    const points = clamp(
+      Math.floor(Number(this.trainingSkillPointsBySquad.get(ownerId)) || 0) + safeDelta,
+      0,
+      9999
+    );
+    this.trainingSkillPointsBySquad.set(ownerId, points);
+    return {
+      ok: true,
+      pointState: { groupId: ownerId, points },
+      state: this.getTrainingState()
     };
   }
 
   adjustTrainingSkillPoints(delta = 0) {
-    if (!this.isTrainingMode) return { ok: false, reason: '仅训练场可调整技能点' };
-    const safeDelta = Math.trunc(Number(delta) || 0);
-    this.trainingSkillPoints = clamp(
-      Math.floor(Number(this.trainingSkillPoints) || 0) + safeDelta,
-      0,
-      9999
-    );
-    return { ok: true, state: this.getTrainingState() };
+    const targetId = this.selectedBattleSquadId
+      || this.selectedDeploySquadId
+      || this.focusSquadId;
+    return this.adjustTrainingSquadSkillPoints(targetId, delta);
   }
 
   setTrainingSkillPointInterval(intervalSec = DEFAULT_TRAINING_SKILL_POINT_INTERVAL_SEC) {
@@ -1791,30 +1895,40 @@ export default class BattleRuntime {
     return { ok: true, state: this.getTrainingState() };
   }
 
+  setTrainingAutoSkillPointGainEnabled(enabled = false) {
+    if (!this.isTrainingMode) return { ok: false, reason: '仅训练场可调整技能点获取方式' };
+    this.trainingAutoSkillPointGainEnabled = enabled === true;
+    this.trainingSkillPointAccumulatorSec = 0;
+    return { ok: true, state: this.getTrainingState() };
+  }
+
   getTrainingSkillTreeProgress(groupId = '', treeCategory = '') {
     const group = this.getDeployGroupById(groupId, TEAM_ANY) || this.getSquadById(groupId);
     const safeCategory = String(treeCategory || '').trim();
     const tree = getSkillTreeById(safeCategory);
-    if (!group || !tree) return { treeCategory: safeCategory, unlocked: [] };
+    if (!group || !tree) return { treeCategory: safeCategory, unlocked: [], levels: {}, points: 0 };
     const allowed = new Set(
       Array.isArray(group?.unitCategories)
         ? group.unitCategories
         : getGroupSkillTreeCategories(group?.units || {}, this.unitTypeMap)
     );
-    if (!allowed.has(safeCategory)) return { treeCategory: safeCategory, unlocked: [] };
-    const key = `${String(group.id || groupId)}:${safeCategory}`;
+    if (!allowed.has(safeCategory)) return { treeCategory: safeCategory, unlocked: [], levels: {}, points: 0 };
+    const ownerId = this.getTrainingSkillPointOwnerId(group.id);
+    const key = `${ownerId}:${safeCategory}`;
     const existing = this.trainingSkillTreeProgress.get(key);
     const normalized = normalizeSkillTreeProgress({ [safeCategory]: existing || {} })[safeCategory];
     this.trainingSkillTreeProgress.set(key, normalized);
     return {
       treeCategory: safeCategory,
-      unlocked: [...normalized.unlocked]
+      unlocked: [...normalized.unlocked],
+      levels: { ...normalized.levels },
+      points: this.getTrainingSquadSkillPointState(group.id).points
     };
   }
 
-  unlockTrainingSkill(groupId = '', treeCategory = '', skillId = '') {
+  upgradeTrainingSkill(groupId = '', treeCategory = '', skillId = '') {
     if (!this.isTrainingMode || this.phase !== 'battle') {
-      return { ok: false, reason: '仅训练过程中可点亮技能' };
+      return { ok: false, reason: '仅训练过程中可点亮或升级技能' };
     }
     const group = this.getSquadById(groupId);
     const tree = getSkillTreeById(treeCategory);
@@ -1822,16 +1936,33 @@ export default class BattleRuntime {
     if (!group || !tree || !skill) return { ok: false, reason: '技能不存在' };
     if (!this.canControlSquad(group)) return { ok: false, reason: '该部队由 AI 接管' };
     const progress = this.getTrainingSkillTreeProgress(groupId, treeCategory);
-    if (progress.unlocked.includes(skill.id)) return { ok: true, unlocked: progress.unlocked, state: this.getTrainingState() };
-    const prerequisitesReady = (skill.prerequisites || []).every((id) => progress.unlocked.includes(id));
+    const currentLevel = getSkillLevel(progress, skill);
+    if (currentLevel >= getSkillMaxLevel(skill)) return { ok: false, reason: '技能已满级' };
+    const prerequisitesReady = currentLevel > 0 || (skill.prerequisites || []).every((id) => (
+      getSkillLevel(progress, getSkillById(treeCategory, id)) > 0
+    ));
     if (!prerequisitesReady) return { ok: false, reason: '需要先点亮前置技能' };
-    const cost = getSkillUnlockCost(skill);
-    if ((Number(this.trainingSkillPoints) || 0) < cost) return { ok: false, reason: `技能点不足（需要 ${cost} 点）` };
-    this.trainingSkillPoints = Math.max(0, Math.floor(Number(this.trainingSkillPoints) || 0) - cost);
-    const key = `${String(group.id || groupId)}:${String(treeCategory || '')}`;
+    const cost = getSkillUpgradeCost(skill, currentLevel);
+    const pointState = this.getTrainingSquadSkillPointState(group.id);
+    if (pointState.points < cost) return { ok: false, reason: `技能点不足（需要 ${cost} 点）` };
+    const nextPoints = pointState.points - cost;
+    this.trainingSkillPointsBySquad.set(pointState.groupId, nextPoints);
+    const key = `${pointState.groupId}:${String(treeCategory || '')}`;
+    const nextLevels = { ...progress.levels, [skill.id]: currentLevel + 1 };
     const nextUnlocked = Array.from(new Set([...progress.unlocked, skill.id]));
-    this.trainingSkillTreeProgress.set(key, { unlocked: nextUnlocked });
-    return { ok: true, unlocked: nextUnlocked, state: this.getTrainingState() };
+    this.trainingSkillTreeProgress.set(key, { unlocked: nextUnlocked, levels: nextLevels });
+    return {
+      ok: true,
+      unlocked: nextUnlocked,
+      level: currentLevel + 1,
+      cost,
+      pointState: { groupId: pointState.groupId, points: nextPoints },
+      state: this.getTrainingState()
+    };
+  }
+
+  unlockTrainingSkill(groupId = '', treeCategory = '', skillId = '') {
+    return this.upgradeTrainingSkill(groupId, treeCategory, skillId);
   }
 
   equipTrainingSkill(groupId = '', slotIndex = 0, skillId = '') {
@@ -1859,18 +1990,21 @@ export default class BattleRuntime {
 
   initializeTrainingSkillTreeProgressForSquad(squad = null) {
     if (!this.isTrainingMode || !squad?.id) return;
-    const addSkillWithPrerequisites = (treeCategory, skillId, unlocked) => {
+    const addSkillWithPrerequisites = (treeCategory, skillId, unlocked, levels) => {
       const skill = getSkillById(treeCategory, skillId);
       if (!skill || unlocked.has(skill.id)) return;
-      (skill.prerequisites || []).forEach((prerequisiteId) => addSkillWithPrerequisites(treeCategory, prerequisiteId, unlocked));
+      (skill.prerequisites || []).forEach((prerequisiteId) => addSkillWithPrerequisites(treeCategory, prerequisiteId, unlocked, levels));
       unlocked.add(skill.id);
+      levels[skill.id] = Math.max(1, Number(levels[skill.id]) || 0);
     };
     normalizeSkillSlots(squad.skillSlots).forEach((slot) => {
       if (!slot.treeCategory) return;
       const current = this.getTrainingSkillTreeProgress(squad.id, slot.treeCategory);
       const unlocked = new Set(current.unlocked);
-      addSkillWithPrerequisites(slot.treeCategory, slot.skillId, unlocked);
-      this.trainingSkillTreeProgress.set(`${squad.id}:${slot.treeCategory}`, { unlocked: Array.from(unlocked) });
+      const levels = { ...current.levels };
+      addSkillWithPrerequisites(slot.treeCategory, slot.skillId, unlocked, levels);
+      const ownerId = this.getTrainingSkillPointOwnerId(squad.id);
+      this.trainingSkillTreeProgress.set(`${ownerId}:${slot.treeCategory}`, { unlocked: Array.from(unlocked), levels });
     });
   }
 
@@ -1882,7 +2016,8 @@ export default class BattleRuntime {
       initialBuildings: cloneJsonValue(this.initialBuildings, []),
       selectedDeploySquadId: this.selectedDeploySquadId,
       focusSquadId: this.focusSquadId,
-      trainingSkillPoints: this.trainingSkillPoints,
+      trainingSkillPointsBySquad: Array.from(this.trainingSkillPointsBySquad.entries()),
+      trainingAutoSkillPointGainEnabled: this.trainingAutoSkillPointGainEnabled === true,
       trainingSkillPointIntervalSec: this.trainingSkillPointIntervalSec,
       trainingSkillPointAccumulatorSec: this.trainingSkillPointAccumulatorSec,
       trainingSkillTreeProgress: Array.from(this.trainingSkillTreeProgress.entries())
@@ -1898,7 +2033,12 @@ export default class BattleRuntime {
       this.initialBuildings = cloneJsonValue(snapshot.initialBuildings, []);
       this.selectedDeploySquadId = String(snapshot.selectedDeploySquadId || '');
       this.focusSquadId = String(snapshot.focusSquadId || this.selectedDeploySquadId || '');
-      this.trainingSkillPoints = Math.max(0, Math.floor(Number(snapshot.trainingSkillPoints) || 0));
+      this.trainingSkillPointsBySquad = new Map(
+        (Array.isArray(snapshot.trainingSkillPointsBySquad) ? snapshot.trainingSkillPointsBySquad : [])
+          .map(([squadId, points]) => [String(squadId || ''), Math.max(0, Math.floor(Number(points) || 0))])
+          .filter(([squadId]) => squadId)
+      );
+      this.trainingAutoSkillPointGainEnabled = snapshot.trainingAutoSkillPointGainEnabled === true;
       this.trainingSkillPointIntervalSec = normalizeTrainingSkillPointInterval(snapshot.trainingSkillPointIntervalSec);
       this.trainingSkillPointAccumulatorSec = Math.max(0, Number(snapshot.trainingSkillPointAccumulatorSec) || 0);
       this.trainingSkillTreeProgress = new Map(Array.isArray(snapshot.trainingSkillTreeProgress) ? snapshot.trainingSkillTreeProgress : []);
@@ -1912,6 +2052,7 @@ export default class BattleRuntime {
     this.selectedBattleSquadId = '';
     this.focusSquadId = '';
     this.hoveredDeploySquadId = '';
+    this.hoveredBattleSquadId = '';
     this.hoveredDeployDirectionArcId = '';
     this.trainingSessionActive = false;
     this.updateCameraAnchor(0);
@@ -1950,6 +2091,23 @@ export default class BattleRuntime {
     return true;
   }
 
+  setHoveredBattleSquad(squadId = '') {
+    if (this.phase !== 'battle') {
+      this.hoveredBattleSquadId = '';
+      return false;
+    }
+    const requestedId = String(squadId || '');
+    const squad = requestedId ? this.getSquadById(requestedId) : null;
+    const nextId = squad
+      && this.canSelectSquad(squad)
+      && !(squad.team === TEAM_DEFENDER && squad.hiddenFromAttacker)
+      ? squad.id
+      : '';
+    if (this.hoveredBattleSquadId === nextId) return false;
+    this.hoveredBattleSquadId = nextId;
+    return true;
+  }
+
   setHoveredDeployDirectionArc(groupId = '') {
     const isDeploy = this.phase === 'deploy';
     const isBattle = this.phase === 'battle';
@@ -1977,6 +2135,7 @@ export default class BattleRuntime {
     this.selectedDeploySquadId = '';
     this.selectedBattleSquadId = '';
     this.hoveredDeploySquadId = '';
+    this.hoveredBattleSquadId = '';
     this.hoveredDeployDirectionArcId = '';
     this.focusSquadId = '';
   }
@@ -2468,6 +2627,7 @@ export default class BattleRuntime {
     }, safeTeam);
     targetGroups.push(nextGroup);
     this.setDeployGroupSkillSlots(groupId, nextGroup.skillSlots, safeTeam);
+    if (this.isTrainingMode) this.trainingSkillPointsBySquad.set(groupId, 0);
     this.selectedDeploySquadId = groupId;
     this.focusSquadId = groupId;
     return { ok: true, groupId };
@@ -2519,6 +2679,10 @@ export default class BattleRuntime {
     if (this.hoveredDeploySquadId === safeGroupId) this.hoveredDeploySquadId = '';
     if (this.hoveredDeployDirectionArcId === safeGroupId) this.hoveredDeployDirectionArcId = '';
     if (this.focusSquadId === safeGroupId) this.focusSquadId = fallbackId;
+    this.trainingSkillPointsBySquad.delete(safeGroupId);
+    Array.from(this.trainingSkillTreeProgress.keys())
+      .filter((key) => key.startsWith(`${safeGroupId}:`))
+      .forEach((key) => this.trainingSkillTreeProgress.delete(key));
     return { ok: true };
   }
 
@@ -2670,6 +2834,37 @@ export default class BattleRuntime {
     targetGroups.forEach((group) => {
       if (!group) return;
       if (group.placed === false && !group.placementActive) return;
+      if (this.isTrainingMode) {
+        const slots = group.placed !== false && Array.isArray(group.deploySlots) && group.deploySlots.length > 0
+          ? group.deploySlots
+          : [{ side: 0, front: 0 }];
+        const representedWeight = Math.max(
+          1,
+          sumUnitsMap(group.units || {}) / Math.max(1, slots.length)
+        );
+        const pickRadius = resolveTrainingAgentSelectionRadius({ weight: representedWeight });
+        const facing = Number.isFinite(Number(group?.formationRect?.facingRad))
+          ? Number(group.formationRect.facingRad)
+          : (group.team === TEAM_DEFENDER ? Math.PI : 0);
+        const frontX = Math.cos(facing);
+        const frontY = Math.sin(facing);
+        const sideX = -frontY;
+        const sideY = frontX;
+        slots.forEach((slot) => {
+          const slotX = (Number(group.x) || 0)
+            + (sideX * (Number(slot?.side) || 0))
+            + (frontX * (Number(slot?.front) || 0));
+          const slotY = (Number(group.y) || 0)
+            + (sideY * (Number(slot?.side) || 0))
+            + (frontY * (Number(slot?.front) || 0));
+          const dist = Math.hypot(slotX - x, slotY - y);
+          if (dist <= pickRadius && dist < bestDist) {
+            best = group;
+            bestDist = dist;
+          }
+        });
+        return;
+      }
       const dx = (Number(group.x) || 0) - x;
       const dy = (Number(group.y) || 0) - y;
       const dist = Math.hypot(dx, dy);
@@ -2887,6 +3082,7 @@ export default class BattleRuntime {
     this.phase = 'battle';
     this.startedAtMs = Date.now();
     this.endedAtMs = 0;
+    this.hoveredBattleSquadId = '';
     const firstUserSquad = this.sim.squads.find((row) => this.canControlSquad(row) && row.remain > 0);
     const selectedTrainingSquad = this.isTrainingMode && selectedDeployGroupId
       ? this.sim.squads.find((row) => (
@@ -2903,6 +3099,19 @@ export default class BattleRuntime {
 
   getSquadById(squadId) {
     return (this.sim?.squads || []).find((row) => row.id === squadId) || null;
+  }
+
+  getSquadCameraAnchor(squadId = '') {
+    const squad = this.getSquadById(String(squadId || ''));
+    if (!squad || (Number(squad.remain) || 0) <= 0) return null;
+    return {
+      x: Number(squad.x) || 0,
+      y: Number(squad.y) || 0,
+      vx: Number(squad.vx) || 0,
+      vy: Number(squad.vy) || 0,
+      squadId: String(squad.id || ''),
+      team: squad.team || ''
+    };
   }
 
   setFocusSquad(squadId = '') {
@@ -2987,6 +3196,46 @@ export default class BattleRuntime {
         bestDistSq = d2;
         bestId = row.id;
       }
+    }
+    return bestId;
+  }
+
+  pickSquadAtAgentPoint(worldX, worldY, options = {}) {
+    if (this.phase !== 'battle' || !this.sim || !this.crowd) return '';
+    const team = options?.team === TEAM_ANY
+      ? TEAM_ANY
+      : (options?.team === TEAM_DEFENDER ? TEAM_DEFENDER : TEAM_ATTACKER);
+    const safeX = Number(worldX);
+    const safeY = Number(worldY);
+    if (!Number.isFinite(safeX) || !Number.isFinite(safeY)) return '';
+
+    const spatial = this.crowd?.spatial;
+    const spatialCandidates = spatial?.map instanceof Map
+      ? querySpatialNearby(spatial, safeX, safeY, TRAINING_SELECTED_UNIT_MAX_PICK_RADIUS)
+      : [];
+    const allAgents = Array.isArray(this.crowd?.allAgents) && this.crowd.allAgents.length > 0
+      ? this.crowd.allAgents
+      : Array.from(this.crowd?.agentsBySquad?.values?.() || []).flat();
+    const candidates = spatialCandidates.length > 0 ? spatialCandidates : allAgents;
+    let bestId = '';
+    let bestDistSq = Infinity;
+    for (let index = 0; index < candidates.length; index += 1) {
+      const agent = candidates[index];
+      if (!agent || agent.dead || (Number(agent.weight) || 0) <= 0.001) continue;
+      const squad = this.getSquadById(agent.squadId);
+      if (
+        !squad
+        || (team !== TEAM_ANY && squad.team !== team)
+        || !this.canSelectSquad(squad)
+        || (squad.team === TEAM_DEFENDER && squad.hiddenFromAttacker)
+      ) continue;
+      const dx = (Number(agent.x) || 0) - safeX;
+      const dy = (Number(agent.y) || 0) - safeY;
+      const distanceSq = (dx * dx) + (dy * dy);
+      const pickRadius = resolveTrainingAgentSelectionRadius(agent);
+      if (distanceSq > (pickRadius * pickRadius) || distanceSq >= bestDistSq) continue;
+      bestDistSq = distanceSq;
+      bestId = squad.id;
     }
     return bestId;
   }
@@ -3160,6 +3409,7 @@ export default class BattleRuntime {
       setPlannedMoveRoute(squad, [safe]);
     }
     squad.lastMoveMarker = { x: safe.x, y: safe.y, ttl: 1.2 };
+    squad.meleeAttackOrder = null;
     squad.guard = { enabled: false, cx: Number(squad.x) || 0, cy: Number(squad.y) || 0, radius: 0, returnRadius: 0, chaseRadius: 0, activeTargetId: '' };
     this.applyOrderToSquad(squad, orderType, safe);
     this.markCommandIssued(options?.inputType || 'move');
@@ -3178,6 +3428,7 @@ export default class BattleRuntime {
     if (this.phase !== 'battle' || !this.sim) return false;
     const squad = this.getSquadById(squadId);
     if (!this.canControlSquad(squad)) return false;
+    squad.meleeAttackOrder = null;
     if (behavior === 'standby') {
       this.beginSquadTransition(squad, 'move', 'standby');
       squad.behavior = 'standby';
@@ -3258,6 +3509,7 @@ export default class BattleRuntime {
       next.push({ x: safe.x, y: safe.y });
     }
     setPlannedMoveRoute(squad, next);
+    squad.meleeAttackOrder = null;
     squad.guard = { enabled: false, cx: Number(squad.x) || 0, cy: Number(squad.y) || 0, radius: 0, returnRadius: 0, chaseRadius: 0, activeTargetId: '' };
     if (next.length > 0) {
       const tail = next[next.length - 1];
@@ -3280,6 +3532,7 @@ export default class BattleRuntime {
     const cx = Number.isFinite(Number(guardSpec?.centerX)) ? Number(guardSpec.centerX) : (Number(squad.x) || 0);
     const cy = Number.isFinite(Number(guardSpec?.centerY)) ? Number(guardSpec.centerY) : (Number(squad.y) || 0);
     const radius = Math.max(12, Number(guardSpec?.radius) || Math.max(42, Number(squad.radius) || 24));
+    squad.meleeAttackOrder = null;
     squad.guard = {
       enabled: true,
       cx,
@@ -3331,9 +3584,20 @@ export default class BattleRuntime {
     const cooldownRemain = Math.max(0, Number(slot.cooldownRemain) || 0);
     if (cooldownRemain > 0.01) return { ok: false, reason: '技能冷却中', cooldownRemain };
     const classTag = resolveTrainingSkillClass(slot.treeCategory, squad);
+    const progress = this.getTrainingSkillTreeProgress(squad.id, slot.treeCategory);
+    const skillLevel = getSkillLevel(progress, skill);
+    if (skillLevel <= 0) return { ok: false, reason: '技能尚未点亮' };
+    const castProfile = resolveTrainingSkillCastProfile(
+      getSkillCastProfile(skill, slot.treeCategory),
+      skillLevel
+    );
     const result = triggerCrowdSkill(this.sim, this.crowd, squadId, {
       ...(targetSpec && typeof targetSpec === 'object' ? targetSpec : {}),
-      kind: classTag
+      kind: classTag,
+      skillId: skill.id,
+      treeCategory: slot.treeCategory,
+      sourceCategory: castProfile.sourceCategory,
+      castProfile
     });
     if (!result?.ok) return result;
     const cooldownTotal = Math.max(0.5, getSkillCooldownSeconds(skill, SKILL_COOLDOWN_BY_CLASS[classTag] || 6));
@@ -3360,15 +3624,37 @@ export default class BattleRuntime {
       const skills = slots.map((slot) => {
         const skill = getSkillById(slot.treeCategory, slot.skillId);
         const classTag = resolveTrainingSkillClass(slot.treeCategory, squad);
+        const progress = slot.treeCategory
+          ? this.getTrainingSkillTreeProgress(squad.id, slot.treeCategory)
+          : { unlocked: [], levels: {} };
+        const skillLevel = skill ? getSkillLevel(progress, skill) : 0;
+        const castProfile = resolveTrainingSkillCastProfile(
+          getSkillCastProfile(skill, slot.treeCategory),
+          skillLevel
+        );
+        const sourceCategory = castProfile.sourceCategory;
         const fallbackMeta = SKILL_META_BY_CLASS[classTag] || SKILL_META_BY_CLASS.infantry;
         const cooldownTotal = Math.max(
           0.5,
           getSkillCooldownSeconds(skill, SKILL_COOLDOWN_BY_CLASS[classTag] || 6)
         );
         const cooldownRemain = Math.max(0, Number(slot.cooldownRemain) || 0);
-        const progress = slot.treeCategory
-          ? this.getTrainingSkillTreeProgress(squad.id, slot.treeCategory)
-          : { unlocked: [] };
+        const hasSkillCategoryCounts = squad?.skillCategoryCounts
+          && Object.prototype.hasOwnProperty.call(squad.skillCategoryCounts, sourceCategory);
+        const crowdAgents = this.crowd?.agentsBySquad?.get(squad.id);
+        const crowdCasterCount = Array.isArray(crowdAgents)
+          ? crowdAgents
+            .filter((agent) => agent && !agent.dead && agent.unitCategory === sourceCategory)
+            .reduce((sum, agent) => sum + Math.max(0, Number(agent.weight) || 0), 0)
+          : NaN;
+        const casterCount = Math.max(
+          0,
+          Number.isFinite(crowdCasterCount)
+            ? crowdCasterCount
+            : hasSkillCategoryCounts
+            ? Number(squad.skillCategoryCounts[sourceCategory]) || 0
+            : Number(squad.remain) || 0
+        );
         return {
           id: skill?.id || `training-slot-${slot.slotIndex}`,
           slotIndex: slot.slotIndex,
@@ -3376,16 +3662,23 @@ export default class BattleRuntime {
           skillId: skill?.id || '',
           name: skill?.name || '空技能位',
           tier: Math.max(0, Number(skill?.tier) || 0),
+          level: skillLevel,
+          maxLevel: getSkillMaxLevel(skill),
           unlockCost: getSkillUnlockCost(skill),
           kind: classTag,
           classTag,
-          count: Math.max(0, Number(squad.remain) || 0),
+          sourceCategory,
+          targetMode: castProfile.targetMode,
+          targetHint: getSkillTargetingHint(castProfile),
+          castProfile,
+          count: casterCount,
+          anchor: resolveSkillAnchor(squad, sourceCategory, classTag),
           description: skill?.description || '开始训练前绑定技能树后可配置技能',
           icon: skill?.icon || fallbackMeta.icon,
           cooldownTotal,
           cooldownRemain,
-          available: !!skill && cooldownRemain <= 0.01,
-          unlocked: !!skill && progress.unlocked.includes(skill.id),
+          available: !!skill && casterCount > 0 && cooldownRemain <= 0.01,
+          unlocked: !!skill && skillLevel > 0,
           empty: !skill
         };
       });
@@ -3405,12 +3698,20 @@ export default class BattleRuntime {
       this.sim.timerSec = Math.max(0, Number(this.sim.timerSec) - dt);
     }
     updateCrowdSim(this.crowd, this.sim, dt);
-    if (this.isTrainingMode) {
+    if (this.isTrainingMode && this.trainingAutoSkillPointGainEnabled) {
       this.trainingSkillPointAccumulatorSec = Math.max(0, Number(this.trainingSkillPointAccumulatorSec) || 0) + dt;
       const interval = Math.max(1, Number(this.trainingSkillPointIntervalSec) || DEFAULT_TRAINING_SKILL_POINT_INTERVAL_SEC);
       while (this.trainingSkillPointAccumulatorSec >= interval) {
         this.trainingSkillPointAccumulatorSec -= interval;
-        this.trainingSkillPoints = Math.min(9999, Math.floor(Number(this.trainingSkillPoints) || 0) + 1);
+        (this.sim.squads || []).forEach((squad) => {
+          if (!this.canControlSquad(squad)) return;
+          const ownerId = this.getTrainingSkillPointOwnerId(squad.id);
+          if (!ownerId) return;
+          this.trainingSkillPointsBySquad.set(
+            ownerId,
+            Math.min(9999, Math.floor(Number(this.trainingSkillPointsBySquad.get(ownerId)) || 0) + 1)
+          );
+        });
       }
     }
     (this.sim.squads || []).forEach((squad) => {
@@ -3641,6 +3942,9 @@ export default class BattleRuntime {
         : [],
       activeFormationId: String(squad?.activeFormationId || squad?.formationRect?.formationId || '').trim(),
       skillSlots: normalizeSkillSlots(squad?.skillSlots),
+      trainingSkillPoints: this.isTrainingMode
+        ? this.getTrainingSquadSkillPointState(squad.id).points
+        : 0,
       action: squad.action,
       remain: Math.max(0, Math.floor(Number(squad.remain) || 0)),
       startCount: Math.max(0, Math.floor(Number(squad.startCount) || 0)),

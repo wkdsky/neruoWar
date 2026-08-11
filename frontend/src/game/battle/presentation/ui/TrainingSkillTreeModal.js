@@ -3,13 +3,19 @@ import {
   Check,
   GitBranch,
   Lock,
+  Minus,
+  Plus,
   X
 } from 'lucide-react';
 import {
   getAllowedSkillTreeCategories,
   getSkillTreeById,
   getSkillTreeFirstActiveSkill,
+  getSkillLevel,
+  getSkillMaxLevel,
+  getSkillPointCostSchedule,
   getSkillTreeRoot,
+  getSkillUpgradeCost,
   getSkillUnlockCost,
   SKILL_TREE_CATALOG,
   SKILL_TREE_CATEGORY_LABELS
@@ -23,10 +29,12 @@ const TrainingSkillTreeModal = ({
   treeCategory = '',
   phase = 'deploy',
   progress = { unlocked: [] },
-  trainingState = null,
+  skillPoints = 0,
   onClose,
   onTreeChange,
   onSkillClick,
+  onSkillUpgrade,
+  onAdjustPoints,
   onUnbind
 }) => {
   const allowedCategories = useMemo(
@@ -45,6 +53,7 @@ const TrainingSkillTreeModal = ({
     [progress]
   );
   const isDeploy = phase === 'deploy';
+  const availableSkillPoints = Math.max(0, Math.floor(Number(skillPoints) || 0));
   const visibleUnlocked = useMemo(() => {
     const next = isDeploy ? new Set() : new Set(unlocked);
     if (isDeploy) {
@@ -55,6 +64,14 @@ const TrainingSkillTreeModal = ({
     }
     return next;
   }, [activeTree.id, isDeploy, unlocked]);
+  const selectedLevel = getSkillLevel(progress, selectedSkill);
+  const selectedMaxLevel = getSkillMaxLevel(selectedSkill);
+  const selectedUpgradeCost = getSkillUpgradeCost(selectedSkill, selectedLevel);
+  const selectedPrerequisitesReady = selectedLevel > 0 || (selectedSkill?.prerequisites || []).every((id) => unlocked.has(id));
+  const selectedCanUpgrade = !isDeploy
+    && selectedLevel < selectedMaxLevel
+    && selectedPrerequisitesReady
+    && availableSkillPoints >= selectedUpgradeCost;
 
   useEffect(() => {
     let closeTimer;
@@ -134,25 +151,36 @@ const TrainingSkillTreeModal = ({
                   {activeTree.skills.filter((skill) => skill.tier === tier).map((skill) => {
                     const lit = visibleUnlocked.has(skill.id);
                     const selected = selectedSkill?.id === skill.id;
+                    const level = lit ? Math.max(1, getSkillLevel(progress, skill)) : 0;
+                    const maxLevel = getSkillMaxLevel(skill);
+                    const nextCost = getSkillUpgradeCost(skill, level);
                     const canUnlock = !isDeploy
                       && !lit
                       && (skill.prerequisites || []).every((id) => unlocked.has(id))
-                      && (Number(trainingState?.points) || 0) >= getSkillUnlockCost(skill);
-                    const nodeDisabled = !lit && (isDeploy || !canUnlock);
+                      && availableSkillPoints >= getSkillUnlockCost(skill);
                     return (
                       <button
                         key={skill.id}
                         type="button"
                         className={`pve2-training-tree-node ${lit ? 'is-lit' : 'is-locked'} ${selected ? 'is-selected' : ''} ${canUnlock ? 'is-available' : ''}`}
                         title={lit
-                          ? `${skill.name} · 点击装备`
+                          ? `${skill.name} · Lv${level}/${maxLevel} · 点击装备`
                           : (isDeploy
                             ? `${skill.name} · 训练开始后使用技能点点亮`
                             : (canUnlock ? `${skill.name} · 点击点亮` : `${skill.name} · 需要前置技能或技能点`))}
-                        disabled={nodeDisabled}
                         onClick={() => {
                           setSelectedSkillId(skill.id);
-                          onSkillClick?.(skill, { lit, canUnlock, slotIndex, treeCategory: activeTree.id });
+                          if (lit || canUnlock) {
+                            onSkillClick?.(skill, {
+                              lit,
+                              canUnlock,
+                              level,
+                              maxLevel,
+                              nextCost,
+                              slotIndex,
+                              treeCategory: activeTree.id
+                            });
+                          }
                         }}
                       >
                         <span className="pve2-training-tree-node-icon">
@@ -161,7 +189,9 @@ const TrainingSkillTreeModal = ({
                         </span>
                         <span className="pve2-training-tree-node-copy">
                           <strong>{skill.name}</strong>
-                          <small>{lit ? skill.power : `点亮 ${getSkillUnlockCost(skill)} 点`}</small>
+                          <small>{lit
+                            ? (level < maxLevel ? `Lv${level} · 升级 ${nextCost} 点` : `Lv${maxLevel} · 已满级`)
+                            : `点亮 ${getSkillUnlockCost(skill)} 点`}</small>
                         </span>
                         {lit ? <Check className="pve2-training-tree-node-check" size={14} aria-hidden="true" /> : null}
                       </button>
@@ -192,12 +222,35 @@ const TrainingSkillTreeModal = ({
             </div>
             <p>{selectedSkill?.description || '选择一个技能节点查看详情。'}</p>
             <div className="pve2-training-tree-detail-effect">{selectedSkill?.effect || ''}</div>
+            <div className="pve2-training-tree-detail-costs" aria-label="技能等级消耗">
+              <strong>点亮与升级消耗</strong>
+              {getSkillPointCostSchedule(selectedSkill).map((entry) => (
+                <span
+                  key={`skill-cost-${entry.level}`}
+                  className={selectedLevel === entry.level ? 'is-current' : ''}
+                >
+                  {entry.level === 1 ? '点亮 Lv1' : `升级至 Lv${entry.level}`}
+                  <b>{entry.cost} 点</b>
+                </span>
+              ))}
+            </div>
             <div className="pve2-training-tree-detail-actions">
-              {!isDeploy && !unlocked.has(selectedSkill?.id) ? (
-                <span>{`技能点 ${Math.max(0, Number(trainingState?.points) || 0)} · 点亮需要 ${getSkillUnlockCost(selectedSkill)} 点`}</span>
-              ) : (
-                <span>{isDeploy ? '准备阶段仅保留起始技能' : '点亮只解锁技能，点击节点才会替换槽位'}</span>
-              )}
+              <span>{`可用技能点 ${availableSkillPoints}`}</span>
+              {!isDeploy && selectedLevel < selectedMaxLevel ? (
+                <button
+                  type="button"
+                  className="pve2-training-tree-upgrade"
+                  disabled={!selectedCanUpgrade}
+                  onClick={() => onSkillUpgrade?.(selectedSkill, {
+                    level: selectedLevel,
+                    treeCategory: activeTree.id
+                  })}
+                >
+                  {selectedLevel <= 0
+                    ? `点亮 ${getSkillUnlockCost(selectedSkill)} 点`
+                    : `升级 ${selectedUpgradeCost} 点`}
+                </button>
+              ) : null}
               {isDeploy && !treeCategory ? null : (
                 <button
                   type="button"
@@ -210,6 +263,16 @@ const TrainingSkillTreeModal = ({
               )}
             </div>
           </aside>
+        </div>
+        <div className="pve2-training-tree-point-editor" aria-label="当前部队技能点编辑">
+          <span>当前部队可用技能点</span>
+          <strong>{availableSkillPoints}</strong>
+          <button type="button" onClick={() => onAdjustPoints?.(-1)} disabled={availableSkillPoints <= 0} aria-label="减少当前部队技能点">
+            <Minus size={14} aria-hidden="true" />
+          </button>
+          <button type="button" onClick={() => onAdjustPoints?.(1)} disabled={!group?.id} aria-label="增加当前部队技能点">
+            <Plus size={14} aria-hidden="true" />
+          </button>
         </div>
       </section>
     </div>

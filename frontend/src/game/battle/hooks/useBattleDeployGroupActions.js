@@ -2,14 +2,11 @@ import { useCallback } from 'react';
 import {
   TEAM_ATTACKER,
   TEAM_DEFENDER,
-  createDefaultConfirmDeletePos,
   createDefaultDeployDraggingGroup
 } from '../screens/battleSceneConstants';
-import { clamp } from '../screens/battleSceneUtils';
 
 export default function useBattleDeployGroupActions({
   runtimeRef,
-  glCanvasRef,
   pointerWorldRef,
   isTrainingMode = false,
   confirmDeleteGroupId = '',
@@ -20,7 +17,6 @@ export default function useBattleDeployGroupActions({
   setMinimapSnapshot,
   setDeployNotice,
   setConfirmDeleteGroupId,
-  setConfirmDeletePos,
   onDeployGroupRemoved
 } = {}) {
   const syncDeployUiFromRuntime = useCallback((runtime, preferredSelectedId = '') => {
@@ -71,30 +67,14 @@ export default function useBattleDeployGroupActions({
     setSelectedSquadId
   ]);
 
-  const handleDeployDelete = useCallback((groupId, event = null) => {
+  const handleDeployDelete = useCallback((groupId) => {
     const runtime = runtimeRef.current;
     if (!runtime || runtime.getPhase() !== 'deploy') return;
     const group = runtime.getDeployGroupById(groupId);
     if (!group) return;
     if (!isTrainingMode && group.team === TEAM_DEFENDER) return;
-    const canvas = glCanvasRef.current;
-    const rect = canvas?.getBoundingClientRect();
-    let x = Number(rect?.width) * 0.5 || 220;
-    let y = Number(rect?.height) * 0.5 || 140;
-    if (event?.currentTarget?.getBoundingClientRect && rect) {
-      const targetRect = event.currentTarget.getBoundingClientRect();
-      x = (targetRect.left + targetRect.width / 2) - rect.left;
-      y = (targetRect.top + targetRect.height / 2) - rect.top;
-    } else if (Number.isFinite(Number(event?.clientX)) && Number.isFinite(Number(event?.clientY)) && rect) {
-      x = Number(event.clientX) - rect.left;
-      y = Number(event.clientY) - rect.top;
-    }
-    setConfirmDeletePos({
-      x: clamp(x, 24, Math.max(24, (Number(rect?.width) || x) - 24)),
-      y: clamp(y, 24, Math.max(24, (Number(rect?.height) || y) - 24))
-    });
     setConfirmDeleteGroupId(String(groupId || ''));
-  }, [glCanvasRef, isTrainingMode, runtimeRef, setConfirmDeleteGroupId, setConfirmDeletePos]);
+  }, [isTrainingMode, runtimeRef, setConfirmDeleteGroupId]);
 
   const handleDeployPlacementAction = useCallback((groupId, event = null) => {
     const runtime = runtimeRef.current;
@@ -168,12 +148,10 @@ export default function useBattleDeployGroupActions({
     const group = runtime.getDeployGroupById(groupId);
     if (!group) {
       setConfirmDeleteGroupId('');
-      setConfirmDeletePos(createDefaultConfirmDeletePos());
       return;
     }
     if (!isTrainingMode && group.team === TEAM_DEFENDER) {
       setConfirmDeleteGroupId('');
-      setConfirmDeletePos(createDefaultConfirmDeletePos());
       return;
     }
     const safeTeam = group.team === TEAM_DEFENDER ? TEAM_DEFENDER : TEAM_ATTACKER;
@@ -181,7 +159,6 @@ export default function useBattleDeployGroupActions({
     if (!result?.ok) {
       setDeployNotice(result?.reason || '删除部队失败');
       setConfirmDeleteGroupId('');
-      setConfirmDeletePos(createDefaultConfirmDeletePos());
       return;
     }
     const nextSelected = runtime.getDeployGroups()?.selectedId || '';
@@ -191,7 +168,6 @@ export default function useBattleDeployGroupActions({
     setCards(runtime.getCardRows());
     setMinimapSnapshot(runtime.getMinimapSnapshot());
     setConfirmDeleteGroupId('');
-    setConfirmDeletePos(createDefaultConfirmDeletePos());
     onDeployGroupRemoved?.(groupId);
     setDeployNotice('部队已删除');
   }, [
@@ -201,7 +177,6 @@ export default function useBattleDeployGroupActions({
     runtimeRef,
     setCards,
     setConfirmDeleteGroupId,
-    setConfirmDeletePos,
     setDeployActionAnchorMode,
     setDeployDraggingGroup,
     setDeployNotice,

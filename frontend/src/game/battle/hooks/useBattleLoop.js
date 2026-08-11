@@ -9,6 +9,7 @@ export default function useBattleLoop({
   runtimeRef,
   pipelineRef,
   cameraControllerRef,
+  skillConfirmState = null,
   idleFrameIntervalMs = 0,
   clockConfig = {},
   debugEnabled = false,
@@ -108,17 +109,24 @@ export default function useBattleLoop({
       camera.mirrorX = !!constants.BATTLE_FOLLOW_MIRROR_X;
     }
 
-    const isPanning = !!callbacks.panDragRef?.current;
-    const followEnabled = nowPhase === 'battle' && !isPanning && !!focusTargetSquadId;
-    const followTargetSquadId = followEnabled ? focusTargetSquadId : '';
-    const followAnchor = followEnabled
-      ? {
-          x: Number(focusAnchor?.x) || 0,
-          y: Number(focusAnchor?.y) || 0,
-          vx: Number(focusAnchor?.vx) || 0,
-          vy: Number(focusAnchor?.vy) || 0,
-          squadId: followTargetSquadId
-        }
+    const isPanning = !!callbacks.panDragRef?.current?.moved;
+    const followTargetSquadId = nowPhase === 'battle'
+      && !isPanning
+      && camera.isFollowing?.()
+      ? String(camera.followSquadId || '')
+      : '';
+    const followSquad = followTargetSquadId
+      ? runtime.getSquadById?.(followTargetSquadId)
+      : null;
+    const followAnchor = followTargetSquadId && followSquad
+      ? (runtime.getSquadCameraAnchor?.(followTargetSquadId) || {
+          x: Number(followSquad.x) || 0,
+          y: Number(followSquad.y) || 0,
+          vx: Number(followSquad.vx) || 0,
+          vy: Number(followSquad.vy) || 0,
+          squadId: followTargetSquadId,
+          team: followSquad.team || ''
+        })
       : null;
     camera.update(deltaSec, followAnchor);
     const cameraState = camera.buildMatrices(safeWidth, safeHeight);
@@ -149,7 +157,8 @@ export default function useBattleLoop({
     pipeline.render?.({
       cameraState,
       snapshot,
-      runtime
+      runtime,
+      skillConfirmState
     });
     frameMetricsRef.current.frameTime = performance.now() - renderStart;
     runtime.setRenderMs?.(frameMetricsRef.current.frameTime);

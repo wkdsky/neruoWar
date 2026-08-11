@@ -12,7 +12,8 @@ const AimOverlayCanvas = ({
   battleUiMode = 'NONE',
   pendingPathPoints = [],
   planningHoverPoint = null,
-  skillConfirmState = null
+  skillConfirmState = null,
+  isTrainingMode = false
 }) => {
   const canvasRef = useRef(null);
 
@@ -128,7 +129,7 @@ const AimOverlayCanvas = ({
       }
 
       const activeGroundSkill = selectedSquad.activeSkill?.targetSpec;
-      if (activeGroundSkill?.shape === 'ground_aoe') {
+      if (!isTrainingMode && activeGroundSkill?.shape === 'ground_aoe') {
         drawWorldRadiusCircle(
           Number(activeGroundSkill.centerX) || 0,
           Number(activeGroundSkill.centerY) || 0,
@@ -139,22 +140,35 @@ const AimOverlayCanvas = ({
         );
       }
 
-      if (battleUiMode === 'SKILL_CONFIRM' && skillConfirmState?.squadId === selectedSquad.id) {
+      if (!isTrainingMode && battleUiMode === 'SKILL_CONFIRM' && skillConfirmState?.squadId === selectedSquad.id) {
         const confirmCenterWorldX = Number(skillConfirmState?.center?.x) || Number(selectedSquad.x) || 0;
         const confirmCenterWorldY = Number(skillConfirmState?.center?.y) || Number(selectedSquad.y) || 0;
         const confirmCenter = toScreen(confirmCenterWorldX, confirmCenterWorldY, 0);
-        if (skillConfirmState.kind === 'infantry') {
-          drawCircle(confirmCenter, 18, 'rgba(74, 222, 128, 0.95)', 'rgba(74, 222, 128, 0.14)', 2, [4, 4]);
-        }
-
-        if (skillConfirmState.kind === 'cavalry') {
+        const targetMode = skillConfirmState.targetMode
+          || (skillConfirmState.kind === 'cavalry' ? 'direction' : (
+            skillConfirmState.kind === 'archer' || skillConfirmState.kind === 'artillery' ? 'ground' : 'self'
+          ));
+        if (targetMode === 'direction') {
           const dirX = Number(skillConfirmState?.dir?.x) || 1;
           const dirY = Number(skillConfirmState?.dir?.y) || 0;
-          const len = Math.max(20, Number(skillConfirmState?.len) || 80);
+          const len = Math.max(10, Number(skillConfirmState?.len) || 80);
+          const maxRange = Math.max(len, Number(skillConfirmState?.maxRange) || len);
+          drawWorldRadiusCircle(
+            confirmCenterWorldX,
+            confirmCenterWorldY,
+            maxRange,
+            'rgba(251, 146, 60, 0.56)',
+            'rgba(251, 146, 60, 0.035)',
+            1.2,
+            [4, 5]
+          );
+          drawCircle(confirmCenter, 18, 'rgba(251, 146, 60, 0.95)', 'rgba(251, 146, 60, 0.16)', 2, [4, 4]);
+          const orbitRadius = Math.max(18, Math.min(42, len * 0.42));
+          const base = toScreen(confirmCenterWorldX + (dirX * orbitRadius), confirmCenterWorldY + (dirY * orbitRadius), 0);
           const tip = toScreen(confirmCenterWorldX + (dirX * len), confirmCenterWorldY + (dirY * len), 0);
-          if (confirmCenter?.visible && tip?.visible) {
+          if (base?.visible && tip?.visible) {
             ctx.beginPath();
-            ctx.moveTo(confirmCenter.x, confirmCenter.y);
+            ctx.moveTo(base.x, base.y);
             ctx.lineTo(tip.x, tip.y);
             ctx.strokeStyle = 'rgba(251, 146, 60, 0.95)';
             ctx.lineWidth = 5;
@@ -177,7 +191,7 @@ const AimOverlayCanvas = ({
           }
         }
 
-        if ((skillConfirmState.kind === 'archer' || skillConfirmState.kind === 'artillery') && skillConfirmState.hoverPoint) {
+        if (targetMode === 'ground' && skillConfirmState.hoverPoint) {
           const centerPoint = {
             x: confirmCenterWorldX,
             y: confirmCenterWorldY
@@ -187,6 +201,15 @@ const AimOverlayCanvas = ({
             y: Number(skillConfirmState.hoverPoint.y) || 0
           };
           const radius = Math.max(8, Number(skillConfirmState.aoeRadius) || 24);
+          drawWorldRadiusCircle(
+            confirmCenterWorldX,
+            confirmCenterWorldY,
+            Math.max(radius, Number(skillConfirmState?.maxRange) || 180),
+            'rgba(56, 189, 248, 0.5)',
+            '',
+            1.1,
+            [4, 5]
+          );
           drawWorldRadiusCircle(
             targetPoint.x,
             targetPoint.y,
@@ -215,6 +238,50 @@ const AimOverlayCanvas = ({
             ctx.setLineDash([]);
           }
         }
+        if (targetMode === 'enemy') {
+          if (skillConfirmState?.profile?.globalTarget) {
+            drawCircle(confirmCenter, 22, 'rgba(74, 222, 128, 0.86)', 'rgba(74, 222, 128, 0.08)', 1.8, [4, 4]);
+          } else {
+            drawWorldRadiusCircle(
+              confirmCenterWorldX,
+              confirmCenterWorldY,
+              Math.max(40, Number(skillConfirmState?.maxRange) || 180),
+              'rgba(74, 222, 128, 0.52)',
+              '',
+              1.1,
+              [4, 5]
+            );
+          }
+          if (skillConfirmState.hoverPoint) {
+            const targetPoint = {
+              x: Number(skillConfirmState.hoverPoint.x) || 0,
+              y: Number(skillConfirmState.hoverPoint.y) || 0
+            };
+            drawWorldRadiusCircle(
+              targetPoint.x,
+              targetPoint.y,
+              Math.max(14, Number(skillConfirmState?.aoeRadius) || 20),
+              'rgba(244, 114, 182, 0.98)',
+              'rgba(244, 114, 182, 0.16)',
+              2,
+              [6, 4]
+            );
+            const target = toScreen(targetPoint.x, targetPoint.y, 0);
+            if (confirmCenter?.visible && target?.visible) {
+              ctx.beginPath();
+              ctx.setLineDash([6, 4]);
+              ctx.moveTo(confirmCenter.x, confirmCenter.y);
+              ctx.lineTo(target.x, target.y);
+              ctx.strokeStyle = 'rgba(244, 114, 182, 0.72)';
+              ctx.lineWidth = 1.6;
+              ctx.stroke();
+              ctx.setLineDash([]);
+            }
+          }
+        }
+        if (targetMode === 'self') {
+          drawCircle(confirmCenter, 22, 'rgba(74, 222, 128, 0.95)', 'rgba(74, 222, 128, 0.14)', 2, [4, 4]);
+        }
       }
     }
 
@@ -234,7 +301,8 @@ const AimOverlayCanvas = ({
     battleUiMode,
     pendingPathPoints,
     planningHoverPoint,
-    skillConfirmState
+    skillConfirmState,
+    isTrainingMode
   ]);
 
   return <canvas ref={canvasRef} className="pve2-overlay-canvas" />;
