@@ -1,0 +1,455 @@
+import { raycastObstacles } from '../crowd/crowdPhysics';
+import { applyDamageToAgent } from '../crowd/crowdCombat';
+import { resolveSquadAttackRange } from '../crowd/attackRange';
+import { acquireHitEffect } from '../effects/CombatEffects';
+import { filterVisionBlockingObstacles } from '../items/itemObstacleUtils';
+
+const TEAM_ATTACKER = 'attacker';
+const TEAM_DEFENDER = 'defender';
+const TEAM_NEUTRAL = 'neutral';
+const OBJECTIVE_TARGET_PRIORITY_NEAREST = 'nearest';
+const OBJECTIVE_TARGET_PRIORITY_HIGHEST_THREAT = 'highestThreat';
+const OBJECTIVE_TARGET_PRIORITY_LOWEST_HEALTH = 'lowestHealth';
+
+const clamp = (value, min, max) => Math.min(max, Math.max(min, value));
+
+const finiteNumber = (value, fallback = 0) => (
+  Number.isFinite(Number(value)) ? Number(value) : fallback
+);
+
+const normalizeTeam = (team = '') => (
+  team === TEAM_ATTACKER || team === TEAM_DEFENDER ? team : TEAM_NEUTRAL
+);
+
+const normalizeObjectiveTargetPriority = (priority = '') => {
+  const normalized = String(priority || '').trim().toLowerCase().replace(/[\s_-]/g, '');
+  if (normalized === 'highestthreat' || normalized === 'threat' || normalized === 'aggro') {
+    return OBJECTIVE_TARGET_PRIORITY_HIGHEST_THREAT;
+  }
+  if (normalized === 'lowesthealth' || normalized === 'lowesthp' || normalized === 'weakest') {
+    return OBJECTIVE_TARGET_PRIORITY_LOWEST_HEALTH;
+  }
+  return OBJECTIVE_TARGET_PRIORITY_NEAREST;
+};
+
+const normalizeObjective = (definition = {}, index = 0) => ({
+  id: String(definition?.objectiveId || `training_objective_${index + 1}`),
+  sourceObjectId: String(definition?.sourceObjectId || ''),
+  type: String(definition?.type || 'structure'),
+  team: normalizeTeam(definition?.team),
+  laneId: String(definition?.laneId || 'jungle'),
+  maxHp: Math.max(1, finiteNumber(definition?.maxHp, 1000)),
+  hp: Math.max(1, finiteNumber(definition?.maxHp, 1000)),
+  attackRange: Math.max(0, finiteNumber(definition?.attackRange)),
+  attackIntervalSec: Math.max(0.1, finiteNumber(definition?.attackIntervalSec, 1)),
+  attackDamage: Math.max(0, finiteNumber(definition?.attackDamage)),
+  attackEnabled: definition?.attackEnabled !== false && finiteNumber(definition?.attackDamage) > 0,
+  targetable: definition?.targetable !== false,
+  priority: normalizeObjectiveTargetPriority(definition?.priority),
+  threatDecayPerSecond: Math.max(0, finiteNumber(definition?.threatDecayPerSecond, 0.2)),
+  respawnSec: Math.max(0, finiteNumber(definition?.respawnSec)),
+  rewardLabel: String(definition?.rewardLabel || ''),
+  presetTags: Array.isArray(definition?.presetTags) ? definition.presetTags.slice() : [],
+  destroyed: false,
+  respawnAt: 0,
+  attackCooldown: 0,
+  lockedSquadId: '',
+  currentTargetId: '',
+  lastAttackerSquadId: '',
+  threatBySquadId: {},
+  destroyedAt: 0,
+  damageTaken: 0,
+  damageDealt: 0,
+  killCount: 0
+});
+
+const resolveBuildingByObjectId = (sim = {}, objective = {}) => (
+  (Array.isArray(sim?.buildings) ? sim.buildings : []).find((building) => (
+    String(building?.id || '') === String(objective?.sourceObjectId || '')
+  )) || null
+);
+
+const ensureTrainingStats = (sim = {}) => {
+  if (!sim.trainingStats || typeof sim.trainingStats !== 'object') {
+    sim.trainingStats = {
+      towerDamage: 0,
+      towerKills: 0,
+      buildingDamage: 0,
+      neutralKills: 0,
+      bushFirstAttack: 0,
+      laneEngagementSeconds: {},
+      bushFirstAttackSquadIds: [],
+      objectiveDamageById: {},
+      objectiveKillsById: {}
+    };
+  }
+  const stats = sim.trainingStats;
+  if (!Number.isFinite(Number(stats.towerDamage))) stats.towerDamage = 0;
+  if (!Number.isFinite(Number(stats.towerKills))) stats.towerKills = 0;
+  if (!Number.isFinite(Number(stats.buildingDamage))) stats.buildingDamage = 0;
+  if (!Number.isFinite(Number(stats.neutralKills))) stats.neutralKills = 0;
+  if (!stats.laneEngagementSeconds || typeof stats.laneEngagementSeconds !== 'object') stats.laneEngagementSeconds = {};
+  if (!stats.objectiveDamageById || typeof stats.objectiveDamageById !== 'object') stats.objectiveDamageById = {};
+  if (!stats.objectiveKillsById || typeof stats.objectiveKillsById !== 'object') stats.objectiveKillsById = {};
+  if (!Array.isArray(stats.bushFirstAttackSquadIds)) stats.bushFirstAttackSquadIds = [];
+  return stats;
+};
+
+const ensureObjectiveRuntimeState = (objective = {}) => {
+  if (!objective || typeof objective !== 'object') return objective;
+  if (!objective.threatBySquadId || typeof objective.threatBySquadId !== 'object') {
+    objective.threatBySquadId = {};
+  }
+  objective.priority = normalizeObjectiveTargetPriority(objective.priority);
+  objective.targetable = objective.targetable !== false;
+  objective.threatDecayPerSecond = Math.max(0, finiteNumber(objective.threatDecayPerSecond, 0.2));
+  objective.lockedSquadId = String(objective.lockedSquadId || '');
+  objective.currentTargetId = String(objective.currentTargetId || objective.lockedSquadId || '');
+  objective.lastAttackerSquadId = String(objective.lastAttackerSquadId || '');
+  objective.destroyedAt = Math.max(0, finiteNumber(objective.destroyedAt));
+  objective.killCount = Math.max(0, Math.floor(finiteNumber(objective.killCount)));
+  return objective;
+};
+
+const resolveObjectivePosition = (sim = {}, objective = {}) => {
+  const building = resolveBuildingByObjectId(sim, objective);
+  return {
+    x: finiteNumber(building?.x),
+    y: finiteNumber(building?.y),
+    radius: Math.max(10, Math.max(finiteNumber(building?.width), finiteNumber(building?.depth)) * 0.5),
+    building
+  };
+};
+
+const canObjectiveTargetSquad = (objective = {}, squad = {}) => {
+  if (objective?.targetable === false) return false;
+  if (!squad || finiteNumber(squad?.remain) <= 0) return false;
+  if (objective?.team === TEAM_ATTACKER && squad?.hiddenFromAttacker) return false;
+  if (objective?.team === TEAM_DEFENDER && squad?.hiddenFromDefender) return false;
+  if (objective?.team === TEAM_NEUTRAL) return squad?.team === TEAM_ATTACKER || squad?.team === TEAM_DEFENDER;
+  return squad?.team !== objective?.team && (squad?.team === TEAM_ATTACKER || squad?.team === TEAM_DEFENDER);
+};
+
+const canSquadAttackObjective = (squad = {}, objective = {}) => {
+  if (!squad || finiteNumber(squad?.remain) <= 0 || objective?.destroyed || objective?.targetable === false) return false;
+  if (squad?.behavior === 'standby' || squad?.behavior === 'retreat') return false;
+  if (objective?.team === TEAM_NEUTRAL) return squad?.team === TEAM_ATTACKER || squad?.team === TEAM_DEFENDER;
+  return squad?.team !== objective?.team && (squad?.team === TEAM_ATTACKER || squad?.team === TEAM_DEFENDER);
+};
+
+const hasObjectiveLineOfSight = (from = {}, to = {}, obstacles = []) => (
+  !raycastObstacles(from, to, obstacles, 0.8)
+);
+
+const resolveVisionObstacles = (sim = {}, objective = {}) => (
+  filterVisionBlockingObstacles(sim?.buildings || [])
+    .filter((building) => String(building?.id || '') !== String(objective?.sourceObjectId || ''))
+);
+
+const resolveSquadHealthRatio = (squad = {}) => {
+  const maxHealth = Math.max(1, finiteNumber(squad?.maxHealth, finiteNumber(squad?.startCount, finiteNumber(squad?.remain, 1))));
+  const health = Math.max(0, finiteNumber(squad?.health, finiteNumber(squad?.remain)));
+  return clamp(health / maxHealth, 0, 1);
+};
+
+const compareAscending = (left = 0, right = 0) => (
+  left < right ? -1 : (left > right ? 1 : 0)
+);
+
+const compareDescending = (left = 0, right = 0) => compareAscending(right, left);
+
+const compareObjectiveTargetCandidates = (objective = {}, left = {}, right = {}) => {
+  let result = 0;
+  if (objective.priority === OBJECTIVE_TARGET_PRIORITY_HIGHEST_THREAT) {
+    result = compareDescending(left.threat, right.threat)
+      || compareAscending(left.distance, right.distance)
+      || compareAscending(left.healthRatio, right.healthRatio);
+  } else if (objective.priority === OBJECTIVE_TARGET_PRIORITY_LOWEST_HEALTH) {
+    result = compareAscending(left.healthRatio, right.healthRatio)
+      || compareDescending(left.threat, right.threat)
+      || compareAscending(left.distance, right.distance);
+  } else {
+    result = compareAscending(left.distance, right.distance)
+      || compareDescending(left.threat, right.threat)
+      || compareAscending(left.healthRatio, right.healthRatio);
+  }
+  if (result !== 0) return result;
+  return String(left?.squad?.id || '').localeCompare(String(right?.squad?.id || ''));
+};
+
+const selectObjectiveTargetSquad = (objective = {}, sim = {}) => {
+  const position = resolveObjectivePosition(sim, objective);
+  if (!position.building || position.building.destroyed) return null;
+  const obstacles = resolveVisionObstacles(sim, objective);
+  const candidates = [];
+  (Array.isArray(sim?.squads) ? sim.squads : []).forEach((squad) => {
+    if (!canObjectiveTargetSquad(objective, squad)) return;
+    const squadPosition = { x: finiteNumber(squad?.x), y: finiteNumber(squad?.y) };
+    const squadRadius = Math.max(4, finiteNumber(squad?.radius, 10));
+    const distance = Math.hypot(squadPosition.x - position.x, squadPosition.y - position.y);
+    if (distance > Math.max(0, finiteNumber(objective?.attackRange)) + position.radius + squadRadius) return;
+    if (!hasObjectiveLineOfSight(position, squadPosition, obstacles)) return;
+    candidates.push({
+      squad,
+      distance,
+      healthRatio: resolveSquadHealthRatio(squad),
+      threat: Math.max(0, finiteNumber(objective?.threatBySquadId?.[squad.id]))
+    });
+  });
+  candidates.sort((left, right) => compareObjectiveTargetCandidates(objective, left, right));
+  return candidates[0]?.squad || null;
+};
+
+const decayObjectiveThreat = (objective = {}, sim = {}, dt = 0) => {
+  ensureObjectiveRuntimeState(objective);
+  const decayMultiplier = Math.max(0, 1 - (objective.threatDecayPerSecond * Math.max(0, finiteNumber(dt))));
+  const squadIds = new Set((Array.isArray(sim?.squads) ? sim.squads : []).map((squad) => String(squad?.id || '')));
+  Object.entries(objective.threatBySquadId).forEach(([squadId, threat]) => {
+    if (!squadIds.has(squadId)) {
+      delete objective.threatBySquadId[squadId];
+      return;
+    }
+    const nextThreat = Math.max(0, finiteNumber(threat) * decayMultiplier);
+    if (nextThreat <= 0.001) {
+      delete objective.threatBySquadId[squadId];
+      return;
+    }
+    objective.threatBySquadId[squadId] = nextThreat;
+  });
+};
+
+const recordObjectiveThreat = (objective = {}, squad = {}, damage = 0) => {
+  ensureObjectiveRuntimeState(objective);
+  const squadId = String(squad?.id || '');
+  if (!squadId) return;
+  const nextThreat = Math.max(0, finiteNumber(objective.threatBySquadId[squadId])) + Math.max(0, finiteNumber(damage));
+  objective.threatBySquadId[squadId] = Math.min(1000000, nextThreat);
+  objective.lastAttackerSquadId = squadId;
+};
+
+const updateObjectiveTargetState = (objective = {}, squad = null) => {
+  const squadId = String(squad?.id || '');
+  objective.lockedSquadId = squadId;
+  objective.currentTargetId = squadId;
+};
+
+const selectNearestAgent = (crowd = {}, squad = {}, position = {}) => {
+  const agents = crowd?.agentsBySquad?.get(squad?.id) || [];
+  let best = null;
+  let bestDistance = Infinity;
+  agents.forEach((agent) => {
+    if (!agent || agent.dead) return;
+    const distance = Math.hypot(finiteNumber(agent?.x) - finiteNumber(position?.x), finiteNumber(agent?.y) - finiteNumber(position?.y));
+    if (distance < bestDistance) {
+      best = agent;
+      bestDistance = distance;
+    }
+  });
+  return best;
+};
+
+const applyObjectiveDamage = (sim = {}, objective = {}, squad = {}, dt = 0) => {
+  const position = resolveObjectivePosition(sim, objective);
+  const building = position.building;
+  if (!building || building.destroyed || !canSquadAttackObjective(squad, objective)) return 0;
+  const attackRange = resolveSquadAttackRange(squad);
+  const squadRadius = Math.max(4, finiteNumber(squad?.radius, 10));
+  const distance = Math.hypot(finiteNumber(squad?.x) - position.x, finiteNumber(squad?.y) - position.y);
+  if (distance > attackRange.max + position.radius + squadRadius) return 0;
+  const obstacles = resolveVisionObstacles(sim, objective);
+  if (!hasObjectiveLineOfSight({ x: finiteNumber(squad?.x), y: finiteNumber(squad?.y) }, position, obstacles)) return 0;
+  const populationFactor = Math.sqrt(Math.max(1, finiteNumber(squad?.remain)));
+  const rawDamage = Math.max(0.2, finiteNumber(squad?.stats?.atk, 1) * populationFactor * 0.64 * Math.max(0.001, finiteNumber(dt)));
+  const actualDamage = rawDamage / Math.max(1, finiteNumber(building?.defense, 1));
+  objective.hp = Math.max(0, finiteNumber(objective?.hp) - actualDamage);
+  building.hp = objective.hp;
+  objective.damageTaken += actualDamage;
+  return actualDamage;
+};
+
+const destroyObjective = (sim = {}, objective = {}, nowSec = 0, killerSquad = null) => {
+  if (objective.destroyed) return false;
+  const stats = ensureTrainingStats(sim);
+  ensureObjectiveRuntimeState(objective);
+  const position = resolveObjectivePosition(sim, objective);
+  const buildingWasActive = !!position.building && !position.building.destroyed;
+  objective.destroyed = true;
+  objective.hp = 0;
+  objective.destroyedAt = Math.max(0, finiteNumber(nowSec));
+  objective.killCount += 1;
+  objective.threatBySquadId = {};
+  updateObjectiveTargetState(objective, null);
+  if (position.building) {
+    position.building.hp = 0;
+    position.building.destroyed = true;
+  }
+  if (buildingWasActive) {
+    sim.destroyedBuildings = Math.max(0, finiteNumber(sim?.destroyedBuildings)) + 1;
+  }
+  stats.objectiveKillsById[objective.id] = Math.max(0, finiteNumber(stats.objectiveKillsById[objective.id])) + 1;
+  if (objective.type === 'tower') {
+    stats.towerKills = Math.max(0, finiteNumber(stats.towerKills)) + 1;
+  }
+  if (objective.type === 'neutralCamp' && objective.respawnSec > 0) {
+    objective.respawnAt = nowSec + objective.respawnSec;
+  }
+  if (killerSquad && objective.type === 'neutralCamp') {
+    killerSquad.neutralKills = Math.max(0, finiteNumber(killerSquad?.neutralKills)) + 1;
+  }
+  return true;
+};
+
+const respawnObjective = (sim = {}, objective = {}) => {
+  const position = resolveObjectivePosition(sim, objective);
+  if (!position.building) return false;
+  ensureObjectiveRuntimeState(objective);
+  objective.destroyed = false;
+  objective.hp = objective.maxHp;
+  objective.respawnAt = 0;
+  objective.attackCooldown = Math.max(0, objective.attackCooldown);
+  objective.destroyedAt = 0;
+  objective.threatBySquadId = {};
+  updateObjectiveTargetState(objective, null);
+  position.building.destroyed = false;
+  position.building.hp = objective.maxHp;
+  return true;
+};
+
+const updateLaneEngagement = (sim = {}, stats = {}, dt = 0) => {
+  const lanes = Array.isArray(sim?.trainingMap?.lanes) ? sim.trainingMap.lanes : [];
+  const squads = Array.isArray(sim?.squads) ? sim.squads : [];
+  lanes.forEach((lane) => {
+    const laneWidth = Math.max(1, finiteNumber(lane?.width, 150));
+    const laneSquads = squads.filter((squad) => (
+      squad
+      && finiteNumber(squad?.remain) > 0
+      && Math.abs(finiteNumber(squad?.y) - finiteNumber(lane?.centerY)) <= laneWidth * 0.72
+    ));
+    const hasAttacker = laneSquads.some((squad) => squad?.team === TEAM_ATTACKER);
+    const hasDefender = laneSquads.some((squad) => squad?.team === TEAM_DEFENDER);
+    if (!hasAttacker || !hasDefender) return;
+    const laneId = String(lane?.id || 'lane');
+    stats.laneEngagementSeconds[laneId] = Math.max(0, finiteNumber(stats.laneEngagementSeconds[laneId])) + Math.max(0, finiteNumber(dt));
+  });
+};
+
+const updateBushFirstAttack = (sim = {}, stats = {}) => {
+  const recorded = new Set(stats.bushFirstAttackSquadIds);
+  (Array.isArray(sim?.squads) ? sim.squads : []).forEach((squad) => {
+    if (!squad || finiteNumber(squad?.remain) <= 0 || recorded.has(squad.id)) return;
+    const hidden = squad?.team === TEAM_DEFENDER ? squad?.hiddenFromAttacker : squad?.hiddenFromDefender;
+    const attacking = finiteNumber(squad?.underAttackTimer) > 0.01 || !!squad?.targetSquadId;
+    if (!hidden || !attacking) return;
+    recorded.add(squad.id);
+  });
+  stats.bushFirstAttackSquadIds = Array.from(recorded);
+  stats.bushFirstAttack = recorded.size;
+};
+
+export const createTrainingObjectives = (definitions = []) => (
+  (Array.isArray(definitions) ? definitions : [])
+    .map((definition, index) => normalizeObjective(definition, index))
+);
+
+export const getTrainingObjectiveSummary = (sim = {}) => (
+  (Array.isArray(sim?.trainingObjectives) ? sim.trainingObjectives : []).map((objective) => ({
+    id: objective.id,
+    type: objective.type,
+    team: objective.team,
+    laneId: objective.laneId,
+    hp: Math.max(0, finiteNumber(objective.hp)),
+    maxHp: Math.max(1, finiteNumber(objective.maxHp)),
+    destroyed: !!objective.destroyed,
+    targetable: objective.targetable !== false,
+    lockedSquadId: String(objective.lockedSquadId || ''),
+    currentTargetId: String(objective.currentTargetId || objective.lockedSquadId || ''),
+    priority: normalizeObjectiveTargetPriority(objective.priority),
+    respawnAt: Math.max(0, finiteNumber(objective.respawnAt)),
+    destroyedAt: Math.max(0, finiteNumber(objective.destroyedAt)),
+    rewardLabel: objective.rewardLabel
+  }))
+);
+
+export const updateTrainingObjectives = (sim = {}, crowd = {}, dt = 0) => {
+  const objectives = Array.isArray(sim?.trainingObjectives) ? sim.trainingObjectives : [];
+  if (objectives.length <= 0) return;
+  const safeDt = clamp(finiteNumber(dt), 0, 0.2);
+  const nowSec = Math.max(0, finiteNumber(sim?.timeElapsed));
+  const stats = ensureTrainingStats(sim);
+
+  objectives.forEach((objective) => {
+    if (!objective) return;
+    ensureObjectiveRuntimeState(objective);
+    if (objective.targetable === false) {
+      updateObjectiveTargetState(objective, null);
+      return;
+    }
+    decayObjectiveThreat(objective, sim, safeDt);
+    const sourceBuilding = resolveBuildingByObjectId(sim, objective);
+    const observedHp = Math.max(0, finiteNumber(sourceBuilding?.hp, objective.hp));
+    if (!objective.destroyed && observedHp < finiteNumber(objective.hp)) {
+      const externalDamage = finiteNumber(objective.hp) - observedHp;
+      objective.hp = observedHp;
+      objective.damageTaken += externalDamage;
+      stats.buildingDamage = Math.max(0, finiteNumber(stats.buildingDamage)) + externalDamage;
+      if (objective.type === 'tower') stats.towerDamage = Math.max(0, finiteNumber(stats.towerDamage)) + externalDamage;
+      stats.objectiveDamageById[objective.id] = Math.max(0, finiteNumber(stats.objectiveDamageById[objective.id])) + externalDamage;
+    }
+    if (!objective.destroyed && sourceBuilding?.destroyed) {
+      destroyObjective(sim, objective, nowSec);
+    }
+    if (objective.destroyed) {
+      if (objective.type === 'neutralCamp' && objective.respawnAt > 0 && nowSec >= objective.respawnAt) {
+        respawnObjective(sim, objective);
+      }
+      return;
+    }
+    let lastDamagingSquad = null;
+    (Array.isArray(sim?.squads) ? sim.squads : []).forEach((squad) => {
+      const damage = applyObjectiveDamage(sim, objective, squad, safeDt);
+      if (damage <= 0) return;
+      lastDamagingSquad = squad;
+      recordObjectiveThreat(objective, squad, damage);
+      stats.buildingDamage = Math.max(0, finiteNumber(stats.buildingDamage)) + damage;
+      if (objective.type === 'tower') stats.towerDamage = Math.max(0, finiteNumber(stats.towerDamage)) + damage;
+      stats.objectiveDamageById[objective.id] = Math.max(0, finiteNumber(stats.objectiveDamageById[objective.id])) + damage;
+    });
+    if (objective.hp <= 0) {
+      if (destroyObjective(sim, objective, nowSec, lastDamagingSquad) && objective.type === 'neutralCamp') {
+        stats.neutralKills = Math.max(0, finiteNumber(stats.neutralKills)) + 1;
+      }
+      return;
+    }
+    if (!objective.attackEnabled) return;
+    objective.attackCooldown = Math.max(0, finiteNumber(objective.attackCooldown) - safeDt);
+    const targetSquad = selectObjectiveTargetSquad(objective, sim);
+    updateObjectiveTargetState(objective, targetSquad);
+    if (!targetSquad || objective.attackCooldown > 0) return;
+    const position = resolveObjectivePosition(sim, objective);
+    const targetAgent = selectNearestAgent(crowd, targetSquad, position);
+    if (!targetAgent) return;
+    const source = {
+      id: `objective_source_${objective.id}`,
+      squadId: '',
+      team: objective.team === TEAM_NEUTRAL ? TEAM_NEUTRAL : objective.team,
+      x: position.x,
+      y: position.y
+    };
+    const damage = Math.max(0.2, finiteNumber(objective.attackDamage));
+    applyDamageToAgent(sim, crowd, source, targetAgent, damage, objective.type === 'tower' ? 'shell' : 'hit', { poiseDamageMul: 0.36 });
+    objective.damageDealt += damage;
+    objective.attackCooldown = Math.max(0.1, finiteNumber(objective.attackIntervalSec, 1));
+    acquireHitEffect(crowd.effectsPool, {
+      type: objective.type === 'tower' ? 'shell' : 'hit',
+      x: position.x,
+      y: position.y,
+      z: Math.max(2, finiteNumber(position?.building?.height, 24) * 0.68),
+      radius: objective.type === 'tower' ? 4.4 : 2.6,
+      ttl: 0.14,
+      team: objective.team === TEAM_DEFENDER ? TEAM_DEFENDER : TEAM_ATTACKER
+    });
+  });
+
+  updateLaneEngagement(sim, stats, safeDt);
+  updateBushFirstAttack(sim, stats);
+};

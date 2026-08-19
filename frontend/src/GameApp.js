@@ -79,6 +79,14 @@ const AppOverlays = lazy(() => import('./components/layout/AppOverlays'));
 const SystemConfirmDialog = lazy(() => import('./components/common/SystemConfirmDialog'));
 const KnowledgeBrocadeWorkspacePage = lazy(() => import('./components/knowledgeBrocade/KnowledgeBrocadeWorkspacePage'));
 
+const TrainingGroundLoadingFallback = () => (
+    <div className="training-ground-module-loading" role="status" aria-live="polite">
+        <strong>正在加载训练营模块…</strong>
+        <span>首次进入会准备战场渲染资源</span>
+        <i aria-hidden="true" />
+    </div>
+);
+
 const PRIMARY_NAVIGATION_TIMEOUT_MS = 10000;
 const PRIMARY_NAVIGATION_RETRY_DELAYS_MS = [250, 700];
 const AUTH_ERROR_MESSAGES = new Set([
@@ -3180,7 +3188,7 @@ const App = () => {
                     </Suspense>
                 )}
                 {view === "trainingGround" && !isAdmin && (
-                    <Suspense fallback={null}>
+                    <Suspense fallback={<TrainingGroundLoadingFallback />}>
                         <TrainingGroundPanel onExit={navigateToHomeWithDockCollapse} />
                     </Suspense>
                 )}

@@ -128,6 +128,32 @@ describe('configured training skill execution', () => {
     expect(casters.every((agent) => agent.unitCategory === 'ranged')).toBe(true);
   });
 
+  test('uses the painted stamps as the ranged skill target and clamps them to range', () => {
+    const runtime = createRuntime([
+      { slotIndex: 0, treeCategory: 'ranged', skillId: 'ranged_fixed_volley' }
+    ]);
+    const squad = runtime.getSquadById('attacker_squad_1');
+    const result = runtime.commandSkillSlot(squad.id, 0, {
+      x: 999,
+      y: 0,
+      paintArea: {
+        totalArea: Math.PI * (16 ** 2),
+        stamps: [{ x: 999, y: 0, radius: 16 }]
+      }
+    });
+
+    expect(result.ok).toBe(true);
+    expect(squad.activeSkill.targetSpec.kind).toBe('ground_paint');
+    const [stamp] = squad.activeSkill.targetSpec.stamps;
+    const source = squad.activeSkill.source;
+    expect(Math.hypot(stamp.x - source.x, stamp.y - source.y) + stamp.radius)
+      .toBeLessThanOrEqual(squad.activeSkill.targetSpec.maxRange + 0.001);
+    expect(runtime.crowd.effectsPool.projectileLive.some((projectile) => (
+      projectile.targetShape === 'ground_paint'
+      && projectile.targetStamps.length === 1
+    ))).toBe(true);
+  });
+
   test('requires an enemy target for intervention support skills and applies a debuff', () => {
     const runtime = createRuntime([
       { slotIndex: 0, treeCategory: 'support', skillId: 'support_intervention_domain' }

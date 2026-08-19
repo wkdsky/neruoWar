@@ -1,13 +1,21 @@
 import { buildWorldColliderParts } from '../../../battlefield/items/ItemGeometryRegistry';
 import { normalizeUnitsMap, sumUnitsMap } from '../runtime/RepMapping';
 import { degToRad } from '../../shared/angle';
+import { resolveTrainingMapTerrainElevation } from '../../shared/trainingMap';
 import BattleSnapshotSchema from './BattleSnapshotSchema';
 import BattleSnapshotPool from './BattleSnapshotPool';
 import { isConcealmentObstacle } from '../../simulation/items/itemObstacleUtils';
 
 const TEAM_ATTACKER = 'attacker';
 const TEAM_DEFENDER = 'defender';
+const TEAM_NEUTRAL = 'neutral';
 const clamp = (value, min, max) => Math.min(max, Math.max(min, value));
+
+const resolveTeamIndex = (team = TEAM_ATTACKER) => {
+  if (team === TEAM_DEFENDER) return 1;
+  if (team === TEAM_NEUTRAL) return 2;
+  return 0;
+};
 
 const inferClassFromUnitType = (unitType = {}) => {
   const explicit = typeof unitType?.classTag === 'string' ? unitType.classTag.trim().toLowerCase() : '';
@@ -15,7 +23,7 @@ const inferClassFromUnitType = (unitType = {}) => {
   const name = typeof unitType?.name === 'string' ? unitType.name : '';
   const roleTag = unitType?.roleTag === '远程' ? '远程' : '近战';
   const speed = Number(unitType?.speed) || 0;
-  const range = Number(unitType?.range) || 0;
+  const range = Number(unitType?.attackRange?.max ?? unitType?.range) || 0;
   if (/(炮|投石|火炮|炮兵|臼炮|加农)/.test(name)) return 'artillery';
   if (/(弓|弩|射手)/.test(name) || (roleTag === '远程' && range >= 3)) return 'archer';
   if (/(骑|铁骑|龙骑)/.test(name) || speed >= 2.1) return 'cavalry';
@@ -56,6 +64,17 @@ const resolveSkillVisualState = (agent = null) => {
   };
 };
 
+const writeSkillVisualState = (data, base, agent = null) => {
+  const category = inferSkillCategoryFromUnitType({ unitCategory: agent?.unitCategory }, 'melee');
+  const cast = agent?.castState;
+  const style = String(cast?.style || '');
+  const duration = Math.max(0.01, Number(cast?.durationSec) || 0.01);
+  data[base + 0] = skillCategoryIndex(category);
+  data[base + 1] = skillSubtypeIndex(category, agent?.unitSubtype);
+  data[base + 2] = style === 'ranged' ? 2 : (style === 'support' ? 3 : (style === 'melee' ? 1 : 0));
+  data[base + 3] = cast ? clamp((Number(cast.elapsedSec) || 0) / duration, 0, 1) : 0;
+};
+
 const normalizeFormationFacing = (team = TEAM_ATTACKER, rawFacing = null) => {
   const fallback = team === TEAM_DEFENDER ? Math.PI : 0;
   const candidate = Number(rawFacing);
@@ -79,10 +98,17 @@ const rotateFormationSlot = (group = {}, slot = {}) => {
   };
 };
 
-const buildRenderableBuildingParts = (walls = []) => {
+const buildRenderableBuildingParts = (walls = [], resolveTerrainElevation = () => 0) => {
   const out = [];
   (Array.isArray(walls) ? walls : []).forEach((wall) => {
     if (!wall) return;
+    const rendersAsTrainingWallPath = wall?.mapStatic === true
+      && wall?.category === 'wall'
+      && Array.isArray(wall?.visualPath)
+      && wall.visualPath.length >= 2;
+    const rendersAsTrainingMapPlaceholder = wall?.mapStatic === true
+      && (wall?.category === 'tower' || wall?.category === 'neutralCamp');
+    if (rendersAsTrainingWallPath || rendersAsTrainingMapPlaceholder) return;
     const hpRatio = clamp((Number(wall?.hp) || 0) / Math.max(1, Number(wall?.maxHp) || 1), 0, 1);
     const colors = wall?.renderColors && typeof wall.renderColors === 'object'
       ? wall.renderColors
@@ -90,10 +116,11 @@ const buildRenderableBuildingParts = (walls = []) => {
     const meshId = typeof wall?.renderProfile?.battle?.meshId === 'string' ? wall.renderProfile.battle.meshId : '';
     const isBush = /bush/i.test(meshId) || isConcealmentObstacle(wall);
     if (isBush) {
+      const terrainElevation = Math.max(0, Number(resolveTerrainElevation({ x: wall?.x, y: wall?.y })) || 0);
       out.push({
         x: Number(wall?.x) || 0,
         y: Number(wall?.y) || 0,
-        z: Math.max(0, Number(wall?.z) || 0),
+        z: Math.max(0, Number(wall?.z) || 0) + terrainElevation,
         width: Math.max(1, Number(wall?.width) || 1),
         depth: Math.max(1, Number(wall?.depth) || 1),
         height: Math.max(1, Number(wall?.height) || 1),
@@ -110,10 +137,11 @@ const buildRenderableBuildingParts = (walls = []) => {
       ? wall.colliderParts
       : buildWorldColliderParts(wall, wall, { stackLayerHeight: Number(wall?.height) || 32 });
     localParts.forEach((part) => {
+      const terrainElevation = Math.max(0, Number(resolveTerrainElevation({ x: part?.cx, y: part?.cy })) || 0);
       out.push({
         x: Number(part?.cx) || 0,
         y: Number(part?.cy) || 0,
-        z: Math.max(0, Number(part?.cz) || 0) - (Math.max(1, Number(part?.h) || 1) * 0.5),
+        z: Math.max(0, Number(part?.cz) || 0) - (Math.max(1, Number(part?.h) || 1) * 0.5) + terrainElevation,
         width: Math.max(1, Number(part?.w) || 1),
         depth: Math.max(1, Number(part?.d) || 1),
         height: Math.max(1, Number(part?.h) || 1),
@@ -156,12 +184,15 @@ export default class BattleSnapshotBuilder {
     const activeBuildings = hideDefenderIntelInDeploy
       ? []
       : (Array.isArray(runtime?.sim?.buildings) ? runtime.sim.buildings : runtime?.initialBuildings);
-    const activeBuildingParts = buildRenderableBuildingParts(activeBuildings);
+    const mapConfig = runtime?.getTrainingMapConfig?.() || null;
+    const resolveTerrainElevation = (point = {}) => resolveTrainingMapTerrainElevation(mapConfig, point);
+    const activeBuildingParts = buildRenderableBuildingParts(activeBuildings, resolveTerrainElevation);
     this.pool.ensureCapacity('buildings', activeBuildingParts.length || 0);
     this.pool.ensureCapacity('projectiles', runtime?.sim?.projectiles?.length || 0);
     this.pool.ensureCapacity('effects', runtime?.sim?.hitEffects?.length || 0);
 
     const units = outSnapshot.units;
+    const unitSquadIds = Array.isArray(outSnapshot.unitSquadIds) ? outSnapshot.unitSquadIds : [];
     const skillStates = outSnapshot.skillStates;
     const buildings = outSnapshot.buildings;
     const projectiles = outSnapshot.projectiles;
@@ -203,10 +234,12 @@ export default class BattleSnapshotBuilder {
           const isFlying = !!runtime.unitTypeMap.get(pickedTypeId)?.isFlying;
           const world = rotateFormationSlot(group, slot);
           const representedWeight = showFullFormation ? Math.max(1, total / slotCount) : total;
+          const terrainElevation = resolveTerrainElevation(world);
           const base = previewCount * unitsSchema.stride;
+          unitSquadIds[previewCount] = String(group?.id || '');
           units.data[base + 0] = Number(world.x) || 0;
           units.data[base + 1] = Number(world.y) || 0;
-          units.data[base + 2] = isFlying ? 8.5 : 0;
+          units.data[base + 2] = terrainElevation + (isFlying ? 8.5 : 0);
           units.data[base + 3] = showFullFormation
             ? Math.max(2.5, Math.min(9.5, Math.sqrt(representedWeight) * 0.82))
             : Math.max(5.5, Math.min(11.5, 3.8 + (Math.sqrt(representedWeight) * 0.52)));
@@ -244,6 +277,8 @@ export default class BattleSnapshotBuilder {
       }
       units.count = previewCount;
       skillStates.count = previewCount;
+      unitSquadIds.length = previewCount;
+      outSnapshot.unitSquadIds = unitSquadIds;
 
       let wallCount = 0;
       for (let i = 0; i < activeBuildingParts.length; i += 1) {
@@ -275,22 +310,29 @@ export default class BattleSnapshotBuilder {
     }
 
     const agents = Array.isArray(runtime.crowd.allAgents) ? runtime.crowd.allAgents : [];
+    const squadsById = runtime?.sim?._squadById instanceof Map
+      ? runtime.sim._squadById
+      : new Map((Array.isArray(runtime?.sim?.squads) ? runtime.sim.squads : [])
+        .filter((squad) => squad?.id)
+        .map((squad) => [String(squad.id), squad]));
     let unitCount = 0;
     for (let i = 0; i < agents.length; i += 1) {
       const agent = agents[i];
       if (!agent || agent.dead || (Number(agent.weight) || 0) <= 0.001) continue;
-      const squad = runtime.getSquadById(agent.squadId);
+      const squad = squadsById.get(String(agent.squadId || '')) || null;
       const hiddenFromAttacker = !!squad?.hiddenFromAttacker;
       if (agent.team === TEAM_DEFENDER && hiddenFromAttacker) continue;
       const visual = runtime.visualConfig(agent.unitTypeId, squad?.classTag || agent.typeCategory || 'infantry');
       const isFlying = !!runtime.unitTypeMap.get(agent.unitTypeId)?.isFlying;
+      const terrainElevation = resolveTerrainElevation(agent);
       const base = unitCount * unitsSchema.stride;
+      unitSquadIds[unitCount] = String(agent.squadId || '');
       units.data[base + 0] = Number(agent.x) || 0;
       units.data[base + 1] = Number(agent.y) || 0;
-      units.data[base + 2] = isFlying ? 8.5 : 0;
+      units.data[base + 2] = terrainElevation + (isFlying ? 8.5 : 0);
       units.data[base + 3] = Math.max(2.6, Math.min(10.5, Math.sqrt(Math.max(1, Number(agent.weight) || 1)) * 0.82));
       units.data[base + 4] = Number(agent.yaw) || 0;
-      units.data[base + 5] = agent.team === TEAM_ATTACKER ? 0 : 1;
+      units.data[base + 5] = resolveTeamIndex(agent.team);
       units.data[base + 6] = clamp((Number(agent.hpWeight) || Number(agent.weight) || 1) / Math.max(0.001, Number(agent.initialWeight) || 1), 0, 1);
       units.data[base + 7] = visual.bodyIndex;
       units.data[base + 8] = visual.gearIndex;
@@ -308,16 +350,14 @@ export default class BattleSnapshotBuilder {
       units.data[base + 17] = visual.gearTopIndex;
       units.data[base + 18] = visual.vehicleTopIndex;
       units.data[base + 19] = visual.silhouetteTopIndex;
-      const skillVisual = resolveSkillVisualState(agent);
       const skillBase = unitCount * skillStatesSchema.stride;
-      skillStates.data[skillBase + 0] = skillVisual.categoryIndex;
-      skillStates.data[skillBase + 1] = skillVisual.subtypeIndex;
-      skillStates.data[skillBase + 2] = skillVisual.skillActionIndex;
-      skillStates.data[skillBase + 3] = skillVisual.skillProgress;
+      writeSkillVisualState(skillStates.data, skillBase, agent);
       unitCount += 1;
     }
     units.count = unitCount;
     skillStates.count = unitCount;
+    unitSquadIds.length = unitCount;
+    outSnapshot.unitSquadIds = unitSquadIds;
 
     let wallCount = 0;
     for (let i = 0; i < activeBuildingParts.length; i += 1) {
@@ -354,7 +394,7 @@ export default class BattleSnapshotBuilder {
       projectiles.data[base + 1] = Number(p.y) || 0;
       projectiles.data[base + 2] = Number(p.z) || 0;
       projectiles.data[base + 3] = Math.max(0.8, Number(p.radius) || 2.2);
-      projectiles.data[base + 4] = p.team === TEAM_ATTACKER ? 0 : 1;
+      projectiles.data[base + 4] = resolveTeamIndex(p.team);
       projectiles.data[base + 5] = p.type === 'shell' ? 1 : 0;
       projectiles.data[base + 6] = clamp((Number(p.ttl) || 0) / Math.max(0.01, (Number(p.elapsed) || 0) + (Number(p.ttl) || 0)), 0, 1);
       projectiles.data[base + 7] = 0;
@@ -372,7 +412,7 @@ export default class BattleSnapshotBuilder {
       effects.data[base + 1] = Number(e.y) || 0;
       effects.data[base + 2] = Number(e.z) || 0;
       effects.data[base + 3] = Math.max(0.6, Number(e.radius) || 2.2);
-      effects.data[base + 4] = e.team === TEAM_ATTACKER ? 0 : 1;
+      effects.data[base + 4] = resolveTeamIndex(e.team);
       if (e.type === 'explosion') effects.data[base + 5] = 1;
       else if (e.type === 'buff_aura') effects.data[base + 5] = 2;
       else if (e.type === 'charge_dust') effects.data[base + 5] = 3;

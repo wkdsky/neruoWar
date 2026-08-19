@@ -25,13 +25,15 @@ describe('training flag labels', () => {
     const rows = buildTrainingFlagRows([
       { id: 'ally', name: '先锋', team: 'attacker', remain: 20, startCount: 40, trainingSkillPoints: 7, x: -100, y: 40, centerX: -88, centerY: 32 },
       { id: 'enemy', name: '守军', team: 'defender', remain: 1, startCount: 10, trainingSkillPoints: 2, x: 100, y: -40 },
+      { id: 'neutral', name: '野区守卫', team: 'neutral', remain: 8, startCount: 8, trainingSkillPoints: 0, x: 0, y: 0 },
       { id: 'unplaced', remain: 30, startCount: 30, placed: false },
       { id: 'fallen', remain: 0, startCount: 30 }
     ]);
 
     expect(rows).toEqual([
-      expect.objectContaining({ id: 'ally', team: 'attacker', troopState: 'warning', skillPoints: 7, x: -88, y: 32 }),
-      expect.objectContaining({ id: 'enemy', team: 'defender', troopState: 'critical', skillPoints: 2 })
+      expect.objectContaining({ id: 'ally', team: 'attacker', troopState: 'warning', skillPoints: 7, showSkillPoints: true, x: -88, y: 32 }),
+      expect.objectContaining({ id: 'enemy', team: 'defender', troopState: 'critical', skillPoints: 2, showSkillPoints: true }),
+      expect.objectContaining({ id: 'neutral', team: 'neutral', troopState: 'healthy', skillPoints: 0, showSkillPoints: false })
     ]);
   });
 

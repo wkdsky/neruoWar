@@ -7,11 +7,13 @@ export const SPEED_MODE_C = 'C_PER_TYPE';
 export const SPEED_MODE_AUTO = 'AUTO';
 
 export const CAMERA_ZOOM_STEP = 36;
+export const TRAINING_CAMERA_ZOOM_STEP = 50;
 export const CAMERA_DISTANCE_CLOSE_MIN = 200;
 export const CAMERA_DISTANCE_MIN = 420;
 export const CAMERA_DISTANCE_MAX = 980;
-export const TRAINING_OVERVIEW_DISTANCE_EXTRA = 900;
-export const TRAINING_OVERVIEW_DISTANCE_MAX = 4600;
+export const TRAINING_PITCH_DISTANCE_MAX = 2000;
+export const TRAINING_OVERVIEW_DISTANCE_EXTRA = 1200;
+export const TRAINING_OVERVIEW_DISTANCE_MAX = 2560;
 export const TRAINING_OVERVIEW_VIEW_PADDING = 1.08;
 
 export const DEPLOY_ROTATE_SENSITIVITY = 0.28;
@@ -48,7 +50,7 @@ export const TRAINING_FONT_SCALE_BY_SIZE = Object.freeze({
   large: 1.3
 });
 
-export const QUICK_DEPLOY_TEAM_SHORTCUTS = [5, 10, 20, 30, 50];
+export const QUICK_DEPLOY_TEAM_SHORTCUTS = [1, 2, 3, 4, 5, 6];
 export const QUICK_DEPLOY_TOTAL_SHORTCUTS = [
   { label: '5000', value: 5000 },
   { label: '1万', value: 10000 },
@@ -58,11 +60,11 @@ export const QUICK_DEPLOY_TOTAL_SHORTCUTS = [
   { label: '30万', value: 300000 },
   { label: '50万', value: 500000 }
 ];
-export const QUICK_DEPLOY_MAX_TEAM_COUNT = 200;
+export const QUICK_DEPLOY_MAX_TEAM_COUNT = 6;
 export const QUICK_DEPLOY_MAX_TOTAL = 500000;
 export const QUICK_DEPLOY_RANDOM_DEFAULT = Object.freeze({
-  attackerTeamCount: '10',
-  defenderTeamCount: '10',
+  attackerTeamCount: '6',
+  defenderTeamCount: '6',
   attackerTotal: '10000',
   defenderTotal: '10000'
 });
@@ -79,18 +81,18 @@ export const QUICK_DEPLOY_STANDARD_PRESETS = [
   {
     id: 'std_balanced',
     label: '均衡标准',
-    desc: '双方 10 支部队，共 1 万人',
-    attackerTeamCount: 10,
-    defenderTeamCount: 10,
+    desc: '双方 4 支部队，共 1 万人',
+    attackerTeamCount: 4,
+    defenderTeamCount: 4,
     attackerTotal: 10000,
     defenderTotal: 10000
   },
   {
     id: 'std_large',
     label: '大会战标准',
-    desc: '双方 20 支部队，共 5 万人',
-    attackerTeamCount: 20,
-    defenderTeamCount: 20,
+    desc: '双方 6 支部队，共 5 万人',
+    attackerTeamCount: 6,
+    defenderTeamCount: 6,
     attackerTotal: 50000,
     defenderTotal: 50000
   }

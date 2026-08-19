@@ -16,6 +16,7 @@ import {
   toInt,
   toStringId
 } from './types';
+import { normalizeAttackRange } from './attackRange';
 
 const CLASS_TAG_SET = new Set(['infantry', 'cavalry', 'archer', 'artillery']);
 
@@ -30,7 +31,7 @@ const normalizeClassTag = (value, fallbackUnit = {}) => {
   const name = toStringId(fallbackUnit?.name);
   const roleTag = fallbackUnit?.roleTag === '远程' ? '远程' : '近战';
   const speed = Number(fallbackUnit?.speed) || 0;
-  const range = Number(fallbackUnit?.range) || 0;
+  const range = normalizeAttackRange(fallbackUnit).max;
   if (/(炮|投石|火炮|炮兵|臼炮|加农)/.test(name)) return 'artillery';
   if (/(弓|弩|弓兵|弩兵|射手)/.test(name) || (roleTag === '远程' && range >= 3)) return 'archer';
   if (/(骑|骑兵|铁骑|龙骑)/.test(name) || speed >= 2.1) return 'cavalry';
@@ -92,8 +93,8 @@ const normalizeComponents = (components = {}) => {
 export const normalizeUnitType = (unit = {}) => {
   const unitTypeId = toStringId(unit?.unitTypeId) || toStringId(unit?.id);
   const tier = Math.max(1, toInt(unit?.tier, toInt(unit?.level, 1, 1, 4), 1, 4));
-  const range = clampNumber(unit?.range, 1, 1, 9999);
-  const roleTag = normalizeRoleTag(unit?.roleTag, range);
+  const attackRange = normalizeAttackRange(unit);
+  const roleTag = normalizeRoleTag(unit?.roleTag, attackRange.max);
   const { unitCategory, unitSubtype } = resolveUnitClassification(unit);
   const enabled = unit?.enabled !== false;
   const bodyId = toStringId(unit?.bodyId) || null;
@@ -104,7 +105,8 @@ export const normalizeUnitType = (unit = {}) => {
   const classTag = normalizeClassTag(unit?.classTag, {
     ...unit,
     roleTag,
-    range
+    attackRange,
+    range: attackRange.max
   });
   return {
     schemaVersion: Math.max(1, toInt(unit?.schemaVersion, 1, 1, 9999)),
@@ -125,7 +127,8 @@ export const normalizeUnitType = (unit = {}) => {
     hp: clampNumber(unit?.hp, 1, 1, 999999999),
     atk: clampNumber(unit?.atk, 1, 0, 999999999),
     def: clampNumber(unit?.def, 0, 0, 999999999),
-    range,
+    attackRange,
+    range: attackRange.max,
     costKP: Math.max(1, toInt(unit?.costKP, 1, 1, 999999999)),
     nextUnitTypeId: toStringId(unit?.nextUnitTypeId) || null,
     upgradeCostKP: Number.isFinite(Number(unit?.upgradeCostKP))

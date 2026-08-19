@@ -14,9 +14,11 @@ const tempColor = new THREE.Color();
 const tempAccent = new THREE.Color();
 
 const TEAM_COLORS = [
-  new THREE.Color(0x1677d2),
-  new THREE.Color(0xde424b)
+  new THREE.Color(0xd95155),
+  new THREE.Color(0x32b4bd),
+  new THREE.Color(0xf4c542)
 ];
+const HIGH_DENSITY_UNIT_THRESHOLD = 160;
 const SELECTED_COLOR = new THREE.Color(0xf4c542);
 const GHOST_COLOR = new THREE.Color(0x80b9e8);
 const HOVER_COLOR = new THREE.Color(0x9deaff);
@@ -203,6 +205,7 @@ export default class TrainingChibiUnitRenderer {
 
   update(units, skillStates = null, visualFocus = null) {
     const count = Math.max(0, Math.floor(Number(units?.count) || 0));
+    const useCrowdLod = count >= HIGH_DENSITY_UNIT_THRESHOLD;
     this.ensureCapacity(count);
     const data = units?.data || [];
     const skillData = skillStates?.data || [];
@@ -219,7 +222,7 @@ export default class TrainingChibiUnitRenderer {
       const z = Number(data[base + 2]) || 0;
       const size = resolveTrainingUnitVisualSize(data[base + 3]);
       const yaw = Number(data[base + 4]) || 0;
-      const teamIndex = Number(data[base + 5]) > 0.5 ? 1 : 0;
+      const teamIndex = clamp(Math.round(Number(data[base + 5]) || 0), 0, TEAM_COLORS.length - 1);
       const hpRatio = clamp(Number(data[base + 6]) || 0, 0, 1);
       const selected = Number(data[base + 12]) > 0.5;
       const ghost = Number(data[base + 14]) > 0.5;
@@ -267,6 +270,8 @@ export default class TrainingChibiUnitRenderer {
       tempMatrix.compose(tempPos, bodyQuaternion, tempScale);
       this.headMesh.setMatrixAt(index, tempMatrix);
       this.headMesh.setColorAt(index, headColor);
+
+      if (useCrowdLod) continue;
 
       tempEuler.set(0, 0, yaw);
       tempQuat.setFromEuler(tempEuler);
@@ -355,12 +360,15 @@ export default class TrainingChibiUnitRenderer {
 
     this.bodyMesh.count = count;
     this.headMesh.count = count;
-    this.faceMesh.count = count;
-    this.eyeMesh.count = count;
+    this.faceMesh.count = useCrowdLod ? 0 : count;
+    this.eyeMesh.count = useCrowdLod ? 0 : count;
     this.helmetMesh.count = helmetCount;
     this.rangedCrestMesh.count = rangedCrestCount;
     this.supportHaloMesh.count = supportHaloCount;
-    [
+    const activeMeshes = useCrowdLod ? [
+      this.bodyMesh,
+      this.headMesh
+    ] : [
       this.bodyMesh,
       this.headMesh,
       this.faceMesh,
@@ -370,7 +378,8 @@ export default class TrainingChibiUnitRenderer {
       this.supportHaloMesh,
       ...this.weaponMeshes,
       ...this.weaponTipMeshes
-    ].forEach((mesh) => {
+    ];
+    activeMeshes.forEach((mesh) => {
       if (!mesh) return;
       mesh.instanceMatrix.needsUpdate = true;
       if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
@@ -379,6 +388,7 @@ export default class TrainingChibiUnitRenderer {
       mesh.count = weaponCounts[index];
       this.weaponTipMeshes[index].count = weaponCounts[index];
     });
+    return true;
   }
 
   dispose() {

@@ -1,10 +1,16 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import BattleClock from '../presentation/runtime/BattleClock';
+import {
+  createBattleDisplaySnapshot,
+  interpolateBattleSnapshots
+} from '../presentation/snapshot/BattleSnapshotInterpolator';
 
 const clamp = (value, min, max) => Math.min(max, Math.max(min, value));
+const BATTLE_SNAPSHOT_INTERVAL_MS = 1000 / 20;
 
 export default function useBattleLoop({
   enabled = false,
+  renderCycleKey = 0,
   canvasRef,
   runtimeRef,
   pipelineRef,
@@ -22,7 +28,16 @@ export default function useBattleLoop({
   const lastFrameRef = useRef(0);
   const fpsStateRef = useRef({ windowSec: 0, frames: 0 });
   const lastHudRef = useRef(0);
+  const renderSnapshotRef = useRef(null);
+  const previousRenderSnapshotRef = useRef(null);
+  const displaySnapshotRef = useRef(null);
+  const renderSnapshotVersionRef = useRef(0);
+  const dynamicSnapshotVersionRef = useRef(0);
+  const lastSnapshotAtRef = useRef(0);
+  const previousSnapshotAtRef = useRef(0);
+  const lastSnapshotPhaseRef = useRef('');
   const reportedRef = useRef(false);
+  const firstRenderReportedRef = useRef(false);
   const worldToScreenRef = useRef(null);
   const worldToDomRef = useRef(null);
   const cameraViewRectRef = useRef({ widthWorld: 240, heightWorld: 160 });
@@ -45,7 +60,17 @@ export default function useBattleLoop({
     timeoutRef.current = 0;
     lastFrameRef.current = 0;
     lastHudRef.current = 0;
+    renderSnapshotRef.current = null;
+    previousRenderSnapshotRef.current = null;
+    displaySnapshotRef.current = null;
+    renderSnapshotVersionRef.current = 0;
+    dynamicSnapshotVersionRef.current = 0;
+    lastSnapshotAtRef.current = 0;
+    previousSnapshotAtRef.current = 0;
+    lastSnapshotPhaseRef.current = '';
     fpsStateRef.current = { windowSec: 0, frames: 0 };
+    reportedRef.current = false;
+    firstRenderReportedRef.current = false;
   }, []);
 
   const setPaused = useCallback((nextPaused) => {
@@ -69,16 +94,6 @@ export default function useBattleLoop({
     const last = lastFrameRef.current || ts;
     const deltaSec = clamp((ts - last) / 1000, 0, 0.05);
     lastFrameRef.current = ts;
-
-    const fpsWindow = fpsStateRef.current;
-    fpsWindow.windowSec += deltaSec;
-    fpsWindow.frames += 1;
-    if (fpsWindow.windowSec >= 0.5) {
-      const fps = fpsWindow.frames / Math.max(0.0001, fpsWindow.windowSec);
-      runtime.setFps?.(fps);
-      fpsWindow.windowSec = 0;
-      fpsWindow.frames = 0;
-    }
 
     const viewport = pipeline.prepareFrame?.() || { width: canvas.width, height: canvas.height };
     const safeWidth = Math.max(1, Number(viewport?.width) || canvas.width || 1);
@@ -151,21 +166,82 @@ export default function useBattleLoop({
       };
     };
 
+    const snapshotNow = performance.now();
+    const shouldRefreshSnapshot = nowPhase !== 'battle'
+      || frameMetricsRef.current.simSteps > 0
+      || !renderSnapshotRef.current
+      || lastSnapshotPhaseRef.current !== nowPhase
+      || (snapshotNow - lastSnapshotAtRef.current) >= BATTLE_SNAPSHOT_INTERVAL_MS;
+    if (shouldRefreshSnapshot) {
+      const previousSnapshot = renderSnapshotRef.current;
+      const previousSnapshotAt = lastSnapshotAtRef.current;
+      renderSnapshotRef.current = runtime.getRenderSnapshot?.() || null;
+      previousRenderSnapshotRef.current = previousSnapshot;
+      previousSnapshotAtRef.current = previousSnapshot ? previousSnapshotAt : 0;
+      renderSnapshotVersionRef.current += 1;
+      lastSnapshotAtRef.current = snapshotNow;
+      lastSnapshotPhaseRef.current = nowPhase;
+    }
+
+    const currentSnapshot = renderSnapshotRef.current;
+    const previousSnapshot = previousRenderSnapshotRef.current;
+    const captureIntervalMs = Math.max(
+      1000 / 60,
+      lastSnapshotAtRef.current - previousSnapshotAtRef.current
+    );
+    const interpolationAlpha = previousSnapshot && nowPhase === 'battle'
+      ? clamp((snapshotNow - lastSnapshotAtRef.current) / captureIntervalMs, 0, 1)
+      : 1;
+    let snapshot = currentSnapshot;
+    let interpolationActive = false;
+    if (previousSnapshot && nowPhase === 'battle' && interpolationAlpha < 1) {
+      if (!displaySnapshotRef.current) {
+        displaySnapshotRef.current = createBattleDisplaySnapshot();
+      }
+      const interpolation = interpolateBattleSnapshots({
+        previousSnapshot,
+        currentSnapshot,
+        alpha: interpolationAlpha,
+        targetSnapshot: displaySnapshotRef.current
+      });
+      snapshot = interpolation.snapshot;
+      interpolationActive = interpolation.active;
+    }
+    const dynamicSnapshotVersion = interpolationActive
+      ? ++dynamicSnapshotVersionRef.current
+      : renderSnapshotVersionRef.current;
+
     const renderStart = performance.now();
-    const snapshot = runtime.getRenderSnapshot?.();
     runtime.cameraPitchMix = camera.getPitchBlend?.() || 0;
-    pipeline.render?.({
+    const rendered = pipeline.render?.({
       cameraState,
       snapshot,
+      snapshotVersion: renderSnapshotVersionRef.current,
+      dynamicSnapshotVersion,
       runtime,
-      skillConfirmState
-    });
+      skillConfirmState,
+      debugEnabled
+    }) !== false;
+    if (rendered && !firstRenderReportedRef.current) {
+      firstRenderReportedRef.current = true;
+      callbacks.onFirstRender?.();
+    }
     frameMetricsRef.current.frameTime = performance.now() - renderStart;
     runtime.setRenderMs?.(frameMetricsRef.current.frameTime);
 
-    const now = performance.now();
-    if ((now - lastHudRef.current) >= 120) {
-      lastHudRef.current = now;
+    const fpsWindow = fpsStateRef.current;
+    fpsWindow.windowSec += deltaSec;
+    if (rendered) fpsWindow.frames += 1;
+    if (fpsWindow.windowSec >= 0.5) {
+      const fps = fpsWindow.frames / Math.max(0.0001, fpsWindow.windowSec);
+      runtime.setFps?.(fps);
+      fpsWindow.windowSec = 0;
+      fpsWindow.frames = 0;
+    }
+
+    const hudNow = performance.now();
+    if ((hudNow - lastHudRef.current) >= 120) {
+      lastHudRef.current = hudNow;
       callbacks.onPhaseChange?.(nowPhase);
       const field = runtime.getField?.();
       const followedSquad = followTargetSquadId ? runtime.getSquadById?.(followTargetSquadId) : null;
@@ -186,48 +262,50 @@ export default function useBattleLoop({
         },
         viewport: cameraViewRectRef.current
       });
-      setCameraAssert({
-        cameraImplTag: cameraState?.cameraImplTag || '',
-        phase: nowPhase,
-        yawDeg: Number(camera.yawDeg) || 0,
-        worldYawDeg: Number(cameraState?.worldYawDeg) || 0,
-        currentPitch: Number(camera.currentPitch) || 0,
-        pitchLow: Number(camera.pitchLow) || 0,
-        pitchHigh: Number(camera.pitchHigh) || 0,
-        distance: Number(camera.distance) || 0,
-        mirrorX: !!camera.mirrorX,
-        handedness: Number(cameraState?.handedness) || 0,
-        centerX: Number(camera.centerX) || 0,
-        centerY: Number(camera.centerY) || 0,
-        eyeX: Number(cameraState?.eye?.[0]) || 0,
-        eyeY: Number(cameraState?.eye?.[1]) || 0,
-        eyeZ: Number(cameraState?.eye?.[2]) || 0,
-        forwardZ: Number(cameraState?.forwardZ) || 0,
-        flipFixApplied: !!cameraState?.flipFixApplied,
-        targetX: Number(cameraState?.target?.[0]) || 0,
-        targetY: Number(cameraState?.target?.[1]) || 0,
-        targetZ: Number(cameraState?.target?.[2]) || 0,
-        cameraRightX: Number(cameraState?.cameraRight?.[0]) || 0,
-        cameraRightY: Number(cameraState?.cameraRight?.[1]) || 0,
-        cameraRightZ: Number(cameraState?.cameraRight?.[2]) || 0,
-        fieldWidth: Number(field?.width) || 0,
-        fieldHeight: Number(field?.height) || 0,
-        deployAttackerMaxX: Number(runtime.getDeployRange?.()?.attackerMaxX) || 0,
-        deployDefenderMinX: Number(runtime.getDeployRange?.()?.defenderMinX) || 0,
-        pointerX: Number(callbacks.pointerWorldRef?.current?.x) || 0,
-        pointerY: Number(callbacks.pointerWorldRef?.current?.y) || 0,
-        pointerValid: callbacks.pointerWorldRef?.current?.valid !== false,
-        isPanning: !!callbacks.panDragRef?.current,
-        panStartDistance: Number(callbacks.panDragRef?.current?.startDistance) || 0,
-        panStartPitch: Number(callbacks.panDragRef?.current?.startPitch) || 0,
-        followTargetX: Number(lockAnchor?.x) || 0,
-        followTargetY: Number(lockAnchor?.y) || 0,
-        followTargetSquadId: String(lockAnchor?.squadId || followTargetSquadId || ''),
-        focusActualX: Number((followedSquad || followedDeployGroup)?.x) || 0,
-        focusActualY: Number((followedSquad || followedDeployGroup)?.y) || 0,
-        focusActualSquadId: String((followedSquad || followedDeployGroup)?.id || ''),
-        focusActualResolved: !!(followedSquad || followedDeployGroup)
-      });
+      if (debugEnabled) {
+        setCameraAssert({
+          cameraImplTag: cameraState?.cameraImplTag || '',
+          phase: nowPhase,
+          yawDeg: Number(camera.yawDeg) || 0,
+          worldYawDeg: Number(cameraState?.worldYawDeg) || 0,
+          currentPitch: Number(camera.currentPitch) || 0,
+          pitchLow: Number(camera.pitchLow) || 0,
+          pitchHigh: Number(camera.pitchHigh) || 0,
+          distance: Number(camera.distance) || 0,
+          mirrorX: !!camera.mirrorX,
+          handedness: Number(cameraState?.handedness) || 0,
+          centerX: Number(camera.centerX) || 0,
+          centerY: Number(camera.centerY) || 0,
+          eyeX: Number(cameraState?.eye?.[0]) || 0,
+          eyeY: Number(cameraState?.eye?.[1]) || 0,
+          eyeZ: Number(cameraState?.eye?.[2]) || 0,
+          forwardZ: Number(cameraState?.forwardZ) || 0,
+          flipFixApplied: !!cameraState?.flipFixApplied,
+          targetX: Number(cameraState?.target?.[0]) || 0,
+          targetY: Number(cameraState?.target?.[1]) || 0,
+          targetZ: Number(cameraState?.target?.[2]) || 0,
+          cameraRightX: Number(cameraState?.cameraRight?.[0]) || 0,
+          cameraRightY: Number(cameraState?.cameraRight?.[1]) || 0,
+          cameraRightZ: Number(cameraState?.cameraRight?.[2]) || 0,
+          fieldWidth: Number(field?.width) || 0,
+          fieldHeight: Number(field?.height) || 0,
+          deployAttackerMaxX: Number(runtime.getDeployRange?.()?.attackerMaxX) || 0,
+          deployDefenderMinX: Number(runtime.getDeployRange?.()?.defenderMinX) || 0,
+          pointerX: Number(callbacks.pointerWorldRef?.current?.x) || 0,
+          pointerY: Number(callbacks.pointerWorldRef?.current?.y) || 0,
+          pointerValid: callbacks.pointerWorldRef?.current?.valid !== false,
+          isPanning: !!callbacks.panDragRef?.current,
+          panStartDistance: Number(callbacks.panDragRef?.current?.startDistance) || 0,
+          panStartPitch: Number(callbacks.panDragRef?.current?.startPitch) || 0,
+          followTargetX: Number(lockAnchor?.x) || 0,
+          followTargetY: Number(lockAnchor?.y) || 0,
+          followTargetSquadId: String(lockAnchor?.squadId || followTargetSquadId || ''),
+          focusActualX: Number((followedSquad || followedDeployGroup)?.x) || 0,
+          focusActualY: Number((followedSquad || followedDeployGroup)?.y) || 0,
+          focusActualSquadId: String((followedSquad || followedDeployGroup)?.id || ''),
+          focusActualResolved: !!(followedSquad || followedDeployGroup)
+        });
+      }
       const debugSwitch = typeof callbacks.resolveBattleDebugSwitch === 'function'
         ? callbacks.resolveBattleDebugSwitch()
         : { enabled: false, steeringWeights: null };
@@ -292,7 +370,7 @@ export default function useBattleLoop({
     return () => {
       stop();
     };
-  }, [enabled, stop]);
+  }, [enabled, renderCycleKey, stop]);
 
   useEffect(() => () => stop(), [stop]);
 

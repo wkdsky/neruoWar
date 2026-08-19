@@ -14,6 +14,7 @@ export default function useBattleSceneInputController({
   deployYawDragRef,
   deployRectDragRef,
   deployDirectionArcDragRef,
+  skillPaintDragRef,
   spacePressedRef,
   selectedSquadId = '',
   paused = false,
@@ -52,6 +53,8 @@ export default function useBattleSceneInputController({
   CAMERA_DISTANCE_CLOSE_MIN,
   CAMERA_DISTANCE_MIN,
   CAMERA_DISTANCE_MAX,
+  TRAINING_CAMERA_ZOOM_STEP,
+  TRAINING_PITCH_DISTANCE_MAX,
   TRAINING_OVERVIEW_DISTANCE_EXTRA,
   TRAINING_OVERVIEW_DISTANCE_MAX,
   TRAINING_OVERVIEW_VIEW_PADDING,
@@ -80,6 +83,7 @@ export default function useBattleSceneInputController({
     deployYawDragRef,
     deployRectDragRef,
     deployDirectionArcDragRef,
+    skillPaintDragRef,
     spacePressedRef,
     constants: {
       ORDER_MOVE,
@@ -87,6 +91,8 @@ export default function useBattleSceneInputController({
       CAMERA_DISTANCE_CLOSE_MIN,
       CAMERA_DISTANCE_MIN,
       CAMERA_DISTANCE_MAX,
+      TRAINING_CAMERA_ZOOM_STEP,
+      TRAINING_PITCH_DISTANCE_MAX,
       TRAINING_OVERVIEW_DISTANCE_EXTRA,
       TRAINING_OVERVIEW_DISTANCE_MAX,
       TRAINING_OVERVIEW_VIEW_PADDING,
@@ -171,6 +177,7 @@ export default function useBattleSceneInputController({
     deployYawDragRef,
     deployRectDragRef,
     deployDirectionArcDragRef,
+    skillPaintDragRef,
     spacePressedRef,
     setIsPanning,
     setDeployNotice,
@@ -189,6 +196,8 @@ export default function useBattleSceneInputController({
     CAMERA_DISTANCE_CLOSE_MIN,
     CAMERA_DISTANCE_MIN,
     CAMERA_DISTANCE_MAX,
+    TRAINING_CAMERA_ZOOM_STEP,
+    TRAINING_PITCH_DISTANCE_MAX,
     TRAINING_OVERVIEW_DISTANCE_EXTRA,
     TRAINING_OVERVIEW_DISTANCE_MAX,
     TRAINING_OVERVIEW_VIEW_PADDING,
@@ -216,6 +225,7 @@ export default function useBattleSceneInputController({
     battleInputController.clearDeployYawDrag();
     battleInputController.clearDeployRectDrag();
     battleInputController.clearDeployDirectionArcDrag();
+    battleInputController.clearSkillPaintDrag();
     runtimeRef.current?.setHoveredDeployGroup?.('');
   }, [battleInputController, interactionLocked, runtimeRef]);
 

@@ -6,9 +6,9 @@ const { fetchUnitTypesWithComponents } = require('../services/unitRegistryServic
 const { fetchBattlefieldItems } = require('../services/placeableCatalogService');
 const { UNIT_TYPE_DTO_VERSION } = require('../services/unitTypeDtoService');
 const {
-  BATTLEFIELD_FIELD_WIDTH,
-  BATTLEFIELD_FIELD_HEIGHT
-} = require('../services/battlefieldScale');
+  buildTrainingBattlefield,
+  buildLegacyTrainingBattlefield
+} = require('../services/trainingMapService');
 const {
   MAX_NAME_DISPLAY_WIDTH,
   limitNameByDisplayWidth
@@ -86,7 +86,8 @@ const MAX_TEMPLATE_FORMATION_COUNT = 9;
 const MAX_TEMPLATE_FORMATION_NAME_LEN = 24;
 const MAX_TEMPLATE_FORMATION_COORD = 999;
 const MAX_COMBAT_ARMY_COUNT = 100;
-const MAX_TRAINING_ARMY_COUNT = 200;
+const MAX_TRAINING_TEAM_ARMY_COUNT = 6;
+const MAX_TRAINING_ARMY_COUNT = MAX_TRAINING_TEAM_ARMY_COUNT * 2;
 const MAX_ARMY_NAME_LEN = MAX_NAME_DISPLAY_WIDTH;
 const MAX_ARMY_UNIT_COUNT = 1000000;
 const MAX_ARMY_DEPLOY_SLOT_COUNT = 1000;
@@ -650,6 +651,16 @@ const serializeTrainingArmies = (rawArmies, unitTypeMap) => (
     ))
 );
 
+const limitTrainingArmiesByTeam = (armies = []) => {
+  const teamCounts = { attacker: 0, defender: 0 };
+  return (Array.isArray(armies) ? armies : []).filter((army) => {
+    const team = army?.team === 'defender' ? 'defender' : 'attacker';
+    if (teamCounts[team] >= MAX_TRAINING_TEAM_ARMY_COUNT) return false;
+    teamCounts[team] += 1;
+    return true;
+  });
+};
+
 const buildAllocatedCombatUnitMap = (rawArmies) => {
   const allocated = new Map();
   (Array.isArray(rawArmies) ? rawArmies : []).forEach((army) => {
@@ -1046,10 +1057,16 @@ router.get('/training/init', authenticateToken, async (req, res) => {
       initialCount: MAX_TEMPLATE_UNIT_COUNT
     }));
     const unitTypeMap = buildUnitTypeMap(unitTypes);
-    const trainingArmies = serializeTrainingArmies(user.trainingArmies, unitTypeMap);
+    const trainingArmies = limitTrainingArmiesByTeam(serializeTrainingArmies(user.trainingArmies, unitTypeMap));
     const attackerDeployUnits = trainingArmies.filter((army) => army.team !== 'defender');
     const defenderDeployUnits = trainingArmies.filter((army) => army.team === 'defender');
     const sumArmyCount = (armies) => armies.reduce((sum, army) => sum + (Number(army?.totalCount) || 0), 0);
+    const requestedMapPreset = typeof req.query?.mapPreset === 'string'
+      ? req.query.mapPreset.trim()
+      : '';
+    const battlefield = requestedMapPreset === 'legacy-flat'
+      ? buildLegacyTrainingBattlefield({ itemCatalog: unlimitedItems })
+      : buildTrainingBattlefield({ itemCatalog: unlimitedItems, presetId: requestedMapPreset });
 
     return res.json({
       mode: 'training',
@@ -1061,6 +1078,7 @@ router.get('/training/init', authenticateToken, async (req, res) => {
       unitsPerSoldier: 10,
       rules: {
         maxDeployGroupTotal: TRAINING_MAX_GROUP_TOTAL,
+        maxDeployTeamCount: MAX_TRAINING_TEAM_ARMY_COUNT,
         templatePercentageTotal: MAX_TEMPLATE_TOTAL_COUNT
       },
       attacker: {
@@ -1079,17 +1097,9 @@ router.get('/training/init', authenticateToken, async (req, res) => {
       },
       unitTypeDtoVersion: UNIT_TYPE_DTO_VERSION,
       unitTypes: Array.isArray(unitTypes) ? unitTypes : [],
-      battlefield: {
-        intelVisible: true,
-        layoutMeta: {
-          fieldWidth: BATTLEFIELD_FIELD_WIDTH,
-          fieldHeight: BATTLEFIELD_FIELD_HEIGHT,
-          maxItemsPerType: 999999
-        },
-        itemCatalog: unlimitedItems,
-        objects: [],
-        defenderDeployments: []
-      }
+      mapId: battlefield.mapId,
+      mapVersion: battlefield.mapVersion,
+      battlefield
     });
   } catch (error) {
     console.error('获取训练场初始化失败:', error);
@@ -1282,7 +1292,8 @@ router.get('/training/armies', authenticateToken, async (req, res) => {
     return res.json({
       success: true,
       maxGroupTotal: TRAINING_MAX_GROUP_TOTAL,
-      armies: serializeTrainingArmies(user.trainingArmies, buildUnitTypeMap(unitTypes))
+      maxTeamCount: MAX_TRAINING_TEAM_ARMY_COUNT,
+      armies: limitTrainingArmiesByTeam(serializeTrainingArmies(user.trainingArmies, buildUnitTypeMap(unitTypes)))
     });
   } catch (error) {
     console.error('获取训练部队失败:', error);
@@ -1300,6 +1311,14 @@ router.put('/training/armies', authenticateToken, async (req, res) => {
     }
     if (rawArmies.length > MAX_TRAINING_ARMY_COUNT) {
       return res.status(400).json({ error: `训练部队数量不能超过 ${MAX_TRAINING_ARMY_COUNT}` });
+    }
+    const attackerCount = rawArmies.filter((army) => army?.team !== 'defender').length;
+    const defenderCount = rawArmies.filter((army) => army?.team === 'defender').length;
+    if (attackerCount > MAX_TRAINING_TEAM_ARMY_COUNT) {
+      return res.status(400).json({ error: `我方部队数量不能超过 ${MAX_TRAINING_TEAM_ARMY_COUNT}` });
+    }
+    if (defenderCount > MAX_TRAINING_TEAM_ARMY_COUNT) {
+      return res.status(400).json({ error: `敌方部队数量不能超过 ${MAX_TRAINING_TEAM_ARMY_COUNT}` });
     }
 
     const [unitTypes, user] = await Promise.all([
@@ -1344,7 +1363,8 @@ router.put('/training/armies', authenticateToken, async (req, res) => {
     return res.json({
       success: true,
       maxGroupTotal: TRAINING_MAX_GROUP_TOTAL,
-      armies: serializeTrainingArmies(savedUser.trainingArmies, unitTypeMap)
+      maxTeamCount: MAX_TRAINING_TEAM_ARMY_COUNT,
+      armies: limitTrainingArmiesByTeam(serializeTrainingArmies(savedUser.trainingArmies, unitTypeMap))
     });
   } catch (error) {
     console.error('保存训练部队失败:', error);

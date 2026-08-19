@@ -1,0 +1,81 @@
+{
+  "schemaVersion": 1,
+  "mapId": "training-war-map-v1",
+  "coordinateSpace": "normalized",
+  "routes": [
+    {
+      "id": "top",
+      "label": "上路",
+      "attackerDirection": "left-to-right",
+      "defenderDirection": "right-to-left",
+      "visualCenterline": [[0.012, 0.049195], [0.462352, 0.049195], [0.536403, 0.049195], [0.988, 0.049195]],
+      "navigationCenterline": [[0.035, 0.271914], [0.115, 0.13], [0.462352, 0.049195], [0.536403, 0.049195], [0.885, 0.13], [0.965, 0.271914]],
+      "visualWidthNormalized": 0.028,
+      "navigationWidthNormalized": 0.082,
+      "entrySpawnRegionIds": ["spawn-attacker-top", "spawn-defender-top"],
+      "connectedTerrainIds": ["grass-main", "sand-central"],
+      "crossesTerrainIds": ["sand-central"]
+    },
+    {
+      "id": "mid",
+      "label": "中路",
+      "attackerDirection": "left-to-right",
+      "defenderDirection": "right-to-left",
+      "visualCenterline": [[0.012, 0.5], [0.462352, 0.5], [0.536403, 0.5], [0.988, 0.5]],
+      "navigationCenterline": [[0.035, 0.271914], [0.18, 0.5], [0.462352, 0.5], [0.536403, 0.5], [0.82, 0.5], [0.965, 0.271914]],
+      "visualWidthNormalized": 0.032,
+      "navigationWidthNormalized": 0.092,
+      "entrySpawnRegionIds": ["spawn-attacker-top", "spawn-attacker-bottom", "spawn-defender-top", "spawn-defender-bottom"],
+      "connectedTerrainIds": ["grass-main", "sand-central", "sand-mid-west", "sand-mid-east"],
+      "crossesTerrainIds": ["sand-central"]
+    },
+    {
+      "id": "bottom",
+      "label": "下路",
+      "attackerDirection": "left-to-right",
+      "defenderDirection": "right-to-left",
+      "visualCenterline": [[0.012, 0.950805], [0.462352, 0.950805], [0.536403, 0.950805], [0.988, 0.950805]],
+      "navigationCenterline": [[0.035, 0.728086], [0.115, 0.87], [0.462352, 0.950805], [0.536403, 0.950805], [0.885, 0.87], [0.965, 0.728086]],
+      "visualWidthNormalized": 0.028,
+      "navigationWidthNormalized": 0.082,
+      "entrySpawnRegionIds": ["spawn-attacker-bottom", "spawn-defender-bottom"],
+      "connectedTerrainIds": ["grass-main", "sand-central"],
+      "crossesTerrainIds": ["sand-central"]
+    }
+  ],
+  "terrainCosts": {
+    "grass": 1,
+    "road": 1,
+    "sand": 1,
+    "highland": 1
+  },
+  "navigationRules": {
+    "outsideBattlefieldWalkable": false,
+    "skillLandingMustResolveNearestWalkable": true,
+    "wallClearanceNormalized": 0.012,
+    "pathClearance": 1.2,
+    "agentRadius": 2.25,
+    "narrowPassage": {
+      "cellSize": 8,
+      "probeDistance": 48,
+      "probeStep": 2,
+      "entryDistance": 38,
+      "releaseSeconds": 3.2
+    },
+    "pathFailureReplanCooldownSeconds": 0.35,
+    "aiTargetUnreachableFailureLimit": 3,
+    "aiTargetUnreachableCooldownSeconds": 2,
+    "aiTargetScoring": {
+      "distanceWeight": 30,
+      "sameLaneBonus": 18,
+      "offLanePenalty": 7,
+      "threatWeight": 14,
+      "lowHealthBonus": 12,
+      "inAttackRangeBonus": 22,
+      "attackingAllyBonus": 16,
+      "targetLockBonus": 10,
+      "protectedAreaPenalty": 12,
+      "blockedLinePenalty": 5
+    }
+  }
+}

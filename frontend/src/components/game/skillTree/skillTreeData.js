@@ -196,7 +196,7 @@ const RANGED_SKILLS = [
     power: '命中 +7%',
     powerLabel: '校准',
     cooldown: '被动',
-    range: '全射程',
+    range: '全攻击范围',
     duration: '永久',
     description: '远程士兵统一校正射界与装填节奏，使部队火力更稳定地落在有效区域。',
     effect: '远程单位命中率提高 7%，移动射击造成的伤害衰减降低 18%。',
@@ -480,7 +480,7 @@ const SUPPORT_SKILLS = [
     range: '全阵型',
     duration: '14 秒',
     description: '以最高等级的协调指令将全体士兵纳入同一战术节奏，形成稳定的全面强化。',
-    effect: '全体友军攻击、防御、速度、射程和硬直上限提高 26%，持续 14 秒。',
+    effect: '全体友军攻击、防御、速度、攻击范围和硬直上限提高 26%，持续 14 秒。',
     prerequisites: ['support_battlefield_resonance'],
     tags: ['增益', '全体', '终极']
   }),

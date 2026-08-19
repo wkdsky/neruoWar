@@ -8,13 +8,22 @@ import {
   resolveTrainingDirectionArcAnchors,
   resolveTrainingWorldFlagHitRects
 } from '../presentation/render/TrainingThreeRenderPipeline';
+import {
+  appendSkillPaintDabs,
+  cloneSkillPaintArea,
+  constrainSkillPaintPoint,
+  finishSkillPaintArea,
+  getSkillPaintRemainingRadius
+} from '../shared/skillPaintArea';
 
 const clamp = (value, min, max) => Math.min(max, Math.max(min, value));
 const PAN_DRAG_THRESHOLD_PX = 4;
 const TEAM_ANY = 'any';
 const CAMERA_VERTICAL_FOV_DEG = 48;
-const DEFAULT_TRAINING_OVERVIEW_DISTANCE_EXTRA = 900;
-const DEFAULT_TRAINING_OVERVIEW_DISTANCE_MAX = 4600;
+const DEFAULT_TRAINING_CAMERA_ZOOM_STEP = 50;
+const DEFAULT_TRAINING_PITCH_DISTANCE_MAX = 2000;
+const DEFAULT_TRAINING_OVERVIEW_DISTANCE_EXTRA = 1200;
+const DEFAULT_TRAINING_OVERVIEW_DISTANCE_MAX = 2560;
 const DEFAULT_TRAINING_OVERVIEW_VIEW_PADDING = 1.08;
 const TRAINING_DIRECTION_ARC_PRIORITY_HIT_OPTIONS = Object.freeze({
   minimumHitRadius: 3,
@@ -59,6 +68,13 @@ const isInteractiveUiTarget = (target) => (
   !!target
   && typeof target.closest === 'function'
   && !!target.closest(INTERACTIVE_UI_SELECTOR)
+);
+
+const resolveSkillTargetMode = (skillConfirmState = null) => (
+  skillConfirmState?.targetMode
+    || (skillConfirmState?.kind === 'cavalry' ? 'direction' : (
+      skillConfirmState?.kind === 'archer' || skillConfirmState?.kind === 'artillery' ? 'ground' : 'self'
+    ))
 );
 
 const resolveTrainingFlagIdFromTarget = (target) => {
@@ -127,6 +143,7 @@ export const createBattleInputController = ({
   deployYawDragRef,
   deployRectDragRef,
   deployDirectionArcDragRef,
+  skillPaintDragRef = { current: null },
   spacePressedRef,
   constants = {},
   getters = {},
@@ -175,6 +192,154 @@ export const createBattleInputController = ({
       px,
       py
     );
+  };
+
+  const isTrainingSkillPaintConfirm = (skillConfirmState = getters.getSkillConfirmState?.()) => (
+    !!getters.isTrainingMode?.()
+    && resolveSkillTargetMode(skillConfirmState) === 'ground'
+    && !!skillConfirmState?.paintArea
+  );
+
+  const resolveSkillPaintOrigin = (skillConfirmState = null, squad = null) => ({
+    x: Number(skillConfirmState?.center?.x) || Number(squad?.x) || 0,
+    y: Number(skillConfirmState?.center?.y) || Number(squad?.y) || 0
+  });
+
+  const resolveSkillPaintCursorPoint = (world = null, skillConfirmState = null, squad = null) => {
+    if (!world || !skillConfirmState) return null;
+    const origin = resolveSkillPaintOrigin(skillConfirmState, squad);
+    const maxRange = Math.max(8, Number(skillConfirmState?.maxRange) || 180);
+    return constrainSkillPaintPoint(
+      world,
+      origin,
+      maxRange,
+      getSkillPaintRemainingRadius(skillConfirmState.paintArea)
+    );
+  };
+
+  const restoreSkillPaintDrag = () => {
+    const drag = skillPaintDragRef?.current;
+    if (!drag) return false;
+    skillPaintDragRef.current = null;
+    callbacks.setSkillConfirmState?.((prev) => {
+      if (!prev || prev.squadId !== drag.squadId) return prev;
+      return {
+        ...prev,
+        hoverPoint: drag.initialHoverPoint ? { ...drag.initialHoverPoint } : null,
+        paintArea: cloneSkillPaintArea(drag.initialPaintArea)
+      };
+    });
+    return true;
+  };
+
+  const beginSkillPaintDrag = (event, skillConfirmState = null) => {
+    if (!isTrainingSkillPaintConfirm(skillConfirmState)) return false;
+    const runtime = runtimeRef.current;
+    const squad = runtime?.getSquadById?.(skillConfirmState.squadId);
+    if (!squad) return false;
+    const world = resolveEventWorldPoint(event);
+    if (!world) return false;
+    const cursorPoint = resolveSkillPaintCursorPoint(world, skillConfirmState, squad);
+    const initialPaintArea = cloneSkillPaintArea(skillConfirmState.paintArea);
+    if (!cursorPoint || !initialPaintArea) return false;
+    const activePaintArea = {
+      ...cloneSkillPaintArea(initialPaintArea),
+      isDragging: true
+    };
+    skillPaintDragRef.current = {
+      squadId: skillConfirmState.squadId,
+      initialHoverPoint: skillConfirmState.hoverPoint ? { ...skillConfirmState.hoverPoint } : null,
+      initialPaintArea,
+      paintArea: activePaintArea,
+      startPoint: { ...cursorPoint },
+      currentPoint: { ...cursorPoint },
+      lastStampPoint: { ...cursorPoint }
+    };
+    callbacks.setSkillConfirmState?.((prev) => (prev && prev.squadId === skillConfirmState.squadId ? {
+      ...prev,
+      hoverPoint: { ...cursorPoint },
+      paintArea: cloneSkillPaintArea(activePaintArea)
+    } : prev));
+    event.preventDefault();
+    return true;
+  };
+
+  const updateSkillPaintDrag = (event) => {
+    const drag = skillPaintDragRef?.current;
+    if (!drag || (Number(event?.buttons) & 1) !== 1) return false;
+    const runtime = runtimeRef.current;
+    const skillConfirmState = getters.getSkillConfirmState?.();
+    if (
+      !runtime
+      || runtime.getPhase?.() !== 'battle'
+      || !isTrainingSkillPaintConfirm(skillConfirmState)
+      || skillConfirmState.squadId !== drag.squadId
+    ) {
+      skillPaintDragRef.current = null;
+      return false;
+    }
+    const squad = runtime.getSquadById?.(drag.squadId);
+    const world = resolveEventWorldPoint(event);
+    const cursorPoint = resolveSkillPaintCursorPoint(world, {
+      ...skillConfirmState,
+      paintArea: drag.paintArea
+    }, squad);
+    if (!cursorPoint) return true;
+    const origin = resolveSkillPaintOrigin(skillConfirmState, squad);
+    const brushed = appendSkillPaintDabs({
+      paintArea: drag.paintArea,
+      from: drag.lastStampPoint,
+      to: cursorPoint,
+      origin,
+      maxRange: Math.max(8, Number(skillConfirmState?.maxRange) || 180)
+    });
+    drag.paintArea = {
+      ...(brushed.paintArea || drag.paintArea),
+      isDragging: true
+    };
+    drag.lastStampPoint = brushed.lastStampPoint || drag.lastStampPoint;
+    drag.currentPoint = { ...cursorPoint };
+    callbacks.setSkillConfirmState?.((prev) => (prev && prev.squadId === drag.squadId ? {
+      ...prev,
+      hoverPoint: { ...cursorPoint },
+      paintArea: cloneSkillPaintArea(drag.paintArea)
+    } : prev));
+    return true;
+  };
+
+  const finishSkillPaintDrag = (event) => {
+    const drag = skillPaintDragRef?.current;
+    if (!drag) return null;
+    const runtime = runtimeRef.current;
+    const skillConfirmState = getters.getSkillConfirmState?.();
+    if (!runtime || !isTrainingSkillPaintConfirm(skillConfirmState) || skillConfirmState.squadId !== drag.squadId) {
+      skillPaintDragRef.current = null;
+      return null;
+    }
+    const squad = runtime.getSquadById?.(drag.squadId);
+    const world = resolveEventWorldPoint(event);
+    const cursorPoint = resolveSkillPaintCursorPoint(world, {
+      ...skillConfirmState,
+      paintArea: drag.paintArea
+    }, squad) || drag.currentPoint;
+    const paintArea = finishSkillPaintArea({
+      paintArea: drag.paintArea,
+      point: cursorPoint,
+      origin: resolveSkillPaintOrigin(skillConfirmState, squad),
+      maxRange: Math.max(8, Number(skillConfirmState?.maxRange) || 180)
+    });
+    skillPaintDragRef.current = null;
+    if (!paintArea || !cursorPoint) return null;
+    const completedState = {
+      ...skillConfirmState,
+      hoverPoint: { ...cursorPoint },
+      paintArea: {
+        ...paintArea,
+        isDragging: false
+      }
+    };
+    callbacks.setSkillConfirmState?.(completedState);
+    return completedState;
   };
 
   const beginPanDrag = (event, buttonMask = 1, primaryAction = '') => {
@@ -327,13 +492,29 @@ export const createBattleInputController = ({
     const deployDraggingTeam = getters.getDeployDraggingTeam?.() || 'attacker';
     if (deployDraggingGroupId) {
       if (!world) return;
-      if (!runtime.canDeployGroupFitAt(deployDraggingGroupId, world, deployDraggingTeam)) {
-        callbacks.setDeployNotice?.(deployDraggingTeam === 'defender'
-          ? '当前阵型超出右侧红色部署区，请调整位置或切换阵型'
-          : '当前阵型超出左侧蓝色部署区，请调整位置或切换阵型');
+      const usesHighlandDeployment = runtime.isTrainingMapHighlandSpawnEnabled?.() === true;
+      const clickedSpawnRegionId = usesHighlandDeployment
+        ? String(runtime.getTrainingMapSpawnMetadata?.(world, deployDraggingTeam)?.spawnRegionId || '')
+        : '';
+      if (usesHighlandDeployment && !clickedSpawnRegionId) {
+        const recallResult = callbacks.recallDeployDraggingGroup?.(deployDraggingGroupId, deployDraggingTeam);
+        if (recallResult?.ok === false) {
+          callbacks.setDeployNotice?.(recallResult.reason || '取消放置失败');
+        }
         return;
       }
-      runtime.moveDeployGroup(deployDraggingGroupId, world, deployDraggingTeam);
+      if (!runtime.canDeployGroupFitAt(deployDraggingGroupId, world, deployDraggingTeam)) {
+        callbacks.setDeployNotice?.(usesHighlandDeployment
+          ? '当前阵型无法完全放入己方高地，请调整位置或切换阵型'
+          : (deployDraggingTeam === 'defender'
+            ? '当前阵型超出右侧红色部署区，请调整位置或切换阵型'
+            : '当前阵型超出左侧蓝色部署区，请调整位置或切换阵型'));
+        return;
+      }
+      if (runtime.moveDeployGroup(deployDraggingGroupId, world, deployDraggingTeam) === false) {
+        callbacks.setDeployNotice?.('当前位置不可部署，请选择己方高地内的空闲位置');
+        return;
+      }
       runtime.setDeployGroupPlaced(deployDraggingTeam, deployDraggingGroupId, true);
       runtime.setSelectedDeployGroup(deployDraggingGroupId);
       runtime.setFocusSquad(deployDraggingGroupId);
@@ -389,7 +570,7 @@ export const createBattleInputController = ({
     callbacks.setCards?.(runtime.getCardRows?.() || []);
   };
 
-  const handleBattlePrimaryAction = (event) => {
+  const handleBattlePrimaryAction = (event, skillConfirmOverride = null) => {
     if (interactionLocked) return;
     if (event.button !== 0) return;
     const runtime = runtimeRef.current;
@@ -399,7 +580,7 @@ export const createBattleInputController = ({
     if (!world && !trainingFlagHitId) return;
     const selected = runtime.getSquadById(getters.getSelectedSquadId?.());
     const battleUiMode = getters.getBattleUiMode?.();
-    const skillConfirmState = getters.getSkillConfirmState?.();
+    const skillConfirmState = skillConfirmOverride || getters.getSkillConfirmState?.();
 
     if (battleUiMode === constants.BATTLE_UI_MODE_SPACING_PICK) {
       callbacks.closeSpacingPick?.();
@@ -413,10 +594,7 @@ export const createBattleInputController = ({
       if (!skillConfirmState || !selected || selected.id !== skillConfirmState.squadId) return;
       const centerX = Number(skillConfirmState?.center?.x) || Number(selected.x) || 0;
       const centerY = Number(skillConfirmState?.center?.y) || Number(selected.y) || 0;
-      const targetMode = skillConfirmState.targetMode
-        || (skillConfirmState.kind === 'cavalry' ? 'direction' : (
-          skillConfirmState.kind === 'archer' || skillConfirmState.kind === 'artillery' ? 'ground' : 'self'
-        ));
+      const targetMode = resolveSkillTargetMode(skillConfirmState);
       let targetSquadId = String(skillConfirmState.targetSquadId || '').trim();
       if (targetMode === 'enemy' && !targetSquadId) {
         const pickedEnemyId = trainingFlagHitId || (world && runtime.pickSquadAtPoint(world.x, world.y, {
@@ -453,6 +631,9 @@ export const createBattleInputController = ({
         const point = skillConfirmState.hoverPoint || { x: centerX, y: centerY };
         payload.x = Number(point.x) || centerX;
         payload.y = Number(point.y) || centerY;
+        if (skillConfirmState.paintArea?.stamps?.length > 0) {
+          payload.paintArea = cloneSkillPaintArea(skillConfirmState.paintArea);
+        }
         if (skillConfirmState?.profile?.castStyle === 'melee') {
           payload.dirX = Number(skillConfirmState?.dir?.x) || 1;
           payload.dirY = Number(skillConfirmState?.dir?.y) || 0;
@@ -607,11 +788,18 @@ export const createBattleInputController = ({
     }
 
     const battleUiMode = getters.getBattleUiMode?.();
+    const skillConfirmState = getters.getSkillConfirmState?.();
     if (battleUiMode === constants.BATTLE_UI_MODE_SPACING_PICK) {
       callbacks.closeSpacingPick?.();
       return;
     }
+    if (event.button === 2 && skillPaintDragRef?.current) {
+      event.preventDefault();
+      restoreSkillPaintDrag();
+      return;
+    }
     if (battleUiMode === constants.BATTLE_UI_MODE_SKILL_CONFIRM && event.button === 0) {
+      if (beginSkillPaintDrag(event, skillConfirmState)) return;
       beginPanDrag(event, 1, 'battle');
       return;
     }
@@ -702,7 +890,10 @@ export const createBattleInputController = ({
 
     const closeDistanceMin = constants.CAMERA_DISTANCE_CLOSE_MIN || constants.CAMERA_DISTANCE_MIN || 360;
     const baseDistanceMax = constants.CAMERA_DISTANCE_MAX || 980;
-    const overviewDistanceMax = getters.isTrainingMode?.()
+    const isTrainingMode = getters.isTrainingMode?.() === true;
+    const pitchDistanceMin = constants.CAMERA_DISTANCE_MIN || closeDistanceMin;
+    const zoomDistanceMin = isTrainingMode ? pitchDistanceMin : closeDistanceMin;
+    const overviewDistanceMax = isTrainingMode
       ? resolveTrainingOverviewDistance({
         field: runtime.getField?.(),
         viewport: {
@@ -715,17 +906,26 @@ export const createBattleInputController = ({
         padding: constants.TRAINING_OVERVIEW_VIEW_PADDING
       })
       : baseDistanceMax;
-    const nextDistance = cameraControllerRef.current.distance + (event.deltaY < 0 ? -(constants.CAMERA_ZOOM_STEP || 24) : (constants.CAMERA_ZOOM_STEP || 24));
+    const zoomStep = isTrainingMode
+      ? Math.max(1, Number(constants.TRAINING_CAMERA_ZOOM_STEP) || DEFAULT_TRAINING_CAMERA_ZOOM_STEP)
+      : Math.max(1, Number(constants.CAMERA_ZOOM_STEP) || 24);
+    const pitchDistanceMax = isTrainingMode
+      ? Math.min(
+        overviewDistanceMax,
+        Math.max(zoomDistanceMin + 1, Number(constants.TRAINING_PITCH_DISTANCE_MAX) || DEFAULT_TRAINING_PITCH_DISTANCE_MAX)
+      )
+      : baseDistanceMax;
+    const nextDistance = cameraControllerRef.current.distance + (event.deltaY < 0 ? -zoomStep : zoomStep);
     if (typeof cameraControllerRef.current.setDistanceWithDynamicPitch === 'function') {
       cameraControllerRef.current.setDistanceWithDynamicPitch(
         nextDistance,
-        closeDistanceMin,
-        baseDistanceMax,
+        zoomDistanceMin,
+        pitchDistanceMax,
         overviewDistanceMax,
-        constants.CAMERA_DISTANCE_MIN || closeDistanceMin
+        pitchDistanceMin
       );
     } else {
-      cameraControllerRef.current.distance = clamp(nextDistance, closeDistanceMin, overviewDistanceMax);
+      cameraControllerRef.current.distance = clamp(nextDistance, zoomDistanceMin, overviewDistanceMax);
     }
   };
 
@@ -777,6 +977,7 @@ export const createBattleInputController = ({
       }
       return;
     }
+    if (skillPaintDragRef?.current) return;
     if (panDragRef.current || deployYawDragRef.current || deployDirectionArcDragRef.current) return;
     const screenPoint = resolveEventCanvasPoint(event);
     if (!screenPoint) return;
@@ -855,10 +1056,7 @@ export const createBattleInputController = ({
       if (!selected) return;
       const centerX = Number(skillConfirmState?.center?.x) || Number(selected.x) || 0;
       const centerY = Number(skillConfirmState?.center?.y) || Number(selected.y) || 0;
-      const targetMode = skillConfirmState.targetMode
-        || (skillConfirmState.kind === 'cavalry' ? 'direction' : (
-          skillConfirmState.kind === 'archer' || skillConfirmState.kind === 'artillery' ? 'ground' : 'self'
-        ));
+      const targetMode = resolveSkillTargetMode(skillConfirmState);
       if (targetMode === 'direction') {
         const dx = world.x - centerX;
         const dy = world.y - centerY;
@@ -882,8 +1080,11 @@ export const createBattleInputController = ({
         const dx = world.x - centerX;
         const dy = world.y - centerY;
         const dist = Math.hypot(dx, dy) || 1;
-        const tx = dist > maxRange ? centerX + (dx / dist) * maxRange : world.x;
-        const ty = dist > maxRange ? centerY + (dy / dist) * maxRange : world.y;
+        const paintCursorPoint = isTrainingSkillPaintConfirm(skillConfirmState)
+          ? resolveSkillPaintCursorPoint(world, skillConfirmState, selected)
+          : null;
+        const tx = paintCursorPoint ? paintCursorPoint.x : (dist > maxRange ? centerX + (dx / dist) * maxRange : world.x);
+        const ty = paintCursorPoint ? paintCursorPoint.y : (dist > maxRange ? centerY + (dy / dist) * maxRange : world.y);
         const isMeleeGround = skillConfirmState?.profile?.castStyle === 'melee';
         callbacks.setSkillConfirmState?.((prev) => (prev ? {
           ...prev,
@@ -944,6 +1145,7 @@ export const createBattleInputController = ({
         clearDeployYawDrag();
         clearDeployRectDrag();
         clearDeployDirectionArcDrag();
+        restoreSkillPaintDrag();
         return;
       }
       const canvas = canvasRef?.current;
@@ -961,6 +1163,13 @@ export const createBattleInputController = ({
         clearDeployRectDrag();
         clearDeployDirectionArcDrag();
         return;
+      }
+      if (skillPaintDragRef?.current) {
+        if (phase !== 'battle') {
+          restoreSkillPaintDrag();
+          return;
+        }
+        if ((Number(event?.buttons) & 1) === 1 && updateSkillPaintDrag(event)) return;
       }
       if (!isDeploy) clearDeployRectDrag();
       if (!canEditDirectionArc) clearDeployDirectionArcDrag();
@@ -1063,6 +1272,16 @@ export const createBattleInputController = ({
         clearDeployYawDrag();
         clearDeployRectDrag();
         clearDeployDirectionArcDrag();
+        restoreSkillPaintDrag();
+        return;
+      }
+      const completedSkillPaint = event.button === 0 ? finishSkillPaintDrag(event) : null;
+      if (completedSkillPaint) {
+        clearPanDrag();
+        clearDeployYawDrag();
+        clearDeployRectDrag();
+        clearDeployDirectionArcDrag();
+        handleBattlePrimaryAction(event, completedSkillPaint);
         return;
       }
       const pan = panDragRef.current;
@@ -1091,6 +1310,7 @@ export const createBattleInputController = ({
       clearDeployYawDrag();
       clearDeployRectDrag();
       clearDeployDirectionArcDrag();
+      restoreSkillPaintDrag();
       runtimeRef.current?.setHoveredDeployGroup?.('');
       runtimeRef.current?.setHoveredBattleSquad?.('');
       spacePressedRef.current = false;
@@ -1112,6 +1332,7 @@ export const createBattleInputController = ({
     clearDeployYawDrag,
     clearDeployRectDrag,
     clearDeployDirectionArcDrag,
+    clearSkillPaintDrag: restoreSkillPaintDrag,
     resolveEventWorldPoint,
     handleMapCommand,
     onDoubleClick,

@@ -1,5 +1,6 @@
 const UNIT_TYPE_DTO_VERSION = 2;
 const { resolveUnitPalette } = require('../seed/unitCatalogFactory');
+const { normalizeAttackRange } = require('./attackRangeService');
 
 const CLASS_TAGS = new Set(['infantry', 'cavalry', 'archer', 'artillery']);
 const UNIT_CATEGORY_SET = new Set(['melee', 'ranged', 'support']);
@@ -73,7 +74,7 @@ const inferClassTag = (unitType = {}) => {
   const name = typeof unitType?.name === 'string' ? unitType.name : '';
   const roleTag = unitType?.roleTag === '远程' ? '远程' : '近战';
   const speed = Number(unitType?.speed) || 0;
-  const range = Number(unitType?.range) || 0;
+  const range = normalizeAttackRange(unitType).max;
   if (/(炮|投石|火炮|炮兵|臼炮|加农)/.test(name)) return 'artillery';
   if (/(弓|弩|弓兵|弩兵|射手)/.test(name) || (roleTag === '远程' && range >= 3)) return 'archer';
   if (/(骑|骑兵|铁骑|龙骑)/.test(name) || speed >= 2.1) return 'cavalry';
@@ -148,6 +149,7 @@ const toUnitTypeDtoV2 = (unitTypeDoc, componentsById = null) => {
   const visuals = resolveVisuals(src, resolveUnitPalette(unitCategory, unitSubtype));
   const fallbackClassTag = inferClassTag(src);
   const classTag = normalizeClassTag(src.classTag, fallbackClassTag) || 'infantry';
+  const attackRange = normalizeAttackRange({ ...src, unitCategory, classTag });
 
   return {
     schemaVersion: UNIT_TYPE_DTO_VERSION,
@@ -165,7 +167,8 @@ const toUnitTypeDtoV2 = (unitTypeDoc, componentsById = null) => {
     hp: Math.max(1, Number(src.hp) || 1),
     atk: Math.max(0, Number(src.atk) || 0),
     def: Math.max(0, Number(src.def) || 0),
-    range: Math.max(1, Number(src.range) || 1),
+    attackRange,
+    range: attackRange.max,
     costKP: Math.max(1, Math.floor(Number(src.costKP) || 1)),
     enabled: src.enabled !== false,
     professionId: normalizeStringId(src.professionId),

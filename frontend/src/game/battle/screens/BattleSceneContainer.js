@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import '../presentation/ui/Battle.css';
 import CameraController from '../presentation/render/CameraController';
 import useBattleRuntime from '../hooks/useBattleRuntime';
@@ -57,6 +57,8 @@ import {
   CAMERA_DISTANCE_MAX,
   CAMERA_DISTANCE_MIN,
   CAMERA_ZOOM_STEP,
+  TRAINING_CAMERA_ZOOM_STEP,
+  TRAINING_PITCH_DISTANCE_MAX,
   TRAINING_OVERVIEW_DISTANCE_EXTRA,
   TRAINING_OVERVIEW_DISTANCE_MAX,
   TRAINING_OVERVIEW_VIEW_PADDING,
@@ -143,9 +145,78 @@ const buildTrainingArmiesSnapshot = (runtime) => {
     ));
 };
 
+const clampLoadingProgress = (value) => Math.min(100, Math.max(0, Math.round(Number(value) || 0)));
+
+const formatTransferBytes = (value = 0) => {
+  const bytes = Math.max(0, Number(value) || 0);
+  if (bytes < 1024) return `${Math.round(bytes)} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(bytes < 10 * 1024 ? 1 : 0)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+};
+
+const resolveTrainingLoadPresentation = ({
+  loading = false,
+  loadingProgress = null,
+  runtimeVersion = 0,
+  renderReady = false,
+  sceneReady = false
+} = {}) => {
+  if (loading) {
+    const fraction = Number(loadingProgress?.fraction);
+    const hasKnownProgress = loadingProgress?.fraction !== null
+      && loadingProgress?.fraction !== undefined
+      && Number.isFinite(fraction);
+    const loadedBytes = Math.max(0, Number(loadingProgress?.loadedBytes) || 0);
+    const totalBytes = Math.max(0, Number(loadingProgress?.totalBytes) || 0);
+    return {
+      progress: hasKnownProgress ? clampLoadingProgress(8 + (Math.min(1, Math.max(0, fraction)) * 57)) : null,
+      label: loadingProgress?.phase === 'download' ? '正在下载训练场配置…' : '正在连接训练场…',
+      detail: totalBytes > 0
+        ? `已接收 ${formatTransferBytes(loadedBytes)} / ${formatTransferBytes(totalBytes)}`
+        : '正在等待服务器返回配置'
+    };
+  }
+  if (runtimeVersion <= 0) {
+    return { progress: 72, label: '正在解析训练场配置…', detail: '正在创建地图与部队运行时' };
+  }
+  if (!renderReady) {
+    return { progress: 84, label: '正在初始化战场渲染…', detail: '正在准备 WebGL 与单位资源' };
+  }
+  if (!sceneReady) {
+    return { progress: 94, label: '正在生成训练地图…', detail: '正在构建地形、营地和首帧画面' };
+  }
+  return null;
+};
+
+const TrainingLoadProgress = ({ presentation = null, overlay = false }) => {
+  if (!presentation) return null;
+  const hasKnownProgress = presentation.progress !== null
+    && presentation.progress !== undefined
+    && Number.isFinite(Number(presentation.progress));
+  const progress = hasKnownProgress ? clampLoadingProgress(presentation.progress) : 0;
+  return (
+    <div className={`pve2-training-load-progress ${overlay ? 'is-overlay' : ''}`} role="status" aria-live="polite">
+      <strong>{presentation.label}</strong>
+      <span>{presentation.detail}</span>
+      <div
+        className={`pve2-training-load-track ${hasKnownProgress ? '' : 'is-indeterminate'}`}
+        role="progressbar"
+        aria-label={presentation.label}
+        aria-valuemin={0}
+        aria-valuemax={100}
+        aria-valuenow={hasKnownProgress ? progress : undefined}
+      >
+        <i style={hasKnownProgress ? { width: `${progress}%` } : undefined} />
+      </div>
+      {hasKnownProgress ? <em>{`${progress}%`}</em> : null}
+    </div>
+  );
+};
+
 const BattleSceneContainer = ({
   open = false,
   loading = false,
+  loadingProgress = null,
   error = '',
   battleInitData = null,
   mode = 'siege',
@@ -169,6 +240,7 @@ const BattleSceneContainer = ({
   const deployYawDragRef = useRef(null);
   const deployRectDragRef = useRef(null);
   const deployDirectionArcDragRef = useRef(null);
+  const skillPaintDragRef = useRef(null);
   const spacePressedRef = useRef(false);
   const mapKeyCommandsRef = useRef(new Set());
   const runtimeInitRef = useRef(null);
@@ -185,6 +257,7 @@ const BattleSceneContainer = ({
     y: 0
   });
   const [trainingSettingsOpen, setTrainingSettingsOpen] = useState(false);
+  const [trainingSceneReady, setTrainingSceneReady] = useState(false);
   const [templateEditorState, setTemplateEditorState] = useState({
     open: false,
     template: null
@@ -405,6 +478,25 @@ const BattleSceneContainer = ({
     mode
   });
 
+  useLayoutEffect(() => {
+    if (!isTrainingMode) return;
+    setTrainingSceneReady(false);
+  }, [battleInitData, error, isTrainingMode, loading, open]);
+
+  const handleFirstTrainingSceneFrame = useCallback(() => {
+    if (isTrainingMode) setTrainingSceneReady(true);
+  }, [isTrainingMode]);
+
+  const trainingLoadPresentation = isTrainingMode
+    ? resolveTrainingLoadPresentation({
+      loading,
+      loadingProgress,
+      runtimeVersion,
+      renderReady,
+      sceneReady: trainingSceneReady
+    })
+    : null;
+
   useEffect(() => {
     if (!isTrainingMode || !renderReady) return;
     pipelineRef.current?.threePipeline?.setGridVisible?.(trainingPresentationSettings.showGrid);
@@ -422,11 +514,13 @@ const BattleSceneContainer = ({
     runtimeDebugOverlay
   } = useBattleLoop({
     enabled: open && runtimeVersion > 0 && renderReady && !loading && !error && !glError,
+    renderCycleKey: runtimeVersion,
     canvasRef: glCanvasRef,
     runtimeRef,
     pipelineRef,
     cameraControllerRef: cameraRef,
     skillConfirmState,
+    clockConfig: isTrainingMode ? { fixedStep: 1 / 20, maxCatchUp: 0.15 } : {},
     idleFrameIntervalMs: isTrainingMode ? (1000 / 20) : 0,
     debugEnabled,
     callbacks: {
@@ -434,6 +528,7 @@ const BattleSceneContainer = ({
         setResultState({ ...createDefaultResultState(), open: true, summary });
         reportBattleResultRef.current(summary);
       },
+      onFirstRender: handleFirstTrainingSceneFrame,
       onPhaseChange: setPhase,
       pointerWorldRef,
       panDragRef,
@@ -448,6 +543,58 @@ const BattleSceneContainer = ({
     }
   });
 
+  const handleStartPerformanceCapture = useCallback((scenario = '') => {
+    const runtime = runtimeRef.current;
+    if (!runtime?.startPerformanceCapture) return;
+    const viewport = typeof window === 'undefined'
+      ? {}
+      : {
+        width: Math.max(0, Math.floor(Number(window.innerWidth) || 0)),
+        height: Math.max(0, Math.floor(Number(window.innerHeight) || 0)),
+        devicePixelRatio: Math.max(1, Number(window.devicePixelRatio) || 1)
+      };
+    const capture = runtime.startPerformanceCapture({
+      scenario,
+      metadata: { viewport }
+    });
+    setDeployNotice(`已开始性能采样：${capture?.scenario || '未标注场景'}`);
+  }, [runtimeRef, setDeployNotice]);
+
+  const handleStopPerformanceCapture = useCallback(() => {
+    const report = runtimeRef.current?.stopPerformanceCapture?.();
+    if (!report) return;
+    setDeployNotice(`已停止性能采样：${report.capture?.scenario || '未标注场景'}`);
+  }, [runtimeRef, setDeployNotice]);
+
+  const handleExportPerformanceReport = useCallback(() => {
+    const report = runtimeRef.current?.getPerformanceReport?.();
+    if (!report) return;
+    if (
+      typeof document === 'undefined'
+      || typeof Blob === 'undefined'
+      || typeof URL === 'undefined'
+      || typeof URL.createObjectURL !== 'function'
+    ) {
+      setDeployNotice('当前环境不支持导出性能报告');
+      return;
+    }
+    const scenarioPart = String(report.capture?.scenario || 'capture')
+      .replace(/[^\w\u4e00-\u9fff-]+/g, '-')
+      .replace(/^-+|-+$/g, '')
+      .slice(0, 48) || 'capture';
+    const objectUrl = URL.createObjectURL(new Blob([
+      JSON.stringify(report, null, 2)
+    ], { type: 'application/json' }));
+    const link = document.createElement('a');
+    link.href = objectUrl;
+    link.download = `training-map-performance-${scenarioPart}.json`;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    window.setTimeout(() => URL.revokeObjectURL(objectUrl), 0);
+    setDeployNotice(`已导出性能报告：${report.capture?.scenario || '未标注场景'}`);
+  }, [runtimeRef, setDeployNotice]);
+
   useBattleSceneLifecycle({
     open,
     phase,
@@ -456,6 +603,7 @@ const BattleSceneContainer = ({
     runtimeVersion,
     runtimeInitRef,
     cameraRef,
+    glCanvasRef,
     resetClock,
     setLoopPaused,
     setPaused,
@@ -1037,6 +1185,7 @@ const BattleSceneContainer = ({
     deployYawDragRef,
     deployRectDragRef,
     deployDirectionArcDragRef,
+    skillPaintDragRef,
     spacePressedRef,
     selectedSquadId,
     paused,
@@ -1075,6 +1224,8 @@ const BattleSceneContainer = ({
     CAMERA_DISTANCE_CLOSE_MIN,
     CAMERA_DISTANCE_MIN,
     CAMERA_DISTANCE_MAX,
+    TRAINING_CAMERA_ZOOM_STEP,
+    TRAINING_PITCH_DISTANCE_MAX,
     TRAINING_OVERVIEW_DISTANCE_EXTRA,
     TRAINING_OVERVIEW_DISTANCE_MAX,
     TRAINING_OVERVIEW_VIEW_PADDING,
@@ -1369,6 +1520,16 @@ const BattleSceneContainer = ({
     }
     setTrainingState(result.state);
   }, [runtimeRef, setDeployNotice, setTrainingState]);
+
+  const handleTrainingMapPresetChange = useCallback((presetId) => {
+    const result = runtimeRef.current?.setTrainingMapPreset?.(presetId);
+    if (!result?.ok) {
+      if (result?.reason) setDeployNotice(result.reason);
+      return;
+    }
+    setDeployNotice(`已切换为${result?.state?.activePresetId || presetId}地图预设`);
+    syncTrainingUi();
+  }, [runtimeRef, setDeployNotice, syncTrainingUi]);
 
   const handleApplyTrainingPresentationSettings = useCallback((nextSettings = {}) => {
     const fontSize = TRAINING_FONT_SCALE_BY_SIZE[nextSettings.fontSize]
@@ -1707,7 +1868,11 @@ const BattleSceneContainer = ({
       </div>
 
       {loading ? (
-        <div className="pve2-loading">加载战斗初始化数据...</div>
+        isTrainingMode ? (
+          <div className="pve2-loading">
+            <TrainingLoadProgress presentation={trainingLoadPresentation} />
+          </div>
+        ) : <div className="pve2-loading">加载战斗初始化数据...</div>
       ) : null}
       {!loading && error ? (
         <div className="pve2-error">
@@ -1718,6 +1883,9 @@ const BattleSceneContainer = ({
 
       {!loading && !error ? (
         <div className="pve2-main">
+          {isTrainingMode && trainingLoadPresentation && !glError ? (
+            <TrainingLoadProgress presentation={trainingLoadPresentation} overlay />
+          ) : null}
           <BattleHUD
             phase={phase}
             status={battleStatus}
@@ -1732,6 +1900,7 @@ const BattleSceneContainer = ({
             onToggleDebug={() => setDebugEnabled((prev) => !prev)}
             onOpenSettings={() => setTrainingSettingsOpen(true)}
             isTrainingMode={isTrainingMode}
+            trainingMap={trainingState?.map || null}
             trainingSessionActive={trainingSessionActive}
             pitchLabel={pitchLabel}
             startLabel={startLabel}
@@ -1932,7 +2101,9 @@ const BattleSceneContainer = ({
             ) : null}
             {battleUiMode === BATTLE_UI_MODE_SKILL_CONFIRM ? (
               <div className="pve2-aim-tip">
-                {skillConfirmState?.targetMode === 'direction'
+                {skillConfirmState?.paintArea
+                  ? '水彩攻区：LMB 直接确认整团；按住 LMB 涂抹，松开后落下剩余尾块。涂抹中按 RMB 回退本笔，再按 RMB 取消施放'
+                  : skillConfirmState?.targetMode === 'direction'
                   ? '近战出击方向：移动鼠标旋转地面箭头，红环为可能命中目标，LMB 确认，RMB 取消'
                   : skillConfirmState?.targetMode === 'enemy'
                     ? '选择敌方部队：悬停目标后红环提示，LMB 确认，RMB 取消'
@@ -1964,6 +2135,9 @@ const BattleSceneContainer = ({
                 selectedSquad={selectedCardRow}
                 showMidlineDebug={showMidlineDebug}
                 onToggleMidlineDebug={() => setShowMidlineDebug((prev) => !prev)}
+                onStartPerformanceCapture={handleStartPerformanceCapture}
+                onStopPerformanceCapture={handleStopPerformanceCapture}
+                onExportPerformanceReport={handleExportPerformanceReport}
               />
             ) : null}
 
@@ -2084,6 +2258,7 @@ const BattleSceneContainer = ({
               onClose={() => setTrainingSettingsOpen(false)}
               onChangeAutoSkillPointGain={handleTrainingAutoSkillPointGainChange}
               onChangeInterval={handleTrainingPointIntervalChange}
+              onChangeMapPreset={handleTrainingMapPresetChange}
               onApply={handleApplyTrainingPresentationSettings}
             />
           ) : null}
@@ -2115,6 +2290,14 @@ const BattleSceneContainer = ({
                         <span>击杀 {resultState.summary.defender?.kills || 0}</span>
                       </div>
                     </div>
+                    {isTrainingMode && resultState.summary?.details?.training ? (
+                      <div className="pve2-result-training-stats">
+                        <span>{`塔伤 ${Math.round(resultState.summary.details.training.towerDamage || 0)}`}</span>
+                        <span>{`建筑伤害 ${Math.round(resultState.summary.details.training.buildingDamage || 0)}`}</span>
+                        <span>{`野区击杀 ${resultState.summary.details.training.neutralKills || 0}`}</span>
+                        <span>{`草丛先手 ${resultState.summary.details.training.bushFirstAttack || 0}`}</span>
+                      </div>
+                    ) : null}
                   </>
                 ) : null}
                 {requireResultReport && resultState.submitting ? <p>正在上报战斗结果...</p> : null}

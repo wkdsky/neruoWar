@@ -3,9 +3,11 @@ import {
   normalizeVec,
   hasLineOfSight
 } from './crowdPhysics';
+import { resolveSquadAttackRange } from './attackRange';
 
 const TEAM_ATTACKER = 'attacker';
 const TEAM_DEFENDER = 'defender';
+const TEAM_NEUTRAL = 'neutral';
 const ORDER_MOVE = 'MOVE';
 const ORDER_CHARGE = 'CHARGE';
 
@@ -234,7 +236,11 @@ const scoreTargetSquad = ({
 
 const buildPairs = (sim, walls, cfg, nowSec) => {
   const squads = Array.isArray(sim?.squads) ? sim.squads.filter((row) => row && row.remain > 0) : [];
-  const meleeSquads = squads.filter((row) => isSquadMelee(row) && row.behavior !== 'retreat');
+  const meleeSquads = squads.filter((row) => (
+    row.team !== TEAM_NEUTRAL
+    && isSquadMelee(row)
+    && row.behavior !== 'retreat'
+  ));
   const pairMap = new Map();
   const squadPairById = new Map();
   const byId = new Map(squads.map((row) => [row.id, row]));
@@ -297,7 +303,20 @@ const buildPairs = (sim, walls, cfg, nowSec) => {
     pair.contactY = pair.pairCenterY;
     const baseSpacing = (toSafeNumber(sim?.engagementAgentDiameter, 4.5) + toSafeNumber(sim?.engagementAgentGap, 1.05));
     pair.laneSpacing = Math.max(2.2, baseSpacing * toSafeNumber(cfg?.laneSpacingMul, 1));
-    pair.standOff = Math.max(1.2, pair.laneSpacing * toSafeNumber(cfg?.standOff, 3.2) * 0.25);
+    const requestedStandOff = pair.laneSpacing * toSafeNumber(cfg?.standOff, 3.2) * 0.25;
+    const agentDiameter = Math.max(1, toSafeNumber(sim?.engagementAgentDiameter, 4.5));
+    const sharedMeleeReach = Math.max(
+      agentDiameter * 1.08,
+      Math.min(
+        resolveSquadAttackRange(attacker).max,
+        resolveSquadAttackRange(defender).max
+      ) * 0.94
+    );
+    pair.standOff = clamp(
+      requestedStandOff,
+      Math.max(1.2, agentDiameter * 0.54),
+      sharedMeleeReach * 0.5
+    );
     pair.bandHalfDepth = Math.max(pair.laneSpacing, toSafeNumber(cfg?.bandHalfDepth, 8.8));
     pair.depthStep = pair.laneSpacing * Math.max(0.6, toSafeNumber(cfg?.depthStepMul, 0.92));
   });

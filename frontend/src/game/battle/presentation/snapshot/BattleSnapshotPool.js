@@ -2,6 +2,7 @@ import BattleSnapshotSchema from './BattleSnapshotSchema';
 
 const DEFAULT_CAPACITY = 16;
 const GROWTH_FACTOR = 1.5;
+const SNAPSHOT_BUFFER_COUNT = 2;
 const DEV = process.env.NODE_ENV !== 'production';
 
 const createChannel = (stride, capacity = DEFAULT_CAPACITY) => ({
@@ -11,17 +12,25 @@ const createChannel = (stride, capacity = DEFAULT_CAPACITY) => ({
   data: new Float32Array(stride * capacity)
 });
 
+const createSnapshot = (schema) => ({
+  schemaVersion: schema.version,
+  unitSquadIds: [],
+  units: createChannel(schema.units.stride),
+  skillStates: createChannel(schema.skillStates.stride),
+  buildings: createChannel(schema.buildings.stride),
+  projectiles: createChannel(schema.projectiles.stride),
+  effects: createChannel(schema.effects.stride)
+});
+
 export default class BattleSnapshotPool {
   constructor(schema = BattleSnapshotSchema) {
     this.schema = schema;
-    this.snapshot = {
-      schemaVersion: schema.version,
-      units: createChannel(schema.units.stride),
-      skillStates: createChannel(schema.skillStates.stride),
-      buildings: createChannel(schema.buildings.stride),
-      projectiles: createChannel(schema.projectiles.stride),
-      effects: createChannel(schema.effects.stride)
-    };
+    this.snapshots = Array.from(
+      { length: SNAPSHOT_BUFFER_COUNT },
+      () => createSnapshot(schema)
+    );
+    this.snapshotIndex = 0;
+    this.snapshot = this.snapshots[this.snapshotIndex];
   }
 
   ensureCapacity(key, nextCount = 0) {
@@ -42,6 +51,8 @@ export default class BattleSnapshotPool {
   }
 
   acquire() {
+    this.snapshotIndex = (this.snapshotIndex + 1) % this.snapshots.length;
+    this.snapshot = this.snapshots[this.snapshotIndex];
     return this.snapshot;
   }
 

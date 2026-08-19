@@ -286,7 +286,7 @@ export const inferTroopCategory = (unitType = {}) => {
   const name = typeof unitType?.name === 'string' ? unitType.name : '';
   const roleTag = unitType?.roleTag === '远程' || unitType?.roleTag === '近战' ? unitType.roleTag : '';
   const speed = Number(unitType?.speed) || 0;
-  const range = Number(unitType?.range) || 0;
+  const range = Number(unitType?.attackRange?.max ?? unitType?.range) || 0;
   if (/(炮|投石|火炮|炮兵|臼炮|加农)/.test(name)) return 'artillery';
   if (/(弓|弩|弓兵|弩兵|射手)/.test(name)) return 'archer';
   if (roleTag === '远程' && range >= 3) return 'archer';

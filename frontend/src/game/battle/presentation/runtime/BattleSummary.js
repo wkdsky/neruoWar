@@ -26,15 +26,31 @@ export const buildBattleSummary = (sim = {}) => {
     });
   });
 
+  const trainingStats = sim?.trainingStats && typeof sim.trainingStats === 'object'
+    ? sim.trainingStats
+    : null;
+  const timeLimitSec = Math.max(0, Number(sim?.timeLimitSec) || 0);
   return {
     battleId: sim?.battleId || '',
     gateKey: sim?.gateKey || '',
-    durationSec: Math.max(0, Math.floor((Number(sim?.timeLimitSec) || 0) - (Number(sim?.timerSec) || 0))),
+    durationSec: timeLimitSec > 0
+      ? Math.max(0, Math.floor(timeLimitSec - (Number(sim?.timerSec) || 0)))
+      : Math.max(0, Math.floor(Number(sim?.timeElapsed) || 0)),
     attacker: sideSummary(attacker),
     defender: sideSummary(defender),
     details: {
       byUnitType,
-      buildingsDestroyed: Math.max(0, Math.floor(Number(sim?.destroyedBuildings) || 0))
+      buildingsDestroyed: Math.max(0, Math.floor(Number(sim?.destroyedBuildings) || 0)),
+      training: trainingStats
+        ? {
+          towerDamage: Math.max(0, Number(trainingStats?.towerDamage) || 0),
+          towerKills: Math.max(0, Math.floor(Number(trainingStats?.towerKills) || 0)),
+          buildingDamage: Math.max(0, Number(trainingStats?.buildingDamage) || 0),
+          neutralKills: Math.max(0, Math.floor(Number(trainingStats?.neutralKills) || 0)),
+          bushFirstAttack: Math.max(0, Math.floor(Number(trainingStats?.bushFirstAttack) || 0)),
+          laneEngagementSeconds: { ...(trainingStats?.laneEngagementSeconds || {}) }
+        }
+        : null
     }
   };
 };

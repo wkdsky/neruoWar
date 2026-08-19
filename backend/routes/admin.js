@@ -155,7 +155,6 @@ const parseUnitTypePayload = (body, { create = false } = {}) => {
     ['hp', true, 1],
     ['atk', true, 0],
     ['def', true, 0],
-    ['range', true, 1],
     ['costKP', true, 1],
     ['level', true, 1],
     ['sortOrder', true, null]
@@ -163,7 +162,7 @@ const parseUnitTypePayload = (body, { create = false } = {}) => {
     const result = parseNumberField({
       body: source,
       key,
-      required: create && ['speed', 'hp', 'atk', 'def', 'range', 'costKP'].includes(key),
+      required: create && ['speed', 'hp', 'atk', 'def', 'costKP'].includes(key),
       integer,
       min
     });
@@ -175,6 +174,34 @@ const parseUnitTypePayload = (body, { create = false } = {}) => {
       parsed[key] = result.value;
     }
   });
+
+  const rawAttackRange = source.attackRange && typeof source.attackRange === 'object'
+    ? source.attackRange
+    : {};
+  const hasAttackRangeMin = Object.prototype.hasOwnProperty.call(rawAttackRange, 'min')
+    || Object.prototype.hasOwnProperty.call(source, 'attackRangeMin');
+  const hasAttackRangeMax = Object.prototype.hasOwnProperty.call(rawAttackRange, 'max')
+    || Object.prototype.hasOwnProperty.call(source, 'attackRangeMax')
+    || Object.prototype.hasOwnProperty.call(source, 'range');
+  if (create || hasAttackRangeMin || hasAttackRangeMax) {
+    const roleTag = parsed.roleTag || (source.roleTag === '远程' ? '远程' : '近战');
+    const defaultMin = roleTag === '远程' ? 3 : 1;
+    const defaultMax = roleTag === '远程' ? 6 : 1;
+    const minValue = Number(rawAttackRange.min ?? source.attackRangeMin ?? defaultMin);
+    const maxValue = Number(rawAttackRange.max ?? source.attackRangeMax ?? source.range ?? defaultMax);
+    if (!Number.isFinite(minValue) || minValue < 0) {
+      errors.push('攻击范围下限必须是不小于 0 的数字');
+    } else if (!Number.isFinite(maxValue) || maxValue < 1) {
+      errors.push('攻击范围上限必须是不小于 1 的数字');
+    } else if (maxValue < minValue) {
+      errors.push('攻击范围上限不能小于下限');
+    } else if (roleTag === '远程' && minValue <= 1) {
+      errors.push('远程兵种攻击范围下限必须大于 1');
+    } else {
+      parsed.attackRange = { min: minValue, max: maxValue };
+      parsed.range = maxValue;
+    }
+  }
 
   if (Object.prototype.hasOwnProperty.call(source, 'enabled')) {
     parsed.enabled = !!source.enabled;

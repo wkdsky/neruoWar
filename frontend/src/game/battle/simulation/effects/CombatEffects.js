@@ -43,6 +43,13 @@ const resetProjectile = (item, payload = {}) => {
   next.targetCenterX = Number(payload.targetCenterX) || 0;
   next.targetCenterY = Number(payload.targetCenterY) || 0;
   next.targetRadius = Math.max(0, Number(payload.targetRadius) || 0);
+  next.targetStamps = Array.isArray(payload.targetStamps)
+    ? payload.targetStamps.map((stamp) => ({
+      x: Number(stamp?.x) || 0,
+      y: Number(stamp?.y) || 0,
+      radius: Math.max(0, Number(stamp?.radius) || 0)
+    }))
+    : [];
   next.targetShape = payload.targetShape || 'point';
   next.blockedByWall = !!payload.blockedByWall;
   next.ttl = Math.max(0.02, Number(payload.ttl) || 1.2);

@@ -1,5 +1,6 @@
 export const DEFAULT_MAX_AGENT_WEIGHT = 50;
 export const DEFAULT_DAMAGE_EXPONENT = 0.75;
+export const DEFAULT_MAX_TOTAL_AGENTS = 360;
 
 const toSafeInt = (value, fallback = 0, min = 0) => {
   const num = Math.floor(Number(value));
@@ -28,12 +29,64 @@ export const estimateRepAgents = (unitsMap = {}, maxAgentWeight = DEFAULT_MAX_AG
     .reduce((sum, count) => sum + Math.ceil(count / safeCap), 0);
 };
 
+const resolveSquadMaxAgentWeight = (squad = {}, maxAgentWeight = DEFAULT_MAX_AGENT_WEIGHT) => {
+  const globalMaxAgentWeight = Math.max(1, Number(maxAgentWeight) || DEFAULT_MAX_AGENT_WEIGHT);
+  const representativeAgentWeightCap = Number(squad?.representativeAgentWeightCap);
+  if (!Number.isFinite(representativeAgentWeightCap) || representativeAgentWeightCap <= 0) {
+    return globalMaxAgentWeight;
+  }
+  return Math.min(globalMaxAgentWeight, Math.max(1, representativeAgentWeightCap));
+};
+
+export const estimateSquadRepAgents = (squads = [], maxAgentWeight = DEFAULT_MAX_AGENT_WEIGHT) => (
+  (Array.isArray(squads) ? squads : [])
+    .reduce((sum, squad) => sum + estimateRepAgents(
+      squad?.units || {},
+      resolveSquadMaxAgentWeight(squad, maxAgentWeight)
+    ), 0)
+);
+
 export const buildRepConfig = (raw = {}) => {
   const source = raw && typeof raw === 'object' ? raw : {};
   return {
     maxAgentWeight: Math.max(1, Number(source.maxAgentWeight) || DEFAULT_MAX_AGENT_WEIGHT),
+    maxTotalAgents: Math.max(0, toSafeInt(source.maxTotalAgents, 0, 0)),
     damageExponent: Math.max(0.2, Math.min(1.25, Number(source.damageExponent) || DEFAULT_DAMAGE_EXPONENT)),
     strictAgentMapping: source.strictAgentMapping !== false
+  };
+};
+
+export const resolveRepConfigForSquads = (squads = [], rawConfig = {}) => {
+  const config = buildRepConfig(rawConfig);
+  const requestedMaxAgentWeight = config.maxAgentWeight;
+  const maxTotalAgents = config.maxTotalAgents;
+  const estimate = (weight) => estimateSquadRepAgents(squads, weight);
+  let effectiveMaxAgentWeight = requestedMaxAgentWeight;
+
+  if (maxTotalAgents > 0 && estimate(effectiveMaxAgentWeight) > maxTotalAgents) {
+    let upperBound = effectiveMaxAgentWeight;
+    while (estimate(upperBound) > maxTotalAgents && upperBound < Number.MAX_SAFE_INTEGER / 2) {
+      upperBound *= 2;
+    }
+
+    let lowerBound = effectiveMaxAgentWeight;
+    while (lowerBound < upperBound) {
+      const middle = lowerBound + Math.floor((upperBound - lowerBound) / 2);
+      if (estimate(middle) <= maxTotalAgents) {
+        upperBound = middle;
+      } else {
+        lowerBound = middle + 1;
+      }
+    }
+    effectiveMaxAgentWeight = upperBound;
+  }
+
+  return {
+    ...config,
+    maxAgentWeight: effectiveMaxAgentWeight,
+    requestedMaxAgentWeight,
+    effectiveMaxAgentWeight,
+    estimatedAgentCount: estimate(effectiveMaxAgentWeight)
   };
 };
 
@@ -41,6 +94,17 @@ export const withRepConfig = (sim, rawConfig = {}) => {
   const config = buildRepConfig(rawConfig);
   return {
     ...sim,
-    repConfig: config
+    repConfig: {
+      ...config,
+      requestedMaxAgentWeight: Math.max(
+        1,
+        Number(rawConfig?.requestedMaxAgentWeight) || config.maxAgentWeight
+      ),
+      effectiveMaxAgentWeight: Math.max(
+        1,
+        Number(rawConfig?.effectiveMaxAgentWeight) || config.maxAgentWeight
+      ),
+      estimatedAgentCount: Math.max(0, toSafeInt(rawConfig?.estimatedAgentCount, 0, 0))
+    }
   };
 };

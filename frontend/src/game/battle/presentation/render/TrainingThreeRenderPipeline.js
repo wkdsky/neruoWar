@@ -12,7 +12,20 @@ import {
 import {
   resolveTrainingSelectedUnitRingRadius
 } from '../../shared/trainingUnitSelection';
+import {
+  getSkillPaintRemainingRadius,
+  isPointInsideSkillPaintArea
+} from '../../shared/skillPaintArea';
+import {
+  resolveTrainingMapTerrainElevation,
+  TRAINING_MAP_WORLD_HEIGHT,
+  TRAINING_MAP_WORLD_WIDTH
+} from '../../shared/trainingMap';
+import { getTrainingMapSpawnRegions } from '../../shared/trainingMapSpawn';
 import TrainingChibiUnitRenderer from './TrainingChibiUnitRenderer';
+import { resolveTrainingRenderedSquadAnchors } from '../snapshot/BattleRenderedSquadAnchors';
+
+export { resolveTrainingRenderedSquadAnchors } from '../snapshot/BattleRenderedSquadAnchors';
 
 const clamp = (value, min, max) => Math.min(max, Math.max(min, value));
 const lerp = (a, b, t) => a + ((b - a) * t);
@@ -25,10 +38,12 @@ const tempColor = new THREE.Color();
 const tempWorldFlagCameraForward = new THREE.Vector3();
 const tempWorldFlagCameraUp = new THREE.Vector3();
 
-const TEAM_ATTACKER_COLOR = new THREE.Color(0x1677d2);
-const TEAM_DEFENDER_COLOR = new THREE.Color(0xde424b);
+const TEAM_ATTACKER_COLOR = new THREE.Color(0xd95155);
+const TEAM_DEFENDER_COLOR = new THREE.Color(0x32b4bd);
+const TEAM_NEUTRAL_COLOR = new THREE.Color(0xf4c542);
 const TEAM_ATTACKER = 'attacker';
 const TEAM_DEFENDER = 'defender';
+const TEAM_NEUTRAL = 'neutral';
 const SELECTED_COLOR = new THREE.Color(0xf4c542);
 const HOVER_COLOR = new THREE.Color(0x9deaff);
 const HOVER_FOOTPRINT_COLOR = new THREE.Color(0x91e7ff);
@@ -38,6 +53,31 @@ const SKILL_PREVIEW_TARGET_COLOR = 0xff4d6d;
 const SKILL_PREVIEW_GROUND_Z = 0.26;
 const SKILL_PREVIEW_TARGET_Z = 0.34;
 const SKILL_PREVIEW_CONE_SEGMENTS = 48;
+const TRAINING_MAX_PIXEL_RATIO = 1.25;
+const TRAINING_DEPLOY_REGION_HIGHLIGHT_ELEVATION = 0.42;
+const TRAINING_DEPLOY_REGION_HIGHLIGHT_COLORS = Object.freeze({
+  [TEAM_ATTACKER]: 0xff747d,
+  [TEAM_DEFENDER]: 0x62e6ef
+});
+
+const resolveTrainingTeamIndex = (team = TEAM_ATTACKER) => {
+  if (team === TEAM_DEFENDER) return 1;
+  if (team === TEAM_NEUTRAL) return 2;
+  return 0;
+};
+
+const isTrainingNeutralTeamIndex = (teamIndex = 0) => Number(teamIndex) >= 1.5;
+
+const resolveTrainingTeamColor = (teamIndex = 0) => {
+  if (isTrainingNeutralTeamIndex(teamIndex)) return TEAM_NEUTRAL_COLOR;
+  return Number(teamIndex) >= 0.5 ? TEAM_DEFENDER_COLOR : TEAM_ATTACKER_COLOR;
+};
+
+export const shouldRenderTrainingUnitGroundMarker = (teamIndex = 0) => !isTrainingNeutralTeamIndex(teamIndex);
+
+export const resolveTrainingFlagShowsSkillPoints = (anchor = {}) => (
+  anchor?.showSkillPoints !== false && String(anchor?.team || '') !== TEAM_NEUTRAL
+);
 
 export const TRAINING_WORLD_FLAG_MAX_PITCH_DEG = 50;
 export const TRAINING_WORLD_FLAG_TARGET_SCREEN_HEIGHT = 76;
@@ -57,6 +97,8 @@ export const resolveTrainingFlagLod = (pitchDeg = 90) => {
 const finiteOr = (value, fallback = 0) => (
   Number.isFinite(Number(value)) ? Number(value) : fallback
 );
+
+export const resolveTrainingRenderFrameInterval = () => 0;
 
 const normalizeSkillPreviewVector = (x, y, fallbackX = 1, fallbackY = 0) => {
   const length = Math.hypot(Number(x) || 0, Number(y) || 0);
@@ -138,6 +180,29 @@ const resolveSkillPreviewAgents = (runtime = null) => (
     ? runtime.crowd.allAgents.filter((agent) => agent && !agent.dead && (Number(agent.weight) || 0) > 0.001)
     : []
 );
+
+const resolveSkillPaintPreviewArea = (skillConfirmState = null, targetPoint = null) => {
+  const rawPaintArea = skillConfirmState?.paintArea;
+  if (!rawPaintArea || !targetPoint) return null;
+  const stamps = Array.isArray(rawPaintArea.stamps)
+    ? rawPaintArea.stamps
+      .filter((stamp) => Number(stamp?.radius) > 0.001)
+      .map((stamp) => ({
+        x: finiteOr(stamp?.x),
+        y: finiteOr(stamp?.y),
+        radius: Math.max(0, finiteOr(stamp?.radius))
+      }))
+    : [];
+  const remainingRadius = getSkillPaintRemainingRadius(rawPaintArea);
+  if (remainingRadius > 0.001) {
+    stamps.push({
+      x: finiteOr(targetPoint.x),
+      y: finiteOr(targetPoint.y),
+      radius: remainingRadius
+    });
+  }
+  return stamps.length > 0 ? { stamps } : null;
+};
 
 export const resolveTrainingSkillPreview = (runtime = null, skillConfirmState = null) => {
   if (!skillConfirmState?.squadId) {
@@ -243,16 +308,40 @@ export const resolveTrainingSkillPreview = (runtime = null, skillConfirmState = 
 
   if (targetMode === 'ground' && targetPoint) {
     const isMeleeGround = profile?.castStyle === 'melee';
+    const paintArea = resolveSkillPaintPreviewArea(skillConfirmState, targetPoint);
     agents.forEach((agent) => {
       const distance = Math.hypot(finiteOr(agent.x) - targetPoint.x, finiteOr(agent.y) - targetPoint.y);
       const agentRadius = Math.max(2.4, Math.min(11, Math.sqrt(Math.max(1, finiteOr(agent.weight, 1))) * 0.82));
       const pathDistance = isMeleeGround
         ? pointToSkillPreviewSegmentDistance(agent, source, targetPoint)
         : Infinity;
-      if (distance > aoeRadius + agentRadius && pathDistance > aoeRadius + agentRadius) return;
+      const targetedByPaint = paintArea
+        ? isPointInsideSkillPaintArea(agent, paintArea, agentRadius)
+        : false;
+      if (paintArea && !targetedByPaint) return;
+      if (!paintArea && distance > aoeRadius + agentRadius && pathDistance > aoeRadius + agentRadius) return;
       targetAgents.push(agent);
       if (agent.squadId) targetSquadIds.add(String(agent.squadId));
     });
+    return {
+      active: true,
+      targetMode,
+      source,
+      targetPoint,
+      castStyle: String(profile?.castStyle || ''),
+      direction: normalizeSkillPreviewVector(
+        finiteOr(targetPoint?.x) - source.x,
+        finiteOr(targetPoint?.y) - source.y,
+        finiteOr(sourceSquad?.dirX, selectedTeam === TEAM_DEFENDER ? -1 : 1),
+        finiteOr(sourceSquad?.dirY)
+      ),
+      maxRange,
+      aoeRadius,
+      coneAngleDeg: Math.max(8, Math.min(180, finiteOr(profile?.coneAngleDeg, 90))),
+      paintArea,
+      targetAgents,
+      targetSquadIds: Array.from(targetSquadIds)
+    };
   } else if (targetMode === 'enemy') {
     const selectedTargetId = String(skillConfirmState.targetSquadId || '').trim();
     agents.forEach((agent) => {
@@ -450,9 +539,10 @@ export const resolveTrainingWorldFlagLayout = ({
   const renderInfoById = {};
   safeAnchors.forEach((anchor) => {
     const dimensions = resolveTrainingWorldFlagDimensions(anchor);
+    const groundElevation = Math.max(0, finiteOr(anchor?.groundElevation));
     const dx = (Number(anchor?.x) || 0) - (Number(eye[0]) || 0);
     const dy = (Number(anchor?.y) || 0) - (Number(eye[1]) || 0);
-    const dz = dimensions.clothBottom - (Number(eye[2]) || 0);
+    const dz = groundElevation + dimensions.clothBottom - (Number(eye[2]) || 0);
     const cameraDepth = Math.max(1, (dx * forward[0]) + (dy * forward[1]) + (dz * forward[2]));
     const viewHeight = 2 * cameraDepth * Math.tan((TRAINING_WORLD_FLAG_CAMERA_FOV_DEG * Math.PI / 180) * 0.5);
     const worldFlagScale = resolveTrainingWorldFlagScreenScale({
@@ -472,14 +562,15 @@ export const resolveTrainingWorldFlagLayout = ({
   });
   const projectAnchor = (anchor) => {
     const info = renderInfoById[String(anchor?.id || '')] || resolveTrainingWorldFlagDimensions(anchor);
+    const groundElevation = Math.max(0, finiteOr(anchor?.groundElevation));
     const point = projectWorld({
       x: Number(anchor?.x) || 0,
       y: Number(anchor?.y) || 0,
-      z: info.clothBottom + (info.clothHeight * 0.5)
+      z: groundElevation + info.clothBottom + (info.clothHeight * 0.5)
     });
     const dx = (Number(anchor?.x) || 0) - (Number(eye[0]) || 0);
     const dy = (Number(anchor?.y) || 0) - (Number(eye[1]) || 0);
-    const dz = info.clothBottom - (Number(eye[2]) || 0);
+    const dz = groundElevation + info.clothBottom - (Number(eye[2]) || 0);
     return point
       ? {
           ...point,
@@ -500,7 +591,8 @@ export const resolveTrainingWorldFlagLayout = ({
     const stackOffset = stackLevel * leaderInfo.stackGapWorld;
     const displayX = Number(leaderAnchor?.x) || 0;
     const displayY = Number(leaderAnchor?.y) || 0;
-    const baseZ = leaderInfo.clothBottom + stackOffset;
+    const groundElevation = Math.max(0, finiteOr(leaderAnchor?.groundElevation));
+    const baseZ = groundElevation + leaderInfo.clothBottom + stackOffset;
     const cameraYaw = Math.atan2(
       (Number(eye[1]) || 0) - displayY,
       (Number(eye[0]) || 0) - displayX
@@ -515,6 +607,7 @@ export const resolveTrainingWorldFlagLayout = ({
       maxLevel,
       displayX,
       displayY,
+      groundElevation,
       baseZ,
       cameraYaw,
       clothBottom: leaderInfo.clothBottom,
@@ -668,12 +761,18 @@ const resolveTrainingVisibleAgents = (runtime = null) => (
     : []
 );
 
+const EMPTY_SKILL_VISUAL_FOCUS = Object.freeze({
+  shadowFlags: null,
+  focusFlags: null,
+  active: false
+});
+
 export const resolveTrainingSkillVisualFocus = (runtime = null, skillConfirmState = null) => {
+  const squadId = String(skillConfirmState?.squadId || '');
+  if (!squadId) return EMPTY_SKILL_VISUAL_FOCUS;
   const agents = resolveTrainingVisibleAgents(runtime);
   const shadowFlags = agents.map(() => false);
   const focusFlags = agents.map(() => false);
-  const squadId = String(skillConfirmState?.squadId || '');
-  if (!squadId) return { shadowFlags, focusFlags, active: false };
   const sourceCategory = String(
     skillConfirmState?.profile?.sourceCategory
       || skillConfirmState?.sourceCategory
@@ -782,13 +881,14 @@ const buildDirectionArcAnchor = (
     x: finiteOr(source?.centerX, finiteOr(source?.x)),
     y: finiteOr(source?.centerY, finiteOr(source?.y)),
     yaw: arcLayout.directionYaw,
-    teamIndex: team === TEAM_DEFENDER ? 1 : 0,
+    teamIndex: resolveTrainingTeamIndex(team),
     team,
     name: String(source?.name || '部队'),
     remain,
     startCount,
     ratio: clamp(remain / startCount, 0, 1),
-    skillPoints: Math.max(0, Math.floor(Number(skillPoints) || 0)),
+    skillPoints: team === TEAM_NEUTRAL ? 0 : Math.max(0, Math.floor(Number(skillPoints) || 0)),
+    showSkillPoints: team !== TEAM_NEUTRAL,
     selected: !!source?.selected || String(source?.id || '') === String(selectedId || ''),
     hovered: String(source?.id || '') === String(hoveredDirectionArcId || ''),
     flagHovered: String(source?.id || '') === String(hoveredFlagId || ''),
@@ -859,7 +959,7 @@ export const resolveTrainingWorldFlagStackLevels = (anchors = [], project = () =
   resolveTrainingWorldFlagStackLayout(anchors, project, options).levels
 );
 
-export const resolveTrainingDirectionArcAnchors = (runtime = null) => {
+export const resolveTrainingDirectionArcAnchors = (runtime = null, renderedSquadAnchors = null) => {
   const phase = runtime?.getPhase?.() || runtime?.phase || 'deploy';
   const resolveSkillPoints = (source = null) => {
     const pointState = runtime?.getTrainingSquadSkillPointState?.(source?.id);
@@ -878,15 +978,29 @@ export const resolveTrainingDirectionArcAnchors = (runtime = null) => {
         && finiteOr(squad.remain) > 0
         && !(squad.team === TEAM_DEFENDER && squad.hiddenFromAttacker)
       ))
-      .map((squad) => buildDirectionArcAnchor(
-        squad,
+      .map((squad) => {
+        const renderedAnchor = renderedSquadAnchors instanceof Map
+          ? renderedSquadAnchors.get(String(squad?.id || ''))
+          : null;
+        const source = renderedAnchor
+          ? {
+              ...squad,
+              x: finiteOr(renderedAnchor.x, finiteOr(squad?.x)),
+              y: finiteOr(renderedAnchor.y, finiteOr(squad?.y)),
+              centerX: finiteOr(renderedAnchor.centerX, finiteOr(renderedAnchor.x, finiteOr(squad?.centerX, finiteOr(squad?.x)))),
+              centerY: finiteOr(renderedAnchor.centerY, finiteOr(renderedAnchor.y, finiteOr(squad?.centerY, finiteOr(squad?.y))))
+            }
+          : squad;
+        return buildDirectionArcAnchor(
+        source,
         squad.team,
         resolveSkillPoints(squad),
         hoveredDirectionArcId,
         false,
         runtime?.selectedBattleSquadId || '',
         hoveredFlagId
-      ));
+        );
+      });
   }
 
   const anchors = [];
@@ -910,26 +1024,47 @@ export const resolveTrainingDirectionArcAnchors = (runtime = null) => {
   return anchors;
 };
 
-const disposeObject = (object) => {
-  if (!object) return;
-  object.traverse?.((child) => {
-    if (child.geometry?.dispose) child.geometry.dispose();
-    const materials = Array.isArray(child.material) ? child.material : [child.material];
-    materials.forEach((material) => {
+const disposeResource = (resource, disposedResources = new Set()) => {
+  if (!resource || typeof resource.dispose !== 'function' || disposedResources.has(resource)) return false;
+  disposedResources.add(resource);
+  resource.dispose();
+  return true;
+};
+
+export const disposeTrainingMaterialCollection = (materials = {}, disposedResources = new Set()) => {
+  const entries = Array.isArray(materials)
+    ? materials
+    : (materials?.isMaterial ? [materials] : Object.values(materials || {}));
+  entries.forEach((entry) => {
+    const materialList = Array.isArray(entry) ? entry : [entry];
+    materialList.forEach((material) => {
       if (!material) return;
       Object.values(material).forEach((value) => {
-        if (value && typeof value === 'object' && typeof value.dispose === 'function') value.dispose();
+        if (value && value !== material && typeof value.dispose === 'function') {
+          disposeResource(value, disposedResources);
+        }
       });
-      material.dispose?.();
+      disposeResource(material, disposedResources);
     });
+  });
+  return disposedResources;
+};
+
+const disposeObject = (object, disposedResources = new Set()) => {
+  if (!object) return;
+  object.traverse?.((child) => {
+    disposeResource(child.geometry, disposedResources);
+    const materials = Array.isArray(child.material) ? child.material : [child.material];
+    disposeTrainingMaterialCollection(materials, disposedResources);
   });
 };
 
 const clearGroup = (group) => {
   if (!group) return;
+  const disposedResources = new Set();
   while (group.children.length > 0) {
     const child = group.children.pop();
-    disposeObject(child);
+    disposeObject(child, disposedResources);
   }
 };
 
@@ -980,7 +1115,11 @@ export const updateTrainingDirectionArcGeometry = (geometry, anchors = []) => {
         prev.sideB,
         next.sideB
       ].forEach((point) => {
-        positions.push(point.x, point.y, TRAINING_DIRECTION_ARC_GROUND_ELEVATION);
+        positions.push(
+          point.x,
+          point.y,
+          Math.max(0, finiteOr(anchor?.groundElevation)) + TRAINING_DIRECTION_ARC_GROUND_ELEVATION
+        );
         colors.push(color[0], color[1], color[2]);
       });
     }
@@ -1028,11 +1167,983 @@ export const createTrainingFlagClothGeometry = () => {
   return geometry;
 };
 
-const createBandMaterial = (color, roughness = 0.92) => new THREE.MeshStandardMaterial({
+const createBandMaterial = (color, roughness = 0.92, options = {}) => new THREE.MeshStandardMaterial({
   color,
   roughness,
-  metalness: 0.02
+  metalness: 0.02,
+  polygonOffset: options?.polygonOffset === true,
+  polygonOffsetFactor: finiteOr(options?.polygonOffsetFactor),
+  polygonOffsetUnits: finiteOr(options?.polygonOffsetUnits)
 });
+
+export const resolveTrainingTerrainDepthOptions = (region = {}) => {
+  const type = typeof region === 'string'
+    ? region
+    : String(region?.type || 'grass');
+  const overlayLayer = type === 'road'
+    ? 2
+    : (type === 'sand' || type === 'river' ? 1 : 0);
+  return {
+    polygonOffset: overlayLayer > 0,
+    polygonOffsetFactor: overlayLayer > 0 ? -overlayLayer : 0,
+    polygonOffsetUnits: overlayLayer > 0 ? -overlayLayer : 0
+  };
+};
+
+const TRAINING_TERRAIN_EDGE_PROFILES = Object.freeze({
+  grass: { width: 24, opacity: 0.16 },
+  sand: { width: 46, opacity: 0.34 },
+  road: { width: 15, opacity: 0.48 }
+});
+
+const resolveTrainingTerrainEdgeProfile = (region = {}) => {
+  const type = String(region?.type || 'grass');
+  const profile = TRAINING_TERRAIN_EDGE_PROFILES[type];
+  if (!profile) return null;
+  return {
+    width: Math.max(2, Number(region?.edgeFeatherWidth) || profile.width),
+    opacity: clamp(Number(region?.edgeFeatherOpacity) || profile.opacity, 0.04, 0.72)
+  };
+};
+
+const createTrainingTerrainEdgeMaterial = ({ color, opacity, feather, radial, depthOptions = {} } = {}) => (
+  new THREE.ShaderMaterial({
+    uniforms: {
+      terrainColor: { value: new THREE.Color(color) },
+      edgeOpacity: { value: opacity },
+      edgeFeather: { value: feather },
+      radialEdge: { value: radial ? 1 : 0 }
+    },
+    vertexShader: `
+      varying vec2 vUv;
+      void main() {
+        vUv = uv;
+        gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+      }
+    `,
+    fragmentShader: `
+      uniform vec3 terrainColor;
+      uniform float edgeOpacity;
+      uniform float edgeFeather;
+      uniform float radialEdge;
+      varying vec2 vUv;
+      void main() {
+        float edgeDistance = min(min(vUv.x, 1.0 - vUv.x), min(vUv.y, 1.0 - vUv.y));
+        if (radialEdge > 0.5) {
+          edgeDistance = 0.5 - length(vUv - vec2(0.5));
+        }
+        float alpha = smoothstep(0.0, max(0.0001, edgeFeather), edgeDistance) * edgeOpacity;
+        gl_FragColor = vec4(terrainColor, alpha);
+      }
+    `,
+    transparent: true,
+    depthWrite: false,
+    side: THREE.DoubleSide,
+    polygonOffset: depthOptions?.polygonOffset === true,
+    polygonOffsetFactor: Number(depthOptions?.polygonOffsetFactor) || 0,
+    polygonOffsetUnits: Number(depthOptions?.polygonOffsetUnits) || 0
+  })
+);
+
+export const createTrainingTerrainEdgeMesh = (region = {}, color = 0x2b4330, name = 'terrain-transition') => {
+  const profile = resolveTrainingTerrainEdgeProfile(region);
+  if (!profile) return null;
+  const depthOptions = resolveTrainingTerrainDepthOptions(region);
+  const shape = String(region?.shape || 'rect');
+  const z = (Number(region?.z) || 0) + 0.002;
+  if (shape === 'semicircle') {
+    const radius = Math.max(1, Number(region?.radius) || Math.min(Number(region?.width) || 1, Number(region?.height) || 1) * 0.5);
+    const expandedRadius = radius + profile.width;
+    const feather = clamp(profile.width / Math.max(1, expandedRadius * 2), 0.001, 0.45);
+    const startAngle = region?.arcDirection === 'down' ? Math.PI : 0;
+    const mesh = new THREE.Mesh(
+      new THREE.CircleGeometry(expandedRadius, 56, startAngle, Math.PI),
+      createTrainingTerrainEdgeMaterial({
+        color,
+        opacity: profile.opacity,
+        feather,
+        radial: true,
+        depthOptions
+      })
+    );
+    mesh.name = name;
+    mesh.position.set(Number(region?.x) || 0, Number(region?.y) || 0, z);
+    return mesh;
+  }
+  if (shape !== 'rect') return null;
+  const width = Math.max(1, Number(region?.width) || 1);
+  const height = Math.max(1, Number(region?.height) || 1);
+  const expandedWidth = width + (profile.width * 2);
+  const expandedHeight = height + (profile.width * 2);
+  const feather = clamp(profile.width / Math.max(1, Math.min(expandedWidth, expandedHeight)), 0.001, 0.45);
+  const mesh = new THREE.Mesh(
+    new THREE.PlaneGeometry(expandedWidth, expandedHeight, 1, 1),
+    createTrainingTerrainEdgeMaterial({
+      color,
+      opacity: profile.opacity,
+      feather,
+      radial: false,
+      depthOptions
+    })
+  );
+  mesh.name = name;
+  mesh.position.set(Number(region?.x) || 0, Number(region?.y) || 0, z);
+  return mesh;
+};
+
+const normalizeTrainingPolygonPoints = (points = []) => {
+  const normalizedPoints = [];
+  (Array.isArray(points) ? points : []).forEach((point) => {
+    const nextPoint = {
+      x: finiteOr(point?.x),
+      y: finiteOr(point?.y)
+    };
+    const previousPoint = normalizedPoints[normalizedPoints.length - 1];
+    if (previousPoint && Math.hypot(nextPoint.x - previousPoint.x, nextPoint.y - previousPoint.y) <= 0.001) return;
+    normalizedPoints.push(nextPoint);
+  });
+  return normalizedPoints;
+};
+
+const interpolateTrainingPolygonPoint = (from = {}, to = {}, progress = 0) => ({
+  x: finiteOr(from?.x) + ((finiteOr(to?.x) - finiteOr(from?.x)) * progress),
+  y: finiteOr(from?.y) + ((finiteOr(to?.y) - finiteOr(from?.y)) * progress)
+});
+
+const resolveTrainingHighlandRamps = (region = {}, points = []) => {
+  const explicitRamps = (Array.isArray(region?.ramps) ? region.ramps : [])
+    .map((ramp, index) => ({
+      id: String(ramp?.id || `ramp-${index + 1}`),
+      vertexIndex: Math.max(0, Math.floor(finiteOr(ramp?.vertexIndex, index))),
+      points: normalizeTrainingPolygonPoints(ramp?.points)
+    }))
+    .filter((ramp) => ramp.points.length === 3);
+  if (explicitRamps.length >= points.length) return explicitRamps;
+  const inset = clamp(finiteOr(region?.rampInset, 0.22), 0.08, 0.36);
+  return points.map((point, index) => {
+    const next = points[(index + 1) % points.length] || point;
+    const previous = points[(index + points.length - 1) % points.length] || point;
+    return {
+      id: `ramp-${index + 1}`,
+      vertexIndex: index,
+      points: [
+        point,
+        interpolateTrainingPolygonPoint(point, next, inset),
+        interpolateTrainingPolygonPoint(point, previous, inset)
+      ]
+    };
+  });
+};
+
+const resolveTrainingHighlandTopPolygon = (points = [], ramps = []) => {
+  if (points.length !== 3 || ramps.length < 3) return points;
+  const topPoints = [];
+  points.forEach((point, index) => {
+    const nextIndex = (index + 1) % points.length;
+    const fromRamp = ramps.find((ramp) => ramp.vertexIndex === index) || ramps[index];
+    const toRamp = ramps.find((ramp) => ramp.vertexIndex === nextIndex) || ramps[nextIndex];
+    const towardNext = fromRamp?.points?.[1];
+    const fromNext = toRamp?.points?.[2];
+    if (towardNext) topPoints.push(towardNext);
+    if (fromNext) topPoints.push(fromNext);
+  });
+  return normalizeTrainingPolygonPoints(topPoints).length >= 3
+    ? normalizeTrainingPolygonPoints(topPoints)
+    : points;
+};
+
+const createTrainingHighlandRampMesh = (ramp = {}, elevation = 0, color = 0x2b4330) => {
+  const points = normalizeTrainingPolygonPoints(ramp?.points);
+  if (points.length !== 3 || elevation <= 0) return null;
+  const [groundPoint, topRight, topLeft] = points;
+  const geometry = new THREE.BufferGeometry();
+  geometry.setAttribute('position', new THREE.Float32BufferAttribute([
+    groundPoint.x, groundPoint.y, 0,
+    topRight.x, topRight.y, 0,
+    topLeft.x, topLeft.y, 0,
+    topRight.x, topRight.y, elevation,
+    topLeft.x, topLeft.y, elevation
+  ], 3));
+  geometry.setIndex([
+    0, 3, 4,
+    0, 2, 1,
+    0, 1, 3,
+    0, 4, 2,
+    1, 2, 4,
+    1, 4, 3
+  ]);
+  geometry.computeVertexNormals();
+  const mesh = new THREE.Mesh(
+    geometry,
+    new THREE.MeshStandardMaterial({
+      color: new THREE.Color(color).multiplyScalar(0.78),
+      roughness: 0.86,
+      metalness: 0.03,
+      side: THREE.DoubleSide
+    })
+  );
+  mesh.name = `training-highland-ramp-${ramp?.id || 'ramp'}`;
+  return mesh;
+};
+
+const createTrainingHighlandRailSegment = (start = {}, end = {}, elevation = 0, index = 0) => {
+  const deltaX = finiteOr(end?.x) - finiteOr(start?.x);
+  const deltaY = finiteOr(end?.y) - finiteOr(start?.y);
+  const length = Math.hypot(deltaX, deltaY);
+  if (length <= 0.01 || elevation <= 0) return null;
+  const railThickness = clamp(elevation * 0.08, 1.4, 5.5);
+  const railHeight = Math.max(6, elevation * 0.3);
+  const group = new THREE.Group();
+  const midpointX = (finiteOr(start?.x) + finiteOr(end?.x)) * 0.5;
+  const midpointY = (finiteOr(start?.y) + finiteOr(end?.y)) * 0.5;
+  const rotation = Math.atan2(deltaY, deltaX);
+  group.name = `training-highland-rail-${index + 1}`;
+  [railHeight * 0.52, railHeight].forEach((height, railIndex) => {
+    const rail = new THREE.Mesh(
+      new THREE.BoxGeometry(length, railThickness, railThickness),
+      new THREE.MeshStandardMaterial({ color: 0x2d343e, roughness: 0.45, metalness: 0.62 })
+    );
+    rail.name = `${group.name}-bar-${railIndex + 1}`;
+    rail.position.set(midpointX, midpointY, elevation + height);
+    rail.rotation.z = rotation;
+    group.add(rail);
+  });
+  const postCount = Math.max(2, Math.ceil(length / Math.max(20, elevation * 0.7)) + 1);
+  for (let postIndex = 0; postIndex < postCount; postIndex += 1) {
+    const progress = postCount <= 1 ? 0.5 : postIndex / (postCount - 1);
+    const position = interpolateTrainingPolygonPoint(start, end, progress);
+    const post = new THREE.Mesh(
+      new THREE.BoxGeometry(railThickness, railThickness, railHeight),
+      new THREE.MeshStandardMaterial({ color: 0x1f2937, roughness: 0.48, metalness: 0.58 })
+    );
+    post.name = `${group.name}-post-${postIndex + 1}`;
+    post.position.set(position.x, position.y, elevation + (railHeight * 0.5));
+    group.add(post);
+  }
+  return group;
+};
+
+export const createTrainingHighlandMesh = (region = {}, color = 0x2b4330) => {
+  const points = normalizeTrainingPolygonPoints(region?.points);
+  const elevation = Math.max(0, finiteOr(region?.elevation));
+  if (points.length < 3 || elevation <= 0) return null;
+  const ramps = resolveTrainingHighlandRamps(region, points);
+  const topPoints = resolveTrainingHighlandTopPolygon(points, ramps);
+  const shape = new THREE.Shape();
+  shape.moveTo(topPoints[0].x, topPoints[0].y);
+  topPoints.slice(1).forEach((point) => shape.lineTo(point.x, point.y));
+  shape.closePath();
+  const geometry = new THREE.ShapeGeometry(shape);
+  geometry.translate(0, 0, elevation);
+  geometry.computeVertexNormals();
+  const mesh = new THREE.Mesh(geometry, createBandMaterial(color, 0.74));
+  mesh.name = `training-highland-${region?.id || 'region'}`;
+  mesh.position.z = finiteOr(region?.z);
+  mesh.userData.ramps = ramps;
+  ramps.forEach((ramp) => {
+    const rampMesh = createTrainingHighlandRampMesh(ramp, elevation, color);
+    if (rampMesh) mesh.add(rampMesh);
+  });
+  const railingEdges = Array.isArray(region?.railingEdges) ? region.railingEdges : [0, 1];
+  const inset = clamp(finiteOr(region?.rampInset, 0.22), 0.08, 0.36);
+  railingEdges.forEach((rawEdge, index) => {
+    const edgeIndex = Math.max(0, Math.floor(finiteOr(rawEdge))) % points.length;
+    const start = points[edgeIndex];
+    const end = points[(edgeIndex + 1) % points.length];
+    const rail = createTrainingHighlandRailSegment(
+      interpolateTrainingPolygonPoint(start, end, inset),
+      interpolateTrainingPolygonPoint(start, end, 1 - inset),
+      elevation,
+      index
+    );
+    if (rail) mesh.add(rail);
+  });
+  return mesh;
+};
+
+export const createTrainingDeployRegionHighlightMesh = (region = {}, mapConfig = null) => {
+  const points = normalizeTrainingPolygonPoints(region?.polygon);
+  if (points.length < 3) return null;
+  const team = region?.team === TEAM_DEFENDER ? TEAM_DEFENDER : TEAM_ATTACKER;
+  const shape = new THREE.Shape();
+  shape.moveTo(points[0].x, points[0].y);
+  points.slice(1).forEach((point) => shape.lineTo(point.x, point.y));
+  shape.closePath();
+  const geometry = new THREE.ShapeGeometry(shape);
+  const position = geometry.getAttribute('position');
+  for (let index = 0; index < position.count; index += 1) {
+    const x = position.getX(index);
+    const y = position.getY(index);
+    position.setZ(index, resolveTrainingMapTerrainElevation(mapConfig, { x, y }) + TRAINING_DEPLOY_REGION_HIGHLIGHT_ELEVATION);
+  }
+  position.needsUpdate = true;
+  geometry.computeVertexNormals();
+  const color = TRAINING_DEPLOY_REGION_HIGHLIGHT_COLORS[team];
+  const mesh = new THREE.Mesh(geometry, new THREE.MeshBasicMaterial({
+    color,
+    transparent: true,
+    opacity: 0.42,
+    side: THREE.DoubleSide,
+    depthWrite: false
+  }));
+  const outline = new THREE.LineLoop(
+    new THREE.BufferGeometry().setFromPoints(points.map((point) => new THREE.Vector3(
+      point.x,
+      point.y,
+      resolveTrainingMapTerrainElevation(mapConfig, point) + TRAINING_DEPLOY_REGION_HIGHLIGHT_ELEVATION + 0.08
+    ))),
+    new THREE.LineBasicMaterial({
+      color,
+      transparent: true,
+      opacity: 0.96,
+      depthWrite: false
+    })
+  );
+  mesh.name = `training-deploy-region-highlight-${region?.id || team}`;
+  mesh.userData = {
+    team,
+    spawnRegionId: String(region?.id || ''),
+    isDeployRegionHighlight: true
+  };
+  mesh.renderOrder = 3;
+  outline.name = `${mesh.name}-outline`;
+  outline.renderOrder = 4;
+  mesh.add(outline);
+  return mesh;
+};
+
+export const resolveTrainingDeployHighlightTeams = (runtime = null) => {
+  if (runtime?.getPhase?.() !== 'deploy') return [];
+  const deployGroups = runtime?.getDeployGroups?.() || {};
+  return [TEAM_ATTACKER, TEAM_DEFENDER].filter((team) => (
+    (Array.isArray(deployGroups?.[team]) ? deployGroups[team] : []).some((group) => (
+      group?.placed === false && group?.placementActive === true
+    ))
+  ));
+};
+
+const normalizeTrainingWallPath = (points = []) => {
+  const normalizedPoints = [];
+  (Array.isArray(points) ? points : []).forEach((point) => {
+    const nextPoint = {
+      x: finiteOr(Array.isArray(point) ? point[0] : point?.x),
+      y: finiteOr(Array.isArray(point) ? point[1] : point?.y)
+    };
+    const previousPoint = normalizedPoints[normalizedPoints.length - 1];
+    if (previousPoint && Math.hypot(nextPoint.x - previousPoint.x, nextPoint.y - previousPoint.y) <= 0.001) return;
+    normalizedPoints.push(nextPoint);
+  });
+  return normalizedPoints;
+};
+
+const normalizeTrainingWallVector = (x = 0, y = 0) => {
+  const length = Math.hypot(x, y);
+  return length > 0.0001 ? { x: x / length, y: y / length } : null;
+};
+
+export const resolveTrainingWallPathOutline = (points = [], thickness = 24) => {
+  const path = normalizeTrainingWallPath(points);
+  if (path.length < 2) return [];
+  const halfThickness = Math.max(0.5, finiteOr(thickness, 24) * 0.5);
+  const leftPoints = [];
+  const rightPoints = [];
+
+  path.forEach((point, index) => {
+    const previousPoint = path[index - 1] || point;
+    const nextPoint = path[index + 1] || point;
+    const incomingDirection = index > 0
+      ? normalizeTrainingWallVector(point.x - previousPoint.x, point.y - previousPoint.y)
+      : null;
+    const outgoingDirection = index < path.length - 1
+      ? normalizeTrainingWallVector(nextPoint.x - point.x, nextPoint.y - point.y)
+      : null;
+    const direction = outgoingDirection || incomingDirection;
+    if (!direction) return;
+    const incomingNormal = incomingDirection
+      ? { x: -incomingDirection.y, y: incomingDirection.x }
+      : { x: -direction.y, y: direction.x };
+    const outgoingNormal = outgoingDirection
+      ? { x: -outgoingDirection.y, y: outgoingDirection.x }
+      : { x: -direction.y, y: direction.x };
+    const miterNormal = normalizeTrainingWallVector(
+      incomingNormal.x + outgoingNormal.x,
+      incomingNormal.y + outgoingNormal.y
+    ) || outgoingNormal;
+    const miterAlignment = Math.abs(
+      (miterNormal.x * outgoingNormal.x) + (miterNormal.y * outgoingNormal.y)
+    );
+    const miterLength = clamp(
+      halfThickness / Math.max(0.35, miterAlignment),
+      halfThickness,
+      halfThickness * 2
+    );
+    const offsetX = miterNormal.x * miterLength;
+    const offsetY = miterNormal.y * miterLength;
+    leftPoints.push({ x: point.x + offsetX, y: point.y + offsetY });
+    rightPoints.push({ x: point.x - offsetX, y: point.y - offsetY });
+  });
+
+  return [...leftPoints, ...rightPoints.reverse()];
+};
+
+const resolveTrainingWallCollisionThickness = (wall = {}) => {
+  const thicknesses = (Array.isArray(wall?.collider?.parts) ? wall.collider.parts : [])
+    .map((part) => finiteOr(part?.d))
+    .filter((thickness) => thickness > 0)
+    .sort((first, second) => first - second);
+  if (thicknesses.length > 0) return Math.max(4, thicknesses[Math.floor(thicknesses.length * 0.5)]);
+  const fallbackThickness = Math.min(finiteOr(wall?.width), finiteOr(wall?.depth));
+  return Math.max(4, fallbackThickness > 0 ? fallbackThickness : 24);
+};
+
+const resolveTrainingWallType = (wall = {}) => {
+  const requested = String(wall?.wallType || '').trim();
+  if (requested === 'thinBarrier' || requested === 'thickWall') return requested;
+  if (wall?.geometryKind === 'highWall' || String(wall?.visualKind || '') === 'crescent') return 'thickWall';
+  return 'thinBarrier';
+};
+
+export const resolveTrainingWallVisualThickness = (wall = {}) => {
+  const requestedThickness = finiteOr(wall?.visualThickness);
+  if (requestedThickness > 0) return Math.max(4, requestedThickness);
+  const collisionThickness = resolveTrainingWallCollisionThickness(wall);
+  if (resolveTrainingWallType(wall) !== 'thinBarrier') return collisionThickness;
+  return clamp(collisionThickness * 0.26, 10, 28);
+};
+
+const resolveTrainingWallOutline = (wall = {}, thickness = 24) => {
+  const explicitOutline = normalizeTrainingWallPath(wall?.visualOutline);
+  return explicitOutline.length >= 3
+    ? explicitOutline
+    : resolveTrainingWallPathOutline(wall?.visualPath, thickness);
+};
+
+const createTrainingWallExtrusion = ({
+  outline = [],
+  height = 0,
+  bevelSize = 0,
+  material = null,
+  name = ''
+} = {}) => {
+  if (outline.length < 3 || height <= 0 || !material) return null;
+  const shape = new THREE.Shape();
+  shape.moveTo(outline[0].x, outline[0].y);
+  outline.slice(1).forEach((point) => shape.lineTo(point.x, point.y));
+  shape.closePath();
+  const geometry = new THREE.ExtrudeGeometry(shape, {
+    depth: height,
+    bevelEnabled: bevelSize > 0,
+    bevelSegments: 1,
+    bevelSize,
+    bevelThickness: Math.min(bevelSize, height * 0.08),
+    curveSegments: 1
+  });
+  geometry.computeVertexNormals();
+  const mesh = new THREE.Mesh(geometry, material);
+  mesh.name = name;
+  return mesh;
+};
+
+const createTrainingThinBarrierMesh = (wall = {}, { namePrefix = 'training-ordinary-wall' } = {}) => {
+  const thickness = resolveTrainingWallVisualThickness(wall);
+  const outline = resolveTrainingWallOutline(wall, thickness);
+  if (outline.length < 3) return null;
+  const height = Math.max(8, finiteOr(wall?.height, 34));
+  const foundationHeight = Math.min(10, Math.max(4, height * 0.1));
+  const capHeight = Math.min(12, Math.max(4, height * 0.12));
+  const panelHeight = Math.max(8, height - foundationHeight - capHeight);
+  const name = `${namePrefix}-${wall?.objectId || 'wall'}`;
+  const group = new THREE.Group();
+  const panelMaterial = new THREE.MeshStandardMaterial({
+    color: 0x758895,
+    roughness: 0.56,
+    metalness: 0.08,
+    emissive: 0x0c141a,
+    emissiveIntensity: 0.2
+  });
+  const frameMaterial = new THREE.MeshStandardMaterial({
+    color: 0xaebdc6,
+    roughness: 0.42,
+    metalness: 0.14,
+    emissive: 0x11181d,
+    emissiveIntensity: 0.18
+  });
+  const bevelSize = Math.min(1.8, Math.max(0.6, thickness * 0.08));
+  const foundation = createTrainingWallExtrusion({
+    outline,
+    height: foundationHeight,
+    bevelSize: Math.min(bevelSize, 1.1),
+    material: frameMaterial,
+    name: `${name}-foundation`
+  });
+  const panel = createTrainingWallExtrusion({
+    outline,
+    height: panelHeight,
+    bevelSize,
+    material: panelMaterial,
+    name: `${name}-panel`
+  });
+  const cap = createTrainingWallExtrusion({
+    outline,
+    height: capHeight,
+    bevelSize: Math.min(bevelSize, 1.1),
+    material: frameMaterial,
+    name: `${name}-cap`
+  });
+  if (foundation) group.add(foundation);
+  if (panel) {
+    panel.position.z = foundationHeight;
+    group.add(panel);
+  }
+  if (cap) {
+    cap.position.z = foundationHeight + panelHeight;
+    group.add(cap);
+  }
+
+  const path = normalizeTrainingWallPath(wall?.visualPath);
+  const postCount = Math.min(6, path.length);
+  if (postCount > 0) {
+    const postGeometry = new THREE.BoxGeometry(1, 1, 1);
+    const postWidth = Math.max(4, thickness * 0.68);
+    for (let index = 0; index < postCount; index += 1) {
+      const pathIndex = postCount <= 1
+        ? 0
+        : Math.round((index / (postCount - 1)) * (path.length - 1));
+      const point = path[pathIndex];
+      if (!point) continue;
+      const post = new THREE.Mesh(postGeometry, frameMaterial);
+      post.name = `${name}-post-${index + 1}`;
+      post.position.set(point.x, point.y, height * 0.5);
+      post.scale.set(postWidth, postWidth, height);
+      group.add(post);
+    }
+  }
+
+  group.name = name;
+  group.position.z = Math.max(0.08, finiteOr(wall?.z));
+  group.userData.wallType = 'thinBarrier';
+  group.userData.visualThickness = thickness;
+  group.userData.collisionThickness = resolveTrainingWallCollisionThickness(wall);
+  return group;
+};
+
+const createTrainingWallMesh = (wall = {}, { namePrefix = 'training-ordinary-wall', forceWallType = '' } = {}) => {
+  const wallType = forceWallType || resolveTrainingWallType(wall);
+  const thickWall = wallType === 'thickWall';
+  if (!thickWall) return createTrainingThinBarrierMesh(wall, { namePrefix });
+  const thickness = resolveTrainingWallVisualThickness(wall);
+  const outline = resolveTrainingWallOutline(wall, thickness);
+  if (outline.length < 3) return null;
+  const height = Math.max(8, finiteOr(wall?.height, 34));
+  const bevelSize = Math.min(6, Math.max(1.4, thickness * 0.1));
+  const mesh = createTrainingWallExtrusion({
+    outline,
+    height,
+    bevelSize,
+    material: new THREE.MeshStandardMaterial({
+      color: 0x46525c,
+      roughness: 0.62,
+      metalness: 0.06,
+      emissive: 0x080d12,
+      emissiveIntensity: 0.16
+    }),
+    name: `${namePrefix}-${wall?.objectId || 'wall'}`
+  });
+  if (!mesh) return null;
+  mesh.position.z = Math.max(0.08, finiteOr(wall?.z));
+  mesh.userData.wallType = wallType;
+  return mesh;
+};
+
+export const createTrainingOrdinaryWallMesh = (wall = {}) => {
+  const wallType = resolveTrainingWallType(wall);
+  return createTrainingWallMesh(wall, {
+    namePrefix: wallType === 'thickWall' ? 'training-thick-wall' : 'training-ordinary-wall'
+  });
+};
+
+export const createTrainingHighWallMesh = (wall = {}) => createTrainingWallMesh(wall, {
+  namePrefix: 'training-high-wall',
+  forceWallType: 'thickWall'
+});
+
+const isTrainingMapStaticPlaceholderCategory = (category = '') => (
+  category === 'tower' || category === 'neutralCamp'
+);
+
+export const isTrainingMapStaticPlaceholder = (object = {}) => (
+  object?.mapStatic === true
+  && isTrainingMapStaticPlaceholderCategory(String(object?.category || object?.objectiveType || ''))
+);
+
+const createTrainingPlaceholderMaterial = (color, options = {}) => new THREE.MeshStandardMaterial({
+  color,
+  roughness: finiteOr(options?.roughness, 0.72),
+  metalness: finiteOr(options?.metalness, 0.08),
+  emissive: options?.emissive || 0x000000,
+  emissiveIntensity: finiteOr(options?.emissiveIntensity, 0)
+});
+
+const createTrainingVerticalCylinder = (radiusTop, radiusBottom, height, material, radialSegments = 8) => {
+  const mesh = new THREE.Mesh(
+    new THREE.CylinderGeometry(radiusTop, radiusBottom, height, radialSegments),
+    material
+  );
+  mesh.geometry.rotateX(Math.PI / 2);
+  return mesh;
+};
+
+const createTrainingVerticalCone = (radius, height, material, radialSegments = 8) => {
+  const mesh = new THREE.Mesh(
+    new THREE.ConeGeometry(radius, height, radialSegments),
+    material
+  );
+  mesh.geometry.rotateX(Math.PI / 2);
+  return mesh;
+};
+
+const resolveTrainingPlaceholderDimensions = (object = {}) => ({
+  width: Math.max(8, finiteOr(object?.width, 58)),
+  depth: Math.max(8, finiteOr(object?.depth, 58)),
+  height: Math.max(12, finiteOr(object?.height, 64))
+});
+
+const createTrainingNeutralCampSentry = ({
+  name = 'training-neutral-sentry',
+  category = 'melee',
+  x = 0,
+  y = 0,
+  z = 0,
+  scale = 1
+} = {}) => {
+  const sentry = new THREE.Group();
+  sentry.name = name;
+  sentry.userData.isNeutralCampSentry = true;
+  sentry.position.set(x, y, z);
+  const body = new THREE.Mesh(
+    new THREE.SphereGeometry(0.78, 10, 8),
+    createTrainingPlaceholderMaterial(0xf4c542, {
+      roughness: 0.5,
+      metalness: 0.12,
+      emissive: 0xf4c542,
+      emissiveIntensity: 0.06
+    })
+  );
+  body.name = `${name}-body`;
+  body.scale.set(scale * 0.9, scale * 0.82, scale);
+  body.position.z = scale * 0.7;
+  const head = new THREE.Mesh(
+    new THREE.SphereGeometry(0.42, 10, 8),
+    createTrainingPlaceholderMaterial(0xffe6a3, { roughness: 0.58, metalness: 0.04 })
+  );
+  head.name = `${name}-head`;
+  head.scale.setScalar(scale);
+  head.position.z = scale * 1.48;
+  sentry.add(body, head);
+
+  if (category === 'ranged') {
+    const bow = new THREE.Mesh(
+      new THREE.TorusGeometry(scale * 0.5, scale * 0.065, 5, 12, Math.PI * 1.5),
+      createTrainingPlaceholderMaterial(0x8b5a2b, { roughness: 0.68, metalness: 0.04 })
+    );
+    bow.name = `${name}-bow`;
+    bow.rotation.x = Math.PI * 0.5;
+    bow.position.set(scale * 0.62, 0, scale * 0.92);
+    sentry.add(bow);
+  } else if (category === 'support') {
+    const halo = new THREE.Mesh(
+      new THREE.TorusGeometry(scale * 0.54, scale * 0.07, 6, 14),
+      createTrainingPlaceholderMaterial(0xffd766, {
+        roughness: 0.3,
+        metalness: 0.38,
+        emissive: 0xffc542,
+        emissiveIntensity: 0.22
+      })
+    );
+    halo.name = `${name}-halo`;
+    halo.position.z = scale * 2.02;
+    sentry.add(halo);
+  } else {
+    const blade = new THREE.Mesh(
+      new THREE.BoxGeometry(scale * 1.12, scale * 0.12, scale * 0.14),
+      createTrainingPlaceholderMaterial(0xd9e1e8, { roughness: 0.28, metalness: 0.72 })
+    );
+    blade.name = `${name}-blade`;
+    blade.rotation.z = -Math.PI * 0.3;
+    blade.position.set(scale * 0.62, 0, scale * 0.88);
+    sentry.add(blade);
+  }
+
+  return sentry;
+};
+
+const createTrainingNeutralPatrolPreviewArrow = ({
+  name = 'training-neutral-patrol-preview',
+  directionRad = 0,
+  length = 24,
+  elevation = 1
+} = {}) => {
+  const direction = new THREE.Vector3(Math.cos(directionRad), Math.sin(directionRad), 0);
+  if (direction.lengthSq() <= 1e-6) return null;
+  const arrowLength = Math.max(8, finiteOr(length, 24));
+  const headLength = Math.min(Math.max(5, arrowLength * 0.24), arrowLength * 0.46);
+  const headWidth = Math.min(Math.max(3, arrowLength * 0.16), arrowLength * 0.32);
+  const arrow = new THREE.ArrowHelper(
+    direction.normalize(),
+    new THREE.Vector3(0, 0, Math.max(0.4, finiteOr(elevation, 1))),
+    arrowLength,
+    0x67e8f9,
+    headLength,
+    headWidth
+  );
+  arrow.name = name;
+  arrow.userData.isNeutralPatrolPreview = true;
+  arrow.line.material.depthTest = false;
+  arrow.line.material.depthWrite = false;
+  arrow.line.renderOrder = 5;
+  arrow.cone.material.depthTest = false;
+  arrow.cone.material.depthWrite = false;
+  arrow.cone.renderOrder = 5;
+  return arrow;
+};
+
+export const createTrainingMapStaticPlaceholderMesh = (object = {}, terrainElevation = 0) => {
+  if (!isTrainingMapStaticPlaceholder(object)) return null;
+  const category = String(object?.category || object?.objectiveType || '');
+  const { width, depth, height } = resolveTrainingPlaceholderDimensions(object);
+  const group = new THREE.Group();
+  const objectId = String(object?.objectId || object?.id || category || 'placeholder');
+  group.name = `training-map-placeholder-${objectId}`;
+  group.position.set(
+    finiteOr(object?.x),
+    finiteOr(object?.y),
+    Math.max(0, finiteOr(object?.z)) + Math.max(0, finiteOr(terrainElevation))
+  );
+  group.userData.mapObjectId = objectId;
+  group.userData.category = category;
+  group.userData.neutralCampId = String(object?.neutralCampId || '');
+  group.userData.maxHp = Math.max(1, finiteOr(object?.maxHp, finiteOr(object?.hp, 1)));
+  group.userData.attackRange = Math.max(0, finiteOr(object?.attackRange));
+
+  if (category === 'tower') {
+    const team = object?.team === TEAM_DEFENDER ? TEAM_DEFENDER : TEAM_ATTACKER;
+    const primaryColor = team === TEAM_DEFENDER ? 0x16dfe8 : 0xef2020;
+    const darkColor = team === TEAM_DEFENDER ? 0x0a4a58 : 0x6b151b;
+    const radius = Math.max(7, Math.min(width, depth) * 0.5);
+    const baseHeight = Math.max(7, height * 0.17);
+    const bodyHeight = Math.max(12, height * 0.58);
+    const capHeight = Math.max(8, height - baseHeight - bodyHeight);
+    const base = createTrainingVerticalCylinder(
+      radius * 0.9,
+      radius,
+      baseHeight,
+      createTrainingPlaceholderMaterial(darkColor, { roughness: 0.68, metalness: 0.16 })
+    );
+    base.name = `${group.name}-octagon-base`;
+    base.position.z = baseHeight * 0.5;
+    const body = createTrainingVerticalCylinder(
+      radius * 0.58,
+      radius * 0.72,
+      bodyHeight,
+      createTrainingPlaceholderMaterial(primaryColor, { roughness: 0.48, metalness: 0.22 })
+    );
+    body.name = `${group.name}-octagon-body`;
+    body.position.z = baseHeight + (bodyHeight * 0.5);
+    const cap = createTrainingVerticalCone(
+      radius * 0.62,
+      capHeight,
+      createTrainingPlaceholderMaterial(primaryColor, {
+        roughness: 0.4,
+        metalness: 0.28,
+        emissive: primaryColor,
+        emissiveIntensity: 0.08
+      })
+    );
+    cap.name = `${group.name}-octagon-cap`;
+    cap.position.z = baseHeight + bodyHeight + (capHeight * 0.5);
+    const ring = new THREE.Mesh(
+      new THREE.RingGeometry(radius * 0.98, radius * 1.1, 8),
+      new THREE.MeshBasicMaterial({
+        color: primaryColor,
+        transparent: true,
+        opacity: 0.7,
+        side: THREE.DoubleSide,
+        depthWrite: false
+      })
+    );
+    ring.name = `${group.name}-range-marker`;
+    ring.position.z = 0.16;
+    group.add(base, body, cap, ring);
+    const attackRange = group.userData.attackRange;
+    const rangeWidth = Math.max(1.2, Math.min(5, attackRange * 0.014));
+    const innerRadius = Math.max(radius * 1.12, attackRange - rangeWidth);
+    if (attackRange > innerRadius + 0.5) {
+      const attackRangeMarker = new THREE.Mesh(
+        new THREE.RingGeometry(innerRadius, attackRange, 64),
+        new THREE.MeshBasicMaterial({
+          color: primaryColor,
+          transparent: true,
+          opacity: 0.28,
+          side: THREE.DoubleSide,
+          depthWrite: false
+        })
+      );
+      attackRangeMarker.name = `${group.name}-attack-range`;
+      attackRangeMarker.position.z = 0.12;
+      attackRangeMarker.visible = false;
+      group.add(attackRangeMarker);
+    }
+    return group;
+  }
+
+  const radius = Math.max(8, Math.min(width, depth) * 0.5);
+  const poleHeight = Math.max(12, height * 0.66);
+  const flagHeight = Math.max(7, poleHeight * 0.32);
+  const campGold = 0xf4c542;
+  const campStone = 0x86704a;
+  const pole = createTrainingVerticalCylinder(
+    Math.max(0.7, radius * 0.025),
+    Math.max(0.9, radius * 0.035),
+    poleHeight,
+    createTrainingPlaceholderMaterial(0x3f3422, { roughness: 0.48, metalness: 0.32 }),
+    8
+  );
+  pole.name = `${group.name}-neutral-flag-pole`;
+  pole.position.z = poleHeight * 0.5;
+  const banner = new THREE.Mesh(
+    new THREE.BoxGeometry(radius * 0.92, Math.max(0.42, radius * 0.025), flagHeight),
+    createTrainingPlaceholderMaterial(campGold, {
+      roughness: 0.36,
+      metalness: 0.18,
+      emissive: campGold,
+      emissiveIntensity: 0.12
+    })
+  );
+  banner.name = `${group.name}-neutral-banner`;
+  banner.position.set(radius * 0.42, 0, poleHeight * 0.72);
+  const campfire = new THREE.Mesh(
+    new THREE.SphereGeometry(Math.max(1.6, radius * 0.09), 10, 8),
+    createTrainingPlaceholderMaterial(0xffbf4d, {
+      roughness: 0.3,
+      metalness: 0,
+      emissive: 0xff9d20,
+      emissiveIntensity: 0.3
+    })
+  );
+  campfire.name = `${group.name}-campfire`;
+  campfire.position.z = Math.max(1.3, radius * 0.08);
+  const stones = Array.from({ length: 3 }, (_, index) => {
+    const angle = (Math.PI * 2 * index) / 3;
+    const stone = new THREE.Mesh(
+      new THREE.DodecahedronGeometry(Math.max(1.8, radius * 0.13), 0),
+      createTrainingPlaceholderMaterial(campStone, { roughness: 0.92, metalness: 0.02 })
+    );
+    stone.name = `${group.name}-camp-stone-${index + 1}`;
+    stone.position.set(
+      Math.cos(angle) * radius * 0.58,
+      Math.sin(angle) * radius * 0.58,
+      Math.max(1.2, radius * 0.08)
+    );
+    return stone;
+  });
+  const neutralCategories = Array.from(new Set(
+    (Array.isArray(object?.neutralComposition) ? object.neutralComposition : [
+      { unitCategory: 'melee' },
+      { unitCategory: 'ranged' }
+    ])
+      .map((entry) => String(entry?.unitCategory || '').trim().toLowerCase())
+      .filter((category) => category === 'melee' || category === 'ranged' || category === 'support')
+  )).slice(0, 3);
+  const sentryScale = clamp(radius * 0.045, 1.3, 2.4);
+  const neutralFormationFacingRad = finiteOr(object?.neutralFormationFacingRad);
+  const sentries = neutralCategories.map((category, index) => {
+    const angle = neutralFormationFacingRad
+      + (Math.PI * 2 * index) / Math.max(1, neutralCategories.length)
+      + (Math.PI / 5);
+    return createTrainingNeutralCampSentry({
+      name: `${group.name}-neutral-sentry-${category}`,
+      category,
+      x: Math.cos(angle) * radius * 0.48,
+      y: Math.sin(angle) * radius * 0.48,
+      z: 0,
+      scale: sentryScale
+    });
+  });
+  const patrolPreview = object?.neutralPatrolPreview === true
+    ? createTrainingNeutralPatrolPreviewArrow({
+      name: `${group.name}-neutral-patrol-preview`,
+      directionRad: finiteOr(object?.neutralPatrolDirectionRad, neutralFormationFacingRad),
+      length: finiteOr(object?.neutralPatrolPreviewLength, radius * 1.2),
+      elevation: Math.max(1.2, radius * 0.12)
+    })
+    : null;
+  group.add(pole, banner, campfire, ...stones, ...sentries);
+  if (patrolPreview) group.add(patrolPreview);
+  return group;
+};
+
+export const applyTrainingMapStaticPlaceholderState = (placeholder = null, building = null) => {
+  if (!placeholder) return false;
+  const maxHp = Math.max(1, finiteOr(building?.maxHp, finiteOr(placeholder?.userData?.maxHp, 1)));
+  const hp = Math.max(0, finiteOr(building?.hp, maxHp));
+  const destroyed = building?.destroyed === true || hp <= 0;
+  placeholder.visible = !destroyed;
+  placeholder.userData.hpRatio = clamp(hp / maxHp, 0, 1);
+  return placeholder.visible;
+};
+
+const createGroundLabelSprite = (text = '', color = '#f8fafc', scale = 1) => {
+  if (typeof document === 'undefined') return null;
+  const canvas = document.createElement('canvas');
+  canvas.width = 512;
+  canvas.height = 128;
+  const context = canvas.getContext('2d');
+  if (!context) return null;
+  context.clearRect(0, 0, canvas.width, canvas.height);
+  context.font = '900 56px "Microsoft YaHei", sans-serif';
+  context.textAlign = 'center';
+  context.textBaseline = 'middle';
+  context.lineWidth = 10;
+  context.strokeStyle = 'rgba(2, 6, 23, 0.76)';
+  context.strokeText(String(text || ''), canvas.width * 0.5, canvas.height * 0.5);
+  context.fillStyle = color;
+  context.fillText(String(text || ''), canvas.width * 0.5, canvas.height * 0.5);
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.colorSpace = THREE.SRGBColorSpace;
+  texture.generateMipmaps = false;
+  texture.minFilter = THREE.LinearFilter;
+  texture.magFilter = THREE.LinearFilter;
+  const sprite = new THREE.Sprite(new THREE.SpriteMaterial({
+    map: texture,
+    transparent: true,
+    depthWrite: false,
+    depthTest: true
+  }));
+  sprite.scale.set(150 * scale, 38 * scale, 1);
+  return sprite;
+};
+
+const createGroundDirectionArrow = (direction = 1, color = 0xffffff) => {
+  const shape = new THREE.Shape();
+  const sign = direction >= 0 ? 1 : -1;
+  shape.moveTo(-24 * sign, -11);
+  shape.lineTo(8 * sign, -11);
+  shape.lineTo(8 * sign, -21);
+  shape.lineTo(30 * sign, 0);
+  shape.lineTo(8 * sign, 21);
+  shape.lineTo(8 * sign, 11);
+  shape.lineTo(-24 * sign, 11);
+  shape.lineTo(-24 * sign, -11);
+  const geometry = new THREE.ShapeGeometry(shape);
+  const material = new THREE.MeshBasicMaterial({
+    color,
+    transparent: true,
+    opacity: 0.78,
+    side: THREE.DoubleSide,
+    depthWrite: false
+  });
+  return new THREE.Mesh(geometry, material);
+};
 
 const makeInstancedMesh = (geometry, material, capacity) => {
   const mesh = new THREE.InstancedMesh(geometry, material, Math.max(1, capacity));
@@ -1054,16 +2165,24 @@ const createTrainingHoverFootprintMaterial = (opacity) => new THREE.MeshBasicMat
   fog: false
 });
 
-const TRAINING_FLAG_CANVAS_THEME = {
+export const TRAINING_FLAG_CANVAS_THEME = {
   attacker: {
+    accent: '#f87171',
+    soft: 'rgba(153, 27, 27, 0.84)'
+  },
+  defender: {
     accent: '#7dd3fc',
     soft: 'rgba(14, 116, 144, 0.82)'
   },
-  defender: {
-    accent: '#fda4af',
-    soft: 'rgba(153, 27, 27, 0.84)'
+  neutral: {
+    accent: '#fde68a',
+    soft: 'rgba(146, 99, 20, 0.84)'
   }
 };
+
+export const resolveTrainingFlagCanvasTheme = (team = TEAM_ATTACKER) => (
+  TRAINING_FLAG_CANVAS_THEME[team] || TRAINING_FLAG_CANVAS_THEME.attacker
+);
 
 const createTrainingFlagCanvas = () => {
   if (typeof document === 'undefined' || typeof document.createElement !== 'function') return null;
@@ -1091,7 +2210,8 @@ const drawTrainingFlagCanvas = (canvas, anchor = {}) => {
   if (!context) return;
   const width = canvas.width;
   const height = canvas.height;
-  const theme = TRAINING_FLAG_CANVAS_THEME[anchor.team] || TRAINING_FLAG_CANVAS_THEME.attacker;
+  const theme = resolveTrainingFlagCanvasTheme(anchor.team);
+  const showSkillPoints = resolveTrainingFlagShowsSkillPoints(anchor);
   context.clearRect(0, 0, width, height);
   context.save();
   context.shadowColor = anchor.flagHovered ? theme.accent : 'rgba(2, 6, 23, 0.72)';
@@ -1137,21 +2257,22 @@ const drawTrainingFlagCanvas = (canvas, anchor = {}) => {
   const startText = `/${Math.max(1, Math.floor(Number(anchor.startCount) || 1))}`;
   const startX = 88 + remainWidth;
   context.fillText(startText, startX, 67);
-  const startWidth = context.measureText(startText).width;
-
-  const pointSeparatorX = Math.min(width - 132, startX + startWidth + 22);
-  context.strokeStyle = 'rgba(226, 232, 240, 0.28)';
-  context.lineWidth = 2;
-  context.beginPath();
-  context.moveTo(pointSeparatorX, 34);
-  context.lineTo(pointSeparatorX, 96);
-  context.stroke();
-  context.font = '800 27px "JetBrains Mono", ui-monospace, monospace';
-  context.fillStyle = '#cbd5e1';
-  context.fillText('点', pointSeparatorX + 18, 67);
-  context.font = '900 39px "JetBrains Mono", ui-monospace, monospace';
-  context.fillStyle = '#fde68a';
-  context.fillText(String(Math.max(0, Math.floor(Number(anchor.skillPoints) || 0))), pointSeparatorX + 55, 67);
+  if (showSkillPoints) {
+    const startWidth = context.measureText(startText).width;
+    const pointSeparatorX = Math.min(width - 132, startX + startWidth + 22);
+    context.strokeStyle = 'rgba(226, 232, 240, 0.28)';
+    context.lineWidth = 2;
+    context.beginPath();
+    context.moveTo(pointSeparatorX, 34);
+    context.lineTo(pointSeparatorX, 96);
+    context.stroke();
+    context.font = '800 27px "JetBrains Mono", ui-monospace, monospace';
+    context.fillStyle = '#cbd5e1';
+    context.fillText('点', pointSeparatorX + 18, 67);
+    context.font = '900 39px "JetBrains Mono", ui-monospace, monospace';
+    context.fillStyle = '#fde68a';
+    context.fillText(String(Math.max(0, Math.floor(Number(anchor.skillPoints) || 0))), pointSeparatorX + 55, 67);
+  }
 
   const barX = 44;
   const barY = 116;
@@ -1172,7 +2293,7 @@ const trainingFlagTextureSignature = (anchor = {}) => [
   anchor.remain,
   anchor.startCount,
   Number(anchor.ratio || 0).toFixed(3),
-  anchor.skillPoints,
+  resolveTrainingFlagShowsSkillPoints(anchor) ? anchor.skillPoints : 'hidden',
   anchor.selected ? 'selected' : 'normal',
   anchor.flagHovered ? 'hovered' : 'normal'
 ].join(':');
@@ -1184,20 +2305,23 @@ export default class TrainingThreeRenderPipeline {
     this.canvas = canvas;
     this.renderer = new THREE.WebGLRenderer({
       canvas,
-      antialias: true,
-      alpha: false,
-      powerPreference: 'high-performance'
+      antialias: false,
+      alpha: false
     });
     this.renderer.setClearColor(0x07111d, 1);
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
     this.renderer.sortObjects = true;
-    this.pixelRatio = Math.min(2, Math.max(1, window.devicePixelRatio || 1));
+    this.pixelRatio = Math.min(TRAINING_MAX_PIXEL_RATIO, Math.max(1, window.devicePixelRatio || 1));
     this.renderer.setPixelRatio(this.pixelRatio);
     this.viewportCssHeight = 1;
+    this.disposed = false;
+    this.lastSnapshotVersion = null;
+    this.lastDynamicSnapshotVersion = null;
+    this.hasSkillVisualFocus = false;
+    this.hasActiveSkillOverlays = false;
 
     this.scene = new THREE.Scene();
-    this.scene.fog = new THREE.Fog(0x07111d, 900, 2800);
-    this.camera = new THREE.PerspectiveCamera(48, 1, 1, 8000);
+    this.camera = new THREE.PerspectiveCamera(48, 1, 16, 8000);
     this.camera.up.set(0, 0, 1);
     this.camera.matrixAutoUpdate = false;
     this.camera.matrixWorldAutoUpdate = false;
@@ -1205,6 +2329,8 @@ export default class TrainingThreeRenderPipeline {
     this.groundGroup = new THREE.Group();
     this.groundGroup.name = 'training-three-ground';
     this.scene.add(this.groundGroup);
+    this.mapStaticPlaceholderGroup = null;
+    this.deployRegionHighlightGroup = null;
 
     this.skillPreviewGroup = new THREE.Group();
     this.skillPreviewGroup.name = 'training-three-skill-preview';
@@ -1488,8 +2614,9 @@ export default class TrainingThreeRenderPipeline {
     this.projectileGeometry = new THREE.SphereGeometry(1, 12, 8);
     this.effectGeometry = new THREE.SphereGeometry(1, 18, 10);
     this.projectileMaterials = {
-      attacker: new THREE.MeshBasicMaterial({ color: 0x9dd7ff }),
-      defender: new THREE.MeshBasicMaterial({ color: 0xffaaa3 }),
+      attacker: new THREE.MeshBasicMaterial({ color: 0xff8a8a }),
+      defender: new THREE.MeshBasicMaterial({ color: 0x8bd9ff }),
+      neutral: new THREE.MeshBasicMaterial({ color: 0xf8d66d }),
       shell: new THREE.MeshBasicMaterial({ color: 0xffc267 })
     };
     this.effectMaterials = {
@@ -1504,12 +2631,13 @@ export default class TrainingThreeRenderPipeline {
     this.projectilePool = [];
     this.effectPool = [];
     this.groundKey = '';
+    this.groundDebugEnabled = null;
     this.gridVisible = true;
   }
 
   prepareFrame() {
     const canvas = this.canvas;
-    if (!canvas) return { width: 0, height: 0 };
+    if (this.disposed || !canvas) return { width: 0, height: 0 };
     const width = Math.max(1, Math.floor(canvas.clientWidth || canvas.parentElement?.clientWidth || 1));
     const height = Math.max(1, Math.floor(canvas.clientHeight || canvas.parentElement?.clientHeight || 1));
     this.viewportCssHeight = height;
@@ -1523,6 +2651,8 @@ export default class TrainingThreeRenderPipeline {
 
   updateCamera(cameraState) {
     if (!cameraState) return;
+    this.camera.near = Math.max(1, Number(cameraState.nearPlane) || this.camera.near);
+    this.camera.far = Math.max(this.camera.near + 1, Number(cameraState.farPlane) || this.camera.far);
     this.camera.projectionMatrix.fromArray(cameraState.projection || []);
     this.camera.projectionMatrixInverse.copy(this.camera.projectionMatrix).invert();
     this.camera.matrixWorldInverse.fromArray(cameraState.viewWorld || cameraState.view || []);
@@ -1530,12 +2660,6 @@ export default class TrainingThreeRenderPipeline {
     this.camera.matrix.copy(this.camera.matrixWorld);
     this.camera.position.setFromMatrixPosition(this.camera.matrixWorld);
     this.camera.matrixWorldNeedsUpdate = false;
-    if (this.scene.fog) {
-      const distance = Math.max(0, Number(cameraState.distance) || 0);
-      const overviewProgress = clamp(Number(cameraState.overviewZoomProgress) || 0, 0, 1);
-      this.scene.fog.near = lerp(900, 2600, overviewProgress);
-      this.scene.fog.far = Math.max(2800, lerp(2800, 7000, overviewProgress), distance * 1.35);
-    }
   }
 
   setGridVisible(visible = true) {
@@ -1548,18 +2672,86 @@ export default class TrainingThreeRenderPipeline {
     });
   }
 
-  updateGround(runtime) {
+  updateTrainingMapStaticPlaceholderStates(runtime = null) {
+    const placeholderGroup = this.mapStaticPlaceholderGroup;
+    if (!placeholderGroup) return;
+    const hideInDeploy = !runtime?.intelVisible && (!runtime?.sim || runtime?.phase === 'deploy');
+    if (hideInDeploy) {
+      placeholderGroup.children.forEach((placeholder) => {
+        placeholder.visible = false;
+      });
+      return;
+    }
+    const buildings = Array.isArray(runtime?.sim?.buildings)
+      ? runtime.sim.buildings
+      : (Array.isArray(runtime?.initialBuildings) ? runtime.initialBuildings : []);
+    const buildingsById = new Map(
+      buildings
+        .filter((building) => building?.id)
+        .map((building) => [String(building.id), building])
+    );
+    const objectivesBySourceId = new Map(
+      (Array.isArray(runtime?.sim?.trainingObjectives) ? runtime.sim.trainingObjectives : [])
+        .filter((objective) => objective?.sourceObjectId)
+        .map((objective) => [String(objective.sourceObjectId), objective])
+    );
+    const activeNeutralCampIds = new Set(
+      (Array.isArray(runtime?.sim?.squads) ? runtime.sim.squads : [])
+        .filter((squad) => squad?.team === TEAM_NEUTRAL && (Number(squad?.remain) || 0) > 0)
+        .map((squad) => String(squad?.neutralCampId || ''))
+        .filter(Boolean)
+    );
+    const phase = runtime?.getPhase?.() || runtime?.phase || 'deploy';
+    const showNeutralPatrolPreview = phase === 'deploy';
+    placeholderGroup.children.forEach((placeholder) => {
+      const objectId = String(placeholder?.userData?.mapObjectId || '');
+      const visible = applyTrainingMapStaticPlaceholderState(placeholder, buildingsById.get(objectId) || null);
+      const hasLiveNeutralCamp = activeNeutralCampIds.has(String(placeholder?.userData?.neutralCampId || ''));
+      const isNeutralCampPlaceholder = placeholder?.userData?.category === 'neutralCamp';
+      placeholder.visible = visible && !(isNeutralCampPlaceholder && phase !== 'deploy');
+      placeholder.children.forEach((child) => {
+        if (child?.userData?.isNeutralCampSentry === true) child.visible = !hasLiveNeutralCamp;
+        if (child?.userData?.isNeutralPatrolPreview === true) child.visible = placeholder.visible && showNeutralPatrolPreview;
+      });
+      const attackRangeMarker = placeholder.getObjectByName(`${placeholder.name}-attack-range`);
+      if (attackRangeMarker) {
+        attackRangeMarker.visible = placeholder.visible && !!objectivesBySourceId.get(objectId)?.lockedSquadId;
+      }
+    });
+  }
+
+  updateDeployRegionHighlights(runtime = null) {
+    const highlightGroup = this.deployRegionHighlightGroup;
+    if (!highlightGroup) return;
+    const activeTeams = new Set(resolveTrainingDeployHighlightTeams(runtime));
+    highlightGroup.visible = activeTeams.size > 0;
+    highlightGroup.children.forEach((mesh) => {
+      mesh.visible = activeTeams.has(mesh?.userData?.team);
+    });
+  }
+
+  updateGround(runtime, { debugEnabled = false, refreshStaticStates = true } = {}) {
     const field = runtime?.getField?.() || {};
     const range = runtime?.getDeployRange?.() || {};
-    const width = Math.max(100, Number(field.width) || 2700);
-    const height = Math.max(100, Number(field.height) || 1488);
+    const mapConfig = runtime?.getTrainingMapConfig?.() || null;
+    const hasThreeLaneMap = !!mapConfig?.enabled || String(mapConfig?.mapId || '') === 'training-three-lane';
+    const width = Math.max(100, Number(field.width) || TRAINING_MAP_WORLD_WIDTH);
+    const height = Math.max(100, Number(field.height) || TRAINING_MAP_WORLD_HEIGHT);
     const halfW = width * 0.5;
     const halfH = height * 0.5;
     const attackerMaxX = clamp(Number(range.attackerMaxX) || -10, -halfW, halfW);
     const defenderMinX = clamp(Number(range.defenderMinX) || 10, -halfW, halfW);
-    const key = `${Math.round(width)}:${Math.round(height)}:${Math.round(attackerMaxX)}:${Math.round(defenderMinX)}`;
-    if (key === this.groundKey) return;
+    const mapKey = hasThreeLaneMap
+      ? `${mapConfig?.mapId || 'training-three-lane'}:${mapConfig?.mapVersion || 1}:${mapConfig?.activePresetId || ''}`
+      : 'legacy-flat';
+    const key = `${Math.round(width)}:${Math.round(height)}:${Math.round(attackerMaxX)}:${Math.round(defenderMinX)}:${mapKey}:${debugEnabled ? 'debug' : 'normal'}`;
+    if (key === this.groundKey) {
+      if (refreshStaticStates) this.updateTrainingMapStaticPlaceholderStates(runtime);
+      return;
+    }
     this.groundKey = key;
+    this.mapStaticPlaceholderGroup = null;
+    this.deployRegionHighlightGroup = null;
     clearGroup(this.groundGroup);
 
     const addBand = (x1, x2, color, name) => {
@@ -1573,15 +2765,362 @@ export default class TrainingThreeRenderPipeline {
       this.groundGroup.add(mesh);
     };
 
-    addBand(-halfW, attackerMaxX, 0x102b43, 'attacker-deploy-band');
-    addBand(attackerMaxX, defenderMinX, 0x2c2a1d, 'center-engagement-band');
-    addBand(defenderMinX, halfW, 0x421b1c, 'defender-deploy-band');
+    const addRectRegion = (region = {}, color = 0x2b4330, name = 'terrain-region', depthOptions = {}) => {
+      const regionWidth = Math.max(1, Number(region?.width) || 1);
+      const regionHeight = Math.max(1, Number(region?.height) || 1);
+      const mesh = new THREE.Mesh(
+        new THREE.PlaneGeometry(regionWidth, regionHeight, 1, 1),
+        createBandMaterial(color, 0.92, depthOptions)
+      );
+      mesh.name = name;
+      mesh.position.set(Number(region?.x) || 0, Number(region?.y) || 0, Number(region?.z) || 0);
+      this.groundGroup.add(mesh);
+    };
 
-    const minorPositions = [];
-    const majorPositions = [];
+    const addSemicircleRegion = (region = {}, color = 0x2b4330, name = 'terrain-semicircle', depthOptions = {}) => {
+      const radius = Math.max(1, Number(region?.radius) || Math.min(Number(region?.width) || 1, Number(region?.height) || 1) * 0.5);
+      const startAngle = region?.arcDirection === 'down' ? Math.PI : 0;
+      const mesh = new THREE.Mesh(
+        new THREE.CircleGeometry(radius, 48, startAngle, Math.PI),
+        createBandMaterial(color, 0.92, depthOptions)
+      );
+      mesh.name = name;
+      mesh.position.set(Number(region?.x) || 0, Number(region?.y) || 0, Number(region?.z) || 0);
+      this.groundGroup.add(mesh);
+    };
+
+    const addPolygonRegion = (region = {}, color = 0x2b4330, name = 'terrain-polygon', depthOptions = {}) => {
+      const points = Array.isArray(region?.points) ? region.points : [];
+      if (points.length < 3) return;
+      const highlandMesh = createTrainingHighlandMesh(region, color);
+      if (highlandMesh) {
+        highlandMesh.name = name;
+        this.groundGroup.add(highlandMesh);
+        return;
+      }
+      const shape = new THREE.Shape();
+      shape.moveTo(Number(points[0]?.x) || 0, Number(points[0]?.y) || 0);
+      points.slice(1).forEach((point) => {
+        shape.lineTo(Number(point?.x) || 0, Number(point?.y) || 0);
+      });
+      shape.closePath();
+      const mesh = new THREE.Mesh(
+        new THREE.ShapeGeometry(shape),
+        createBandMaterial(color, 0.92, depthOptions)
+      );
+      mesh.name = name;
+      mesh.position.z = Number(region?.z) || 0;
+      this.groundGroup.add(mesh);
+    };
+
+    const addTerrainRegion = (region = {}, color = 0x2b4330, name = 'terrain-region') => {
+      const depthOptions = resolveTrainingTerrainDepthOptions(region);
+      if (region?.shape === 'polygon') {
+        addPolygonRegion(region, color, name, depthOptions);
+      } else if (region?.shape === 'semicircle') {
+        addSemicircleRegion(region, color, name, depthOptions);
+      } else {
+        addRectRegion(region, color, name, depthOptions);
+      }
+      const edgeMesh = createTrainingTerrainEdgeMesh(
+        region,
+        color,
+        `terrain-transition-${region?.id || String(region?.type || 'region')}`
+      );
+      if (edgeMesh) this.groundGroup.add(edgeMesh);
+    };
+
+    const mapLinePositions = [];
     const pushLine = (bucket, x1, y1, x2, y2, z = 0.05) => {
       bucket.push(x1, y1, z, x2, y2, z);
     };
+
+    if (hasThreeLaneMap) {
+      const terrainColors = {
+        grass: 0x294533,
+        'highland-attacker': 0x58272d,
+        'highland-defender': 0x194a52,
+        sand: 0xe9d549,
+        river: 0xb69056,
+        road: 0x655943
+      };
+      const terrainRegions = Array.isArray(mapConfig?.terrainRegions) ? mapConfig.terrainRegions : [];
+      const resolveTerrainElevation = (point = {}) => resolveTrainingMapTerrainElevation(mapConfig, point);
+      terrainRegions.forEach((region) => {
+        const type = String(region?.type || 'grass');
+        addTerrainRegion(region, terrainColors[type] || terrainColors.grass, `terrain-${region?.id || type}`);
+      });
+      const deployRegionHighlightGroup = new THREE.Group();
+      deployRegionHighlightGroup.name = 'training-deploy-region-highlights';
+      getTrainingMapSpawnRegions(mapConfig, { field: { width, height } })
+        .filter((region) => region.walkable)
+        .forEach((region) => {
+          const highlight = createTrainingDeployRegionHighlightMesh(region, mapConfig);
+          if (highlight) deployRegionHighlightGroup.add(highlight);
+        });
+      if (deployRegionHighlightGroup.children.length > 0) {
+        deployRegionHighlightGroup.visible = false;
+        this.deployRegionHighlightGroup = deployRegionHighlightGroup;
+        this.groundGroup.add(deployRegionHighlightGroup);
+      }
+      (Array.isArray(mapConfig?.objects) ? mapConfig.objects : [])
+        .filter((wall) => (
+          wall?.category === 'wall'
+          && wall?.geometryKind !== 'highlandRail'
+          && Array.isArray(wall?.visualPath)
+          && wall.visualPath.length >= 2
+        ))
+        .forEach((wall) => {
+          const mesh = wall?.geometryKind === 'highWall'
+            ? createTrainingHighWallMesh(wall)
+            : createTrainingOrdinaryWallMesh(wall);
+          if (mesh) this.groundGroup.add(mesh);
+        });
+      const lanes = Array.isArray(mapConfig?.lanes) ? mapConfig.lanes : [];
+      lanes.forEach((lane) => {
+        const centerY = Number(lane?.centerY) || 0;
+        const laneWidth = Math.max(1, Number(lane?.width) || 150);
+        pushLine(mapLinePositions, -halfW, centerY - (laneWidth * 0.5), halfW, centerY - (laneWidth * 0.5), 0.12);
+        pushLine(mapLinePositions, -halfW, centerY + (laneWidth * 0.5), halfW, centerY + (laneWidth * 0.5), 0.12);
+        if (debugEnabled) {
+          const label = createGroundLabelSprite(String(lane?.label || lane?.id || '道路'), '#f8e7b6', 0.72);
+          if (label) {
+            label.position.set(-halfW + 175, centerY, 0.18);
+            this.groundGroup.add(label);
+          }
+        }
+      });
+      const teamPresentation = mapConfig?.teamPresentation || {};
+      terrainRegions
+        .filter((region) => String(region?.type || '').startsWith('highland-'))
+        .forEach((region) => {
+          const team = String(region?.type || '').endsWith('defender') ? TEAM_DEFENDER : TEAM_ATTACKER;
+          const presentation = teamPresentation?.[team] || {};
+          const points = Array.isArray(region?.points) ? region.points : [];
+          if (points.length <= 0) return;
+          const centroid = points.reduce((sum, point) => ({
+            x: sum.x + finiteOr(point?.x),
+            y: sum.y + finiteOr(point?.y)
+          }), { x: 0, y: 0 });
+          const center = { x: centroid.x / points.length, y: centroid.y / points.length };
+          const topElevation = resolveTerrainElevation(center);
+          if (debugEnabled) {
+            const sideLabel = String(region?.sourceRegionId || '').includes('bottom') ? '下' : '上';
+            const label = createGroundLabelSprite(
+              `${String(presentation?.label || (team === TEAM_DEFENDER ? '防守方高地' : '进攻方高地'))}${sideLabel}`,
+              String(presentation?.color || (team === TEAM_DEFENDER ? '#16dfe8' : '#ef2020')),
+              0.58
+            );
+            if (label) {
+              label.position.set(center.x, center.y, topElevation + 0.28);
+              this.groundGroup.add(label);
+            }
+          }
+          const tip = points.reduce((currentTip, point) => {
+            if (!currentTip) return point;
+            const currentX = finiteOr(currentTip?.x);
+            const nextX = finiteOr(point?.x);
+            return team === TEAM_DEFENDER
+              ? (nextX < currentX ? point : currentTip)
+              : (nextX > currentX ? point : currentTip);
+          }, null);
+          if (!tip) return;
+          const connector = createGroundDirectionArrow(
+            team === TEAM_DEFENDER ? -1 : 1,
+            team === TEAM_DEFENDER ? 0x55d4db : 0xee666a
+          );
+          connector.scale.set(0.54, 0.54, 1);
+          connector.position.set(finiteOr(tip?.x), finiteOr(tip?.y), topElevation + 0.24);
+          connector.name = `highland-route-connector-${region?.sourceRegionId || region?.id || team}`;
+          this.groundGroup.add(connector);
+        });
+      const attackerArrow = createGroundDirectionArrow(1, 0xee666a);
+      attackerArrow.position.set(-1020, 0, 0.13);
+      this.groundGroup.add(attackerArrow);
+      const defenderArrow = createGroundDirectionArrow(-1, 0x55d4db);
+      defenderArrow.position.set(1020, 0, 0.13);
+      this.groundGroup.add(defenderArrow);
+      (Array.isArray(mapConfig?.deploySlots) ? mapConfig.deploySlots : []).forEach((slot) => {
+        const defender = slot?.team === TEAM_DEFENDER;
+        const slotElevation = resolveTerrainElevation(slot);
+        const ring = new THREE.Mesh(
+          new THREE.RingGeometry(8, 12, 28),
+          new THREE.MeshBasicMaterial({
+            color: defender ? 0x55d4db : 0xee666a,
+            transparent: true,
+            opacity: 0.86,
+            side: THREE.DoubleSide,
+            depthWrite: false
+          })
+        );
+        ring.position.set(Number(slot?.x) || 0, Number(slot?.y) || 0, slotElevation + 0.14);
+        this.groundGroup.add(ring);
+        if (debugEnabled) {
+          const slotLabel = createGroundLabelSprite(String(slot?.label || '部署槽'), defender ? '#b8f5f7' : '#ffd0d2', 0.42);
+          if (slotLabel) {
+            slotLabel.position.set(Number(slot?.x) || 0, (Number(slot?.y) || 0) + 28, slotElevation + 0.17);
+            this.groundGroup.add(slotLabel);
+          }
+        }
+      });
+      const mapStaticPlaceholderGroup = new THREE.Group();
+      mapStaticPlaceholderGroup.name = 'training-map-static-placeholders';
+      mapStaticPlaceholderGroup.renderOrder = 2;
+      (Array.isArray(mapConfig?.objects) ? mapConfig.objects : [])
+        .filter((object) => isTrainingMapStaticPlaceholder(object))
+        .forEach((object) => {
+          const placeholder = createTrainingMapStaticPlaceholderMesh(
+            object,
+            resolveTerrainElevation(object)
+          );
+          if (placeholder) mapStaticPlaceholderGroup.add(placeholder);
+        });
+      if (mapStaticPlaceholderGroup.children.length > 0) {
+        this.mapStaticPlaceholderGroup = mapStaticPlaceholderGroup;
+        this.groundGroup.add(mapStaticPlaceholderGroup);
+      }
+      if (debugEnabled) {
+        const referenceImage = mapConfig?.referenceGeometry?.debugOverlay?.referenceImage;
+        const referenceImageUrl = String(referenceImage?.url || '');
+        if (referenceImageUrl) {
+          const texture = new THREE.TextureLoader().load(referenceImageUrl);
+          const crop = referenceImage?.crop && typeof referenceImage.crop === 'object' ? referenceImage.crop : {};
+          const cropLeft = clamp(Number(crop?.left) || 0, 0, 1);
+          const cropTop = clamp(Number(crop?.top) || 0, 0, 1);
+          const cropWidth = clamp(Number(crop?.width) || 1, 0.001, 1 - cropLeft);
+          const cropHeight = clamp(Number(crop?.height) || 1, 0.001, 1 - cropTop);
+          texture.colorSpace = THREE.SRGBColorSpace;
+          texture.repeat.set(cropWidth, cropHeight);
+          texture.offset.set(cropLeft, 1 - cropTop - cropHeight);
+          texture.needsUpdate = true;
+          const referenceOverlay = new THREE.Mesh(
+            new THREE.PlaneGeometry(width, height, 1, 1),
+            new THREE.MeshBasicMaterial({
+              map: texture,
+              transparent: true,
+              opacity: 0.28,
+              side: THREE.DoubleSide,
+              depthTest: false,
+              depthWrite: false
+            })
+          );
+          referenceOverlay.name = 'training-reference-overlay';
+          referenceOverlay.position.set(0, 0, 0.24);
+          referenceOverlay.renderOrder = 10;
+          this.groundGroup.add(referenceOverlay);
+        }
+        const addDebugLine = (points = [], color = 0xffffff, name = 'training-map-debug-line', closed = false) => {
+          if (!Array.isArray(points) || points.length < 2) return;
+          const positions = [];
+          points.forEach((point) => {
+            positions.push(Number(point?.x) || 0, Number(point?.y) || 0, Number(point?.z) || 0.3);
+          });
+          const geometry = new THREE.BufferGeometry();
+          geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+          const material = new THREE.LineBasicMaterial({
+            color,
+            transparent: true,
+            opacity: 0.92,
+            depthWrite: false
+          });
+          const line = closed ? new THREE.LineLoop(geometry, material) : new THREE.Line(geometry, material);
+          line.name = name;
+          this.groundGroup.add(line);
+        };
+        const normalizedToWorld = (point = []) => ({
+          x: ((Number(point?.[0]) || 0) - 0.5) * width,
+          y: (0.5 - (Number(point?.[1]) || 0)) * height,
+          z: 0.3
+        });
+        (Array.isArray(mapConfig?.spawnRegions) ? mapConfig.spawnRegions : []).forEach((region) => {
+          const sourceTerrain = terrainRegions.find((terrain) => terrain?.sourceRegionId === region?.id);
+          const debugElevation = Math.max(
+            0.3,
+            finiteOr(sourceTerrain?.z) + Math.max(0, finiteOr(sourceTerrain?.elevation)) + 0.3
+          );
+          const points = (Array.isArray(region?.normalizedPolygon) ? region.normalizedPolygon : [])
+            .map((point) => ({ ...normalizedToWorld(point), z: debugElevation }));
+          addDebugLine(points, region?.team === TEAM_DEFENDER ? 0x16dfe8 : 0xef2020, `debug-spawn-${region?.id || 'region'}`, true);
+          const centroid = points.reduce((sum, point) => ({ x: sum.x + point.x, y: sum.y + point.y }), { x: 0, y: 0 });
+          const label = createGroundLabelSprite(String(region?.id || 'spawn'), '#ffffff', 0.42);
+          if (label && points.length > 0) {
+            label.position.set(centroid.x / points.length, centroid.y / points.length, debugElevation + 0.06);
+            this.groundGroup.add(label);
+          }
+        });
+        lanes.forEach((lane) => {
+          const points = Array.isArray(lane?.centerline) ? lane.centerline : [];
+          addDebugLine(points.map((point) => ({ ...point, z: 0.31 })), 0xfff0a6, `debug-route-${lane?.id || 'lane'}`);
+        });
+        const mapObjects = Array.isArray(mapConfig?.objects) ? mapConfig.objects : [];
+        mapObjects.filter((entry) => entry?.category === 'wall').forEach((wall) => {
+          const wallColor = wall?.geometryKind === 'highWall' ? 0xf87171 : 0xfbbf24;
+          const visualPath = Array.isArray(wall?.visualPath) ? wall.visualPath : [];
+          const debugWallElevation = Math.max(0.32, finiteOr(wall?.z) + Math.max(0, finiteOr(wall?.height)) + 0.45);
+          if (visualPath.length >= 2) {
+            addDebugLine(
+              visualPath.map((point) => ({ ...point, z: debugWallElevation })),
+              wallColor,
+              `debug-wall-path-${wall?.objectId || 'wall'}`
+            );
+          }
+          const halfWidth = Math.max(1, Number(wall?.width) || 1) * 0.5;
+          const halfDepth = Math.max(1, Number(wall?.depth) || 1) * 0.5;
+          const centerX = Number(wall?.x) || 0;
+          const centerY = Number(wall?.y) || 0;
+          if (visualPath.length < 2) {
+            addDebugLine([
+              { x: centerX - halfWidth, y: centerY - halfDepth, z: 0.32 },
+              { x: centerX + halfWidth, y: centerY - halfDepth, z: 0.32 },
+              { x: centerX + halfWidth, y: centerY + halfDepth, z: 0.32 },
+              { x: centerX - halfWidth, y: centerY + halfDepth, z: 0.32 }
+            ], wallColor, `debug-wall-${wall?.objectId || 'wall'}`, true);
+          }
+          const colliderParts = Array.isArray(wall?.collider?.parts) ? wall.collider.parts : [];
+          colliderParts.forEach((part, partIndex) => {
+            const partCenterX = centerX + (Number(part?.cx) || 0);
+            const partCenterY = centerY + (Number(part?.cy) || 0);
+            const partHalfWidth = Math.max(1, Number(part?.w) || 1) * 0.5;
+            const partHalfDepth = Math.max(1, Number(part?.d) || 1) * 0.5;
+            const yawRadians = (Number(part?.yawDeg) || 0) * Math.PI / 180;
+            const cosine = Math.cos(yawRadians);
+            const sine = Math.sin(yawRadians);
+            const corners = [
+              { x: -partHalfWidth, y: -partHalfDepth },
+              { x: partHalfWidth, y: -partHalfDepth },
+              { x: partHalfWidth, y: partHalfDepth },
+              { x: -partHalfWidth, y: partHalfDepth }
+            ].map((corner) => ({
+              x: partCenterX + ((corner.x * cosine) - (corner.y * sine)),
+              y: partCenterY + ((corner.x * sine) + (corner.y * cosine)),
+              z: debugWallElevation
+            }));
+            addDebugLine(corners, 0x38bdf8, `debug-wall-collider-${wall?.objectId || 'wall'}-${partIndex}`, true);
+          });
+        });
+        const mapObjectsById = new Map(mapObjects.map((entry) => [String(entry?.objectId || ''), entry]));
+        (Array.isArray(mapConfig?.objectives) ? mapConfig.objectives : []).forEach((objective) => {
+          const source = mapObjectsById.get(String(objective?.sourceObjectId || ''));
+          if (!source) return;
+          const label = createGroundLabelSprite(String(objective?.objectiveId || 'objective'), objective?.type === 'tower' ? '#ffffff' : '#d9f99d', 0.34);
+          if (label) {
+            label.position.set(
+              Number(source?.x) || 0,
+              (Number(source?.y) || 0) + 20,
+              resolveTerrainElevation(source) + 0.38
+            );
+            this.groundGroup.add(label);
+          }
+        });
+      }
+    } else {
+      addBand(-halfW, attackerMaxX, 0x102b43, 'attacker-deploy-band');
+      addBand(attackerMaxX, defenderMinX, 0x2c2a1d, 'center-engagement-band');
+      addBand(defenderMinX, halfW, 0x421b1c, 'defender-deploy-band');
+    }
+
+    const minorPositions = [];
+    const majorPositions = [];
     for (let x = Math.ceil(-halfW / 28) * 28; x <= halfW; x += 28) {
       const bucket = Math.abs(x % 112) <= 0.001 ? majorPositions : minorPositions;
       pushLine(bucket, x, -halfH, x, halfH);
@@ -1607,15 +3146,19 @@ export default class TrainingThreeRenderPipeline {
     };
     addLines(minorPositions, 0x7fa8bd, 0.16, 'minor-grid');
     addLines(majorPositions, 0xd7e8ef, 0.26, 'major-grid');
+    if (mapLinePositions.length > 0) addLines(mapLinePositions, 0xf8e7b6, 0.42, 'training-lane-boundaries');
 
     const boundaryPositions = [];
-    pushLine(boundaryPositions, attackerMaxX, -halfH, attackerMaxX, halfH, 0.08);
-    pushLine(boundaryPositions, defenderMinX, -halfH, defenderMinX, halfH, 0.08);
+    if (!hasThreeLaneMap) {
+      pushLine(boundaryPositions, attackerMaxX, -halfH, attackerMaxX, halfH, 0.08);
+      pushLine(boundaryPositions, defenderMinX, -halfH, defenderMinX, halfH, 0.08);
+    }
     pushLine(boundaryPositions, -halfW, -halfH, halfW, -halfH, 0.08);
     pushLine(boundaryPositions, halfW, -halfH, halfW, halfH, 0.08);
     pushLine(boundaryPositions, halfW, halfH, -halfW, halfH, 0.08);
     pushLine(boundaryPositions, -halfW, halfH, -halfW, -halfH, 0.08);
-    addLines(boundaryPositions, 0xffe08a, 0.62, 'deployment-boundaries');
+    addLines(boundaryPositions, 0xffe08a, 0.62, hasThreeLaneMap ? 'map-boundaries' : 'deployment-boundaries');
+    this.updateTrainingMapStaticPlaceholderStates(runtime);
   }
 
   ensureUnitCapacity(count) {
@@ -1870,7 +3413,7 @@ export default class TrainingThreeRenderPipeline {
       this.skillPreviewArrow.visible = true;
     } else {
       setGroundTransform(this.skillPreviewRangeMesh, source.x, source.y, preview.maxRange);
-      if (targetPoint) {
+      if (targetPoint && !preview.paintArea?.stamps?.length) {
         setGroundTransform(this.skillPreviewAoeMesh, targetPoint.x, targetPoint.y, preview.aoeRadius);
         setGroundTransform(this.skillPreviewAoeRingMesh, targetPoint.x, targetPoint.y, preview.aoeRadius);
         setGroundTransform(this.skillPreviewOriginMesh, source.x, source.y, Math.max(7, preview.aoeRadius * 0.24));
@@ -1998,8 +3541,9 @@ export default class TrainingThreeRenderPipeline {
     let hoveredCount = 0;
     for (let i = 0; i < count; i += 1) {
       const base = i * UNIT_INSTANCE_STRIDE;
-      if (Number(data[base + 12]) > 0.5) selectedCount += 1;
-      if (Number(data[base + 15]) > 0.5) hoveredCount += 1;
+      const showGroundMarker = shouldRenderTrainingUnitGroundMarker(data[base + 5]);
+      if (showGroundMarker && Number(data[base + 12]) > 0.5) selectedCount += 1;
+      if (showGroundMarker && Number(data[base + 15]) > 0.5) hoveredCount += 1;
     }
 
     this.ensureSelectedRingCapacity(selectedCount);
@@ -2014,7 +3558,8 @@ export default class TrainingThreeRenderPipeline {
       const size = Math.max(2.2, Number(data[base + 3]) || 4);
       const selected = Number(data[base + 12]) > 0.5;
       const hovered = Number(data[base + 15]) > 0.5;
-      if (selected) {
+      const showGroundMarker = shouldRenderTrainingUnitGroundMarker(data[base + 5]);
+      if (selected && showGroundMarker) {
         tempPos.set(x, y, z + 0.14);
         tempQuat.identity();
         const selectionRadius = resolveTrainingSelectedUnitRingRadius(size);
@@ -2023,10 +3568,10 @@ export default class TrainingThreeRenderPipeline {
         this.selectedRingMesh.setMatrixAt(selectedIndex, tempMatrix);
         selectedIndex += 1;
       }
-      if (hovered) {
+      if (hovered && showGroundMarker) {
         const footprint = resolveTrainingHoverFootprint(size, hoverPresentation.zoomOutProgress);
         const yaw = Number(data[base + 4]) || 0;
-        tempColor.copy(Number(data[base + 5]) > 0.5 ? TEAM_DEFENDER_COLOR : TEAM_ATTACKER_COLOR);
+        tempColor.copy(resolveTrainingTeamColor(data[base + 5]));
         tempColor.lerp(HOVER_FOOTPRINT_COLOR, hoverPresentation.outerColorMix);
         tempEuler.set(0, 0, yaw);
         tempQuat.setFromEuler(tempEuler);
@@ -2035,7 +3580,7 @@ export default class TrainingThreeRenderPipeline {
         tempMatrix.compose(tempPos, tempQuat, tempScale);
         this.hoverFootprintOuterMesh.setMatrixAt(hoveredEffectIndex, tempMatrix);
         this.hoverFootprintOuterMesh.setColorAt(hoveredEffectIndex, tempColor);
-        tempColor.copy(Number(data[base + 5]) > 0.5 ? TEAM_DEFENDER_COLOR : TEAM_ATTACKER_COLOR);
+        tempColor.copy(resolveTrainingTeamColor(data[base + 5]));
         tempColor.lerp(HOVER_FOOTPRINT_COLOR, hoverPresentation.innerColorMix);
         tempPos.set(x, y, z + footprint.inner.elevation);
         tempScale.set(footprint.inner.width * 0.5, footprint.inner.depth * 0.5, 1);
@@ -2059,19 +3604,26 @@ export default class TrainingThreeRenderPipeline {
     return pickTrainingWorldFlagId(this.worldFlagHitRects, x, y);
   }
 
-  updateDirectionMarkers(runtime, cameraState = {}) {
-    const anchors = resolveTrainingDirectionArcAnchors(runtime);
+  updateDirectionMarkers(runtime, cameraState = {}, snapshot = null) {
+    const mapConfig = runtime?.getTrainingMapConfig?.() || null;
+    const renderedSquadAnchors = resolveTrainingRenderedSquadAnchors(runtime, snapshot);
+    const anchors = resolveTrainingDirectionArcAnchors(runtime, renderedSquadAnchors).map((anchor) => ({
+      ...anchor,
+      groundElevation: resolveTrainingMapTerrainElevation(mapConfig, anchor)
+    }));
     const markerCount = anchors.length;
     this.ensureDirectionMarkerCapacity(markerCount);
-    const arcAnchors = anchors.map((anchor) => {
-      tempColor.copy(anchor.teamIndex < 0.5 ? TEAM_ATTACKER_COLOR : TEAM_DEFENDER_COLOR);
-      if (anchor.selected) tempColor.lerp(SELECTED_COLOR, 0.4);
-      if (anchor.hovered) tempColor.lerp(HOVER_COLOR, 0.72);
-      return {
-        ...anchor,
-        color: [tempColor.r, tempColor.g, tempColor.b]
-      };
-    });
+    const arcAnchors = anchors
+      .filter((anchor) => shouldRenderTrainingUnitGroundMarker(anchor.teamIndex))
+      .map((anchor) => {
+        tempColor.copy(resolveTrainingTeamColor(anchor.teamIndex));
+        if (anchor.selected) tempColor.lerp(SELECTED_COLOR, 0.4);
+        if (anchor.hovered) tempColor.lerp(HOVER_COLOR, 0.72);
+        return {
+          ...anchor,
+          color: [tempColor.r, tempColor.g, tempColor.b]
+        };
+      });
     updateTrainingDirectionArcGeometry(this.directionArcGeometry, arcAnchors);
     const flagLod = resolveTrainingFlagLod(cameraState?.pitchDeg);
     const viewportHeight = Math.max(
@@ -2113,7 +3665,7 @@ export default class TrainingThreeRenderPipeline {
     const flagCount = flagLayouts.length;
     flagLayouts.forEach((layout, index) => {
       const anchor = layout.anchor;
-      tempPos.set(layout.displayX, layout.displayY, -0.35);
+      tempPos.set(layout.displayX, layout.displayY, layout.groundElevation - 0.35);
       tempQuat.identity();
       tempScale.set(
         layout.worldFlagScale,
@@ -2148,7 +3700,7 @@ export default class TrainingThreeRenderPipeline {
       tempPos.set(
         layout.displayX,
         layout.displayY,
-        layout.stackedPoleHeight + (0.4 * layout.worldFlagScale)
+        layout.groundElevation + layout.stackedPoleHeight + (0.4 * layout.worldFlagScale)
       );
       tempQuat.identity();
       tempScale.setScalar(layout.isLeader ? 0.64 * layout.worldFlagScale : 0.001);
@@ -2156,7 +3708,7 @@ export default class TrainingThreeRenderPipeline {
       this.worldFlagFinialMesh.setMatrixAt(index, tempMatrix);
     });
 
-    this.directionArcMesh.visible = markerCount > 0;
+    this.directionArcMesh.visible = arcAnchors.length > 0;
     this.worldFlagPoleMesh.visible = flagCount > 0 && flagLod.worldFlag;
     this.worldFlagFinialMesh.visible = flagCount > 0 && flagLod.worldFlag;
     this.worldFlagPoleMesh.count = flagCount;
@@ -2251,7 +3803,9 @@ export default class TrainingThreeRenderPipeline {
       const radius = Math.max(0.8, Number(data[base + 3]) || 2.2);
       mesh.material = typeIndex >= 0.5
         ? this.projectileMaterials.shell
-        : (teamIndex < 0.5 ? this.projectileMaterials.attacker : this.projectileMaterials.defender);
+        : (teamIndex >= 1.5
+          ? this.projectileMaterials.neutral
+          : (teamIndex >= 0.5 ? this.projectileMaterials.defender : this.projectileMaterials.attacker));
       mesh.position.set(Number(data[base + 0]) || 0, Number(data[base + 1]) || 0, (Number(data[base + 2]) || 0) + radius);
       mesh.scale.setScalar(radius);
     }
@@ -2294,26 +3848,77 @@ export default class TrainingThreeRenderPipeline {
     }
   }
 
-  render({ cameraState, snapshot, runtime, skillConfirmState = null }) {
-    if (!cameraState || !snapshot) return;
+  render({
+    cameraState,
+    snapshot,
+    snapshotVersion = null,
+    dynamicSnapshotVersion = snapshotVersion,
+    runtime,
+    skillConfirmState = null,
+    debugEnabled = false
+  }) {
+    if (this.disposed || !cameraState || !snapshot) return;
+    const hasVersion = snapshotVersion !== null
+      && snapshotVersion !== undefined
+      && Number.isFinite(Number(snapshotVersion));
+    const snapshotChanged = !hasVersion || Number(snapshotVersion) !== this.lastSnapshotVersion;
+    const hasDynamicVersion = dynamicSnapshotVersion !== null
+      && dynamicSnapshotVersion !== undefined
+      && Number.isFinite(Number(dynamicSnapshotVersion));
+    const dynamicSnapshotChanged = !hasDynamicVersion
+      || Number(dynamicSnapshotVersion) !== this.lastDynamicSnapshotVersion;
+    const hasSkillInput = !!skillConfirmState?.squadId;
+
     this.updateCamera(cameraState);
-    this.updateGround(runtime);
-    this.updateBuildings(snapshot.buildings);
-    const skillVisualFocus = resolveTrainingSkillVisualFocus(runtime, skillConfirmState);
-    this.updateUnits(snapshot.units, snapshot.skillStates, skillVisualFocus, cameraState);
-    const skillPreview = resolveTrainingSkillPreview(runtime, skillConfirmState);
-    this.updateSkillPreview(runtime, skillConfirmState, skillPreview);
-    this.updateMeleeAlertRegions(runtime, skillConfirmState, skillPreview);
-    this.updateSkillMarkers(runtime, skillConfirmState);
-    this.updateDirectionMarkers(runtime, cameraState);
-    this.updateProjectiles(snapshot.projectiles);
-    this.updateEffects(snapshot.effects);
+    const groundNeedsRefresh = snapshotChanged
+      || !this.groundKey
+      || this.groundDebugEnabled !== debugEnabled;
+    if (groundNeedsRefresh) {
+      this.updateGround(runtime, { debugEnabled, refreshStaticStates: snapshotChanged });
+      this.groundDebugEnabled = debugEnabled;
+    }
+    this.updateDeployRegionHighlights(runtime);
+    if (snapshotChanged) {
+      this.updateBuildings(snapshot.buildings);
+    }
+    if (snapshotChanged || dynamicSnapshotChanged) {
+      this.updateProjectiles(snapshot.projectiles);
+      this.updateEffects(snapshot.effects);
+    }
+    const skillVisualFocus = hasSkillInput
+      ? resolveTrainingSkillVisualFocus(runtime, skillConfirmState)
+      : EMPTY_SKILL_VISUAL_FOCUS;
+    if (snapshotChanged || dynamicSnapshotChanged || hasSkillInput || this.hasSkillVisualFocus) {
+      this.updateUnits(snapshot.units, snapshot.skillStates, skillVisualFocus, cameraState);
+    }
+    this.hasSkillVisualFocus = skillVisualFocus.active;
+    if (snapshotChanged || hasSkillInput || this.hasActiveSkillOverlays) {
+      const skillPreview = resolveTrainingSkillPreview(runtime, skillConfirmState);
+      this.updateSkillPreview(runtime, skillConfirmState, skillPreview);
+      this.updateMeleeAlertRegions(runtime, skillConfirmState, skillPreview);
+      this.updateSkillMarkers(runtime, skillConfirmState);
+      this.hasActiveSkillOverlays = hasSkillInput || !!skillPreview?.active;
+    }
+    this.updateDirectionMarkers(runtime, cameraState, snapshot);
+    if (hasVersion) this.lastSnapshotVersion = Number(snapshotVersion);
+    if (hasDynamicVersion) this.lastDynamicSnapshotVersion = Number(dynamicSnapshotVersion);
     this.renderer.render(this.scene, this.camera);
+    return true;
   }
 
   dispose() {
+    if (this.disposed) return;
+    this.disposed = true;
     this.chibiUnitRenderer?.dispose?.();
-    disposeObject(this.scene);
+    const disposedResources = new Set();
+    disposeObject(this.scene, disposedResources);
+    disposeTrainingMaterialCollection(this.skillMarkerMaterials, disposedResources);
+    disposeTrainingMaterialCollection(this.projectileMaterials, disposedResources);
+    disposeTrainingMaterialCollection(this.effectMaterials, disposedResources);
+    this.worldFlagClothPool.forEach((entry) => {
+      disposeTrainingMaterialCollection([entry?.material], disposedResources);
+      disposeResource(entry?.texture, disposedResources);
+    });
     this.renderer.dispose();
     this.unitMesh = null;
     this.selectedRingMesh = null;
@@ -2322,18 +3927,20 @@ export default class TrainingThreeRenderPipeline {
     this.directionArcMesh = null;
     this.worldFlagPoleMesh = null;
     this.worldFlagFinialMesh = null;
-    this.worldFlagClothPool.forEach((entry) => {
-      entry.texture?.dispose?.();
-      entry.material?.dispose?.();
-    });
     this.worldFlagClothPool = [];
     this.worldFlagHitRects = [];
     this.skillPreviewTargetRingMesh = null;
     this.skillPreviewTargetDiscMesh = null;
     this.meleeAlertMesh = null;
     this.skillMarkerPool = [];
+    this.skillMarkerMaterials = {};
     this.buildingMesh = null;
     this.projectilePool = [];
     this.effectPool = [];
+    this.projectileMaterials = {};
+    this.effectMaterials = {};
+    this.mapStaticPlaceholderGroup = null;
+    this.groundKey = '';
+    this.groundDebugEnabled = null;
   }
 }

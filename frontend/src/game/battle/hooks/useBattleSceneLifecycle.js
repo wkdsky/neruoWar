@@ -6,6 +6,10 @@ import {
   CAMERA_DISTANCE_CLOSE_MIN,
   CAMERA_DISTANCE_MAX,
   CAMERA_DISTANCE_MIN,
+  TRAINING_PITCH_DISTANCE_MAX,
+  TRAINING_OVERVIEW_DISTANCE_EXTRA,
+  TRAINING_OVERVIEW_DISTANCE_MAX,
+  TRAINING_OVERVIEW_VIEW_PADDING,
   DEPLOY_DEFAULT_WORLD_YAW_DEG,
   DEPLOY_DEFAULT_YAW_DEG,
   TEAM_ATTACKER,
@@ -18,6 +22,7 @@ import {
   createDefaultTemplateFillPreview
 } from '../screens/battleSceneConstants';
 import { computeDeployOverviewDistance } from '../screens/battleSceneUtils';
+import { resolveTrainingOverviewDistance } from '../input/BattleInputController';
 
 export default function useBattleSceneLifecycle({
   open = false,
@@ -27,6 +32,7 @@ export default function useBattleSceneLifecycle({
   runtimeVersion = 0,
   runtimeInitRef,
   cameraRef,
+  glCanvasRef,
   resetClock,
   setLoopPaused,
   setPaused,
@@ -85,13 +91,27 @@ export default function useBattleSceneLifecycle({
     cameraRef.current.mirrorX = false;
     cameraRef.current.pitchLow = BATTLE_PITCH_LOW_DEG;
     cameraRef.current.pitchHigh = BATTLE_PITCH_HIGH_DEG;
-    const overviewDistance = computeDeployOverviewDistance(runtime.getField?.());
+    const field = runtime.getField?.();
+    const canvas = glCanvasRef?.current;
+    const overviewDistance = isTrainingMode
+      ? resolveTrainingOverviewDistance({
+        field,
+        viewport: {
+          width: Number(canvas?.width) || Number(canvas?.clientWidth) || 16,
+          height: Number(canvas?.height) || Number(canvas?.clientHeight) || 9
+        },
+        baseDistance: CAMERA_DISTANCE_MAX,
+        extraDistance: TRAINING_OVERVIEW_DISTANCE_EXTRA,
+        maxDistance: TRAINING_OVERVIEW_DISTANCE_MAX,
+        padding: TRAINING_OVERVIEW_VIEW_PADDING
+      })
+      : computeDeployOverviewDistance(field);
     if (typeof cameraRef.current.setDistanceWithDynamicPitch === 'function') {
       cameraRef.current.setDistanceWithDynamicPitch(
         overviewDistance,
         CAMERA_DISTANCE_CLOSE_MIN,
-        CAMERA_DISTANCE_MAX,
-        CAMERA_DISTANCE_MAX,
+        isTrainingMode ? TRAINING_PITCH_DISTANCE_MAX : CAMERA_DISTANCE_MAX,
+        isTrainingMode ? overviewDistance : CAMERA_DISTANCE_MAX,
         CAMERA_DISTANCE_MIN
       );
     } else {
@@ -130,6 +150,7 @@ export default function useBattleSceneLifecycle({
     runtimeVersion,
     runtimeInitRef,
     cameraRef,
+    glCanvasRef,
     resetClock,
     setLoopPaused,
     setPaused,

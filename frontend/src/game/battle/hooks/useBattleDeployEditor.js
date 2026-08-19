@@ -19,6 +19,7 @@ const EMPTY_TEMPLATE_FILL_STATS = Object.freeze({
   totalAtk: 0,
   totalDef: 0,
   cohesiveSpeed: 0,
+  attackRange: { min: 0, max: 0 },
   range: 0
 });
 
@@ -382,9 +383,8 @@ export default function useBattleDeployEditor({
       setDeployNotice(result?.reason || '取消放置失败');
       return { ok: false, reason: result?.reason || '取消放置失败' };
     }
-    runtime.setSelectedDeployGroup?.(group.id);
-    runtime.setFocusSquad?.(group.id);
-    setSelectedSquadId(group.id);
+    runtime.clearSelection?.();
+    setSelectedSquadId('');
     setDeployDraggingGroup({ groupId: '', team: TEAM_ATTACKER });
     setDeployActionAnchorMode('');
     syncCardsAndMinimap(runtime);

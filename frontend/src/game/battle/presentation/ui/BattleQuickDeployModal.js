@@ -1,5 +1,6 @@
 import React from 'react';
 import {
+  QUICK_DEPLOY_MAX_TEAM_COUNT,
   QUICK_DEPLOY_STANDARD_PRESETS,
   QUICK_DEPLOY_TEAM_SHORTCUTS,
   QUICK_DEPLOY_TOTAL_SHORTCUTS
@@ -100,11 +101,13 @@ const BattleQuickDeployModal = ({
             <div className="pve2-quick-form-block">
               <h5>我方</h5>
               <label>
-                <span>部队数</span>
+                <span>{`部队数（1–${QUICK_DEPLOY_MAX_TEAM_COUNT}）`}</span>
                 <div className="pve2-quick-input-wrap">
                   <input
-                    type="text"
+                    type="number"
                     inputMode="numeric"
+                    min="1"
+                    max={QUICK_DEPLOY_MAX_TEAM_COUNT}
                     value={quickDeployRandomForm?.attackerTeamCount || ''}
                     onChange={(event) => onChangeRandomForm?.('attackerTeamCount', event.target.value || '')}
                     placeholder="输入我方部队数"
@@ -152,11 +155,13 @@ const BattleQuickDeployModal = ({
             <div className="pve2-quick-form-block">
               <h5>敌方</h5>
               <label>
-                <span>部队数</span>
+                <span>{`部队数（1–${QUICK_DEPLOY_MAX_TEAM_COUNT}）`}</span>
                 <div className="pve2-quick-input-wrap">
                   <input
-                    type="text"
+                    type="number"
                     inputMode="numeric"
+                    min="1"
+                    max={QUICK_DEPLOY_MAX_TEAM_COUNT}
                     value={quickDeployRandomForm?.defenderTeamCount || ''}
                     onChange={(event) => onChangeRandomForm?.('defenderTeamCount', event.target.value || '')}
                     placeholder="输入敌方部队数"

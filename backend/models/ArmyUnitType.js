@@ -1,4 +1,5 @@
 const mongoose = require('mongoose');
+const { normalizeAttackRange } = require('../services/attackRangeService');
 
 const RpsTypeEnum = ['melee', 'ranged', 'support'];
 const RarityEnum = ['common', 'rare', 'epic', 'legend'];
@@ -41,6 +42,19 @@ const VisualPreviewSchema = new mongoose.Schema({
     primary: { type: String, default: '#5aa3ff' },
     secondary: { type: String, default: '#cfd8e3' },
     accent: { type: String, default: '#ffd166' }
+  }
+}, { _id: false });
+
+const AttackRangeSchema = new mongoose.Schema({
+  min: {
+    type: Number,
+    required: true,
+    min: 0
+  },
+  max: {
+    type: Number,
+    required: true,
+    min: 1
   }
 }, { _id: false });
 
@@ -93,10 +107,15 @@ const ArmyUnitTypeSchema = new mongoose.Schema({
     required: true,
     min: 0
   },
+  attackRange: {
+    type: AttackRangeSchema,
+    required: true,
+    default: () => ({})
+  },
   range: {
     type: Number,
-    required: true,
-    min: 1
+    min: 1,
+    default: 1
   },
   costKP: {
     type: Number,
@@ -193,6 +212,18 @@ ArmyUnitTypeSchema.pre('validate', function syncTierAndLevel(next) {
   const safeTier = Math.max(1, Math.floor(Number(this.tier) || Number(this.level) || 1));
   this.tier = safeTier;
   this.level = safeTier;
+  const attackRange = normalizeAttackRange({
+    roleTag: this.roleTag,
+    unitCategory: this.unitCategory,
+    rpsType: this.rpsType,
+    attackRange: this.attackRange,
+    range: this.range
+  });
+  this.attackRange = attackRange;
+  this.range = attackRange.max;
+  if (this.roleTag === '远程' && attackRange.min <= 1) {
+    this.invalidate('attackRange.min', '远程兵种攻击范围下限必须大于 1');
+  }
   next();
 });
 

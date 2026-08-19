@@ -1,7 +1,15 @@
 import createBattleInputController, { resolveTrainingOverviewDistance } from './BattleInputController';
 import CameraController from '../presentation/render/CameraController';
-import { CAMERA_ZOOM_STEP } from '../screens/battleSceneConstants';
+import {
+  CAMERA_ZOOM_STEP,
+  CAMERA_DISTANCE_MIN,
+  CAMERA_DISTANCE_MAX,
+  TRAINING_CAMERA_ZOOM_STEP,
+  TRAINING_PITCH_DISTANCE_MAX,
+  TRAINING_OVERVIEW_DISTANCE_MAX
+} from '../screens/battleSceneConstants';
 import { resolveTrainingDirectionArcLayout } from '../shared/trainingDirectionArc';
+import { createSkillPaintArea } from '../shared/skillPaintArea';
 import {
   resolveTrainingDirectionArcAnchors,
   resolveTrainingWorldFlagHitRects
@@ -62,6 +70,7 @@ const createFixture = ({
     deployYawDragRef: { current: null },
     deployRectDragRef: { current: null },
     deployDirectionArcDragRef: { current: null },
+    skillPaintDragRef: { current: null },
     spacePressedRef: { current: false }
   };
   const controller = createBattleInputController({
@@ -77,6 +86,7 @@ const createFixture = ({
     deployYawDragRef: refs.deployYawDragRef,
     deployRectDragRef: refs.deployRectDragRef,
     deployDirectionArcDragRef: refs.deployDirectionArcDragRef,
+    skillPaintDragRef: refs.skillPaintDragRef,
     spacePressedRef: refs.spacePressedRef,
     constants: {
       BATTLE_UI_MODE_NONE: 'none',
@@ -117,7 +127,118 @@ test('uses a finer production wheel zoom increment', () => {
   expect(CAMERA_ZOOM_STEP).toBe(36);
 });
 
+test('uses a faster training wheel zoom increment', () => {
+  expect(TRAINING_CAMERA_ZOOM_STEP).toBe(50);
+  expect(TRAINING_CAMERA_ZOOM_STEP).toBeGreaterThan(CAMERA_ZOOM_STEP);
+});
+
+test('starts the training pitch transition before both legacy and prior thresholds', () => {
+  expect(TRAINING_PITCH_DISTANCE_MAX).toBe(2000);
+  expect(TRAINING_PITCH_DISTANCE_MAX).toBeGreaterThan(CAMERA_DISTANCE_MAX);
+});
+
 describe('BattleInputController primary-button panning', () => {
+  test('rolls back an active training skill paint before cancelling skill confirmation', () => {
+    let skillConfirmState = {
+      squadId: 'caster',
+      targetMode: 'ground',
+      center: { x: 0, y: 0 },
+      maxRange: 180,
+      hoverPoint: { x: 0, y: 0 },
+      paintArea: createSkillPaintArea({ casterModelCount: 20, aoeRadius: 40, maxRange: 180 }),
+      resumeOnConfirm: true
+    };
+    const setSkillConfirmState = jest.fn((next) => {
+      skillConfirmState = typeof next === 'function' ? next(skillConfirmState) : next;
+    });
+    const closeSkillConfirm = jest.fn();
+    const squad = { id: 'caster', x: 0, y: 0, remain: 20 };
+    const { controller } = createFixture({
+      getters: {
+        getSelectedSquadId: () => 'caster',
+        getBattleUiMode: () => 'skill-confirm',
+        getSkillConfirmState: () => skillConfirmState,
+        isTrainingMode: () => true
+      },
+      runtimeOverrides: {
+        getSquadById: jest.fn(() => squad),
+        callbacks: { setSkillConfirmState, closeSkillConfirm }
+      }
+    });
+    const cleanup = controller.bindWindow();
+
+    controller.onMouseDown(sceneMouseDown({ clientX: 0, clientY: 0 }));
+    window.dispatchEvent(new MouseEvent('mousemove', {
+      bubbles: true,
+      buttons: 1,
+      clientX: 70,
+      clientY: 0
+    }));
+
+    expect(skillConfirmState.paintArea.stamps.length).toBeGreaterThan(0);
+    controller.onMouseDown(sceneMouseDown({ button: 2, clientX: 70, clientY: 0 }));
+    expect(skillConfirmState.paintArea.stamps).toEqual([]);
+    expect(closeSkillConfirm).not.toHaveBeenCalled();
+
+    controller.onMouseDown(sceneMouseDown({ button: 2, clientX: 70, clientY: 0 }));
+    expect(closeSkillConfirm).toHaveBeenCalledWith(true);
+    cleanup();
+  });
+
+  test('commits a complete paint blob when a training ground skill is clicked', () => {
+    let skillConfirmState = {
+      squadId: 'caster',
+      slotIndex: 0,
+      skillId: 'ranged_fixed_volley',
+      treeCategory: 'ranged',
+      sourceCategory: 'ranged',
+      kind: 'archer',
+      targetMode: 'ground',
+      profile: { targetMode: 'ground', castStyle: 'ranged' },
+      center: { x: 0, y: 0 },
+      maxRange: 180,
+      hoverPoint: { x: 0, y: 0 },
+      paintArea: createSkillPaintArea({ casterModelCount: 9, aoeRadius: 40, maxRange: 180 }),
+      resumeOnConfirm: true
+    };
+    const setSkillConfirmState = jest.fn((next) => {
+      skillConfirmState = typeof next === 'function' ? next(skillConfirmState) : next;
+    });
+    const commandSkillSlot = jest.fn(() => ({ ok: true }));
+    const closeSkillConfirm = jest.fn();
+    const squad = { id: 'caster', x: 0, y: 0, remain: 20 };
+    const { controller } = createFixture({
+      getters: {
+        getSelectedSquadId: () => 'caster',
+        getBattleUiMode: () => 'skill-confirm',
+        getSkillConfirmState: () => skillConfirmState,
+        isTrainingMode: () => true
+      },
+      runtimeOverrides: {
+        getSquadById: jest.fn(() => squad),
+        commandSkillSlot,
+        callbacks: { setSkillConfirmState, closeSkillConfirm }
+      }
+    });
+    const cleanup = controller.bindWindow();
+
+    controller.onMouseDown(sceneMouseDown({ clientX: 80, clientY: 0 }));
+    window.dispatchEvent(new MouseEvent('mouseup', {
+      bubbles: true,
+      button: 0,
+      clientX: 80,
+      clientY: 0
+    }));
+
+    expect(commandSkillSlot).toHaveBeenCalledWith('caster', 0, expect.objectContaining({
+      paintArea: expect.objectContaining({
+        stamps: [expect.objectContaining({ x: 80, y: 0 })]
+      })
+    }));
+    expect(closeSkillConfirm).toHaveBeenCalledWith(true);
+    cleanup();
+  });
+
   test('uses the current rendered flag polygon before the input-side fallback', () => {
     const pickTrainingWorldFlagIdAtScreen = jest.fn(function pickTrainingWorldFlagIdAtScreen() {
       return this.flagId;
@@ -329,6 +450,20 @@ describe('BattleInputController primary-button panning', () => {
     expect(portrait).toBeGreaterThan(landscape);
   });
 
+  test('caps the scaled training overview at a two-road view', () => {
+    const distance = resolveTrainingOverviewDistance({
+      field: { width: 7200, height: 5008 },
+      viewport: { width: 1600, height: 900 },
+      baseDistance: 980,
+      extraDistance: 1200,
+      maxDistance: TRAINING_OVERVIEW_DISTANCE_MAX,
+      padding: 1.08
+    });
+
+    expect(TRAINING_OVERVIEW_DISTANCE_MAX).toBe(2560);
+    expect(distance).toBe(TRAINING_OVERVIEW_DISTANCE_MAX);
+  });
+
   test('passes the extended overview band to the training wheel zoom', () => {
     const setDistanceWithDynamicPitch = jest.fn();
     const camera = {
@@ -351,13 +486,44 @@ describe('BattleInputController primary-button panning', () => {
     });
 
     expect(setDistanceWithDynamicPitch).toHaveBeenCalledWith(
-      1_004,
+      1_030,
       360,
-      980,
+      TRAINING_PITCH_DISTANCE_MAX,
       expect.any(Number),
       360
     );
     expect(setDistanceWithDynamicPitch.mock.calls[0][3]).toBeGreaterThan(980);
+  });
+
+  test('does not zoom the training camera beyond its 15-degree boundary', () => {
+    const camera = new CameraController({ pitchLow: 15, pitchHigh: 90, distance: CAMERA_DISTANCE_MIN });
+    camera.setDistanceWithDynamicPitch(
+      CAMERA_DISTANCE_MIN,
+      CAMERA_DISTANCE_MIN,
+      TRAINING_PITCH_DISTANCE_MAX,
+      3_200,
+      CAMERA_DISTANCE_MIN
+    );
+    const { controller } = createFixture({
+      camera,
+      getters: { isTrainingMode: () => true },
+      constants: {
+        CAMERA_DISTANCE_CLOSE_MIN: 200,
+        CAMERA_DISTANCE_MIN,
+        CAMERA_DISTANCE_MAX,
+        TRAINING_CAMERA_ZOOM_STEP,
+        TRAINING_PITCH_DISTANCE_MAX
+      }
+    });
+
+    controller.onWheel({
+      deltaY: -1,
+      preventDefault: jest.fn(),
+      target: { closest: () => null }
+    });
+
+    expect(camera.distance).toBe(CAMERA_DISTANCE_MIN);
+    expect(camera.currentPitch).toBe(15);
   });
 
   test('extends battle wheel zoom below the pitch anchor', () => {
@@ -894,6 +1060,30 @@ describe('BattleInputController training placement', () => {
     expect(runtime.setDeployGroupPlaced).toHaveBeenCalledWith('attacker', 'attacker-pending', true);
     expect(resolveDeployPlacementTeam).not.toHaveBeenCalled();
     expect(switchDeployGroupTeamForTraining).not.toHaveBeenCalled();
+  });
+
+  test('cancels a pending training placement when the click misses its highland', () => {
+    const recallDeployDraggingGroup = jest.fn(() => ({ ok: true }));
+    const { controller, runtime } = createFixture({
+      phase: 'deploy',
+      getters: {
+        getDeployDraggingGroupId: () => 'attacker-pending',
+        getDeployDraggingTeam: () => 'attacker',
+        isTrainingMode: () => true
+      },
+      runtimeOverrides: {
+        isTrainingMapHighlandSpawnEnabled: jest.fn(() => true),
+        getTrainingMapSpawnMetadata: jest.fn(() => ({ spawnRegionId: '' })),
+        canDeployGroupFitAt: jest.fn(),
+        callbacks: { recallDeployDraggingGroup }
+      }
+    });
+
+    controller.handleMapCommand(sceneMouseDown({ clientX: 860, clientY: 120 }));
+
+    expect(runtime.getTrainingMapSpawnMetadata).toHaveBeenCalledWith({ x: 860, y: 120 }, 'attacker');
+    expect(recallDeployDraggingGroup).toHaveBeenCalledWith('attacker-pending', 'attacker');
+    expect(runtime.canDeployGroupFitAt).not.toHaveBeenCalled();
   });
 });
 

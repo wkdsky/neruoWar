@@ -2,6 +2,9 @@ import {
   clamp,
   normalizeVec,
   buildSpatialHash,
+  buildObstacleSpatialIndex,
+  estimateLocalFlowWidth,
+  queryObstacleCandidates,
   querySpatialNearby,
   pushOutOfRect,
   raycastObstacles
@@ -15,10 +18,34 @@ import {
 import { applyDamageToAgent, updateCrowdCombat } from './crowdCombat';
 import { syncMeleeEngagement } from './engagement';
 import itemInteractionSystem from '../items/ItemInteractionSystem';
+import {
+  filterBlockingObstacles,
+  filterVisionBlockingObstacles
+} from '../items/itemObstacleUtils';
+import { updateTrainingObjectives } from '../objectives/TrainingObjectiveSystem';
+import { updateTrainingNeutralCamps } from '../objectives/TrainingNeutralCampSystem';
+import { resolveTrainingMapLegalPosition } from '../navigation/TrainingMapNavigator';
 import { snapTrainingDirectionOffset } from '../../shared/trainingDirectionArc';
+import {
+  isPointInsideSkillPaintArea,
+  normalizeSkillPaintArea
+} from '../../shared/skillPaintArea';
+import { isRangedSquad, resolveSquadAttackRange } from './attackRange';
+import {
+  isTrainingMapAiTargetDeferred,
+  recordTrainingMapAiEvent,
+  selectTrainingMapAiObjective,
+  selectTrainingMapAiTarget,
+  syncTrainingMapAiState
+} from '../TrainingMapAi';
+import {
+  TEAM_ATTACKER,
+  TEAM_DEFENDER,
+  TEAM_NEUTRAL,
+  isHostileTeam,
+  resolveDefaultHostileTeam
+} from './teamRelations';
 
-const TEAM_ATTACKER = 'attacker';
-const TEAM_DEFENDER = 'defender';
 const SKILL_CATEGORY_MELEE = 'melee';
 const SKILL_CATEGORY_RANGED = 'ranged';
 const SKILL_CATEGORY_SUPPORT = 'support';
@@ -64,6 +91,37 @@ const AGENT_REFORM_ACCEL = 260;
 const AGENT_RETREAT_ACCEL = 280;
 const AGENT_AVOID_PROBE = 10;
 const FLAG_BACK_OFFSET = 0.72;
+
+const resolveCrowdObstacleSignature = (obstacles = []) => (
+  (Array.isArray(obstacles) ? obstacles : []).map((obstacle, index) => [
+    String(obstacle?.id || obstacle?.objectId || index),
+    obstacle?.destroyed ? 1 : 0,
+    obstacle?.blocksMovement === false ? 0 : 1,
+    Number(obstacle?.x) || 0,
+    Number(obstacle?.y) || 0,
+    Number(obstacle?.width) || 0,
+    Number(obstacle?.depth) || 0,
+    Number(obstacle?.rotation) || 0,
+    Number(obstacle?.colliderRevision) || 0,
+    String(obstacle?.collider?.kind || ''),
+    Array.isArray(obstacle?.collider?.parts) ? obstacle.collider.parts.length : 0,
+    Array.isArray(obstacle?.collider?.polygon?.points) ? obstacle.collider.polygon.points.length : 0
+  ].join(':')).join('|')
+);
+
+const resolveCrowdBlockingWalls = (crowd, obstacles = []) => {
+  const signature = resolveCrowdObstacleSignature(obstacles);
+  if (crowd?._blockingWalls && crowd._blockingWallsSignature === signature) {
+    return crowd._blockingWalls;
+  }
+  const walls = filterBlockingObstacles(obstacles);
+  walls._obstacleSpatialIndex = buildObstacleSpatialIndex(walls);
+  if (crowd && typeof crowd === 'object') {
+    crowd._blockingWalls = walls;
+    crowd._blockingWallsSignature = signature;
+  }
+  return walls;
+};
 const FORMATION_SPACING_SCALE = Object.freeze({
   [FORMATION_SPACING_LOOSE]: 1.28,
   [FORMATION_SPACING_STANDARD]: 1,
@@ -73,13 +131,21 @@ const FORMATION_STRUCTURAL_GAP_MULTIPLIER = 1.5;
 const LEADER_MAX_TURN_RATE = Math.PI * 1.9;
 const LEADER_MAX_ACCEL = 120;
 const LEADER_MAX_DECEL = 170;
+const REFERENCE_LEADER_SPEED_MULTIPLIER = 18;
 const LEADER_ARRIVAL_RADIUS = 5.4;
 const LEADER_SLOW_RADIUS = 38;
 const LEADER_WAYPOINT_SLOW_RADIUS = 18;
 const LEADER_WAYPOINT_MIN_SPEED_RATIO = 0.72;
 const LEADER_FINAL_MIN_SPEED_RATIO = 0.08;
 const OBSTACLE_AVOID_PROBE = 20;
+const NAVIGATION_STUCK_TIMEOUT_SEC = 0.72;
+const NAVIGATION_MIN_PROGRESS = 0.18;
+const NAVIGATION_MIN_MOVEMENT = 0.2;
+const NAVIGATION_MAX_FAILURES_BEFORE_WAIT = 3;
+const DEFAULT_AI_NAVIGATION_PLANS_PER_STEP = 1;
+const DEFAULT_AI_DECISIONS_PER_STEP = 1;
 const AVOID_SIDE_LOCK_SEC = 0.32;
+const NARROW_PASSAGE_SCAN_INTERVAL_SEC = 0.24;
 const AVOID_KEY_GRID = 6;
 const AGENT_SETTLE_RADIUS = 2.4;
 const AGENT_SETTLE_DEADZONE = 1.08;
@@ -126,6 +192,12 @@ const SKILL_COOLDOWN_BY_CLASS = {
   archer: 8.6,
   artillery: 13.5
 };
+const AI_SKILL_TARGET_RANGE = Object.freeze({
+  infantry: 82,
+  cavalry: 155,
+  archer: 148,
+  artillery: 182
+});
 const DEFAULT_STEERING_WEIGHTS = {
   slot: 1,
   separation: 1,
@@ -135,6 +207,225 @@ const DEFAULT_STEERING_WEIGHTS = {
   leaderAvoidance: 1,
   turnHz: 8.2,
   maxTurnRate: LEADER_MAX_TURN_RATE
+};
+
+export const resolveTrainingMapMovementScale = (sim = {}) => {
+  const configuredMultiplier = Number(sim?.trainingMap?.movementCalibration?.leaderSpeedMultiplier);
+  if (!Number.isFinite(configuredMultiplier) || configuredMultiplier <= 0) return 1;
+  return Math.min(3, Math.max(0.5, configuredMultiplier / REFERENCE_LEADER_SPEED_MULTIPLIER));
+};
+
+const resolveTrainingNavigationAgentRadius = (squad = {}, sim = {}) => {
+  const configuredRadius = Number(sim?.trainingMap?.navigation?.agentRadius);
+  const requestedRadius = Number(squad?.navigationAgentRadius);
+  if (Number.isFinite(requestedRadius) && requestedRadius > 0) return clamp(requestedRadius, 1, 8);
+  if (Number.isFinite(configuredRadius) && configuredRadius > 0) return clamp(configuredRadius, 1, 8);
+  return Math.max(4, Number(squad?.radius) || 10);
+};
+
+const resolveTrainingNavigationPathClearance = (sim = {}) => {
+  const navigation = sim?.trainingMap?.navigation || {};
+  const configuredClearance = Number(navigation?.pathClearance);
+  if (Number.isFinite(configuredClearance)) return clamp(configuredClearance, 0, 48);
+  return clamp(Number(navigation?.wallClearance) || 18, 0, 48);
+};
+
+const resolveTrainingNavigationPlanBudget = (sim = {}) => clamp(
+  Math.floor(Number(sim?.trainingMap?.navigation?.aiNavigationPlansPerStep) || DEFAULT_AI_NAVIGATION_PLANS_PER_STEP),
+  1,
+  8
+);
+
+const resolveTrainingAiNavigationSearchNodes = (squad = {}, sim = {}) => {
+  if (squad?.behavior !== 'auto' && squad?.controlMode !== 'AI') return 0;
+  const configured = Math.floor(Number(sim?.trainingMap?.navigation?.aiNavigationSearchNodes));
+  if (Number.isFinite(configured) && configured > 0) return clamp(configured, 1, 256);
+  const fieldWidth = Number(sim?.field?.width) || 0;
+  const fieldHeight = Number(sim?.field?.height) || 0;
+  return fieldWidth >= 4000 && fieldHeight >= 3000 ? 4 : 0;
+};
+
+const consumeTrainingNavigationPlanBudget = (sim = {}) => {
+  const budget = sim?._trainingNavigationBudget;
+  if (!budget || !Number.isFinite(Number(budget.remaining))) return true;
+  if (budget.remaining <= 0) return false;
+  budget.remaining -= 1;
+  return true;
+};
+
+const resolveTrainingAiDecisionBudget = (sim = {}) => clamp(
+  Math.floor(Number(sim?.trainingMap?.navigation?.aiDecisionsPerStep) || DEFAULT_AI_DECISIONS_PER_STEP),
+  1,
+  12
+);
+
+const canRefreshTrainingAiDecision = (squad = null, sim = null, nowSec = 0) => {
+  const cache = squad?._trainingAiTargetCache;
+  if (cache && (Number(cache?.nextAt) || 0) > nowSec) return true;
+  const budget = sim?._trainingAiDecisionBudget;
+  if (!budget || !Number.isFinite(Number(budget.remaining))) return true;
+  if (budget.remaining <= 0) return false;
+  budget.remaining -= 1;
+  return true;
+};
+
+export const resolveTrainingNarrowPassageColumns = ({
+  position = {},
+  forward = {},
+  obstacles = [],
+  baseColumns = 1,
+  spacing = (AGENT_RADIUS * 2) + AGENT_GAP,
+  agentRadius = AGENT_RADIUS,
+  navigation = {}
+} = {}) => {
+  const safeBaseColumns = Math.max(1, Math.floor(Number(baseColumns) || 1));
+  const direction = normalizeVec(Number(forward?.x) || 0, Number(forward?.y) || 0);
+  if (safeBaseColumns <= 1 || direction.len <= 0.0001) {
+    return { active: false, columns: safeBaseColumns, width: Infinity, distance: 0 };
+  }
+  const config = navigation?.narrowPassage && typeof navigation.narrowPassage === 'object'
+    ? navigation.narrowPassage
+    : {};
+  const probeDistance = clamp(Number(config?.probeDistance) || 48, 12, 120);
+  const probeStep = clamp(Number(config?.probeStep) || 2, 1, 8);
+  const entryDistance = clamp(Number(config?.entryDistance) || 38, 0, 96);
+  const scanStep = Math.max(14, probeStep * 6);
+  const passageSpacing = Math.max(AGENT_RADIUS * 2, Number(spacing) || (AGENT_RADIUS * 2) + AGENT_GAP);
+  const inflate = Math.max(0.5, Number(agentRadius) || AGENT_RADIUS) + 0.4;
+  let narrowestWidth = Infinity;
+  let narrowestDistance = 0;
+
+  for (let distanceAhead = 0; distanceAhead <= entryDistance; distanceAhead += scanStep) {
+    const probeOrigin = {
+      x: (Number(position?.x) || 0) + (direction.x * distanceAhead),
+      y: (Number(position?.y) || 0) + (direction.y * distanceAhead)
+    };
+    const width = estimateLocalFlowWidth(probeOrigin, direction, obstacles, {
+      step: probeStep,
+      maxProbe: probeDistance,
+      inflate
+    });
+    if (width < narrowestWidth) {
+      narrowestWidth = width;
+      narrowestDistance = distanceAhead;
+    }
+  }
+
+  const safeWidth = Number.isFinite(narrowestWidth) ? narrowestWidth : probeDistance * 2;
+  const columns = clamp(
+    Math.floor((safeWidth + (passageSpacing * 0.12)) / passageSpacing) + 1,
+    1,
+    safeBaseColumns
+  );
+  return {
+    active: columns < safeBaseColumns,
+    columns,
+    width: safeWidth,
+    distance: narrowestDistance
+  };
+};
+
+const resolveTrainingNarrowPassageState = ({
+  squad = null,
+  sim = null,
+  walls = [],
+  forward = {},
+  baseColumns = 1,
+  spacing = (AGENT_RADIUS * 2) + AGENT_GAP,
+  nowSec = 0
+} = {}) => {
+  if (!squad) return { active: false, columns: Math.max(1, baseColumns), width: Infinity, distance: 0 };
+  const navigation = sim?.trainingMap?.navigation || {};
+  if (!navigation?.narrowPassage || typeof navigation.narrowPassage !== 'object') {
+    squad._narrowPassage = {
+      active: false,
+      columns: Math.max(1, Math.floor(Number(baseColumns) || 1)),
+      width: Infinity,
+      distance: 0,
+      until: 0,
+      sampledAt: nowSec
+    };
+    return squad._narrowPassage;
+  }
+  const previous = squad?._narrowPassage;
+  if (
+    previous
+    && Number.isFinite(Number(previous?.sampledAt))
+    && nowSec >= Number(previous.sampledAt)
+    && (nowSec - Number(previous.sampledAt)) < NARROW_PASSAGE_SCAN_INTERVAL_SEC
+  ) {
+    return previous;
+  }
+  const probeRadius = Math.max(
+    8,
+    (Number(navigation?.narrowPassage?.probeDistance) || 48)
+      + (Number(navigation?.narrowPassage?.entryDistance) || 38)
+      + resolveTrainingNavigationAgentRadius(squad, sim)
+  );
+  const nearbyWalls = queryObstacleCandidates(
+    walls,
+    Number(squad?.x) || 0,
+    Number(squad?.y) || 0,
+    probeRadius
+  );
+  if (nearbyWalls.length <= 0) {
+    if (previous?.active && (Number(previous?.until) || 0) > nowSec) {
+      return { ...previous, active: true, sampledAt: nowSec };
+    }
+    squad._narrowPassage = {
+      active: false,
+      columns: Math.max(1, Math.floor(Number(baseColumns) || 1)),
+      width: Infinity,
+      distance: 0,
+      until: 0,
+      sampledAt: nowSec
+    };
+    return squad._narrowPassage;
+  }
+  const passage = resolveTrainingNarrowPassageColumns({
+    position: squad,
+    forward,
+    obstacles: nearbyWalls,
+    baseColumns,
+    spacing,
+    agentRadius: resolveTrainingNavigationAgentRadius(squad, sim),
+    navigation
+  });
+  const releaseSeconds = clamp(Number(navigation?.narrowPassage?.releaseSeconds) || 3.2, 0.5, 12);
+  if (passage.active) {
+    const state = {
+      ...passage,
+      active: true,
+      until: nowSec + releaseSeconds,
+      sampledAt: nowSec
+    };
+    squad._narrowPassage = state;
+    return state;
+  }
+  if (previous?.active && (Number(previous?.until) || 0) > nowSec) {
+    return { ...previous, active: true, sampledAt: nowSec };
+  }
+  squad._narrowPassage = { ...passage, active: false, until: 0, sampledAt: nowSec };
+  return squad._narrowPassage;
+};
+
+const resolveNarrowPassageFormationSlot = ({
+  index = 0,
+  standardSlot = {},
+  passage = null,
+  spacing = (AGENT_RADIUS * 2) + AGENT_GAP,
+  spacingScale = 1
+} = {}) => {
+  if (!passage?.active) return standardSlot;
+  const columns = Math.max(1, Math.floor(Number(passage?.columns) || 1));
+  const safeIndex = Math.max(0, Math.floor(Number(index) || 0));
+  const column = safeIndex % columns;
+  const row = Math.floor(safeIndex / columns);
+  const sideSpacing = Math.max(AGENT_RADIUS * 2, Number(spacing) || 1) * spacingScale;
+  return {
+    side: (column - ((columns - 1) * 0.5)) * sideSpacing,
+    front: -row * sideSpacing * 0.92
+  };
 };
 
 const sumUnitsMap = (map = {}) => Object.values(map || {}).reduce((sum, c) => sum + Math.max(0, Number(c) || 0), 0);
@@ -160,11 +451,42 @@ const resolveVisibleAgentCount = (remain = 0, maxAgentWeight = DEFAULT_MAX_AGENT
   return Math.max(byWeight, Math.min(MAX_AGENTS_PER_SQUAD, 150 + Math.floor((n - 3000) / 120)));
 };
 
-const resolveRepConfig = (sim, crowd) => ({
-  maxAgentWeight: Math.max(1, Number(crowd?.repConfig?.maxAgentWeight ?? sim?.repConfig?.maxAgentWeight) || DEFAULT_MAX_AGENT_WEIGHT),
-  damageExponent: Math.max(0.2, Math.min(1.25, Number(crowd?.repConfig?.damageExponent ?? sim?.repConfig?.damageExponent) || DEFAULT_DAMAGE_EXPONENT)),
-  strictAgentMapping: (crowd?.repConfig?.strictAgentMapping ?? sim?.repConfig?.strictAgentMapping) !== false
-});
+const resolveRepConfig = (sim, crowd) => {
+  const source = crowd?.repConfig && typeof crowd.repConfig === 'object'
+    ? crowd.repConfig
+    : (sim?.repConfig && typeof sim.repConfig === 'object' ? sim.repConfig : {});
+  const maxAgentWeight = Math.max(1, Number(source.maxAgentWeight) || DEFAULT_MAX_AGENT_WEIGHT);
+  return {
+    maxAgentWeight,
+    maxTotalAgents: Math.max(0, Math.floor(Number(source.maxTotalAgents) || 0)),
+    requestedMaxAgentWeight: Math.max(
+      1,
+      Number(source.requestedMaxAgentWeight) || maxAgentWeight
+    ),
+    effectiveMaxAgentWeight: Math.max(
+      1,
+      Number(source.effectiveMaxAgentWeight) || maxAgentWeight
+    ),
+    estimatedAgentCount: Math.max(0, Math.floor(Number(source.estimatedAgentCount) || 0)),
+    damageExponent: Math.max(0.2, Math.min(1.25, Number(source.damageExponent) || DEFAULT_DAMAGE_EXPONENT)),
+    strictAgentMapping: source.strictAgentMapping !== false
+  };
+};
+
+const resolveSquadRepConfig = (squad, crowd) => {
+  const repConfig = resolveRepConfig(null, crowd);
+  const representativeAgentWeightCap = Number(squad?.representativeAgentWeightCap);
+  if (!Number.isFinite(representativeAgentWeightCap) || representativeAgentWeightCap <= 0) {
+    return repConfig;
+  }
+  return {
+    ...repConfig,
+    maxAgentWeight: Math.min(
+      repConfig.maxAgentWeight,
+      Math.max(1, representativeAgentWeightCap)
+    )
+  };
+};
 
 const hamiltonAllocate = (countsByType = {}, budget = 0) => {
   const entries = Object.entries(countsByType || {}).filter(([id, c]) => !!id && c > 0);
@@ -205,7 +527,7 @@ const inferCategoryFromUnitType = (unitType = {}, fallbackClass = 'infantry') =>
   const name = typeof unitType?.name === 'string' ? unitType.name : '';
   const roleTag = unitType?.roleTag === '远程' || unitType?.roleTag === '近战' ? unitType.roleTag : '';
   const speed = Number(unitType?.speed) || 0;
-  const range = Number(unitType?.range) || 0;
+  const range = Number(unitType?.attackRange?.max ?? unitType?.attackRangeMax ?? unitType?.range) || 0;
   if (/(炮|投石|火炮|炮兵|臼炮|加农)/.test(name)) return 'artillery';
   if (/(弓|弩|弓兵|弩兵|射手)/.test(name)) return 'archer';
   if (roleTag === '远程' && range >= 3) return 'archer';
@@ -545,15 +867,6 @@ const resolveAgentSpeedMul = (unitType = {}, category = 'infantry') => {
   return 1;
 };
 
-const resolveAttackRange = (squad = {}) => {
-  const avgRange = Math.max(1, Number(squad?.stats?.range) || 1);
-  if (squad.classTag === 'artillery') return 126;
-  if (squad.classTag === 'archer') return 88;
-  if (squad.classTag === 'cavalry') return Math.max(7.4, avgRange * 16);
-  if (avgRange >= 2.2) return Math.max(64, avgRange * 28);
-  return 6.2;
-};
-
 const ensureSquadActionState = (squad) => {
   if (!squad || typeof squad !== 'object') return { kind: 'none', ttl: 0, dur: 0, from: 'none', to: 'none' };
   if (!squad.actionState || typeof squad.actionState !== 'object') {
@@ -704,7 +1017,11 @@ const moveMeleeChargeAgent = (agent, destination, squad, sim, walls, dt) => {
   }
   const speed = Math.max(
     10,
-    (Number(squad?.stats?.speed) || 1) * 20 * clamp(Number(agent?.moveSpeedMul) || 1, 0.6, 1.8) * 1.38
+    (Number(squad?.stats?.speed) || 1)
+      * 20
+      * resolveTrainingMapMovementScale(sim)
+      * clamp(Number(agent?.moveSpeedMul) || 1, 0.6, 1.8)
+      * 1.38
   );
   const step = Math.min(toTarget.len, speed * Math.max(0.001, Number(dt) || 0));
   const previousX = Number(agent.x) || 0;
@@ -1048,11 +1365,10 @@ const pointInsideMeleeAlertRect = (point = {}, rect = {}) => {
 };
 
 const pickEnemyInsideMeleeAlert = (squad = {}, sim = null, rect = {}, origin = squad) => {
-  const enemyTeam = squad?.team === TEAM_ATTACKER ? TEAM_DEFENDER : TEAM_ATTACKER;
   let best = null;
   let bestDistance = Infinity;
   (Array.isArray(sim?.squads) ? sim.squads : []).forEach((candidate) => {
-    if (!candidate || candidate.team !== enemyTeam || (Number(candidate.remain) || 0) <= 0) return;
+    if (!candidate || !isHostileTeam(squad?.team, candidate?.team) || (Number(candidate.remain) || 0) <= 0) return;
     if (isEnemyHiddenForViewer(candidate, squad?.team)) return;
     const candidateRadius = Math.max(0, Number(candidate?.radius) || 0);
     const expandedRect = candidateRadius > 0
@@ -1081,6 +1397,25 @@ const samplePointInCircle = (center, radius) => {
 };
 
 const samplePointInTargetArea = (targetSpec = {}) => {
+  const paintStamps = Array.isArray(targetSpec?.stamps) ? targetSpec.stamps : [];
+  if (paintStamps.length > 0) {
+    const totalWeight = paintStamps.reduce((sum, stamp) => (
+      sum + (Math.max(0, Number(stamp?.radius) || 0) ** 2)
+    ), 0);
+    if (totalWeight > 1e-5) {
+      let selectedStamp = paintStamps[paintStamps.length - 1];
+      let selection = Math.random() * totalWeight;
+      for (let stampIndex = 0; stampIndex < paintStamps.length; stampIndex += 1) {
+        const stamp = paintStamps[stampIndex];
+        selection -= Math.max(0, Number(stamp?.radius) || 0) ** 2;
+        if (selection <= 0) {
+          selectedStamp = stamp;
+          break;
+        }
+      }
+      return samplePointInCircle(selectedStamp, Math.max(0, Number(selectedStamp?.radius) || 0));
+    }
+  }
   const center = {
     x: Number(targetSpec?.x) || 0,
     y: Number(targetSpec?.y) || 0
@@ -1140,7 +1475,24 @@ const normalizeGroundSkillTargetSpec = (sim, squad, classTag, targetInput = {}) 
     x: sourceX + (vec.x * range),
     y: sourceY + (vec.y * range)
   };
-  const walls = Array.isArray(sim?.buildings) ? sim.buildings.filter((wall) => !wall?.destroyed) : [];
+  const walls = filterVisionBlockingObstacles(sim?.buildings || []);
+  const paintArea = normalizeSkillPaintArea({
+    paintArea: targetInput?.paintArea,
+    origin: { x: sourceX, y: sourceY },
+    maxRange
+  });
+  if (paintArea) {
+    return {
+      kind: 'ground_paint',
+      x: paintArea.center.x,
+      y: paintArea.center.y,
+      radius: Math.max(1, paintArea.maxStampRadius),
+      maxRange,
+      stamps: paintArea.stamps,
+      clipPolygon: [],
+      blockedByWall: false
+    };
+  }
   const uiHasClipPolygon = Array.isArray(targetInput?.clipPolygon) && targetInput.clipPolygon.length >= 3;
   const clippedCenter = uiHasClipPolygon
     ? {
@@ -1201,6 +1553,13 @@ const emitGroundSkillWave = (sim, crowd, squad, activeSkill, waveIndex = 0) => {
   const classTag = activeSkill?.classTag === 'artillery' ? 'artillery' : 'archer';
   const config = activeSkill.config || GROUND_SKILL_CONFIG[classTag];
   const targetSpec = activeSkill.targetSpec || {};
+  const explicitTarget = (Array.isArray(sim?.squads) ? sim.squads : []).find((candidate) => (
+    String(candidate?.id || '') === String(activeSkill?.targetSquadId || '')
+    && isHostileTeam(squad?.team, candidate?.team)
+  )) || null;
+  const targetTeam = isHostileTeam(squad?.team, activeSkill?.targetTeam)
+    ? activeSkill.targetTeam
+    : (explicitTarget?.team || resolveDefaultHostileTeam(squad?.team));
   const casterIds = new Set(Array.isArray(activeSkill?.casterAgentIds) ? activeSkill.casterAgentIds : []);
   const rankedShooters = [...agents]
     .filter((agent) => !agent.dead && (casterIds.size <= 0 || casterIds.has(agent.id)))
@@ -1226,7 +1585,6 @@ const emitGroundSkillWave = (sim, crowd, squad, activeSkill, waveIndex = 0) => {
       Math.max(floorByShooters, scaledShotBudget)
     )
   );
-  const enemyTeam = squad.team === TEAM_ATTACKER ? TEAM_DEFENDER : TEAM_ATTACKER;
   let fired = 0;
   for (let shotIndex = 0; shotIndex < totalShots; shotIndex += 1) {
     const shooter = shooters[shotIndex % shooters.length];
@@ -1240,7 +1598,8 @@ const emitGroundSkillWave = (sim, crowd, squad, activeSkill, waveIndex = 0) => {
       Number(config?.speedHint) || 220
     );
     const repConfig = resolveRepConfig(sim, crowd);
-    const weightMul = Math.max(1, Math.pow(Math.max(1, Number(shooter.weight) || 1), repConfig.damageExponent));
+    const weightMul = Math.max(1, Math.pow(Math.max(1, Number(shooter.weight) || 1), repConfig.damageExponent))
+      * Math.max(0.05, Number(shooter.combatScale) || 1);
     const damageBase = Math.max(0.22, (Number(squad.stats?.atk) || 10) * (classTag === 'artillery' ? 0.11 : 0.065));
     const damage = damageBase
       * weightMul
@@ -1265,11 +1624,12 @@ const emitGroundSkillWave = (sim, crowd, squad, activeSkill, waveIndex = 0) => {
       blastFalloff: Math.max(0, Number(config?.blastFalloff) || 0),
       wallDamageMul: Math.max(0.1, Number(config?.wallDamageMul) || 1),
       ttl: Math.max(0.2, (Number(ballistic.flightSec) || 0.8) + (classTag === 'artillery' ? 0.35 : 0.2)),
-      targetTeam: enemyTeam,
+      targetTeam,
       targetCenterX: Number(targetSpec?.x) || 0,
       targetCenterY: Number(targetSpec?.y) || 0,
       targetRadius: Math.max(0, Number(targetSpec?.radius) || 0),
-      targetShape: 'ground_aoe',
+      targetStamps: targetSpec?.kind === 'ground_paint' ? targetSpec.stamps : [],
+      targetShape: targetSpec?.kind === 'ground_paint' ? 'ground_paint' : 'ground_aoe',
       blockedByWall: !!targetSpec?.blockedByWall,
       skillId: activeSkill.id,
       skillClass: classTag,
@@ -1326,11 +1686,10 @@ const isEnemyHiddenForViewer = (enemySquad = {}, viewerTeam = TEAM_ATTACKER) => 
 };
 
 const pickNearestEnemySquad = (squad, squads = []) => {
-  const enemyTeam = squad?.team === TEAM_ATTACKER ? TEAM_DEFENDER : TEAM_ATTACKER;
   let best = null;
   let bestDist = Infinity;
   squads.forEach((row) => {
-    if (!row || row.team !== enemyTeam || row.remain <= 0) return;
+    if (!row || !isHostileTeam(squad?.team, row?.team) || row.remain <= 0) return;
     if (isEnemyHiddenForViewer(row, squad?.team)) return;
     const dist = Math.hypot((row.x || 0) - (squad.x || 0), (row.y || 0) - (squad.y || 0));
     if (dist < bestDist) {
@@ -1341,7 +1700,380 @@ const pickNearestEnemySquad = (squad, squads = []) => {
   return best;
 };
 
-const updateSquadBehaviorPlan = (squad, sim, nowSec = 0) => {
+const selectTrainingMapEnemyTarget = (squad = null, sim = null, nowSec = 0) => {
+  if (!canRefreshTrainingAiDecision(squad, sim, nowSec)) {
+    squad._trainingAiDecisionDeferred = true;
+    const cachedSelection = squad?._trainingAiTargetCache?.selection;
+    if (cachedSelection?.target && cachedSelection.target.remain > 0) {
+      squad._trainingAiSelection = cachedSelection;
+      return cachedSelection.target;
+    }
+    return null;
+  }
+  squad._trainingAiDecisionDeferred = false;
+  const selection = selectTrainingMapAiTarget(squad, sim, {
+    candidates: sim?.squads,
+    nowSec
+  });
+  if (selection) {
+    if (squad._trainingAiSelection !== selection) {
+      squad.debugTargetScore = {
+        targetId: selection.targetId,
+        score: selection.score,
+        distance: selection.distance,
+        sameLane: selection.sameLane,
+        targetLaneId: selection.targetLaneId,
+        threat: selection.threat,
+        healthRatio: selection.healthRatio,
+        inAttackRange: selection.inAttackRange,
+        attackingAlly: selection.attackingAlly,
+        protectedArea: selection.protectedArea,
+        directLineBlocked: selection.directLineBlocked,
+        terms: selection.terms
+      };
+    }
+    squad._trainingAiSelection = selection;
+    return selection.target;
+  }
+  if (squad) squad._trainingAiSelection = null;
+  if (squad?._trainingAiDecisionDeferred) return null;
+  const fallbackCache = squad?._trainingNearestEnemyCache;
+  if (fallbackCache && (Number(fallbackCache.nextAt) || 0) > nowSec) {
+    const cachedTarget = (Array.isArray(sim?.squads) ? sim.squads : []).find((row) => (
+      String(row?.id || '') === String(fallbackCache.targetId || '')
+      && row.remain > 0
+    ));
+    return cachedTarget || null;
+  }
+  let best = null;
+  let bestDist = Infinity;
+  (Array.isArray(sim?.squads) ? sim.squads : []).forEach((row) => {
+    if (!row || !isHostileTeam(squad?.team, row?.team) || row.remain <= 0) return;
+    if (isEnemyHiddenForViewer(row, squad?.team)) return;
+    if (isTrainingMapAiTargetDeferred(squad, row.id, nowSec)) return;
+    const dist = Math.hypot((row.x || 0) - (squad.x || 0), (row.y || 0) - (squad.y || 0));
+    if (dist < bestDist) {
+      bestDist = dist;
+      best = row;
+    }
+  });
+  if (squad) {
+    squad._trainingNearestEnemyCache = {
+      targetId: String(best?.id || ''),
+      nextAt: nowSec + 0.18
+    };
+  }
+  return best;
+};
+
+const recordTrainingTargetNavigationPlan = ({
+  squad = null,
+  targetId = '',
+  planned = null,
+  sim = null,
+  nowSec = 0
+} = {}) => {
+  if (!squad) return null;
+  const safeTargetId = String(targetId || '');
+  const previous = squad?._trainingTargetNavigation;
+  const previousTargets = previous?.targets && typeof previous.targets === 'object'
+    ? previous.targets
+    : {};
+  const previousTargetState = previousTargets[safeTargetId]
+    || (String(previous?.targetId || '') === safeTargetId ? previous : null);
+  const retryCooldown = Math.max(
+    0.1,
+    Number(sim?.trainingNavigator?.getPathFailureReplanCooldownSeconds?.()) || 0.35
+  );
+  const failureLimit = clamp(
+    Math.floor(Number(sim?.trainingMap?.navigation?.aiTargetUnreachableFailureLimit) || NAVIGATION_MAX_FAILURES_BEFORE_WAIT),
+    1,
+    8
+  );
+  const unreachableCooldown = clamp(
+    Number(sim?.trainingMap?.navigation?.aiTargetUnreachableCooldownSeconds) || Math.max(1, retryCooldown * 4),
+    retryCooldown,
+    20
+  );
+  const failureCount = planned?.ok
+    ? 0
+    : Math.min(12, (Number(previousTargetState?.failureCount) || 0) + 1);
+  const blockedUntil = !planned?.ok && failureCount >= failureLimit
+    ? nowSec + unreachableCooldown
+    : 0;
+  const targetState = {
+    failureCount,
+    retryAt: planned?.ok ? 0 : nowSec + retryCooldown,
+    blockedUntil
+  };
+  const targetStates = { ...previousTargets, [safeTargetId]: targetState };
+  const state = {
+    targetId: safeTargetId,
+    ...targetState,
+    targets: targetStates
+  };
+  squad._trainingTargetNavigation = state;
+  if (!planned?.ok) {
+    if (squad._trainingAiTargetCache?.targetId === safeTargetId) {
+      squad._trainingAiTargetCache.nextAt = 0;
+    }
+    recordTrainingMapAiEvent({
+      squad,
+      sim,
+      nowSec,
+      reason: blockedUntil > nowSec ? 'target-path-deferred' : 'target-path-retry',
+      targetId: safeTargetId
+    });
+  }
+  return state;
+};
+
+const resolveTrainingAutoAdvanceGoal = (squad = null, sim = null) => {
+  if (!squad || !sim) return null;
+  if (squad.team === TEAM_NEUTRAL) return null;
+  const objectiveSelection = selectTrainingMapAiObjective(squad, sim);
+  if (objectiveSelection) {
+    squad.debugTargetScore = {
+      targetId: objectiveSelection.targetId,
+      score: objectiveSelection.score,
+      distance: objectiveSelection.distance,
+      sameLane: objectiveSelection.sameLane,
+      targetLaneId: objectiveSelection.targetLaneId,
+      threat: objectiveSelection.threat,
+      healthRatio: objectiveSelection.healthRatio,
+      inAttackRange: objectiveSelection.inAttackRange,
+      protectedArea: objectiveSelection.protectedArea,
+      directLineBlocked: objectiveSelection.directLineBlocked,
+      terms: objectiveSelection.terms
+    };
+    return {
+      id: objectiveSelection.targetId,
+      x: objectiveSelection.x,
+      y: objectiveSelection.y
+    };
+  }
+  const halfWidth = Math.max(1, Number(sim?.field?.width) || 2700) * 0.5;
+  const configuredAgentRadius = Number(sim?.trainingMap?.navigation?.agentRadius);
+  const clearance = Number.isFinite(configuredAgentRadius) && configuredAgentRadius > 0
+    ? Math.max(6, resolveTrainingNavigationAgentRadius(squad, sim) + resolveTrainingNavigationPathClearance(sim))
+    : Math.max(6, Number(squad?.radius) || 10);
+  const targetX = squad.team === TEAM_DEFENDER
+    ? (-halfWidth + clearance)
+    : (halfWidth - clearance);
+  return {
+    id: `field-edge:${squad.team}`,
+    x: targetX,
+    y: Number(squad.y) || 0
+  };
+};
+
+const planTrainingNavigationTarget = (squad = null, sim = null, target = {}, walls = []) => {
+  if (!squad) return { ok: false, destination: null };
+  const source = { x: Number(squad.x) || 0, y: Number(squad.y) || 0 };
+  const requestedTarget = { x: Number(target?.x) || 0, y: Number(target?.y) || 0 };
+  const navigator = sim?.trainingNavigator;
+  const radius = resolveTrainingNavigationAgentRadius(squad, sim);
+  const rawDestination = navigator?.isWalkable && navigator?.resolveLegalPosition
+    ? (navigator.isWalkable(requestedTarget, { obstacles: walls, radius })
+      ? requestedTarget
+      : navigator.resolveLegalPosition(source, requestedTarget, { obstacles: walls, radius }))
+    : requestedTarget;
+  const navigationClearance = resolveTrainingNavigationPathClearance(sim);
+  const destination = navigator?.findNearestWalkablePoint
+    ? navigator.findNearestWalkablePoint(rawDestination, {
+      obstacles: walls,
+      radius: radius + navigationClearance
+    })
+    : rawDestination;
+  if (!navigator?.planRoute) {
+    squad.waypoints = [destination];
+    syncTrainingNavigationOrderPath(squad);
+    return { ok: true, destination };
+  }
+  if (!consumeTrainingNavigationPlanBudget(sim)) {
+    return { ok: false, deferred: true, destination };
+  }
+  const route = navigator.planRoute(source, destination, {
+    obstacles: walls,
+    radius,
+    maxSearchNodes: resolveTrainingAiNavigationSearchNodes(squad, sim)
+  });
+  if (!doesTrainingRouteReachTarget(route, destination)) {
+    return { ok: false, destination };
+  }
+  applyTrainingNavigationRoute(squad, route);
+  return { ok: true, destination };
+};
+
+const routeDistanceFrom = (source = {}, route = []) => {
+  let previous = { x: Number(source?.x) || 0, y: Number(source?.y) || 0 };
+  return (Array.isArray(route) ? route : []).reduce((total, point) => {
+    const current = { x: Number(point?.x) || 0, y: Number(point?.y) || 0 };
+    const segment = Math.hypot(current.x - previous.x, current.y - previous.y);
+    previous = current;
+    return total + segment;
+  }, 0);
+};
+
+const resolveTrainingRangedApproachPlan = ({
+  squad = null,
+  sim = null,
+  target = null,
+  desiredDistance = 0,
+  walls = []
+} = {}) => {
+  if (!squad || !target) return { ok: false, destination: null, route: [] };
+  const source = { x: Number(squad?.x) || 0, y: Number(squad?.y) || 0 };
+  const targetPoint = { x: Number(target?.x) || 0, y: Number(target?.y) || 0 };
+  const navigator = sim?.trainingNavigator;
+  const radius = resolveTrainingNavigationAgentRadius(squad, sim);
+  const clearance = resolveTrainingNavigationPathClearance(sim);
+  const targetRadius = Math.max(0, Number(target?.radius) || 0);
+  const attackRange = resolveSquadAttackRange(squad);
+  const preferredDistance = Math.max(attackRange.min + targetRadius, Number(desiredDistance) || 0);
+  const maximumDistance = Math.max(preferredDistance, attackRange.max + targetRadius);
+  const distances = Array.from(new Set([
+    preferredDistance,
+    Math.min(maximumDistance, Math.max(preferredDistance, attackRange.max * 0.86)),
+    maximumDistance
+  ].map((value) => Math.max(4, Number(value) || 4))));
+  const sourceAngle = Math.atan2(source.y - targetPoint.y, source.x - targetPoint.x);
+  const angleOffsets = [0, Math.PI / 6, -Math.PI / 6, Math.PI / 3, -Math.PI / 3, Math.PI / 2, -Math.PI / 2, Math.PI];
+  const visionWalls = filterVisionBlockingObstacles(sim?.buildings || []);
+  let best = null;
+
+  distances.forEach((distanceValue) => {
+    angleOffsets.forEach((offset, offsetIndex) => {
+      const requested = {
+        x: targetPoint.x + (Math.cos(sourceAngle + offset) * distanceValue),
+        y: targetPoint.y + (Math.sin(sourceAngle + offset) * distanceValue)
+      };
+      const rawDestination = navigator?.isWalkable && navigator?.resolveLegalPosition
+        ? (navigator.isWalkable(requested, { obstacles: walls, radius })
+          ? requested
+          : navigator.resolveLegalPosition(source, requested, { obstacles: walls, radius }))
+        : requested;
+      const destination = navigator?.findNearestWalkablePoint
+        ? navigator.findNearestWalkablePoint(rawDestination, {
+          obstacles: walls,
+          radius: radius + clearance
+        })
+        : rawDestination;
+      if (raycastObstacles(destination, targetPoint, visionWalls, Math.max(0.8, radius * 0.12))) return;
+      const route = navigator?.planRoute
+        ? (consumeTrainingNavigationPlanBudget(sim)
+          ? navigator.planRoute(source, destination, {
+            obstacles: walls,
+            radius,
+            maxSearchNodes: resolveTrainingAiNavigationSearchNodes(squad, sim)
+          })
+          : null)
+        : [destination];
+      if (!route) {
+        best = best || { deferred: true, destination: null, route: [], score: Infinity };
+        return;
+      }
+      if (!doesTrainingRouteReachTarget(route, destination)) return;
+      const distanceError = Math.abs(Math.hypot(destination.x - targetPoint.x, destination.y - targetPoint.y) - preferredDistance);
+      const score = routeDistanceFrom(source, route) + (distanceError * 1.5) + (offsetIndex * 0.01);
+      if (!best || score < best.score) {
+        best = { destination, route, score };
+      }
+    });
+  });
+
+  if (!best || best.deferred) return { ok: false, deferred: !!best?.deferred, destination: null, route: [] };
+  applyTrainingNavigationRoute(squad, best.route);
+  return { ok: true, destination: best.destination, route: best.route };
+};
+
+const planTrainingAttackNavigationTarget = ({
+  squad = null,
+  sim = null,
+  target = null,
+  desiredDistance = 0,
+  ranged = false,
+  walls = []
+} = {}) => {
+  if (!squad || !target) return { ok: false, destination: null, route: [] };
+  if (ranged) {
+    return resolveTrainingRangedApproachPlan({
+      squad,
+      sim,
+      target,
+      desiredDistance,
+      walls
+    });
+  }
+  const direction = normalizeVec(
+    (Number(target?.x) || 0) - (Number(squad?.x) || 0),
+    (Number(target?.y) || 0) - (Number(squad?.y) || 0)
+  );
+  return planTrainingNavigationTarget(squad, sim, {
+    x: (Number(target?.x) || 0) - (direction.x * Math.max(0, Number(desiredDistance) || 0)),
+    y: (Number(target?.y) || 0) - (direction.y * Math.max(0, Number(desiredDistance) || 0))
+  }, walls);
+};
+
+const updateTrainingAutoAdvancePlan = (squad = null, sim = null, walls = [], nowSec = 0) => {
+  if (!squad || squad.behavior !== 'auto') return false;
+  const enemyTarget = selectTrainingMapEnemyTarget(squad, sim, nowSec);
+  if (squad._trainingAiDecisionDeferred) {
+    squad.action = 'AI思考';
+    return true;
+  }
+  if (enemyTarget) {
+    const hadAutomaticGoal = !!squad.autoNavigation;
+    squad.autoNavigation = null;
+    if (hadAutomaticGoal) {
+      squad.waypoints = [];
+      syncTrainingNavigationOrderPath(squad);
+    }
+    return false;
+  }
+  if (squad.targetSquadId) {
+    squad.targetSquadId = '';
+    squad.waypoints = [];
+    syncTrainingNavigationOrderPath(squad);
+  }
+  const goal = resolveTrainingAutoAdvanceGoal(squad, sim);
+  if (!goal) return false;
+  const state = squad?.autoNavigation && typeof squad.autoNavigation === 'object'
+    ? squad.autoNavigation
+    : null;
+  if (
+    state?.goalId === goal.id
+    && state?.destination
+    && Array.isArray(squad.waypoints)
+    && squad.waypoints.length <= 0
+    && Math.hypot(
+      (Number(state.destination.x) || 0) - (Number(squad.x) || 0),
+      (Number(state.destination.y) || 0) - (Number(squad.y) || 0)
+    ) <= LEADER_ARRIVAL_RADIUS
+  ) {
+    squad.action = '自动待命';
+    return true;
+  }
+  if (Array.isArray(squad.waypoints) && squad.waypoints.length > 0) {
+    squad.action = '自动推进';
+    return true;
+  }
+  if (state?.goalId === goal.id && (Number(state.retryAt) || 0) > nowSec) {
+    squad.action = '路径等待';
+    return true;
+  }
+  const planned = planTrainingNavigationTarget(squad, sim, goal, walls);
+  squad.autoNavigation = {
+    goalId: goal.id,
+    destination: planned.destination,
+    retryAt: planned.ok ? 0 : nowSec + (planned.deferred ? 0.08 : resolveTrainingNavigationReplanCooldown(sim)),
+    deferred: !!planned.deferred
+  };
+  squad.action = planned.ok ? '自动推进' : (planned.deferred ? '路径排队' : '路径等待');
+  return true;
+};
+
+const updateSquadBehaviorPlan = (squad, sim, nowSec = 0, walls = []) => {
   if (!squad || squad.remain <= 0) return;
   const actionState = ensureSquadActionState(squad);
   if (actionState.kind === 'stagger' && (Number(actionState.ttl) || 0) > 0) {
@@ -1358,6 +2090,7 @@ const updateSquadBehaviorPlan = (squad, sim, nowSec = 0) => {
     squad.action = '换阵中';
     return;
   }
+  if (updateTrainingAutoAdvancePlan(squad, sim, walls, nowSec)) return;
   const orderType = resolveSquadOrderType(squad);
   const chargeCommitted = orderType === ORDER_CHARGE && (Number(squad?.order?.commitUntil) || 0) > nowSec;
   if (orderType === ORDER_MOVE) {
@@ -1386,7 +2119,7 @@ const updateSquadBehaviorPlan = (squad, sim, nowSec = 0) => {
   const fieldWidth = Number(sim?.field?.width) || 2700;
   const halfW = fieldWidth / 2;
   const hasWaypoint = squad.waypoints.length > 0;
-  const nearestEnemy = pickNearestEnemySquad(squad, sim?.squads || []);
+  let nearestEnemy = null;
 
   if (squad.behavior === 'retreat') {
     squad.action = '撤退';
@@ -1421,10 +2154,7 @@ const updateSquadBehaviorPlan = (squad, sim, nowSec = 0) => {
       ? Math.hypot((Number(guardEnemy.x) || 0) - gcx, (Number(guardEnemy.y) || 0) - gcy)
       : Infinity;
     const toCenter = Math.hypot((Number(squad.x) || 0) - gcx, (Number(squad.y) || 0) - gcy);
-    const isRangedGuard = squad.classTag === 'archer'
-      || squad.classTag === 'artillery'
-      || squad.roleTag === '远程'
-      || (Number(squad?.stats?.range) || 0) >= 2.2;
+    const isRangedGuard = isRangedSquad(squad);
 
     if (guardEnemy && enemyDist <= guardRadius) {
       guard.activeTargetId = guardEnemy.id;
@@ -1435,6 +2165,24 @@ const updateSquadBehaviorPlan = (squad, sim, nowSec = 0) => {
     }
 
     if (isRangedGuard) {
+      const patrolTarget = guard?.patrolTarget && typeof guard.patrolTarget === 'object'
+        ? guard.patrolTarget
+        : null;
+      if (!guard.activeTargetId && patrolTarget) {
+        const patrolDistance = Math.hypot(
+          (Number(patrolTarget.x) || 0) - (Number(squad.x) || 0),
+          (Number(patrolTarget.y) || 0) - (Number(squad.y) || 0)
+        );
+        if (patrolDistance > Math.max(LEADER_ARRIVAL_RADIUS, Number(squad?.radius) * 0.42)) {
+          squad.targetSquadId = '';
+          if (!Array.isArray(squad.waypoints) || squad.waypoints.length <= 0) {
+            squad.waypoints = [{ x: Number(patrolTarget.x) || 0, y: Number(patrolTarget.y) || 0 }];
+          }
+          squad.action = '巡逻';
+          return;
+        }
+        guard.patrolTarget = null;
+      }
       squad.targetSquadId = guardEnemy && enemyDist <= guardRadius ? guardEnemy.id : '';
       if (toCenter > returnRadius) {
         squad.waypoints = [{ x: gcx, y: gcy }];
@@ -1464,6 +2212,25 @@ const updateSquadBehaviorPlan = (squad, sim, nowSec = 0) => {
         }
       }
       guard.activeTargetId = '';
+    }
+
+    const patrolTarget = guard?.patrolTarget && typeof guard.patrolTarget === 'object'
+      ? guard.patrolTarget
+      : null;
+    if (patrolTarget) {
+      const patrolDistance = Math.hypot(
+        (Number(patrolTarget.x) || 0) - (Number(squad.x) || 0),
+        (Number(patrolTarget.y) || 0) - (Number(squad.y) || 0)
+      );
+      if (patrolDistance > Math.max(LEADER_ARRIVAL_RADIUS, Number(squad?.radius) * 0.42)) {
+        squad.targetSquadId = '';
+        if (!Array.isArray(squad.waypoints) || squad.waypoints.length <= 0) {
+          squad.waypoints = [{ x: Number(patrolTarget.x) || 0, y: Number(patrolTarget.y) || 0 }];
+        }
+        squad.action = '巡逻';
+        return;
+      }
+      guard.patrolTarget = null;
     }
 
     squad.targetSquadId = '';
@@ -1498,6 +2265,12 @@ const updateSquadBehaviorPlan = (squad, sim, nowSec = 0) => {
     return;
   }
 
+  nearestEnemy = selectTrainingMapEnemyTarget(squad, sim, nowSec);
+  if (squad._trainingAiDecisionDeferred) {
+    squad.action = 'AI思考';
+    return;
+  }
+
   if (!nearestEnemy) {
     if (!hasWaypoint) {
       squad.action = squad.behavior === 'defend' ? '防御' : (orderType === ORDER_ATTACK_MOVE ? '攻击前进' : '待命');
@@ -1505,34 +2278,69 @@ const updateSquadBehaviorPlan = (squad, sim, nowSec = 0) => {
     return;
   }
 
-  const isRanged = squad.classTag === 'archer'
-    || squad.classTag === 'artillery'
-    || squad.roleTag === '远程'
-    || (Number(squad?.stats?.range) || 0) >= 2.2;
-  const attackRange = resolveAttackRange(squad);
-  const dx = (nearestEnemy.x || 0) - (squad.x || 0);
-  const dy = (nearestEnemy.y || 0) - (squad.y || 0);
-  const dist = Math.hypot(dx, dy) || 1;
-  const dirX = dx / dist;
-  const dirY = dy / dist;
-  const desired = isRanged ? attackRange * 0.95 : Math.max(attackRange * 0.82, (AGENT_RADIUS * 2) + 0.5);
+  const isRanged = isRangedSquad(squad);
+  const attackRange = resolveSquadAttackRange(squad);
+  const dist = Math.hypot(
+    (nearestEnemy.x || 0) - (squad.x || 0),
+    (nearestEnemy.y || 0) - (squad.y || 0)
+  ) || 1;
+  const desired = isRanged
+    ? attackRange.min + ((attackRange.max - attackRange.min) * 0.72)
+    : Math.max(attackRange.max * 0.82, (AGENT_RADIUS * 2) + 0.5);
   const engageThreshold = desired * (squad.behavior === 'defend' ? 1.05 : (isRanged ? 1.1 : 1.22));
 
   if (dist > engageThreshold && !hasWaypoint) {
-    let nextX = (nearestEnemy.x || 0) - (dirX * desired);
-    let nextY = (nearestEnemy.y || 0) - (dirY * desired);
-    if (squad.team === TEAM_DEFENDER) {
-      nextX = Math.max(nextX, -fieldWidth * 0.12);
-    } else {
-      nextX = Math.min(nextX, fieldWidth * 0.12);
+    const planned = planTrainingAttackNavigationTarget({
+      squad,
+      sim,
+      target: nearestEnemy,
+      desiredDistance: desired,
+      ranged: isRanged,
+      walls
+    });
+    if (planned?.deferred) {
+      squad.targetSquadId = nearestEnemy.id;
+      squad.action = '路径排队';
+      return;
     }
-    squad.waypoints = [{ x: nextX, y: nextY }];
-    squad.action = orderType === ORDER_ATTACK_MOVE ? '攻击前进' : '移动';
-  } else if (isRanged && dist < desired * 0.72 && !hasWaypoint) {
-    const backX = (squad.x || 0) - (dirX * 26);
-    const backY = (squad.y || 0) - (dirY * 26);
-    squad.waypoints = [{ x: backX, y: backY }];
-    squad.action = orderType === ORDER_ATTACK_MOVE ? '攻击前进' : '移动';
+    const navigationState = recordTrainingTargetNavigationPlan({
+      squad,
+      targetId: nearestEnemy.id,
+      planned,
+      sim,
+      nowSec
+    });
+    if (navigationState?.blockedUntil > nowSec) squad._trainingAiSelection = null;
+    squad.targetSquadId = navigationState?.blockedUntil > nowSec ? '' : nearestEnemy.id;
+    squad.action = planned.ok
+      ? (orderType === ORDER_ATTACK_MOVE ? '攻击前进' : '移动')
+      : '路径等待';
+  } else if (isRanged && dist < Math.max(attackRange.min + 6, desired * 0.72) && !hasWaypoint) {
+    const planned = planTrainingAttackNavigationTarget({
+      squad,
+      sim,
+      target: nearestEnemy,
+      desiredDistance: Math.max(attackRange.min + 6, desired * 0.72),
+      ranged: true,
+      walls
+    });
+    if (planned?.deferred) {
+      squad.targetSquadId = nearestEnemy.id;
+      squad.action = '路径排队';
+      return;
+    }
+    const navigationState = recordTrainingTargetNavigationPlan({
+      squad,
+      targetId: nearestEnemy.id,
+      planned,
+      sim,
+      nowSec
+    });
+    if (navigationState?.blockedUntil > nowSec) squad._trainingAiSelection = null;
+    squad.targetSquadId = navigationState?.blockedUntil > nowSec ? '' : nearestEnemy.id;
+    squad.action = planned.ok
+      ? (orderType === ORDER_ATTACK_MOVE ? '攻击前进' : '移动')
+      : '路径等待';
   } else if (!hasWaypoint) {
     squad.action = squad.behavior === 'defend' ? '防御' : (orderType === ORDER_ATTACK_MOVE ? '攻击前进' : '普通攻击');
   }
@@ -1553,6 +2361,7 @@ const createAgent = ({
   formationSlot = null,
   formationSpacingSlots = null,
   moveSpeedMul = 1,
+  combatScale = 1,
   isFlagBearer = false
 }) => ({
   id,
@@ -1571,6 +2380,7 @@ const createAgent = ({
   weight: Math.max(0.2, Number(weight) || 1),
   initialWeight: Math.max(0.2, Number(weight) || 1),
   hpWeight: Math.max(0.2, Number(weight) || 1),
+  combatScale: clamp(Number(combatScale) || 1, 0.05, 32),
   state: 'idle',
   attackCd: 0,
   targetAgentId: '',
@@ -1591,30 +2401,56 @@ const createAgent = ({
 });
 
 const ensureFlagBearer = (squad, agents = []) => {
-  const alive = (Array.isArray(agents) ? agents : []).filter((agent) => agent && !agent.dead && (agent.weight || 0) > 0.001);
-  if (alive.length <= 0) {
+  const rows = Array.isArray(agents) ? agents : [];
+  let flagBearer = null;
+  const preferredId = String(squad?.flagBearerAgentId || '');
+  for (let index = 0; index < rows.length; index += 1) {
+    const agent = rows[index];
+    if (!agent || agent.dead || (agent.weight || 0) <= 0.001) continue;
+    if (preferredId && agent.id === preferredId) {
+      flagBearer = agent;
+      break;
+    }
+    if (!flagBearer || (Number(agent.slotOrder) || 0) < (Number(flagBearer.slotOrder) || 0)) {
+      flagBearer = agent;
+    }
+  }
+  if (!flagBearer) {
     if (squad) squad.flagBearerAgentId = '';
     return null;
   }
-  let flagBearer = alive.find((agent) => agent.id === squad?.flagBearerAgentId) || null;
-  if (!flagBearer) {
-    flagBearer = alive.reduce((best, agent) => {
-      if (!best) return agent;
-      return (agent.slotOrder < best.slotOrder) ? agent : best;
-    }, null);
-  }
-  alive.forEach((agent) => {
+  for (let index = 0; index < rows.length; index += 1) {
+    const agent = rows[index];
+    if (!agent || agent.dead || (agent.weight || 0) <= 0.001) continue;
     agent.isFlagBearer = !!flagBearer && agent.id === flagBearer.id;
-  });
+  }
   if (squad) squad.flagBearerAgentId = flagBearer?.id || '';
   return flagBearer;
+};
+
+const holdAgentsWhileAiPlanPending = (agents = [], dt = 0) => {
+  (Array.isArray(agents) ? agents : []).forEach((agent) => {
+    if (!agent || agent.dead) return;
+    stepAgentCast(agent, dt);
+    clearAvoidanceMemory(agent);
+    agent.vx = 0;
+    agent.vy = 0;
+    agent.hitTimer = Math.max(0, (Number(agent.hitTimer) || 0) - dt);
+    agent.state = agent.attackCd > 0 ? 'attack' : 'idle';
+  });
 };
 
 const createAgentsForSquad = (squad, crowd) => {
   const unitMap = crowd.unitTypeMap || new Map();
   const countsByType = normalizeUnitsMap(squad?.units || {});
   const remain = Math.max(1, Math.floor(Number(squad?.remain) || sumUnitsMap(countsByType) || 1));
-  const repConfig = resolveRepConfig(null, crowd);
+  const repConfig = resolveSquadRepConfig(squad, crowd);
+  const requestedMaxAgentWeight = Math.max(
+    1,
+    Number(repConfig.requestedMaxAgentWeight) || repConfig.maxAgentWeight
+  );
+  const normalizeCombatPower = requestedMaxAgentWeight !== repConfig.maxAgentWeight;
+  const damageExponent = Math.max(0.2, Number(repConfig.damageExponent) || DEFAULT_DAMAGE_EXPONENT);
   const minRequiredByType = Object.fromEntries(
     Object.entries(countsByType).map(([unitTypeId, count]) => [
       unitTypeId,
@@ -1664,6 +2500,19 @@ const createAgentsForSquad = (squad, crowd) => {
       Math.max(0.2, (countsByType[unitTypeId] || 1) / safeCount),
       repConfig.maxAgentWeight
     );
+    const baselineAgentCount = Math.max(
+      1,
+      Math.ceil((countsByType[unitTypeId] || 1) / requestedMaxAgentWeight)
+    );
+    const baselineAgentWeight = Math.max(
+      0.2,
+      (countsByType[unitTypeId] || 1) / baselineAgentCount
+    );
+    const baselinePower = baselineAgentCount * Math.pow(baselineAgentWeight, damageExponent);
+    const currentPower = safeCount * Math.pow(perAgentWeight, damageExponent);
+    const combatScale = normalizeCombatPower
+      ? baselinePower / Math.max(0.001, currentPower)
+      : 1;
     const unitType = unitMap.get(unitTypeId) || {};
     const category = inferCategoryFromUnitType(unitType, squad?.classTag || 'infantry');
     const unitCategory = inferSkillCategoryFromUnitType(unitType);
@@ -1684,6 +2533,7 @@ const createAgentsForSquad = (squad, crowd) => {
         x: spawnPoint.x,
         y: spawnPoint.y,
         weight: perAgentWeight,
+        combatScale,
         slotOrder,
         formationSlot,
         moveSpeedMul
@@ -1692,7 +2542,6 @@ const createAgentsForSquad = (squad, crowd) => {
     }
   });
   if (agents.length <= 0) {
-    const repConfig = resolveRepConfig(null, crowd);
     agents.push(createAgent({
       id: `${squad.id}_ag_1`,
       squadId: squad.id,
@@ -1726,7 +2575,156 @@ const createAgentsForSquad = (squad, crowd) => {
   return agents;
 };
 
-const leaderMoveStep = (squad, sim, crowd, dt, forwardVec, steeringWeights = DEFAULT_STEERING_WEIGHTS) => {
+const resolveTrainingNavigationTarget = (squad = null) => {
+  const waypoint = Array.isArray(squad?.waypoints) ? squad.waypoints[0] : null;
+  if (!waypoint) return null;
+  return {
+    x: Number(waypoint?.x) || 0,
+    y: Number(waypoint?.y) || 0
+  };
+};
+
+const resolveTrainingNavigationReplanCooldown = (sim = null) => {
+  const configuredCooldown = sim?.trainingNavigator?.getPathFailureReplanCooldownSeconds?.();
+  return clamp(Number(configuredCooldown) || 0.35, 0.1, 2);
+};
+
+const doesTrainingRouteReachTarget = (route = [], target = {}, radius = LEADER_ARRIVAL_RADIUS) => {
+  const last = Array.isArray(route) && route.length > 0 ? route[route.length - 1] : null;
+  if (!last) return false;
+  return Math.hypot(
+    (Number(last?.x) || 0) - (Number(target?.x) || 0),
+    (Number(last?.y) || 0) - (Number(target?.y) || 0)
+  ) <= Math.max(1, Number(radius) || LEADER_ARRIVAL_RADIUS);
+};
+
+const syncTrainingNavigationOrderPath = (squad = null) => {
+  if (!squad?.order || typeof squad.order !== 'object') return;
+  squad.order.pathPoints = (Array.isArray(squad.waypoints) ? squad.waypoints : []).map((point) => ({
+    x: Number(point?.x) || 0,
+    y: Number(point?.y) || 0
+  }));
+  squad.order.pathIndex = 0;
+};
+
+const applyTrainingNavigationRoute = (squad = null, route = [], remainingWaypoints = []) => {
+  const plannedRoute = Array.isArray(route) ? route : [];
+  const remaining = Array.isArray(remainingWaypoints) ? remainingWaypoints : [];
+  squad.waypoints = [...plannedRoute, ...remaining].map((point) => ({
+    x: Number(point?.x) || 0,
+    y: Number(point?.y) || 0
+  }));
+  syncTrainingNavigationOrderPath(squad);
+};
+
+const attemptTrainingNavigationReplan = ({
+  squad,
+  sim,
+  walls = [],
+  target = {},
+  nowSec = 0
+} = {}) => {
+  const navigator = sim?.trainingNavigator;
+  if (!squad || !navigator?.planRoute) return false;
+  if ((Number(squad?._navigationReplanAt) || 0) > nowSec) return false;
+
+  const currentWaypoints = Array.isArray(squad?.waypoints) ? squad.waypoints.slice() : [];
+  const source = { x: Number(squad?.x) || 0, y: Number(squad?.y) || 0 };
+  if (!consumeTrainingNavigationPlanBudget(sim)) {
+    squad._navigationReplanAt = nowSec + Math.min(0.12, resolveTrainingNavigationReplanCooldown(sim));
+    return false;
+  }
+  const route = navigator.planRoute(source, target, {
+    obstacles: walls,
+    radius: resolveTrainingNavigationAgentRadius(squad, sim),
+    maxSearchNodes: resolveTrainingAiNavigationSearchNodes(squad, sim)
+  });
+  const cooldown = resolveTrainingNavigationReplanCooldown(sim);
+  squad._navigationReplanAt = nowSec + cooldown;
+  squad._navigationReplanAttempts = Math.max(0, Number(squad?._navigationReplanAttempts) || 0) + 1;
+
+  if (doesTrainingRouteReachTarget(route, target)) {
+    applyTrainingNavigationRoute(squad, route, currentWaypoints.slice(1));
+    squad._navigationFailureCount = 0;
+    squad._navigationStuckSince = 0;
+    return true;
+  }
+
+  squad._navigationFailureCount = Math.min(
+    6,
+    Math.max(0, Number(squad?._navigationFailureCount) || 0) + 1
+  );
+  if (squad._navigationFailureCount < NAVIGATION_MAX_FAILURES_BEFORE_WAIT) return false;
+
+  const recoveryPoint = navigator?.findNearestWalkablePoint?.(source, {
+    obstacles: walls,
+    radius: resolveTrainingNavigationAgentRadius(squad, sim) + resolveTrainingNavigationPathClearance(sim)
+  });
+  if (recoveryPoint && Math.hypot(
+    (Number(recoveryPoint?.x) || 0) - source.x,
+    (Number(recoveryPoint?.y) || 0) - source.y
+  ) > NAVIGATION_MIN_PROGRESS) {
+    applyTrainingNavigationRoute(squad, [recoveryPoint], currentWaypoints);
+  }
+  squad._navigationWaitUntil = nowSec + (cooldown * Math.min(4, squad._navigationFailureCount));
+  squad.vx = 0;
+  squad.vy = 0;
+  squad.speed = 0;
+  squad.action = '路径等待';
+  return false;
+};
+
+const updateTrainingNavigationRecovery = ({
+  squad,
+  sim,
+  walls = [],
+  target = null,
+  start = {},
+  nowSec = 0,
+  dt = 0
+} = {}) => {
+  if (!squad || !sim?.trainingNavigator || !target || squad?.skillRush?.ttl > 0) return;
+  if ((Number(squad?._navigationWaitUntil) || 0) > nowSec) return;
+
+  const current = { x: Number(squad?.x) || 0, y: Number(squad?.y) || 0 };
+  const targetDistanceBefore = Math.hypot(
+    (Number(target?.x) || 0) - (Number(start?.x) || 0),
+    (Number(target?.y) || 0) - (Number(start?.y) || 0)
+  );
+  const targetDistanceAfter = Math.hypot(
+    (Number(target?.x) || 0) - current.x,
+    (Number(target?.y) || 0) - current.y
+  );
+  if (targetDistanceAfter <= LEADER_ARRIVAL_RADIUS) {
+    squad._navigationFailureCount = 0;
+    squad._navigationReplanAttempts = 0;
+    squad._navigationStuckSince = 0;
+    return;
+  }
+
+  const movedDistance = Math.hypot(
+    current.x - (Number(start?.x) || 0),
+    current.y - (Number(start?.y) || 0)
+  );
+  const collisionAt = Number(squad?._navigationCollisionAt) || 0;
+  const collidedThisStep = collisionAt > 0
+    && collisionAt >= (nowSec - Math.max(0, Number(dt) || 0) - 0.001);
+  const madeProgress = (targetDistanceBefore - targetDistanceAfter) >= NAVIGATION_MIN_PROGRESS
+    || (movedDistance >= NAVIGATION_MIN_MOVEMENT && !collidedThisStep);
+  if (madeProgress && !collidedThisStep) {
+    squad._navigationFailureCount = 0;
+    squad._navigationReplanAttempts = 0;
+    squad._navigationStuckSince = 0;
+    return;
+  }
+
+  if (!(Number(squad?._navigationStuckSince) || 0)) squad._navigationStuckSince = nowSec;
+  const stuckFor = nowSec - (Number(squad?._navigationStuckSince) || nowSec);
+  if (!collidedThisStep && stuckFor < NAVIGATION_STUCK_TIMEOUT_SEC) return;
+  attemptTrainingNavigationReplan({ squad, sim, walls, target, nowSec });
+};
+
+const leaderMoveStep = (squad, sim, crowd, dt, forwardVec, steeringWeights = DEFAULT_STEERING_WEIGHTS, blockingWalls = null) => {
   const actionState = ensureSquadActionState(squad);
   const actionKind = typeof actionState.kind === 'string' ? actionState.kind : 'none';
   const fatiguePenalty = squad.fatigueTimer > 0 ? 0.72 : 1;
@@ -1753,9 +2751,11 @@ const leaderMoveStep = (squad, sim, crowd, dt, forwardVec, steeringWeights = DEF
   const policyMul = speedPolicy === SPEED_POLICY_RETREAT
     ? 1.08
     : (speedPolicy === SPEED_POLICY_REFORM ? 0.82 : 1);
-  const speedBase = Math.max(9, baseGroupSpeed * 18);
+  const speedBase = Math.max(9, baseGroupSpeed * REFERENCE_LEADER_SPEED_MULTIPLIER * resolveTrainingMapMovementScale(sim));
   const speedTargetMax = speedBase * fatiguePenalty * buffSpeed * rushSpeed * policyMul * (chargingCommitted ? 1.15 : 1);
-  const walls = Array.isArray(sim?.buildings) ? sim.buildings.filter((row) => !row?.destroyed) : [];
+  const walls = Array.isArray(blockingWalls)
+    ? blockingWalls
+    : filterBlockingObstacles(sim?.buildings || []);
   let target = null;
   const lockRangedSkill = !!squad?.activeSkill?.lockMovement;
 
@@ -1779,6 +2779,18 @@ const leaderMoveStep = (squad, sim, crowd, dt, forwardVec, steeringWeights = DEF
     target = null;
   } else if (Array.isArray(squad.waypoints) && squad.waypoints.length > 0) {
     target = squad.waypoints[0];
+  }
+
+  if (
+    target
+    && !(Number(squad?.skillRush?.ttl) > 0)
+    && (Number(squad?._navigationWaitUntil) || 0) > nowSec
+  ) {
+    target = null;
+    squad.vx = 0;
+    squad.vy = 0;
+    squad.speed = 0;
+    squad.action = '路径等待';
   }
 
   let currentSpeed = Math.max(0, Number(squad.speed) || 0);
@@ -1864,7 +2876,9 @@ const leaderMoveStep = (squad, sim, crowd, dt, forwardVec, steeringWeights = DEF
   ny = clamp(ny, -halfH + 4, halfH - 4);
   let pushNx = 0;
   let pushNy = 0;
-  walls.forEach((wall) => {
+  const nearbyWalls = queryObstacleCandidates(walls, nx, ny, AGENT_RADIUS + 1.8);
+  nearbyWalls.forEach((wall) => {
+    if (!wall || wall.destroyed) return;
     const beforeX = nx;
     const beforeY = ny;
     const pushed = pushOutOfRect({ x: nx, y: ny }, wall, AGENT_RADIUS + 1.8);
@@ -1893,6 +2907,13 @@ const leaderMoveStep = (squad, sim, crowd, dt, forwardVec, steeringWeights = DEF
       squad.vx -= pushN.x * remove;
       squad.vy -= pushN.y * remove;
     }
+  }
+  if (
+    (Math.abs(pushNx) + Math.abs(pushNy)) > 1e-4
+    && target
+    && !(Number(squad?.skillRush?.ttl) > 0)
+  ) {
+    squad._navigationCollisionAt = nowSec;
   }
   squad.speed = Math.hypot(squad.vx, squad.vy);
   squad.dirX = dir.x;
@@ -2104,7 +3125,8 @@ const trimOrGrowAgents = (squad, agents = [], crowd, dt) => {
         slotOrder: source.slotOrder + i + 1,
         formationSlot: source.formationSlot,
         formationSpacingSlots: source.formationSpacingSlots,
-        moveSpeedMul: source.moveSpeedMul || 1
+        moveSpeedMul: source.moveSpeedMul || 1,
+        combatScale: source.combatScale || 1
       }));
     }
   }
@@ -2173,6 +3195,30 @@ const resolveAgentModeSpeedMul = (agent, squad, crowd) => {
   return clamp(Number(agent?.moveSpeedMul) || 1, 0.6, 1.8);
 };
 
+const resolveForcedAgentLanding = (sim, agent, direction = {}, distance = 0) => {
+  const start = {
+    x: Number(agent?.x) || 0,
+    y: Number(agent?.y) || 0
+  };
+  const target = {
+    x: start.x + ((Number(direction?.x) || 0) * Math.max(0, Number(distance) || 0)),
+    y: start.y + ((Number(direction?.y) || 0) * Math.max(0, Number(distance) || 0))
+  };
+  const options = {
+    obstacles: sim?.buildings,
+    radius: Math.max(0.6, Number(agent?.radius) || AGENT_RADIUS)
+  };
+  if (sim?.trainingNavigator?.resolveLegalPosition) {
+    return sim.trainingNavigator.resolveLegalPosition(start, target, options);
+  }
+  return resolveTrainingMapLegalPosition({
+    field: sim?.field,
+    start,
+    target,
+    ...options
+  });
+};
+
 const applyCavalryRushImpact = (sim, crowd, squad, agents = [], fromPoint, toPoint) => {
   if (!squad || !squad.skillRush) return;
   const rush = squad.skillRush;
@@ -2185,13 +3231,17 @@ const applyCavalryRushImpact = (sim, crowd, squad, agents = [], fromPoint, toPoi
   const flagBearer = ensureFlagBearer(squad, agents);
   const sourceWeight = Math.max(1, Number(flagBearer?.weight) || 1);
   const repConfig = resolveRepConfig(sim, crowd);
-  const impactDamage = Math.max(0.8, (Number(squad.stats?.atk) || 10) * 0.11 * Math.pow(sourceWeight, repConfig.damageExponent));
+  const impactDamage = Math.max(
+    0.8,
+    (Number(squad.stats?.atk) || 10)
+      * 0.11
+      * Math.pow(sourceWeight, repConfig.damageExponent)
+      * Math.max(0.05, Number(flagBearer?.combatScale) || 1)
+  );
   const dir = normalizeVec((toPoint?.x || 0) - (fromPoint?.x || 0), (toPoint?.y || 0) - (fromPoint?.y || 0));
-  const enemyTeam = squad.team === TEAM_ATTACKER ? TEAM_DEFENDER : TEAM_ATTACKER;
-
   crowd.agentsBySquad.forEach((enemyAgents, enemySquadId) => {
     const enemySquad = (sim?.squads || []).find((row) => row.id === enemySquadId) || null;
-    if (!enemySquad || enemySquad.team !== enemyTeam || enemySquad.remain <= 0) return;
+    if (!enemySquad || !isHostileTeam(squad?.team, enemySquad?.team) || enemySquad.remain <= 0) return;
     (Array.isArray(enemyAgents) ? enemyAgents : []).forEach((enemyAgent) => {
       if (!enemyAgent || enemyAgent.dead) return;
       if (rush.hitAgentIds.has(enemyAgent.id)) return;
@@ -2203,8 +3253,9 @@ const applyCavalryRushImpact = (sim, crowd, squad, agents = [], fromPoint, toPoi
       enemyAgent.hitTimer = 0.24;
       enemyAgent.weight = Math.max(0, (Number(enemyAgent.weight) || 0) - impactDamage);
       enemyAgent.hpWeight = Math.max(0, (Number(enemyAgent.hpWeight) || 0) - impactDamage);
-      enemyAgent.x = (Number(enemyAgent.x) || 0) + (dir.x * 1.8);
-      enemyAgent.y = (Number(enemyAgent.y) || 0) + (dir.y * 1.8);
+      const landing = resolveForcedAgentLanding(sim, enemyAgent, dir, 1.8);
+      enemyAgent.x = landing.x;
+      enemyAgent.y = landing.y;
       enemySquad.underAttackTimer = 1.2;
       acquireHitEffect(crowd.effectsPool, {
         type: 'slash',
@@ -2246,8 +3297,21 @@ export const createCrowdSim = (sim, options = {}) => {
     const agents = createAgentsForSquad(squad, crowd);
     crowd.nextAgentId += agents.length;
     crowd.agentsBySquad.set(squad.id, agents);
+    crowd.allAgents.push(...agents);
   });
+  crowd.spatial = buildSpatialHash(crowd.allAgents, 14);
   return crowd;
+};
+
+export const addCrowdSquad = (crowd, squad, { replace = false } = {}) => {
+  if (!crowd || !squad?.id) return [];
+  if (!replace && crowd.agentsBySquad?.has(squad.id)) {
+    return crowd.agentsBySquad.get(squad.id) || [];
+  }
+  const agents = createAgentsForSquad(squad, crowd);
+  crowd.nextAgentId += agents.length;
+  crowd.agentsBySquad.set(squad.id, agents);
+  return agents;
 };
 
 export const getCrowdAgentsForSquad = (crowd, squadId = '') => {
@@ -2284,6 +3348,67 @@ const ensureSkillCooldownMap = (squad) => {
   if (!Number.isFinite(Number(squad.skillCooldowns.artillery))) squad.skillCooldowns.artillery = 0;
   if (!Number.isFinite(Number(squad.skillCooldowns.support))) squad.skillCooldowns.support = 0;
   return squad.skillCooldowns;
+};
+
+export const resolveTrainingAiSkillPreflight = ({
+  squad = null,
+  target = null,
+  sim = null,
+  skillKind = ''
+} = {}) => {
+  const normalizedKind = skillKind === 'cavalry' || skillKind === 'archer' || skillKind === 'artillery'
+    ? skillKind
+    : 'infantry';
+  if (!squad || (Number(squad?.remain) || 0) <= 0) {
+    return { ok: false, reason: 'caster-unavailable', retrySec: 1.2 };
+  }
+  if (!target || (Number(target?.remain) || 0) <= 0 || !isHostileTeam(squad?.team, target?.team)) {
+    return { ok: false, reason: 'target-invalid', retrySec: 1.2 };
+  }
+  if (isEnemyHiddenForViewer(target, squad?.team)) {
+    return { ok: false, reason: 'target-hidden', retrySec: 1.2 };
+  }
+  if (squad?.activeSkill || (Number(squad?.skillRush?.ttl) || 0) > 0) {
+    return { ok: false, reason: 'skill-active', retrySec: 0.6 };
+  }
+  const cooldownMap = ensureSkillCooldownMap(squad);
+  if ((Number(cooldownMap?.[normalizedKind]) || 0) > 0.01) {
+    return { ok: false, reason: 'skill-cooldown', retrySec: Math.min(2.1, Number(cooldownMap?.[normalizedKind]) || 0.6) };
+  }
+  if (normalizedKind === 'cavalry' && (Number(squad?.stamina) || 0) < 32) {
+    return { ok: false, reason: 'insufficient-stamina', retrySec: 1.2 };
+  }
+  const source = { x: Number(squad?.x) || 0, y: Number(squad?.y) || 0 };
+  const targetPoint = { x: Number(target?.x) || 0, y: Number(target?.y) || 0 };
+  const distance = Math.hypot(targetPoint.x - source.x, targetPoint.y - source.y);
+  const maximumDistance = Math.max(1, Number(AI_SKILL_TARGET_RANGE[normalizedKind]) || skillRangeByClass(normalizedKind));
+  const minimumDistance = normalizedKind === 'cavalry' ? CAVALRY_RUSH_MIN_DISTANCE : 0;
+  if (distance < minimumDistance || distance > maximumDistance) {
+    return { ok: false, reason: 'target-out-of-range', retrySec: 1.2, distance, maximumDistance };
+  }
+  const walls = filterBlockingObstacles(sim?.buildings || []);
+  const navigator = sim?.trainingNavigator;
+  if (navigator?.isWalkable && !navigator.isWalkable(targetPoint, {
+    obstacles: walls,
+    radius: Math.max(4, Number(target?.radius) || 10)
+  })) {
+    return { ok: false, reason: 'target-not-legal', retrySec: 1.2 };
+  }
+  const visionWalls = filterVisionBlockingObstacles(sim?.buildings || []);
+  const blocked = !!raycastObstacles(source, targetPoint, visionWalls, Math.max(0.8, (Number(squad?.radius) || 10) * 0.12));
+  if ((normalizedKind === 'archer' || normalizedKind === 'artillery') && blocked) {
+    return { ok: false, reason: 'line-of-sight-blocked', retrySec: 1.2 };
+  }
+  if (normalizedKind === 'cavalry' && blocked) {
+    return { ok: false, reason: 'charge-path-blocked', retrySec: 1.2 };
+  }
+  return {
+    ok: true,
+    reason: '',
+    distance,
+    maximumDistance,
+    targetPoint
+  };
 };
 
 const updateAttackCooldownFromSkills = (squad) => {
@@ -2353,7 +3478,7 @@ const resolveConfiguredTargetSquad = (sim, squad, targetInput = {}) => {
   const targetSquadId = String(targetInput?.targetSquadId || '').trim();
   const target = (sim?.squads || []).find((row) => row?.id === targetSquadId) || null;
   if (!target || (Number(target?.remain) || 0) <= 0) return null;
-  if (target.team === squad?.team) return null;
+  if (!isHostileTeam(squad?.team, target?.team)) return null;
   return target;
 };
 
@@ -2397,9 +3522,14 @@ const applyConfiguredMeleeWave = (sim, crowd, squad, activeSkill, waveIndex = 0)
   const coneAngle = Math.max(8, Math.min(180, Number(profile?.coneAngleDeg) || 90));
   const minDot = Math.cos((coneAngle * Math.PI / 180) * 0.5);
   const shape = String(profile?.shape || 'cone');
+  const paintArea = activeSkill?.targetSpec?.kind === 'ground_paint'
+    ? activeSkill.targetSpec
+    : null;
   const damageExponent = Math.max(0.2, Number(sim?.repConfig?.damageExponent) || DEFAULT_DAMAGE_EXPONENT);
   const casterPower = casters.reduce((sum, agent) => (
-    sum + Math.pow(Math.max(1, Number(agent?.weight) || 1), damageExponent)
+    sum
+      + Math.pow(Math.max(1, Number(agent?.weight) || 1), damageExponent)
+      * Math.max(0.05, Number(agent?.combatScale) || 1)
   ), 0);
   const damage = Math.max(
     0.12,
@@ -2409,7 +3539,7 @@ const applyConfiguredMeleeWave = (sim, crowd, squad, activeSkill, waveIndex = 0)
       * Math.max(1, casterPower / Math.max(1, Math.sqrt(casters.length)))
   );
   const targets = getAllCrowdAgents(crowd)
-    .filter((agent) => agent && !agent.dead && agent.team !== squad?.team)
+    .filter((agent) => agent && !agent.dead && isHostileTeam(squad?.team, agent?.team))
     .sort((left, right) => {
       const leftDist = Math.hypot((left.x || 0) - source.x, (left.y || 0) - source.y);
       const rightDist = Math.hypot((right.x || 0) - source.x, (right.y || 0) - source.y);
@@ -2423,7 +3553,9 @@ const applyConfiguredMeleeWave = (sim, crowd, squad, activeSkill, waveIndex = 0)
     const dx = (Number(target.x) || 0) - source.x;
     const dy = (Number(target.y) || 0) - source.y;
     const dist = Math.hypot(dx, dy);
-    const inShape = shape === 'circle'
+    const inShape = paintArea
+      ? isPointInsideSkillPaintArea(target, paintArea, Math.max(0.6, Number(target?.radius) || 0))
+      : shape === 'circle'
       ? dist <= radius
       : (dist <= maxRange && dist > 0.001 && (((dx / dist) * direction.x) + ((dy / dist) * direction.y)) >= minDot);
     if (!inShape) continue;
@@ -2431,8 +3563,9 @@ const applyConfiguredMeleeWave = (sim, crowd, squad, activeSkill, waveIndex = 0)
     applyDamageToAgent(sim, crowd, sourceAgent, target, damage, 'slash', { poiseDamageMul: 1.25 });
     const knockback = Math.max(0, Number(profile?.knockback) || 0);
     if (knockback > 0 && !target.dead) {
-      target.x = (Number(target.x) || 0) + (direction.x * knockback);
-      target.y = (Number(target.y) || 0) + (direction.y * knockback);
+      const landing = resolveForcedAgentLanding(sim, target, direction, knockback);
+      target.x = landing.x;
+      target.y = landing.y;
     }
     impactedSquads.add(target.squadId);
     hitCount += 1;
@@ -2502,8 +3635,20 @@ const triggerConfiguredCrowdSkill = (sim, crowd, squad, targetInput = {}) => {
       x: Number.isFinite(Number(targetInput?.x)) ? Number(targetInput.x) : direction.source.x,
       y: Number.isFinite(Number(targetInput?.y)) ? Number(targetInput.y) : direction.source.y
     };
+  const projectileClass = profile?.projectileClass === 'artillery' ? 'artillery' : 'archer';
+  const paintedGroundTarget = targetMode === 'ground' && targetInput?.paintArea
+    ? normalizeGroundSkillTargetSpec(sim, squad, projectileClass, {
+        ...targetInput,
+        originX: direction.source.x,
+        originY: direction.source.y,
+        x: target.x,
+        y: target.y,
+        radius: Math.max(8, Number(profile?.aoeRadius) || 24),
+        maxRange: Math.max(8, Number(profile?.maxRange) || skillRangeByClass(projectileClass))
+      })
+    : null;
   const effectiveMeleeTarget = sourceCategory === SKILL_CATEGORY_MELEE && targetMode === 'ground'
-    ? {
+    ? paintedGroundTarget || {
         x: direction.source.x + (direction.dirX * direction.distance),
         y: direction.source.y + (direction.dirY * direction.distance)
       }
@@ -2574,6 +3719,7 @@ const triggerConfiguredCrowdSkill = (sim, crowd, squad, targetInput = {}) => {
       source: direction.source,
       dirX: direction.dirX,
       dirY: direction.dirY,
+      targetSpec: paintedGroundTarget,
       casterAgentIds: casters.map((agent) => agent.id),
       wavesTotal: Math.max(1, Math.floor(Number(profile?.waves) || 1)),
       wavesFired: 0,
@@ -2636,7 +3782,6 @@ const triggerConfiguredCrowdSkill = (sim, crowd, squad, targetInput = {}) => {
     return { ok: true, sourceCategory };
   }
 
-  const projectileClass = profile?.projectileClass === 'artillery' ? 'artillery' : 'archer';
   const hasFixedRangedCaster = casters.some((agent) => (
     agent?.typeCategory === 'artillery' || agent?.unitSubtype === 'defense'
   ));
@@ -2650,10 +3795,13 @@ const triggerConfiguredCrowdSkill = (sim, crowd, squad, targetInput = {}) => {
     id: `skill_${squad.id}_${Date.now()}`,
     mode: 'ground',
     skillId,
+    source: direction.source,
     classTag: projectileClass,
     sourceCategory,
+    targetSquadId: targetSquad?.id || '',
+    targetTeam: targetSquad?.team || '',
     casterAgentIds: casters.map((agent) => agent.id),
-    targetSpec: normalizeGroundSkillTargetSpec(sim, squad, projectileClass, {
+    targetSpec: paintedGroundTarget || normalizeGroundSkillTargetSpec(sim, squad, projectileClass, {
       ...targetInput,
       originX: direction.source.x,
       originY: direction.source.y,
@@ -2685,12 +3833,15 @@ const triggerConfiguredCrowdSkill = (sim, crowd, squad, targetInput = {}) => {
   if (profile?.statusEffect?.type === 'debuff') {
     const targetRadius = Math.max(8, Number(profile?.aoeRadius) || 24);
     (sim?.squads || []).forEach((enemySquad) => {
-      if (!enemySquad || enemySquad.team === squad.team || (Number(enemySquad.remain) || 0) <= 0) return;
+      if (!enemySquad || !isHostileTeam(squad?.team, enemySquad?.team) || (Number(enemySquad.remain) || 0) <= 0) return;
+      const squadRadius = Math.max(8, Number(enemySquad.radius) || 8);
+      const insidePaintArea = activeSkill.targetSpec?.kind === 'ground_paint'
+        && isPointInsideSkillPaintArea(enemySquad, activeSkill.targetSpec, squadRadius);
       const dist = Math.hypot(
         (Number(enemySquad.x) || 0) - activeSkill.targetSpec.x,
         (Number(enemySquad.y) || 0) - activeSkill.targetSpec.y
       );
-      if (dist <= targetRadius + Math.max(8, Number(enemySquad.radius) || 8)) {
+      if (activeSkill.targetSpec?.kind === 'ground_paint' ? insidePaintArea : dist <= targetRadius + squadRadius) {
         applySquadStatusEffect(enemySquad, {
           ...profile.statusEffect,
           sourceSkillId: skillId
@@ -2813,6 +3964,11 @@ export const triggerCrowdSkill = (sim, crowd, squadId, targetInput) => {
   }
 
   const rangedClass = skillKind === 'artillery' ? 'artillery' : 'archer';
+  const requestedTargetSquad = resolveConfiguredTargetSquad(
+    sim,
+    squad,
+    targetInput && typeof targetInput === 'object' ? targetInput : {}
+  );
   if (squad.guard) squad.guard.enabled = false;
   const cfg = GROUND_SKILL_CONFIG[rangedClass] || GROUND_SKILL_CONFIG.archer;
   const targetSpec = normalizeGroundSkillTargetSpec(
@@ -2824,6 +3980,8 @@ export const triggerCrowdSkill = (sim, crowd, squadId, targetInput) => {
   const activeSkill = {
     id: `skill_${squad.id}_${Date.now()}`,
     classTag: rangedClass,
+    targetSquadId: requestedTargetSquad?.id || '',
+    targetTeam: requestedTargetSquad?.team || '',
     targetSpec,
     wavesTotal: Math.max(1, Math.floor(Number(cfg?.waves) || 1)),
     wavesFired: 0,
@@ -2860,8 +4018,28 @@ export const updateCrowdSim = (crowd, sim, dt) => {
   if (crowd && typeof crowd === 'object') crowd.steeringWeights = steeringWeights;
   sim.timeElapsed = Math.max(0, Number(sim?.timeElapsed) || 0) + safeDt;
   const nowSec = Number(sim?.timeElapsed) || 0;
+  sim._trainingNavigationBudget = {
+    remaining: resolveTrainingNavigationPlanBudget(sim),
+    at: nowSec
+  };
+  sim._trainingAiDecisionBudget = {
+    remaining: resolveTrainingAiDecisionBudget(sim),
+    at: nowSec
+  };
+  updateTrainingNeutralCamps({
+    sim,
+    crowd,
+    nowSec,
+    context: {
+      field: sim.field,
+      navigator: sim.trainingNavigator,
+      obstacles: sim.buildings
+    },
+    spawnSquad: (squad) => addCrowdSquad(crowd, squad, { replace: true })
+  });
   const squads = Array.isArray(sim?.squads) ? sim.squads : [];
-  const walls = Array.isArray(sim?.buildings) ? sim.buildings.filter((w) => !w?.destroyed) : [];
+  const walls = resolveCrowdBlockingWalls(crowd, sim?.buildings || []);
+  sim._trainingBlockingObstacles = walls;
 
   crowd.allAgents = [];
   crowd.agentsBySquad.forEach((agents, squadId) => {
@@ -3001,38 +4179,60 @@ export const updateCrowdSim = (crowd, sim, dt) => {
     skillCooldowns.support = Math.max(0, (Number(skillCooldowns.support) || 0) - safeDt);
     updateAttackCooldownFromSkills(squad);
     squad.underAttackTimer = Math.max(0, (Number(squad.underAttackTimer) || 0) - safeDt);
-    updateSquadBehaviorPlan(squad, sim, Number(sim?.timeElapsed) || 0);
+    updateSquadBehaviorPlan(squad, sim, Number(sim?.timeElapsed) || 0, walls);
     squad._aiSkillCd = Math.max(0, Number(squad._aiSkillCd) || 0);
 
-    if (squad.team === TEAM_DEFENDER) {
+    if (squad.team === TEAM_DEFENDER && squad.controlMode !== 'USER') {
       squad._aiSkillCd = Math.max(0, squad._aiSkillCd - safeDt);
       if (squad._aiSkillCd <= 0) {
-        const nearestEnemy = pickNearestEnemySquad(squad, sim?.squads || []);
-        if (nearestEnemy) {
-          const dist = Math.hypot((nearestEnemy.x || 0) - (squad.x || 0), (nearestEnemy.y || 0) - (squad.y || 0));
-          const classTag = squad.classTag || 'infantry';
-          const shouldUseSkill = (
-            (classTag === 'infantry' && dist < 82)
-            || (classTag === 'cavalry' && dist > 24 && dist < 155)
-            || (classTag === 'archer' && dist < 148)
-            || (classTag === 'artillery' && dist < 182)
-          );
-          if (shouldUseSkill) {
-            const result = triggerCrowdSkill(sim, crowd, squad.id, { x: nearestEnemy.x || 0, y: nearestEnemy.y || 0 });
-            if (result?.ok) {
-              squad._aiSkillCd = classTag === 'artillery' ? 8.8 : 6.6;
+        const selectedEnemy = selectTrainingMapEnemyTarget(squad, sim, Number(sim?.timeElapsed) || 0);
+        if (squad._trainingAiDecisionDeferred) {
+          squad._aiSkillCd = 0.08;
+        } else {
+          const nearestEnemy = selectedEnemy || pickNearestEnemySquad(squad, sim?.squads || []);
+          if (nearestEnemy) {
+            const classTag = squad.classTag === 'cavalry' || squad.classTag === 'archer' || squad.classTag === 'artillery'
+              ? squad.classTag
+              : 'infantry';
+            const preflight = resolveTrainingAiSkillPreflight({
+              squad,
+              target: nearestEnemy,
+              sim,
+              skillKind: classTag
+            });
+            if (preflight.ok) {
+              const result = triggerCrowdSkill(sim, crowd, squad.id, {
+                kind: classTag,
+                targetSquadId: nearestEnemy.id,
+                x: nearestEnemy.x || 0,
+                y: nearestEnemy.y || 0
+              });
+              if (result?.ok) {
+                squad._aiSkillCd = classTag === 'artillery' ? 8.8 : 6.6;
+              } else {
+                squad._aiSkillCd = 2.1;
+              }
             } else {
-              squad._aiSkillCd = 2.1;
+              recordTrainingMapAiEvent({
+                squad,
+                sim,
+                nowSec,
+                reason: `skill-preflight-${preflight.reason}`,
+                targetId: nearestEnemy.id
+              });
+              squad._aiSkillCd = Math.max(0.2, Number(preflight.retrySec) || 1.2);
             }
           } else {
             squad._aiSkillCd = 1.2;
           }
-        } else {
-          squad._aiSkillCd = 1.2;
         }
       }
     }
 
+    const navigationStart = { x: Number(squad.x) || 0, y: Number(squad.y) || 0 };
+    const navigationTarget = (Number(squad?.skillRush?.ttl) || 0) > 0
+      ? null
+      : resolveTrainingNavigationTarget(squad);
     const previousFormationPose = resolveSquadFormationPose(squad);
     let forward = squad._crowdForward || teamForward(squad.team);
     const rushFromPoint = { x: Number(squad.x) || 0, y: Number(squad.y) || 0 };
@@ -3041,7 +4241,7 @@ export const updateCrowdSim = (crowd, sim, dt) => {
       const toEnemy = normalizeVec((enemy.x || 0) - (squad.x || 0), (enemy.y || 0) - (squad.y || 0));
       if (toEnemy.len > 0.0001) forward = { x: toEnemy.x, y: toEnemy.y };
     }
-    forward = leaderMoveStep(squad, sim, crowd, safeDt, forward, steeringWeights);
+    forward = leaderMoveStep(squad, sim, crowd, safeDt, forward, steeringWeights, walls);
     squad._crowdForward = forward;
     const formationPose = advanceSquadFormationPose(squad, forward, previousFormationPose, safeDt);
     const formationForward = formationPose.forward;
@@ -3059,6 +4259,17 @@ export const updateCrowdSim = (crowd, sim, dt) => {
     const spacing = (AGENT_RADIUS * 2) + AGENT_GAP;
     const formationSpacing = normalizeFormationSpacing(squad?.formationSpacing);
     const formationSpacingScale = FORMATION_SPACING_SCALE[formationSpacing] || FORMATION_SPACING_SCALE[FORMATION_SPACING_STANDARD];
+    const narrowPassage = leaderMoving
+      ? resolveTrainingNarrowPassageState({
+        squad,
+        sim,
+        walls,
+        forward: formationForward,
+        baseColumns: baseCols,
+        spacing,
+        nowSec
+      })
+      : { active: false, columns: baseCols, width: Infinity, distance: 0 };
     const speedPolicy = typeof squad.speedPolicy === 'string' ? squad.speedPolicy : SPEED_POLICY_MARCH;
     const retreatMode = speedPolicy === SPEED_POLICY_RETREAT;
     const reformMode = speedPolicy === SPEED_POLICY_REFORM;
@@ -3067,10 +4278,20 @@ export const updateCrowdSim = (crowd, sim, dt) => {
     const avoidGain = retreatMode ? 0.68 : 0.95;
     const accelCap = retreatMode ? AGENT_RETREAT_ACCEL : (reformMode ? AGENT_REFORM_ACCEL : AGENT_MAX_ACCEL);
     const flagBack = spacing * FLAG_BACK_OFFSET;
-    const sorted = [...agents].sort((a, b) => a.slotOrder - b.slotOrder);
+    const sorted = agents;
+    const nearbyAgents = [];
+    const nearbyWalls = [];
+    const statusMultipliers = resolveSquadStatusMultipliers(squad);
     ensureFlagBearer(squad, sorted);
 
-    sorted.forEach((agent, index) => {
+    const aiPlanPending = squad._trainingAiDecisionDeferred === true
+      && !leaderMoving
+      && !squad.activeSkill
+      && !squad.meleeAttackOrder;
+    if (aiPlanPending) {
+      holdAgentsWhileAiPlanPending(sorted, safeDt);
+    } else {
+      sorted.forEach((agent, index) => {
       if (!agent || agent.dead) return;
       stepAgentCast(agent, safeDt);
       if (squad.meleeAttackOrder && agent.meleeChargeState) {
@@ -3101,14 +4322,20 @@ export const updateCrowdSim = (crowd, sim, dt) => {
         agent.hitTimer = Math.max(0, (Number(agent.hitTimer) || 0) - safeDt);
         return;
       }
-      const slot = resolveAgentFormationSlot(agent, index, baseCols, spacing, formationSpacing);
+      const standardSlot = resolveAgentFormationSlot(agent, index, baseCols, spacing, formationSpacing);
+      const slot = resolveNarrowPassageFormationSlot({
+        index,
+        standardSlot,
+        passage: narrowPassage,
+        spacing,
+        spacingScale: formationSpacingScale
+      });
       const castOffset = resolveAgentCastOffset(agent);
       const desiredX = (Number(squad.x) || 0) + (formationSide.x * slot.side) + (formationForward.x * slot.front) + castOffset.x;
       const desiredY = (Number(squad.y) || 0) + (formationSide.y * slot.side) + (formationForward.y * slot.front) + castOffset.y;
       const toDesired = normalizeVec(desiredX - (agent.x || 0), desiredY - (agent.y || 0));
       const fatigueMul = squad.fatigueTimer > 0 ? 0.72 : 1;
       const weightSlow = 1;
-      const statusMultipliers = resolveSquadStatusMultipliers(squad);
       const castSpeedMul = Number(agent?.castState?.dashSpeedMul) > 0
         ? Number(agent.castState.dashSpeedMul)
         : 1;
@@ -3117,15 +4344,33 @@ export const updateCrowdSim = (crowd, sim, dt) => {
         * ((squad.skillRush?.ttl || 0) > 0 ? 1.45 : 1)
         * castSpeedMul;
       const modeSpeedMul = resolveAgentModeSpeedMul(agent, squad, crowd);
-      const speed = Math.max(6, (Number(squad._groupSpeedScalar) || Number(squad.stats?.speed) || 1) * 20 * fatigueMul * weightSlow * speedMul * modeSpeedMul);
+      const speed = Math.max(
+        6,
+        (Number(squad._groupSpeedScalar) || Number(squad.stats?.speed) || 1)
+          * 20
+          * resolveTrainingMapMovementScale(sim)
+          * fatigueMul
+          * weightSlow
+          * speedMul
+          * modeSpeedMul
+      );
       const engagementCfg = crowd?.engagement?.config || {};
       const engagementEnabled = !!crowd?.engagement?.enabled;
       const isMelee = isMeleeAgent(agent);
       const hasAnchor = engagementEnabled && isMelee && !!agent.engagePairKey
         && Number.isFinite(Number(agent.engageAx)) && Number.isFinite(Number(agent.engageAy));
-      const neighbors = querySpatialNearby(spatial, agent.x, agent.y, 12);
+      const neighbors = querySpatialNearby(spatial, agent.x, agent.y, 12, nearbyAgents);
       const separationDistance = Math.max(AGENT_MIN_FORMATION_SEPARATION_GAP, spacing * formationSpacingScale * 0.94);
-      const slotBlocked = walls.some((wall) => (
+      const slotWalls = queryObstacleCandidates(
+        walls,
+        desiredX,
+        desiredY,
+        (agent.radius || AGENT_RADIUS) + 0.5,
+        nearbyWalls
+      );
+      const slotBlocked = slotWalls.some((wall) => (
+        !wall?.destroyed
+        &&
         pushOutOfRect({ x: desiredX, y: desiredY }, wall, (agent.radius || AGENT_RADIUS) + 0.5)?.pushed
       ));
       const hasForeignNeighbor = neighbors.some((other) => (
@@ -3257,7 +4502,15 @@ export const updateCrowdSim = (crowd, sim, dt) => {
       let ny = (Number(agent.y) || 0) + (vy * safeDt);
       let pushNx = 0;
       let pushNy = 0;
-      walls.forEach((wall) => {
+      const collisionWalls = queryObstacleCandidates(
+        walls,
+        nx,
+        ny,
+        (agent.radius || AGENT_RADIUS) + 0.5,
+        nearbyWalls
+      );
+      collisionWalls.forEach((wall) => {
+        if (!wall || wall.destroyed) return;
         const beforeX = nx;
         const beforeY = ny;
         const pushed = pushOutOfRect({ x: nx, y: ny }, wall, (agent.radius || AGENT_RADIUS) + 0.5);
@@ -3297,7 +4550,8 @@ export const updateCrowdSim = (crowd, sim, dt) => {
       } else {
         agent.state = agent.attackCd > 0 ? 'attack' : 'idle';
       }
-    });
+      });
+    }
 
     refreshMeleeAttackOrder(squad, sorted, nowSec);
 
@@ -3310,12 +4564,31 @@ export const updateCrowdSim = (crowd, sim, dt) => {
 
     trimOrGrowAgents(squad, agents, crowd, safeDt);
     aggregateSquadFromAgents(squad, crowd.agentsBySquad.get(squad.id) || []);
+    updateTrainingNavigationRecovery({
+      squad,
+      sim,
+      walls,
+      target: navigationTarget,
+      start: navigationStart,
+      nowSec,
+      dt: safeDt
+    });
+    syncTrainingMapAiState({
+      squad,
+      sim,
+      nowSec,
+      selection: squad._trainingAiSelection,
+      reason: (Number(squad?._trainingTargetNavigation?.blockedUntil) || 0) > nowSec
+        ? 'target-path-deferred'
+        : ''
+    });
   });
 
   crowd.allAgents = [];
   crowd.agentsBySquad.forEach((agents) => crowd.allAgents.push(...agents.filter((agent) => !agent.dead)));
   crowd.spatial = buildSpatialHash(crowd.allAgents, 14);
   updateCrowdCombat(sim, crowd, safeDt);
+  updateTrainingObjectives(sim, crowd, safeDt);
   stepEffectPool(crowd.effectsPool, safeDt);
   sim.projectiles = crowd.effectsPool.projectileLive;
   sim.hitEffects = crowd.effectsPool.hitLive;

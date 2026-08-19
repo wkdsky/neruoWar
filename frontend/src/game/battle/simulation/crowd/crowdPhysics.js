@@ -35,11 +35,50 @@ const getDefaultPart = (obs = {}) => ({
   yawDeg: normalizeDeg(obs?.rotation || 0)
 });
 
+const worldColliderCache = new WeakMap();
+
+const resolveColliderTransform = (obs = {}) => ({
+  x: Number(obs?.x) || 0,
+  y: Number(obs?.y) || 0,
+  width: Number(obs?.width) || 0,
+  depth: Number(obs?.depth) || 0,
+  rotation: Number(obs?.rotation) || 0,
+  collider: obs?.collider || null
+});
+
+const isSameColliderTransform = (entry = null, transform = null) => (
+  !!entry
+  && !!transform
+  && entry.x === transform.x
+  && entry.y === transform.y
+  && entry.width === transform.width
+  && entry.depth === transform.depth
+  && entry.rotation === transform.rotation
+  && entry.collider === transform.collider
+);
+
+const getWorldColliderCacheEntry = (obs = {}) => {
+  if (!obs || typeof obs !== 'object') return { parts: null, polygon: null };
+  const transform = resolveColliderTransform(obs);
+  const cached = worldColliderCache.get(obs);
+  if (isSameColliderTransform(cached, transform)) return cached;
+  const entry = {
+    ...transform,
+    parts: null,
+    polygon: null
+  };
+  worldColliderCache.set(obs, entry);
+  return entry;
+};
+
 const getWorldCompositeParts = (obs = {}) => {
+  const cached = getWorldColliderCacheEntry(obs);
+  if (cached.parts) return cached.parts;
   const source = obs?.collider && typeof obs.collider === 'object' ? obs.collider : null;
   const parts = Array.isArray(source?.parts) ? source.parts : [];
   if (parts.length <= 0) {
-    return [getDefaultPart(obs)];
+    cached.parts = [getDefaultPart(obs)];
+    return cached.parts;
   }
   const yaw = normalizeDeg(obs?.rotation || 0);
   const out = [];
@@ -55,21 +94,28 @@ const getWorldCompositeParts = (obs = {}) => {
       yawDeg: normalizeDeg(yaw + (Number(part?.yawDeg) || 0))
     });
   });
-  return out.length > 0 ? out : [getDefaultPart(obs)];
+  cached.parts = out.length > 0 ? out : [getDefaultPart(obs)];
+  return cached.parts;
 };
 
 const getWorldPolygon = (obs = {}) => {
+  const cached = getWorldColliderCacheEntry(obs);
+  if (cached.polygon) return cached.polygon;
   const source = obs?.collider && typeof obs.collider === 'object' ? obs.collider : null;
   const rawPoints = Array.isArray(source?.polygon?.points) ? source.polygon.points : [];
-  if (rawPoints.length < 3) return [];
+  if (rawPoints.length < 3) {
+    cached.polygon = [];
+    return cached.polygon;
+  }
   const yaw = normalizeDeg(obs?.rotation || 0);
-  return rawPoints.map((point) => {
+  cached.polygon = rawPoints.map((point) => {
     const rotated = rotate2D(Number(point?.x) || 0, Number(point?.y) || 0, yaw);
     return {
       x: (Number(obs?.x) || 0) + rotated.x,
       y: (Number(obs?.y) || 0) + rotated.y
     };
   });
+  return cached.polygon;
 };
 
 const getColliderKind = (obs = {}) => {
@@ -313,10 +359,130 @@ export const raycastRotatedRect = (start, end, rect, inflate = 0) => {
   };
 };
 
+const resolveObstacleBounds = (obstacle = {}) => {
+  if (!obstacle) return null;
+  const kind = getColliderKind(obstacle);
+  const polygon = kind === 'polygon' ? getWorldPolygon(obstacle) : [];
+  let minX = Infinity;
+  let minY = Infinity;
+  let maxX = -Infinity;
+  let maxY = -Infinity;
+  if (polygon.length >= 3) {
+    polygon.forEach((point) => {
+      minX = Math.min(minX, Number(point?.x) || 0);
+      minY = Math.min(minY, Number(point?.y) || 0);
+      maxX = Math.max(maxX, Number(point?.x) || 0);
+      maxY = Math.max(maxY, Number(point?.y) || 0);
+    });
+  } else {
+    const parts = getWorldCompositeParts(obstacle);
+    parts.forEach((part) => {
+      const halfWidth = Math.max(1, Number(part?.w) || 1) * 0.5;
+      const halfDepth = Math.max(1, Number(part?.d) || 1) * 0.5;
+      const radians = (Number(part?.yawDeg) || 0) * Math.PI / 180;
+      const extentX = (Math.abs(Math.cos(radians)) * halfWidth) + (Math.abs(Math.sin(radians)) * halfDepth);
+      const extentY = (Math.abs(Math.sin(radians)) * halfWidth) + (Math.abs(Math.cos(radians)) * halfDepth);
+      const centerX = Number(part?.cx) || 0;
+      const centerY = Number(part?.cy) || 0;
+      minX = Math.min(minX, centerX - extentX);
+      minY = Math.min(minY, centerY - extentY);
+      maxX = Math.max(maxX, centerX + extentX);
+      maxY = Math.max(maxY, centerY + extentY);
+    });
+  }
+  if (!Number.isFinite(minX) || !Number.isFinite(minY) || !Number.isFinite(maxX) || !Number.isFinite(maxY)) return null;
+  return { minX, minY, maxX, maxY };
+};
+
+const appendObstacleToCells = (map, obstacle, bounds, cellSize) => {
+  const minColumn = Math.floor(bounds.minX / cellSize);
+  const maxColumn = Math.floor(bounds.maxX / cellSize);
+  const minRow = Math.floor(bounds.minY / cellSize);
+  const maxRow = Math.floor(bounds.maxY / cellSize);
+  for (let column = minColumn; column <= maxColumn; column += 1) {
+    for (let row = minRow; row <= maxRow; row += 1) {
+      const key = `${column}:${row}`;
+      if (!map.has(key)) map.set(key, []);
+      map.get(key).push(obstacle);
+    }
+  }
+};
+
+export const buildObstacleSpatialIndex = (obstacles = [], cellSize = 192) => {
+  const size = Math.max(32, Number(cellSize) || 192);
+  const map = new Map();
+  (Array.isArray(obstacles) ? obstacles : []).forEach((obstacle) => {
+    if (!obstacle || obstacle.destroyed) return;
+    const bounds = resolveObstacleBounds(obstacle);
+    if (bounds) appendObstacleToCells(map, obstacle, bounds, size);
+  });
+  return {
+    size,
+    map,
+    seen: new Set(),
+    rows: []
+  };
+};
+
+const queryObstacleSpatialIndex = (index, bounds, out = null) => {
+  if (!index?.map || !bounds) return Array.isArray(out) ? out : [];
+  const rows = Array.isArray(out) ? out : index.rows;
+  rows.length = 0;
+  index.seen.clear();
+  const minColumn = Math.floor(bounds.minX / index.size);
+  const maxColumn = Math.floor(bounds.maxX / index.size);
+  const minRow = Math.floor(bounds.minY / index.size);
+  const maxRow = Math.floor(bounds.maxY / index.size);
+  for (let column = minColumn; column <= maxColumn; column += 1) {
+    for (let row = minRow; row <= maxRow; row += 1) {
+      const bucket = index.map.get(`${column}:${row}`);
+      if (!bucket) continue;
+      for (let indexInBucket = 0; indexInBucket < bucket.length; indexInBucket += 1) {
+        const obstacle = bucket[indexInBucket];
+        if (!obstacle || index.seen.has(obstacle)) continue;
+        index.seen.add(obstacle);
+        rows.push(obstacle);
+      }
+    }
+  }
+  return rows;
+};
+
+export const queryObstacleCandidates = (obstacles = [], x = 0, y = 0, radius = 0, out = null) => {
+  const index = obstacles?._obstacleSpatialIndex;
+  if (!index) return Array.isArray(obstacles) ? obstacles : [];
+  const padding = Math.max(0, Number(radius) || 0);
+  const centerX = Number(x) || 0;
+  const centerY = Number(y) || 0;
+  return queryObstacleSpatialIndex(index, {
+    minX: centerX - padding,
+    minY: centerY - padding,
+    maxX: centerX + padding,
+    maxY: centerY + padding
+  }, out);
+};
+
+export const queryObstacleSegmentCandidates = (obstacles = [], start = {}, end = {}, inflate = 0, out = null) => {
+  const index = obstacles?._obstacleSpatialIndex;
+  if (!index) return Array.isArray(obstacles) ? obstacles : [];
+  const padding = Math.max(0, Number(inflate) || 0);
+  const startX = Number(start?.x) || 0;
+  const startY = Number(start?.y) || 0;
+  const endX = Number(end?.x) || 0;
+  const endY = Number(end?.y) || 0;
+  return queryObstacleSpatialIndex(index, {
+    minX: Math.min(startX, endX) - padding,
+    minY: Math.min(startY, endY) - padding,
+    maxX: Math.max(startX, endX) + padding,
+    maxY: Math.max(startY, endY) + padding
+  }, out);
+};
+
 export const raycastObstacles = (start, end, obstacles = [], inflate = 0) => {
+  const candidates = queryObstacleSegmentCandidates(obstacles, start, end, inflate);
   let best = null;
-  for (let i = 0; i < obstacles.length; i += 1) {
-    const obs = obstacles[i];
+  for (let i = 0; i < candidates.length; i += 1) {
+    const obs = candidates[i];
     if (!obs || obs.destroyed) continue;
     const hit = raycastCollider(start, end, obs, inflate);
     if (!hit) continue;
@@ -331,8 +497,9 @@ export const raycastObstacles = (start, end, obstacles = [], inflate = 0) => {
 };
 
 export const hasLineOfSight = (start, end, obstacles = [], inflate = 0) => {
-  for (let i = 0; i < obstacles.length; i += 1) {
-    const wall = obstacles[i];
+  const candidates = queryObstacleSegmentCandidates(obstacles, start, end, inflate);
+  for (let i = 0; i < candidates.length; i += 1) {
+    const wall = candidates[i];
     if (!wall || wall.destroyed) continue;
     if (lineIntersectsCollider(start, end, wall, inflate)) return false;
   }
@@ -350,7 +517,8 @@ export const estimateLocalFlowWidth = (origin, forward, obstacles = [], options 
     for (let d = step; d <= maxProbe; d += step) {
       const px = (Number(origin?.x) || 0) + (side.x * d * sign);
       const py = (Number(origin?.y) || 0) + (side.y * d * sign);
-      const blocked = obstacles.some((obs) => !obs?.destroyed && isInsideCollider({ x: px, y: py }, obs, inflate));
+      const candidates = queryObstacleCandidates(obstacles, px, py, inflate);
+      const blocked = candidates.some((obs) => !obs?.destroyed && isInsideCollider({ x: px, y: py }, obs, inflate));
       if (blocked) return Math.max(step, d - step);
     }
     return maxProbe;
@@ -374,18 +542,22 @@ export const buildSpatialHash = (agents = [], cellSize = 14) => {
   return { size, map };
 };
 
-export const querySpatialNearby = (hash, x, y, radius = 10) => {
+export const querySpatialNearby = (hash, x, y, radius = 10, out = []) => {
   const size = Math.max(2, Number(hash?.size) || 14);
   const map = hash?.map instanceof Map ? hash.map : new Map();
   const range = Math.max(1, Math.ceil((Math.max(1, Number(radius) || 1)) / size));
   const cx = Math.floor((Number(x) || 0) / size);
   const cy = Math.floor((Number(y) || 0) / size);
-  const rows = [];
+  const rows = Array.isArray(out) ? out : [];
+  rows.length = 0;
   for (let ix = -range; ix <= range; ix += 1) {
     for (let iy = -range; iy <= range; iy += 1) {
       const key = `${cx + ix}:${cy + iy}`;
-      if (!map.has(key)) continue;
-      rows.push(...map.get(key));
+      const bucket = map.get(key);
+      if (!bucket) continue;
+      for (let index = 0; index < bucket.length; index += 1) {
+        rows.push(bucket[index]);
+      }
     }
   }
   return rows;

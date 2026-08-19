@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import BattleRuntime from '../presentation/runtime/BattleRuntime';
+import { DEFAULT_MAX_TOTAL_AGENTS } from '../presentation/runtime/RepMapping';
 import normalizeUnitTypes from '../../unit/normalizeUnitTypes';
 
 export default function useBattleRuntime({
@@ -35,6 +36,7 @@ export default function useBattleRuntime({
     const runtime = new BattleRuntime(normalizedInitData, {
       repConfig: {
         maxAgentWeight: 50,
+        maxTotalAgents: mode === 'training' ? DEFAULT_MAX_TOTAL_AGENTS : 0,
         damageExponent: 0.75,
         strictAgentMapping: true
       },

@@ -9,8 +9,10 @@ const { toUnitTypeDtoV2 } = require('../services/unitTypeDtoService');
 const { serializeArmyUnitType } = require('../services/armyUnitTypeService');
 const {
   matchesExpectedUnitClassifications,
-  matchesExpectedUnitCosts
+  matchesExpectedUnitCosts,
+  matchesExpectedUnitAttackRanges
 } = require('../services/unitRegistryService');
+const ArmyUnitType = require('../models/ArmyUnitType');
 
 test('unit catalog contains exactly the nine planned unit types', () => {
   const catalog = buildUnitCatalog({});
@@ -66,6 +68,13 @@ test('unit catalog contains exactly the nine planned unit types', () => {
   });
   assert.equal(unitTypes.filter((unit) => Object.hasOwn(unit, 'abilityIds')).length, 0);
   assert.equal(catalog.unitComponents.some((component) => component.kind === 'ability'), false);
+  unitTypes.forEach((unit) => {
+    assert.ok(unit.attackRange);
+    assert.ok(unit.attackRange.max >= unit.attackRange.min);
+    if (unit.roleTag === '远程') {
+      assert.ok(unit.attackRange.min > 1);
+    }
+  });
 
   const componentIds = new Set(catalog.unitComponents.map((component) => component.componentId));
   unitTypes.forEach((unit) => {
@@ -88,7 +97,7 @@ test('canonical unit ids preserve all nine classifications when stored fields ar
     hp: unit.hp,
     atk: unit.atk,
     def: unit.def,
-    range: unit.range,
+    attackRange: unit.attackRange,
     costKP: unit.costKP,
     enabled: true
   }));
@@ -177,4 +186,41 @@ test('catalog readiness rejects stale unit costs', () => {
 
   assert.equal(matchesExpectedUnitCosts(rows, expected), false);
   assert.equal(matchesExpectedUnitCosts(expected, expected), true);
+});
+
+test('catalog readiness rejects stale unit attack ranges', () => {
+  const expected = buildUnitCatalog({}).unitTypes;
+  const staleRows = expected.map((unit, index) => ({
+    unitTypeId: unit.unitTypeId,
+    roleTag: unit.roleTag,
+    attackRange: index === 3
+      ? { min: 1, max: unit.attackRange.max }
+      : unit.attackRange
+  }));
+
+  assert.equal(matchesExpectedUnitAttackRanges(staleRows, expected), false);
+  assert.equal(matchesExpectedUnitAttackRanges(expected, expected), true);
+});
+
+test('unit model keeps remote attack ranges outside the inner circle', async () => {
+  const unit = new ArmyUnitType({
+    unitTypeId: 'test_remote_attack_range',
+    name: '测试远程兵种',
+    roleTag: '远程',
+    unitCategory: 'ranged',
+    unitSubtype: 'balance',
+    speed: 3,
+    hp: 100,
+    atk: 10,
+    def: 5,
+    attackRange: { min: 3, max: 6 },
+    costKP: 1
+  });
+
+  await unit.validate();
+  assert.deepEqual(unit.attackRange.toObject(), { min: 3, max: 6 });
+  assert.equal(unit.range, 6);
+
+  unit.attackRange = { min: 1, max: 6 };
+  await assert.rejects(unit.validate(), /远程兵种攻击范围下限必须大于 1/);
 });

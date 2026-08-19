@@ -12,7 +12,8 @@ const createEmptyUnitTypeForm = () => ({
     hp: '120',
     atk: '20',
     def: '10',
-    range: '1',
+    attackRangeMin: '1',
+    attackRangeMax: '1',
     costKP: '10',
     level: '1',
     nextUnitTypeId: '',
@@ -103,7 +104,8 @@ const useAdminCatalogFeature = () => {
             hp: String(unitType.hp ?? 120),
             atk: String(unitType.atk ?? 20),
             def: String(unitType.def ?? 10),
-            range: String(unitType.range ?? 1),
+            attackRangeMin: String(unitType?.attackRange?.min ?? (unitType.roleTag === '远程' ? 3 : 1)),
+            attackRangeMax: String(unitType?.attackRange?.max ?? unitType.range ?? 1),
             costKP: String(unitType.costKP ?? 10),
             level: String(unitType.level ?? 1),
             nextUnitTypeId: unitType.nextUnitTypeId || '',
@@ -122,7 +124,10 @@ const useAdminCatalogFeature = () => {
             hp: Number(form.hp),
             atk: Number(form.atk),
             def: Number(form.def),
-            range: Number(form.range),
+            attackRange: {
+                min: Number(form.attackRangeMin),
+                max: Number(form.attackRangeMax)
+            },
             costKP: Number(form.costKP),
             level: Number(form.level),
             nextUnitTypeId: form.nextUnitTypeId.trim() || null,
@@ -152,7 +157,8 @@ const useAdminCatalogFeature = () => {
             ['hp', 1, true],
             ['atk', 0, true],
             ['def', 0, true],
-            ['range', 1, true],
+            ['attackRangeMin', 0, false],
+            ['attackRangeMax', 1, false],
             ['costKP', 1, true],
             ['level', 1, true]
         ];
@@ -161,6 +167,12 @@ const useAdminCatalogFeature = () => {
             if (!Number.isFinite(value)) return `${key} 必须为数字`;
             if (integer && !Number.isInteger(value)) return `${key} 必须为整数`;
             if (value < min) return `${key} 不能小于 ${min}`;
+        }
+        if (Number(form.attackRangeMax) < Number(form.attackRangeMin)) {
+            return '攻击范围上限不能小于下限';
+        }
+        if (form.roleTag === '远程' && Number(form.attackRangeMin) <= 1) {
+            return '远程兵种攻击范围下限必须大于 1';
         }
         return '';
     }, []);

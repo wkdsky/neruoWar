@@ -111,12 +111,24 @@ export const AdminUnitTypesTab = ({
                         />
                     </label>
                     <label>
-                        射程
+                        攻击范围下限
+                        <input
+                            type="number"
+                            min="0"
+                            step="0.1"
+                            value={unitTypeForm.attackRangeMin}
+                            onChange={(e) => setUnitTypeForm((prev) => ({ ...prev, attackRangeMin: e.target.value }))}
+                            className="edit-input"
+                        />
+                    </label>
+                    <label>
+                        攻击范围上限
                         <input
                             type="number"
                             min="1"
-                            value={unitTypeForm.range}
-                            onChange={(e) => setUnitTypeForm((prev) => ({ ...prev, range: e.target.value }))}
+                            step="0.1"
+                            value={unitTypeForm.attackRangeMax}
+                            onChange={(e) => setUnitTypeForm((prev) => ({ ...prev, attackRangeMax: e.target.value }))}
                             className="edit-input"
                         />
                     </label>
@@ -192,7 +204,7 @@ export const AdminUnitTypesTab = ({
                         <th>生命</th>
                         <th>攻击</th>
                         <th>防御</th>
-                        <th>射程</th>
+                        <th>攻击范围</th>
                         <th>单价</th>
                         <th>排序</th>
                         <th>操作</th>
@@ -210,7 +222,7 @@ export const AdminUnitTypesTab = ({
                                 <td>{unitType.hp}</td>
                                 <td>{unitType.atk}</td>
                                 <td>{unitType.def}</td>
-                                <td>{unitType.range}</td>
+                                <td>{`${unitType?.attackRange?.min ?? 1}–${unitType?.attackRange?.max ?? unitType.range ?? 1}`}</td>
                                 <td>{unitType.costKP}</td>
                                 <td>{unitType.sortOrder}</td>
                                 <td className="action-cell">

@@ -30,11 +30,25 @@ const BattleDebugPanel = ({
   camera = {},
   selectedSquad = null,
   showMidlineDebug = true,
-  onToggleMidlineDebug = null
+  onToggleMidlineDebug = null,
+  onStartPerformanceCapture = null,
+  onStopPerformanceCapture = null,
+  onExportPerformanceReport = null
 }) => {
+  const [performanceScenario, setPerformanceScenario] = React.useState('');
+  const performanceCapture = stats?.performanceCapture || {};
+  const performanceMetrics = performanceCapture.metrics || {};
+  const simulationMetrics = performanceMetrics.simulationMs || {};
+  const renderMetrics = performanceMetrics.renderMs || {};
+  const fpsMetrics = performanceMetrics.fps || {};
+  const captureStatus = performanceCapture.active
+    ? '记录中'
+    : (performanceCapture.startedAtMs ? '已停止' : '未开始');
   const lines = [
     `阶段：${phaseLabel(phase)}`,
     `性能：FPS ${formatFixed(stats?.fps, 1)} ｜ 模拟 ${formatFixed(stats?.simStepMs, 2)}ms ｜ 渲染 ${formatFixed(stats?.renderMs, 2)}ms`,
+    `性能采样：${captureStatus} ｜ 场景 ${performanceCapture.scenario || '-'} ｜ 时长 ${formatFixed((Number(performanceCapture.durationMs) || 0) / 1000, 1)}s ｜ 样本 sim ${formatInt(performanceCapture.sampleCounts?.simulationMs)} / render ${formatInt(performanceCapture.sampleCounts?.renderMs)} / fps ${formatInt(performanceCapture.sampleCounts?.fps)}`,
+    `性能分位：模拟 p50/p95 ${formatFixed(simulationMetrics.p50, 2)}/${formatFixed(simulationMetrics.p95, 2)}ms ｜ 渲染 p50/p95 ${formatFixed(renderMetrics.p50, 2)}/${formatFixed(renderMetrics.p95, 2)}ms ｜ FPS p50/p95 ${formatFixed(fpsMetrics.p50, 1)}/${formatFixed(fpsMetrics.p95, 1)}`,
     `渲染对象：小人模型 ${formatInt(stats?.unitModelCount ?? stats?.agentCount)} ｜ 投射物 ${formatInt(stats?.projectileCount)} ｜ 建筑 ${formatInt(stats?.buildingCount)}`,
     `相机锚点：原始(${formatFixed(stats?.cameraAnchorRawX, 2)}, ${formatFixed(stats?.cameraAnchorRawY, 2)}) ｜ 平滑(${formatFixed(stats?.cameraAnchorSmoothX, 2)}, ${formatFixed(stats?.cameraAnchorSmoothY, 2)}) ｜ 差值 ${formatFixed(stats?.cameraAnchorDelta, 3)}`,
     `中线规则：允许跨中线 ${formatBool(stats?.allowCrossMidline)} ｜ 上帧Clamp ${formatBool(stats?.clampChanged)} ｜ 选中编队 ${stats?.clampSquadId || '-'}`,
@@ -53,13 +67,56 @@ const BattleDebugPanel = ({
     );
     if (selectedSquad?.debugTargetScore) {
       const score = selectedSquad.debugTargetScore;
-      lines.push(`目标评分：${score.targetId || '-'} ｜ total ${formatFixed(score.score, 2)} ｜ atk ${formatFixed(score.atkTerm, 2)} ｜ frag ${formatFixed(score.fragTerm, 2)} ｜ lowHp ${formatFixed(score.lowHpBonus, 2)}`);
+      if (score?.terms) {
+        lines.push(`地图目标评分：${score.targetId || '-'} ｜ total ${formatFixed(score.score, 2)} ｜ 距离 ${formatFixed(score.terms.distance, 2)} ｜ 路线 ${formatFixed(score.terms.lane, 2)} ｜ 威胁 ${formatFixed(score.terms.threat, 2)} ｜ 保护 ${formatFixed(score.terms.protectedArea, 2)}`);
+      } else {
+        lines.push(`目标评分：${score.targetId || '-'} ｜ total ${formatFixed(score.score, 2)} ｜ atk ${formatFixed(score.atkTerm, 2)} ｜ frag ${formatFixed(score.fragTerm, 2)} ｜ lowHp ${formatFixed(score.lowHpBonus, 2)}`);
+      }
+    }
+    if (selectedSquad?.trainingAi) {
+      const ai = selectedSquad.trainingAi;
+      const lastEvent = Array.isArray(ai.events) ? ai.events[ai.events.length - 1] : null;
+      lines.push(`地图AI：${ai.state || '-'} ｜ 目标 ${ai.targetId || '-'} ｜ 重试 ${formatInt(ai.retries)} ｜ 上次切换 ${lastEvent?.reason || '-'}`);
     }
   }
 
   return (
     <div className="pve2-debug-merged-panel">
       <div className="pve2-debug-actions">
+        {typeof onStartPerformanceCapture === 'function' ? (
+          <input
+            type="text"
+            className="pve2-debug-performance-scenario"
+            value={performanceScenario}
+            onChange={(event) => setPerformanceScenario(event.target.value)}
+            placeholder="场景，如 100-unit-pathing"
+            aria-label="性能采样场景"
+          />
+        ) : null}
+        {typeof onStartPerformanceCapture === 'function' ? (
+          <button
+            type="button"
+            className="btn btn-secondary btn-small"
+            onClick={() => onStartPerformanceCapture(performanceScenario)}
+          >
+            {performanceCapture.active ? '重新开始采样' : '开始性能采样'}
+          </button>
+        ) : null}
+        {typeof onStopPerformanceCapture === 'function' ? (
+          <button
+            type="button"
+            className="btn btn-secondary btn-small"
+            onClick={onStopPerformanceCapture}
+            disabled={!performanceCapture.active}
+          >
+            停止采样
+          </button>
+        ) : null}
+        {typeof onExportPerformanceReport === 'function' ? (
+          <button type="button" className="btn btn-secondary btn-small" onClick={onExportPerformanceReport}>
+            导出性能 JSON
+          </button>
+        ) : null}
         {typeof onToggleMidlineDebug === 'function' ? (
           <button type="button" className="btn btn-secondary btn-small" onClick={onToggleMidlineDebug}>
             {showMidlineDebug ? '隐藏中线调试' : '显示中线调试'}

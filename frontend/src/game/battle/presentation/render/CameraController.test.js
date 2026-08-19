@@ -83,6 +83,27 @@ describe('CameraController focus transition', () => {
     expect(camera.getOverviewZoomProgress()).toBe(1);
   });
 
+  test('begins lowering the training pitch before the prior training threshold', () => {
+    const camera = new CameraController({ pitchLow: 15, pitchHigh: 90, distance: 3_200 });
+
+    camera.setDistanceWithDynamicPitch(2_000, 200, 2_000, 3_200, 420);
+    expect(camera.currentPitch).toBe(90);
+
+    camera.setDistanceWithDynamicPitch(1_940, 200, 2_000, 3_200, 420);
+    expect(camera.currentPitch).toBeLessThan(90);
+    expect(camera.currentPitch).toBeGreaterThan(15);
+  });
+
+  test('raises the overview near plane to preserve thin terrain layers', () => {
+    const camera = new CameraController({ pitchLow: 40, pitchHigh: 90, distance: 560 });
+
+    camera.setDistanceWithDynamicPitch(4_600, 200, 980, 4_600);
+    expect(camera.buildMatrices(1280, 720).nearPlane).toBe(48);
+
+    camera.setDistanceWithDynamicPitch(200, 200, 980, 4_600);
+    expect(camera.buildMatrices(1280, 720).nearPlane).toBe(16);
+  });
+
   test('holds a 15-degree pitch while extending into the close ground band', () => {
     const camera = new CameraController({ pitchLow: 15, pitchHigh: 90, distance: 980 });
 

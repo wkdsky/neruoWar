@@ -29,6 +29,7 @@ const readIsMobileShell = () => readIsMobileViewport();
 const SENSE_SELECTOR_EDGE_MARGIN = 24;
 const SENSE_SELECTOR_DESKTOP_GAP = 28;
 const DEFAULT_DESKTOP_PANEL_SIZE = { width: 680, height: 560 };
+const preloadTrainingGround = () => import('../game/TrainingGroundPanel').catch(() => null);
 const readViewportSize = () => ({
     width: Math.max(320, Math.round(window.visualViewport?.width || window.innerWidth || 1280)),
     height: Math.max(320, Math.round(window.visualViewport?.height || window.innerHeight || 720))
@@ -1063,6 +1064,7 @@ export const AppShellChrome = ({
     };
 
     const onOpenTrainingGround = async () => {
+        void preloadTrainingGround();
         setShowMilitaryMenu(false);
         await collapseExpandedRightDockPanels();
         await prepareForPrimaryNavigation();

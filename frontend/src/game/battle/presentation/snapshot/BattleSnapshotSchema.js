@@ -36,7 +36,7 @@ const BattleSnapshotSchema = {
       'selectedFlag', 'flagBearerFlag', 'ghostFlag', 'hoverFlag',
       'bodyTopIndex', 'gearTopIndex', 'vehicleTopIndex', 'silhouetteTopIndex'
     ],
-    notes: 'Compatible with ImpostorRenderer attribute layout locations 2..6'
+    notes: 'teamIndex: attacker=0, defender=1, neutral=2; compatible with ImpostorRenderer attribute layout locations 2..6'
   },
   skillStates: {
     stride: UNIT_SKILL_STATE_STRIDE,

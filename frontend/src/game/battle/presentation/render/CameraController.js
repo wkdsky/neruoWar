@@ -1,12 +1,18 @@
 const DEG2RAD = Math.PI / 180;
 const CAMERA_IMPL_TAG = 'CAMERA_WORLD_MAP_ALIGN_V4';
-const CAMERA_FAR = 8000;
+const CAMERA_FAR = 16000;
+const CAMERA_NEAR_MIN = 16;
+const CAMERA_NEAR_MAX = 48;
 
 const clamp = (value, min, max) => Math.min(max, Math.max(min, value));
 const smoothstep = (t) => {
   const x = clamp(t, 0, 1);
   return x * x * (3 - (2 * x));
 };
+
+const resolveCameraNearPlane = (distance = 0) => (
+  clamp((Math.max(0, Number(distance) || 0)) * 0.04, CAMERA_NEAR_MIN, CAMERA_NEAR_MAX)
+);
 
 const normalize3 = (v) => {
   const len = Math.hypot(v[0], v[1], v[2]) || 1;
@@ -438,7 +444,8 @@ export default class CameraController {
       vertical
     ];
 
-    this.projection = mat4Perspective(48 * DEG2RAD, safeWidth / safeHeight, 1, CAMERA_FAR);
+    const nearPlane = resolveCameraNearPlane(this.distance);
+    this.projection = mat4Perspective(48 * DEG2RAD, safeWidth / safeHeight, nearPlane, CAMERA_FAR);
     const pivotWorldRotation = mat4Multiply(
       mat4Multiply(
         mat4Translation(this.centerX, this.centerY, 0),
@@ -517,6 +524,8 @@ export default class CameraController {
       handedness,
       cameraImplTag: CAMERA_IMPL_TAG,
       distance: this.distance,
+      nearPlane,
+      farPlane: CAMERA_FAR,
       overviewZoomProgress: this.getOverviewZoomProgress(),
       pitchDeg: this.currentPitch,
       worldYawDeg: Number(this.worldYawDeg) || 0,

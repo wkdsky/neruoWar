@@ -27,6 +27,7 @@ const TrainingSettingsModal = ({
   onClose,
   onChangeAutoSkillPointGain,
   onChangeInterval,
+  onChangeMapPreset,
   onApply
 }) => {
   const [activeTab, setActiveTab] = useState('battle');
@@ -34,6 +35,7 @@ const TrainingSettingsModal = ({
   const [draftInterval, setDraftInterval] = useState(60);
   const [draftFontSize, setDraftFontSize] = useState('medium');
   const [draftShowGrid, setDraftShowGrid] = useState(true);
+  const [draftMapPresetId, setDraftMapPresetId] = useState('');
   const wasOpenRef = useRef(false);
 
   const intervals = Array.isArray(state?.pointIntervals) && state.pointIntervals.length > 0
@@ -41,6 +43,9 @@ const TrainingSettingsModal = ({
     : [10, 30, 60, 120, 300];
   const currentInterval = Math.max(1, Number(state?.pointIntervalSec) || intervals[0] || 60);
   const currentAutoSkillPointGain = state?.autoSkillPointGainEnabled === true;
+  const mapState = state?.map && typeof state.map === 'object' ? state.map : null;
+  const mapPresets = Array.isArray(mapState?.presets) ? mapState.presets : [];
+  const currentMapPresetId = String(mapState?.activePresetId || '');
 
   useEffect(() => {
     if (open && !wasOpenRef.current) {
@@ -49,9 +54,10 @@ const TrainingSettingsModal = ({
       setDraftInterval(currentInterval);
       setDraftFontSize(normalizeFontSize(settings?.fontSize));
       setDraftShowGrid(settings?.showGrid !== false);
+      setDraftMapPresetId(currentMapPresetId);
     }
     wasOpenRef.current = open;
-  }, [currentAutoSkillPointGain, currentInterval, open, settings?.fontSize, settings?.showGrid]);
+  }, [currentAutoSkillPointGain, currentInterval, currentMapPresetId, open, settings?.fontSize, settings?.showGrid]);
 
   if (!open) return null;
 
@@ -60,6 +66,7 @@ const TrainingSettingsModal = ({
       onChangeAutoSkillPointGain?.(draftAutoSkillPointGain);
     }
     if (draftAutoSkillPointGain && draftInterval !== currentInterval) onChangeInterval?.(draftInterval);
+    if (draftMapPresetId && draftMapPresetId !== currentMapPresetId) onChangeMapPreset?.(draftMapPresetId);
     onApply?.({
       fontSize: normalizeFontSize(draftFontSize),
       showGrid: draftShowGrid !== false
@@ -183,6 +190,27 @@ const TrainingSettingsModal = ({
 
           {activeTab === 'battlefield' ? (
             <section className="pve2-training-settings-section pve2-training-settings-battlefield">
+              {mapPresets.length > 0 ? (
+                <>
+                  <span className="pve2-training-settings-label">地图预设</span>
+                  <div className="pve2-training-settings-rate-options" role="radiogroup" aria-label="地图预设">
+                    {mapPresets.map((preset) => (
+                      <button
+                        key={preset.id}
+                        type="button"
+                        role="radio"
+                        aria-checked={draftMapPresetId === preset.id}
+                        className={draftMapPresetId === preset.id ? 'is-active' : ''}
+                        disabled={state?.sessionActive === true}
+                        onClick={() => setDraftMapPresetId(preset.id)}
+                      >
+                        {preset.label || preset.id}
+                      </button>
+                    ))}
+                  </div>
+                  {state?.sessionActive === true ? <small>重置训练后可切换地图预设</small> : null}
+                </>
+              ) : null}
               <label className="pve2-training-settings-toggle">
                 <span>显示网格线</span>
                 <input

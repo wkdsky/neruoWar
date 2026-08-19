@@ -21,6 +21,7 @@ const BattleHUD = ({
   onToggleDebug,
   onOpenSettings,
   isTrainingMode = false,
+  trainingMap = null,
   trainingSessionActive = false,
   pitchLabel = '40°',
   startLabel = '开战',
@@ -31,6 +32,12 @@ const BattleHUD = ({
   <div className="pve2-hud">
     <div className="pve2-hud-left">
       <span className="pve2-chip">{phase === 'deploy' ? '部署中' : (phase === 'ended' ? '战斗结束' : (paused ? '已暂停' : '战斗中'))}</span>
+      {isTrainingMode && trainingMap?.activePresetId ? (
+        <span className="pve2-chip">{
+          (trainingMap?.presets || []).find((preset) => preset?.id === trainingMap.activePresetId)?.label
+          || trainingMap.activePresetId
+        }</span>
+      ) : null}
       {!isTrainingMode ? <span className="pve2-time">{formatTime(status?.timerSec || 0)}</span> : null}
       {status?.endReason ? <span className="pve2-reason">{status.endReason}</span> : null}
     </div>
@@ -55,11 +62,10 @@ const BattleHUD = ({
         </>
       )}
       <button type="button" className="btn btn-secondary" onClick={onTogglePitch}>视角 {pitchLabel}</button>
+      <button type="button" className="btn btn-secondary" onClick={onToggleDebug} disabled={interactionLocked}>{debugEnabled ? '关闭调试' : '调试'}</button>
       {isTrainingMode ? (
         <button type="button" className="btn btn-secondary" onClick={onOpenSettings} disabled={interactionLocked}>设置</button>
-      ) : (
-        <button type="button" className="btn btn-secondary" onClick={onToggleDebug} disabled={interactionLocked}>{debugEnabled ? '关闭调试' : '调试'}</button>
-      )}
+      ) : null}
       {isTrainingMode && trainingSessionActive ? (
         <button type="button" className="btn btn-danger" onClick={onReset} disabled={interactionLocked}>重置</button>
       ) : (

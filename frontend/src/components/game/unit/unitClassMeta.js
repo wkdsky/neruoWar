@@ -61,7 +61,7 @@ export const resolveUnitClassMeta = (unit = {}) => {
   const name = typeof unit?.name === 'string' ? unit.name : '';
   const roleTag = unit?.roleTag === '远程' ? '远程' : '近战';
   const speed = Number(unit?.speed) || 0;
-  const range = Number(unit?.range) || 0;
+  const range = Number(unit?.attackRange?.max ?? unit?.range) || 0;
   if (/(炮|投石|火炮|炮兵|臼炮|加农)/.test(name)) return UNIT_CLASS_META.artillery;
   if (/(弓|弩|弓兵|弩兵|射手)/.test(name) || (roleTag === '远程' && range >= 3)) return UNIT_CLASS_META.archer;
   if (/(骑|骑兵|铁骑|龙骑)/.test(name) || speed >= 2.1) return UNIT_CLASS_META.cavalry;

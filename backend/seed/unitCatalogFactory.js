@@ -61,7 +61,7 @@ const PROFESSION_CONFIG = [
     professionId: 'melee.mobility',
     professionName: '迅击游骑',
     roleTag: '近战',
-    base: { hp: 115, atk: 26, def: 5, speed: 5.2, range: 1, costKP: UNIT_KNOWLEDGE_COST_KP.melee_mobility, cooldown: 0.9, accuracy: 0.84, impactPoise: 10, impactTransition: 12 },
+    base: { hp: 115, atk: 26, def: 5, speed: 5.2, attackRange: { min: 1, max: 1 }, costKP: UNIT_KNOWLEDGE_COST_KP.melee_mobility, cooldown: 0.9, accuracy: 0.84, impactPoise: 10, impactTransition: 12 },
     vehicleId: 'veh_hover_bike',
     description: '以高速切入、绕后和追击为核心的近战单位，牺牲部分防御换取战场机动性。'
   },
@@ -72,7 +72,7 @@ const PROFESSION_CONFIG = [
     professionId: 'melee.defense',
     professionName: '壁垒卫士',
     roleTag: '近战',
-    base: { hp: 220, atk: 18, def: 16, speed: 2.7, range: 1, costKP: UNIT_KNOWLEDGE_COST_KP.melee_defense, cooldown: 1.2, accuracy: 0.86, impactPoise: 14, impactTransition: 15 },
+    base: { hp: 220, atk: 18, def: 16, speed: 2.7, attackRange: { min: 1, max: 1 }, costKP: UNIT_KNOWLEDGE_COST_KP.melee_defense, cooldown: 1.2, accuracy: 0.86, impactPoise: 14, impactTransition: 15 },
     vehicleId: 'veh_turtle_apc',
     description: '承担正面承伤和阵线稳固的近战单位，拥有九类兵种中最高的生存能力。'
   },
@@ -83,7 +83,7 @@ const PROFESSION_CONFIG = [
     professionId: 'melee.balance',
     professionName: '均衡战士',
     roleTag: '近战',
-    base: { hp: 165, atk: 23, def: 10, speed: 3.8, range: 1, costKP: UNIT_KNOWLEDGE_COST_KP.melee_balance, cooldown: 1.0, accuracy: 0.85, impactPoise: 11, impactTransition: 12 },
+    base: { hp: 165, atk: 23, def: 10, speed: 3.8, attackRange: { min: 1, max: 1 }, costKP: UNIT_KNOWLEDGE_COST_KP.melee_balance, cooldown: 1.0, accuracy: 0.85, impactPoise: 11, impactTransition: 12 },
     vehicleId: 'veh_jeep_top',
     description: '攻防、速度和持续作战能力均衡的近战单位，适合承担部队的通用前排。'
   },
@@ -94,7 +94,7 @@ const PROFESSION_CONFIG = [
     professionId: 'ranged.mobility',
     professionName: '游击射手',
     roleTag: '远程',
-    base: { hp: 105, atk: 19, def: 5, speed: 4.3, range: 8, costKP: UNIT_KNOWLEDGE_COST_KP.ranged_mobility, cooldown: 0.8, accuracy: 0.68, movePenaltyK: 0.22, impactPoise: 7, impactTransition: 8 },
+    base: { hp: 105, atk: 19, def: 5, speed: 4.3, attackRange: { min: 3, max: 6 }, costKP: UNIT_KNOWLEDGE_COST_KP.ranged_mobility, cooldown: 0.8, accuracy: 0.68, movePenaltyK: 0.22, impactPoise: 7, impactTransition: 8 },
     vehicleId: 'veh_hover_skiff',
     description: '强调边移动边输出和快速换位的远程单位，适合拉扯和侧翼火力。'
   },
@@ -105,9 +105,9 @@ const PROFESSION_CONFIG = [
     professionId: 'ranged.defense',
     professionName: '守望炮手',
     roleTag: '远程',
-    base: { hp: 155, atk: 22, def: 10, speed: 2.6, range: 12, costKP: UNIT_KNOWLEDGE_COST_KP.ranged_defense, cooldown: 1.4, accuracy: 0.86, movePenaltyK: 0.18, impactPoise: 10, impactTransition: 12 },
+    base: { hp: 155, atk: 22, def: 10, speed: 2.6, attackRange: { min: 4, max: 8 }, costKP: UNIT_KNOWLEDGE_COST_KP.ranged_defense, cooldown: 1.4, accuracy: 0.86, movePenaltyK: 0.18, impactPoise: 10, impactTransition: 12 },
     vehicleId: 'veh_spg',
-    description: '依靠射程、命中和阵地稳定性进行远程防守的单位，适合守住关键区域。'
+    description: '依靠攻击范围、命中和阵地稳定性进行远程防守的单位，适合守住关键区域。'
   },
   {
     unitCategory: 'ranged',
@@ -116,7 +116,7 @@ const PROFESSION_CONFIG = [
     professionId: 'ranged.balance',
     professionName: '精锐射手',
     roleTag: '远程',
-    base: { hp: 125, atk: 21, def: 7, speed: 3.4, range: 10, costKP: UNIT_KNOWLEDGE_COST_KP.ranged_balance, cooldown: 1.05, accuracy: 0.8, movePenaltyK: 0.22, impactPoise: 8, impactTransition: 10 },
+    base: { hp: 125, atk: 21, def: 7, speed: 3.4, attackRange: { min: 3, max: 7 }, costKP: UNIT_KNOWLEDGE_COST_KP.ranged_balance, cooldown: 1.05, accuracy: 0.8, movePenaltyK: 0.22, impactPoise: 8, impactTransition: 10 },
     vehicleId: 'veh_mortar_car',
     description: '各项远程能力均衡的通用输出单位，能在多数战场环境保持稳定贡献。'
   },
@@ -127,7 +127,7 @@ const PROFESSION_CONFIG = [
     professionId: 'support.combination',
     professionName: '专精增幅师',
     roleTag: '远程',
-    base: { hp: 115, atk: 10, def: 7, speed: 3.2, range: 7, costKP: UNIT_KNOWLEDGE_COST_KP.support_combination, cooldown: 1.25, accuracy: 0.7, movePenaltyK: 0.18, impactPoise: 5, impactTransition: 9 },
+    base: { hp: 115, atk: 10, def: 7, speed: 3.2, attackRange: { min: 3, max: 6 }, costKP: UNIT_KNOWLEDGE_COST_KP.support_combination, cooldown: 1.25, accuracy: 0.7, movePenaltyK: 0.18, impactPoise: 5, impactTransition: 9 },
     vehicleId: 'veh_support_relay',
     description: '未来技能树中的组合型辅助，倾向于集中强化部队的某一组关键属性。'
   },
@@ -138,7 +138,7 @@ const PROFESSION_CONFIG = [
     professionId: 'support.comprehensive',
     professionName: '全域协调师',
     roleTag: '远程',
-    base: { hp: 145, atk: 9, def: 9, speed: 2.9, range: 6, costKP: UNIT_KNOWLEDGE_COST_KP.support_comprehensive, cooldown: 1.4, accuracy: 0.72, movePenaltyK: 0.16, impactPoise: 6, impactTransition: 10 },
+    base: { hp: 145, atk: 9, def: 9, speed: 2.9, attackRange: { min: 3, max: 6 }, costKP: UNIT_KNOWLEDGE_COST_KP.support_comprehensive, cooldown: 1.4, accuracy: 0.72, movePenaltyK: 0.16, impactPoise: 6, impactTransition: 10 },
     vehicleId: 'veh_command_car',
     description: '未来技能树中的全面型辅助，提供覆盖攻击、防御、速度和稳定性的综合增益。'
   },
@@ -149,7 +149,7 @@ const PROFESSION_CONFIG = [
     professionId: 'support.intervention',
     professionName: '战术干预师',
     roleTag: '远程',
-    base: { hp: 105, atk: 13, def: 5, speed: 3.6, range: 9, costKP: UNIT_KNOWLEDGE_COST_KP.support_intervention, cooldown: 1.1, accuracy: 0.76, movePenaltyK: 0.16, impactPoise: 7, impactTransition: 11 },
+    base: { hp: 105, atk: 13, def: 5, speed: 3.6, attackRange: { min: 3, max: 7 }, costKP: UNIT_KNOWLEDGE_COST_KP.support_intervention, cooldown: 1.1, accuracy: 0.76, movePenaltyK: 0.16, impactPoise: 7, impactTransition: 11 },
     vehicleId: 'veh_intervention_skiff',
     description: '未来技能树中的干预型辅助，围绕解除控制、清除负面效果和施加敌方减益展开。'
   }
@@ -205,7 +205,7 @@ const buildStaticComponents = () => {
     data: {
       cooldownSec: Number(cfg.base.cooldown) || 1,
       accuracy: Number(cfg.base.accuracy) || 0.8,
-      range: Number(cfg.base.range) || 1,
+      attackRange: { ...cfg.base.attackRange },
       impact: {
         poise: Number(cfg.base.impactPoise) || 8,
         transition: Number(cfg.base.impactTransition) || 8
@@ -347,7 +347,10 @@ const buildUnitTypes = () => {
       hp: Math.round(cfg.base.hp),
       atk: Math.round(cfg.base.atk),
       def: Math.round(cfg.base.def),
-      range: roundTo(clamp(cfg.base.range, 1, 22), 2),
+      attackRange: {
+        min: roundTo(clamp(cfg.base.attackRange?.min, 0, 22), 2),
+        max: roundTo(clamp(cfg.base.attackRange?.max, 1, 22), 2)
+      },
       costKP: Math.max(1, Math.round(cfg.base.costKP)),
       level: tier,
       tier,

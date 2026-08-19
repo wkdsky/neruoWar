@@ -16,6 +16,10 @@ import {
   skillNeedsTargetSelection,
   SKILL_TARGET_MODE
 } from '../../../components/game/skillTree/skillCastProfiles';
+import {
+  createSkillPaintArea,
+  resolveSkillPaintCasterModelCount
+} from '../shared/skillPaintArea';
 
 export default function useBattleActions({
   runtimeRef,
@@ -331,11 +335,27 @@ export default function useBattleActions({
       Number(profile?.minRange) || 0,
       Number(profile?.dashDistance) || Math.min(64, Number(profile?.maxRange) || 180)
     );
+    const maxRange = Math.max(8, Number(profile?.maxRange) || skillRangeByClass(kind));
+    const aoeRadius = Math.max(8, Number(profile?.aoeRadius) || skillAoeRadiusByClass(kind));
+    const casterModelCount = resolveSkillPaintCasterModelCount(
+      runtime?.crowd?.agentsBySquad?.get?.(selected.id),
+      selected.id,
+      sourceCategory
+    );
+    const paintArea = isTrainingMode && profile?.targetMode === SKILL_TARGET_MODE.GROUND
+      ? createSkillPaintArea({
+          casterModelCount,
+          aoeRadius,
+          maxRange
+        })
+      : null;
     const initialDirection = {
       x: dirX,
       y: dirY
     };
-    const initialHoverPoint = profile?.castStyle === 'melee'
+    const initialHoverPoint = paintArea
+      ? { x: center.x, y: center.y }
+      : profile?.castStyle === 'melee'
       ? {
           x: center.x + (dirX * defaultDistance),
           y: center.y + (dirY * defaultDistance)
@@ -353,8 +373,9 @@ export default function useBattleActions({
       center,
       dir: initialDirection,
       len: defaultDistance,
-      maxRange: Math.max(8, Number(profile?.maxRange) || skillRangeByClass(kind)),
-      aoeRadius: Math.max(8, Number(profile?.aoeRadius) || skillAoeRadiusByClass(kind)),
+      maxRange,
+      aoeRadius,
+      paintArea,
       targetSquadId: '',
       hoverPoint: initialHoverPoint,
       resumeOnConfirm: !paused
@@ -363,6 +384,7 @@ export default function useBattleActions({
     setClockPaused(true);
   }, [
     closeSkillPick,
+    isTrainingMode,
     runtimeRef,
     paused,
     selectBattleSquad,

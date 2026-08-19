@@ -1,0 +1,115 @@
+{
+  "schemaVersion": 1,
+  "mapId": "training-war-map-v1",
+  "mapVersion": 8,
+  "referenceAsset": {
+    "file": "战场图.png",
+    "sha256": "7bb91d9ca9c698727880c200e8aa6212eb170e0699c31f736502eee480b5ed2b",
+    "pixelWidth": 1698,
+    "pixelHeight": 1182,
+    "effectiveBattlefieldBounds": {
+      "left": 43,
+      "top": 63,
+      "right": 1650,
+      "bottom": 1181,
+      "width": 1607,
+      "height": 1118,
+      "rightAndBottomAreVectorBounds": true
+    }
+  },
+  "coordinateSystems": {
+    "referencePixels": "origin at image top-left; x right; y down",
+    "normalized": "origin at effective battlefield top-left; x right; y down; both axes in [0, 1]",
+    "runtimeWorld": {
+      "width": 7200,
+      "height": 5008,
+      "scaleMultiplier": 2.6666666666,
+      "origin": "center",
+      "xAxis": "right",
+      "yAxis": "up",
+      "elevationAxis": "z up",
+      "xFormula": "(normalized.x - 0.5) * 7200",
+      "yFormula": "(0.5 - normalized.y) * 5008"
+    }
+  },
+  "movementCalibration": {
+    "revision": 3,
+    "targetTravelSeconds": 8,
+    "nominalUnitSpeed": 5,
+    "leaderSpeedMultiplier": 36,
+    "referenceSpawnSlotId": "deploy-spawn-attacker-top-1",
+    "referenceSpawnSlotIds": [
+      "deploy-spawn-attacker-top-1",
+      "deploy-spawn-attacker-bottom-3"
+    ],
+    "referenceObjectiveId": "tower-attacker-mid-outer",
+    "notes": "以正常行军速度的机动/均衡混合部队为标定；防御型慢速部队自然会更久，冲锋和加速技能不计入。"
+  },
+  "terrainRegions": [
+    { "id": "grass-main", "type": "grass", "shape": "rect", "normalizedBounds": [0, 0, 1, 1], "walkable": true },
+    { "id": "sand-central", "type": "sand", "shape": "rect", "sourceBounds": [786, 65, 905, 1179], "normalizedBounds": [0.462352, 0.001789, 0.536403, 0.998211], "walkable": true, "crossedByRoutes": ["top", "mid", "bottom"] },
+    { "id": "sand-upper-west", "type": "sand", "shape": "rect", "sourceBounds": [346, 334, 465, 422], "normalizedBounds": [0.18855, 0.242397, 0.262601, 0.321109], "walkable": true },
+    { "id": "sand-upper-east", "type": "sand", "shape": "rect", "sourceBounds": [1229, 334, 1348, 422], "normalizedBounds": [0.738021, 0.242397, 0.812072, 0.321109], "walkable": true },
+    { "id": "sand-mid-west", "type": "sand", "shape": "rect", "sourceBounds": [275, 574, 341, 670], "normalizedBounds": [0.144368, 0.457066, 0.185439, 0.542934], "walkable": true },
+    { "id": "sand-mid-east", "type": "sand", "shape": "rect", "sourceBounds": [1353, 574, 1419, 670], "normalizedBounds": [0.815184, 0.457066, 0.856254, 0.542934], "walkable": true },
+    { "id": "sand-lower-west", "type": "sand", "shape": "rect", "sourceBounds": [346, 832, 465, 921], "normalizedBounds": [0.18855, 0.687835, 0.262601, 0.767442], "walkable": true },
+    { "id": "sand-lower-east", "type": "sand", "shape": "rect", "sourceBounds": [1230, 834, 1349, 922], "normalizedBounds": [0.738643, 0.689624, 0.812694, 0.768336], "walkable": true },
+    { "id": "sand-top-west", "type": "sand", "shape": "semicircle", "sourceBounds": [304, 64, 400, 111], "normalizedBounds": [0.162414, 0.000894, 0.222153, 0.042934], "walkable": true },
+    { "id": "sand-top-east", "type": "sand", "shape": "semicircle", "sourceBounds": [1295, 64, 1391, 112], "normalizedBounds": [0.779091, 0.000894, 0.83883, 0.043828], "walkable": true },
+    { "id": "sand-bottom-west", "type": "sand", "shape": "semicircle", "sourceBounds": [304, 1132, 400, 1180], "normalizedBounds": [0.162414, 0.956172, 0.222153, 0.999106], "walkable": true },
+    { "id": "sand-bottom-east", "type": "sand", "shape": "semicircle", "sourceBounds": [1279, 1132, 1376, 1180], "normalizedBounds": [0.769135, 0.956172, 0.829496, 0.999106], "walkable": true }
+  ],
+  "spawnRegions": [
+    { "id": "spawn-attacker-top", "team": "attacker", "side": "left", "laneAffinity": "top", "elevation": 1, "renderElevation": 34, "renderFootprintScale": 1.16, "rampInset": 0.22, "railingEdges": [0, 1], "walkable": true, "sourcePolygon": [[43, 282], [153, 367], [43, 453]], "normalizedPolygon": [[0, 0.195886], [0.068451, 0.271914], [0, 0.348837]], "routeIds": ["top", "mid"] },
+    { "id": "spawn-attacker-bottom", "team": "attacker", "side": "left", "laneAffinity": "bottom", "elevation": 1, "renderElevation": 34, "renderFootprintScale": 1.16, "rampInset": 0.22, "railingEdges": [0, 1], "walkable": true, "sourcePolygon": [[43, 792], [153, 877], [43, 962]], "normalizedPolygon": [[0, 0.652057], [0.068451, 0.728086], [0, 0.804114]], "routeIds": ["bottom", "mid"] },
+    { "id": "spawn-defender-top", "team": "defender", "side": "right", "laneAffinity": "top", "elevation": 1, "renderElevation": 34, "renderFootprintScale": 1.16, "rampInset": 0.22, "railingEdges": [0, 1], "walkable": true, "sourcePolygon": [[1650, 282], [1540, 367], [1650, 453]], "normalizedPolygon": [[1, 0.195886], [0.931549, 0.271914], [1, 0.348837]], "routeIds": ["top", "mid"] },
+    { "id": "spawn-defender-bottom", "team": "defender", "side": "right", "laneAffinity": "bottom", "elevation": 1, "renderElevation": 34, "renderFootprintScale": 1.16, "rampInset": 0.22, "railingEdges": [0, 1], "walkable": true, "sourcePolygon": [[1650, 792], [1540, 877], [1650, 962]], "normalizedPolygon": [[1, 0.652057], [0.931549, 0.728086], [1, 0.804114]], "routeIds": ["bottom", "mid"] }
+  ],
+  "walls": {
+    "high": [
+      { "id": "high-wall-upper-west", "sourceBounds": [597, 479, 705, 572], "visualPath": [[0.345986, 0.372093], [0.416304, 0.40966], [0.359117, 0.447227], [0.416304, 0.484794], [0.351588, 0.517889]], "collision": { "kind": "polyline-buffer", "radiusNormalized": 0.012, "blocksMovement": true, "blocksVision": true } },
+      { "id": "high-wall-upper-east", "sourceBounds": [990, 480, 1096, 572], "visualPath": [[0.654014, 0.372987], [0.583696, 0.410555], [0.640883, 0.448122], [0.583696, 0.485689], [0.648412, 0.517889]], "collision": { "kind": "polyline-buffer", "radiusNormalized": 0.012, "blocksMovement": true, "blocksVision": true } },
+      { "id": "high-wall-lower-west", "sourceBounds": [598, 672, 705, 765], "visualPath": [[0.346608, 0.626118], [0.416304, 0.663685], [0.359739, 0.701252], [0.416304, 0.738819], [0.35221, 0.775492]], "collision": { "kind": "polyline-buffer", "radiusNormalized": 0.012, "blocksMovement": true, "blocksVision": true } },
+      { "id": "high-wall-lower-east", "sourceBounds": [990, 674, 1097, 766], "visualPath": [[0.653392, 0.627907], [0.583074, 0.665474], [0.639639, 0.703041], [0.583074, 0.740608], [0.64779, 0.776386]], "collision": { "kind": "polyline-buffer", "radiusNormalized": 0.012, "blocksMovement": true, "blocksVision": true } }
+    ],
+    "ordinary": [
+      { "id": "ordinary-top-west-outer", "sourceBounds": [113, 142, 247, 274], "visualKind": "arc", "sourcePath": [[247,158],[226,155],[204,149],[181,143],[158,149],[135,161],[121,183],[113,206],[120,229],[127,251],[134,274]], "collision": { "kind": "polyline-buffer", "widthPx": 24, "blocksMovement": true, "blocksVision": false } },
+      { "id": "ordinary-top-west-arch", "sourceBounds": [430, 160, 689, 190], "visualKind": "arc", "sourcePath": [[430,183],[454,178],[480,171],[507,167],[533,160],[559,160],[585,165],[611,168],[638,172],[664,179],[689,183]], "collision": { "kind": "polyline-buffer", "widthPx": 20, "blocksMovement": true, "blocksVision": false } },
+      { "id": "ordinary-upper-west-crescent", "sourceBounds": [258, 260, 399, 417], "visualKind": "crescent", "wallType": "thickWall", "sourcePath": [[399,289],[377,281],[356,278],[334,279],[312,291],[294,311],[284,333],[285,355],[290,377],[300,398],[320,417]], "sourceOutline": [[329,260],[306,266],[284,280],[268,300],[263,310],[258,330],[259,356],[265,374],[272,386],[291,405],[317,417],[319,417],[308,396],[304,379],[305,353],[310,337],[316,326],[334,306],[352,295],[368,290],[399,289],[379,271],[360,263],[345,260]], "collision": { "kind": "polyline-buffer", "widthPx": 56, "blocksMovement": true, "blocksVision": true } },
+      { "id": "ordinary-upper-west-enclosure", "sourceBounds": [407, 317, 557, 492], "visualKind": "loop", "sourcePath": [[407,484],[434,488],[461,486],[488,482],[515,473],[540,451],[550,424],[550,397],[542,370],[528,343],[512,317]], "collision": { "kind": "polyline-buffer", "widthPx": 22, "blocksMovement": true, "blocksVision": false } },
+      { "id": "ordinary-mid-upper-west-outer", "sourceBounds": [127, 453, 264, 592], "visualKind": "arc", "sourcePath": [[131,453],[127,473],[132,494],[137,515],[146,536],[161,557],[182,574],[203,583],[224,586],[245,586],[264,582]], "collision": { "kind": "polyline-buffer", "widthPx": 24, "blocksMovement": true, "blocksVision": false } },
+      { "id": "ordinary-mid-upper-west-bar", "sourceBounds": [323, 547, 505, 574], "visualKind": "arc", "sourcePath": [[323,560],[359,560],[396,560],[432,560],[469,560],[505,560]], "collision": { "kind": "polyline-buffer", "widthPx": 20, "blocksMovement": true, "blocksVision": false } },
+      { "id": "ordinary-mid-lower-west-outer", "sourceBounds": [129, 651, 266, 791], "visualKind": "arc", "sourcePath": [[135,791],[129,770],[135,749],[139,728],[148,707],[163,687],[184,669],[205,660],[226,656],[247,657],[266,656]], "collision": { "kind": "polyline-buffer", "widthPx": 24, "blocksMovement": true, "blocksVision": false } },
+      { "id": "ordinary-mid-lower-west-bar", "sourceBounds": [321, 670, 503, 696], "visualKind": "arc", "sourcePath": [[503,683],[467,683],[430,684],[394,683],[357,683],[321,683]], "collision": { "kind": "polyline-buffer", "widthPx": 20, "blocksMovement": true, "blocksVision": false } },
+      { "id": "ordinary-lower-west-enclosure", "sourceBounds": [409, 761, 559, 936], "visualKind": "loop", "sourcePath": [[515,936],[530,909],[544,882],[552,855],[552,828],[542,802],[517,780],[490,770],[463,765],[436,761],[409,767]], "collision": { "kind": "polyline-buffer", "widthPx": 22, "blocksMovement": true, "blocksVision": false } },
+      { "id": "ordinary-lower-west-crescent", "sourceBounds": [255, 835, 397, 992], "visualKind": "crescent", "wallType": "thickWall", "sourcePath": [[397,963],[375,970],[354,974],[332,973],[310,961],[291,941],[281,919],[282,897],[287,875],[297,854],[317,835]], "sourceOutline": [[315,835],[289,847],[269,867],[258,890],[255,917],[259,938],[272,962],[285,975],[297,983],[311,989],[326,992],[344,992],[371,984],[386,974],[397,963],[365,962],[352,958],[330,945],[314,927],[303,901],[301,880],[306,855],[317,835]], "collision": { "kind": "polyline-buffer", "widthPx": 56, "blocksMovement": true, "blocksVision": true } },
+      { "id": "ordinary-bottom-west-outer", "sourceBounds": [115, 971, 250, 1102], "visualKind": "arc", "sourcePath": [[134,971],[129,993],[123,1015],[115,1038],[122,1060],[137,1083],[160,1095],[182,1102],[205,1095],[227,1090],[250,1084]], "collision": { "kind": "polyline-buffer", "widthPx": 24, "blocksMovement": true, "blocksVision": false } },
+      { "id": "ordinary-bottom-west-arch", "sourceBounds": [424, 1053, 684, 1084], "visualKind": "arc", "sourcePath": [[427,1053],[449,1065],[475,1072],[501,1075],[527,1078],[553,1084],[580,1077],[606,1074],[632,1070],[658,1065],[681,1053]], "collision": { "kind": "polyline-buffer", "widthPx": 20, "blocksMovement": true, "blocksVision": false } },
+      { "id": "ordinary-top-east-outer", "sourceBounds": [1446, 142, 1581, 274], "visualKind": "arc", "sourcePath": [[1446,162],[1468,155],[1490,149],[1513,142],[1536,149],[1559,161],[1573,183],[1578,206],[1573,229],[1567,251],[1559,274]], "collision": { "kind": "polyline-buffer", "widthPx": 24, "blocksMovement": true, "blocksVision": false } },
+      { "id": "ordinary-top-east-arch", "sourceBounds": [1004, 160, 1264, 190], "visualKind": "arc", "sourcePath": [[1264,183],[1239,178],[1213,171],[1187,167],[1161,162],[1135,160],[1108,166],[1082,168],[1056,172],[1030,179],[1004,185]], "collision": { "kind": "polyline-buffer", "widthPx": 20, "blocksMovement": true, "blocksVision": false } },
+      { "id": "ordinary-upper-east-crescent", "sourceBounds": [1295, 260, 1436, 417], "visualKind": "crescent", "wallType": "thickWall", "sourcePath": [[1295,288],[1317,281],[1338,278],[1359,279],[1381,291],[1400,312],[1409,333],[1409,354],[1404,376],[1394,398],[1374,417]], "sourceOutline": [[1348,260],[1330,264],[1315,271],[1305,278],[1295,289],[1325,290],[1341,295],[1362,308],[1378,327],[1386,344],[1390,372],[1384,400],[1373,418],[1373,418],[1393,411],[1417,392],[1428,375],[1433,362],[1436,335],[1430,309],[1414,284],[1397,271],[1385,265],[1364,260]], "collision": { "kind": "polyline-buffer", "widthPx": 56, "blocksMovement": true, "blocksVision": true } },
+      { "id": "ordinary-upper-east-enclosure", "sourceBounds": [1136, 317, 1286, 492], "visualKind": "loop", "sourcePath": [[1286,483],[1260,488],[1233,486],[1206,482],[1179,473],[1153,451],[1142,424],[1143,397],[1152,370],[1165,343],[1177,317]], "collision": { "kind": "polyline-buffer", "widthPx": 22, "blocksMovement": true, "blocksVision": false } },
+      { "id": "ordinary-mid-upper-east-outer", "sourceBounds": [1429, 462, 1567, 601], "visualKind": "arc", "sourcePath": [[1559,462],[1564,482],[1560,503],[1556,524],[1548,545],[1532,566],[1512,582],[1491,592],[1470,597],[1449,595],[1429,592]], "collision": { "kind": "polyline-buffer", "widthPx": 24, "blocksMovement": true, "blocksVision": false } },
+      { "id": "ordinary-mid-upper-east-bar", "sourceBounds": [1188, 547, 1370, 574], "visualKind": "arc", "sourcePath": [[1188,560],[1224,560],[1261,560],[1297,560],[1334,560],[1370,560]], "collision": { "kind": "polyline-buffer", "widthPx": 20, "blocksMovement": true, "blocksVision": false } },
+      { "id": "ordinary-mid-lower-east-outer", "sourceBounds": [1429, 653, 1566, 792], "visualKind": "arc", "sourcePath": [[1558,792],[1566,772],[1559,751],[1556,730],[1547,709],[1532,688],[1511,671],[1490,662],[1469,657],[1448,657],[1429,658]], "collision": { "kind": "polyline-buffer", "widthPx": 24, "blocksMovement": true, "blocksVision": false } },
+      { "id": "ordinary-mid-lower-east-bar", "sourceBounds": [1192, 671, 1374, 698], "visualKind": "arc", "sourcePath": [[1374,684],[1337,684],[1301,684],[1264,684],[1228,684],[1192,683]], "collision": { "kind": "polyline-buffer", "widthPx": 20, "blocksMovement": true, "blocksVision": false } },
+      { "id": "ordinary-lower-east-enclosure", "sourceBounds": [1136, 762, 1286, 937], "visualKind": "loop", "sourcePath": [[1177,937],[1164,911],[1151,884],[1143,857],[1142,830],[1152,804],[1178,781],[1205,772],[1232,767],[1259,765],[1286,768]], "collision": { "kind": "polyline-buffer", "widthPx": 22, "blocksMovement": true, "blocksVision": false } },
+      { "id": "ordinary-lower-east-crescent", "sourceBounds": [1299, 836, 1440, 994], "visualKind": "crescent", "wallType": "thickWall", "sourcePath": [[1377,836],[1397,855],[1407,876],[1413,898],[1413,920],[1404,941],[1386,962],[1364,974],[1342,976],[1321,972],[1299,965]], "sourceOutline": [[1378,836],[1390,859],[1394,882],[1391,906],[1380,930],[1363,948],[1344,959],[1332,963],[1298,964],[1311,977],[1330,988],[1342,992],[1359,994],[1362,994],[1388,989],[1410,977],[1422,965],[1430,953],[1437,936],[1440,918],[1437,892],[1430,875],[1422,863],[1403,846],[1378,836]], "collision": { "kind": "polyline-buffer", "widthPx": 56, "blocksMovement": true, "blocksVision": true } },
+      { "id": "ordinary-bottom-east-outer", "sourceBounds": [1445, 980, 1580, 1112], "visualKind": "arc", "sourcePath": [[1445,1093],[1467,1099],[1489,1104],[1512,1110],[1535,1104],[1558,1093],[1572,1071],[1580,1048],[1572,1025],[1566,1003],[1559,980]], "collision": { "kind": "polyline-buffer", "widthPx": 24, "blocksMovement": true, "blocksVision": false } },
+      { "id": "ordinary-bottom-east-arch", "sourceBounds": [990, 1054, 1250, 1085], "visualKind": "arc", "sourcePath": [[1250,1058],[1225,1067],[1199,1073],[1173,1077],[1147,1079],[1121,1085],[1094,1079],[1068,1076],[1042,1072],[1016,1066],[990,1059]], "collision": { "kind": "polyline-buffer", "widthPx": 20, "blocksMovement": true, "blocksVision": false } }
+    ]
+  },
+  "debugOverlay": {
+    "defaultEnabled": false,
+    "referenceImage": {
+      "url": "/training-war-map-v1-reference.png",
+      "crop": {
+        "left": 0.025324,
+        "top": 0.053299,
+        "width": 0.946408,
+        "height": 0.945855
+      }
+    },
+    "layers": ["referenceBounds", "terrain", "spawnRegions", "routes", "walls", "objectives", "neutralCamps", "labels"]
+  }
+}

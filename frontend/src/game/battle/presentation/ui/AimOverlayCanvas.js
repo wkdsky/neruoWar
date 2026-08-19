@@ -1,4 +1,5 @@
 import React, { useEffect, useRef } from 'react';
+import { getSkillPaintRemainingRadius } from '../../shared/skillPaintArea';
 
 const clamp = (value, min, max) => Math.min(max, Math.max(min, value));
 
@@ -49,6 +50,76 @@ const AimOverlayCanvas = ({
       const edge = toScreen(x + Math.max(1, worldRadius), y, 0);
       const radius = edge?.visible ? Math.hypot(edge.x - center.x, edge.y - center.y) : Math.max(8, worldRadius * 0.35);
       drawCircle(center, radius, stroke, fill, lineWidth, dash);
+    };
+
+    const drawWatercolorBlob = (point, worldRadius, opacity = 0.2) => {
+      const center = toScreen(point?.x, point?.y, 0);
+      if (!center?.visible) return;
+      const safeWorldRadius = Math.max(1, Number(worldRadius) || 1);
+      const edgeX = toScreen((Number(point?.x) || 0) + safeWorldRadius, Number(point?.y) || 0, 0);
+      const edgeY = toScreen(Number(point?.x) || 0, (Number(point?.y) || 0) + safeWorldRadius, 0);
+      const radiusX = edgeX?.visible
+        ? Math.max(2, Math.hypot(edgeX.x - center.x, edgeX.y - center.y))
+        : Math.max(6, safeWorldRadius * 0.32);
+      const radiusY = edgeY?.visible
+        ? Math.max(2, Math.hypot(edgeY.x - center.x, edgeY.y - center.y))
+        : radiusX;
+      ctx.save();
+      ctx.translate(center.x, center.y);
+      ctx.scale(radiusX, radiusY);
+      const gradient = ctx.createRadialGradient(0, 0, 0, 0, 0, 1);
+      gradient.addColorStop(0, `rgba(244, 114, 182, ${Math.max(0.03, opacity * 0.52)})`);
+      gradient.addColorStop(0.72, `rgba(244, 114, 182, ${Math.max(0.025, opacity * 0.3)})`);
+      gradient.addColorStop(0.94, `rgba(244, 114, 182, ${Math.max(0.012, opacity * 0.16)})`);
+      gradient.addColorStop(1, 'rgba(244, 114, 182, 0)');
+      ctx.beginPath();
+      ctx.arc(0, 0, 1, 0, Math.PI * 2);
+      ctx.fillStyle = gradient;
+      ctx.fill();
+      ctx.restore();
+    };
+
+    const drawWatercolorStroke = (stamps = [], opacity = 0.3) => {
+      const projected = (Array.isArray(stamps) ? stamps : [])
+        .map((stamp) => {
+          const x = Number(stamp?.x) || 0;
+          const y = Number(stamp?.y) || 0;
+          const worldRadius = Math.max(1, Number(stamp?.radius) || 1);
+          const center = toScreen(x, y, 0);
+          if (!center?.visible) return null;
+          const edgeX = toScreen(x + worldRadius, y, 0);
+          const edgeY = toScreen(x, y + worldRadius, 0);
+          const radiusX = edgeX?.visible ? Math.hypot(edgeX.x - center.x, edgeX.y - center.y) : 6;
+          const radiusY = edgeY?.visible ? Math.hypot(edgeY.x - center.x, edgeY.y - center.y) : radiusX;
+          return {
+            stamp: { x, y, radius: worldRadius },
+            center,
+            radius: Math.max(2, (radiusX + radiusY) * 0.5)
+          };
+        })
+        .filter(Boolean);
+      if (projected.length <= 0) return;
+      if (projected.length === 1) {
+        drawWatercolorBlob(projected[0].stamp, projected[0].stamp.radius, opacity);
+        return;
+      }
+      ctx.save();
+      ctx.lineCap = 'round';
+      ctx.lineJoin = 'round';
+      for (let segmentIndex = 1; segmentIndex < projected.length; segmentIndex += 1) {
+        const previous = projected[segmentIndex - 1];
+        const current = projected[segmentIndex];
+        ctx.beginPath();
+        ctx.moveTo(previous.center.x, previous.center.y);
+        ctx.lineTo(current.center.x, current.center.y);
+        ctx.strokeStyle = `rgba(244, 114, 182, ${Math.max(0.03, opacity * 0.48)})`;
+        ctx.lineWidth = Math.max(4, Math.min(previous.radius, current.radius) * 2);
+        ctx.stroke();
+      }
+      ctx.restore();
+      projected.forEach((row) => {
+        drawWatercolorBlob(row.stamp, row.stamp.radius, opacity * 0.82);
+      });
     };
 
     const drawPath = (sourceCenter, points, color, nodeFill, dash = [5, 4], lineWidth = 2) => {
@@ -105,6 +176,34 @@ const AimOverlayCanvas = ({
       }
 
       drawPath(center, waypoints, 'rgba(56, 189, 248, 0.82)', 'rgba(56, 189, 248, 0.24)');
+
+      if (
+        isTrainingMode
+        && battleUiMode === 'SKILL_CONFIRM'
+        && skillConfirmState?.squadId === selectedSquad.id
+        && skillConfirmState?.paintArea
+      ) {
+        const originX = Number(skillConfirmState?.center?.x) || Number(selectedSquad.x) || 0;
+        const originY = Number(skillConfirmState?.center?.y) || Number(selectedSquad.y) || 0;
+        drawWorldRadiusCircle(
+          originX,
+          originY,
+          Math.max(8, Number(skillConfirmState?.maxRange) || 180),
+          'rgba(251, 191, 36, 0.56)',
+          'rgba(251, 191, 36, 0.025)',
+          1.1,
+          [4, 5]
+        );
+        const stamps = Array.isArray(skillConfirmState.paintArea.stamps)
+          ? skillConfirmState.paintArea.stamps
+          : [];
+        drawWatercolorStroke(stamps, 0.3);
+        const remainingRadius = getSkillPaintRemainingRadius(skillConfirmState.paintArea);
+        const cursorPoint = skillConfirmState.hoverPoint || { x: originX, y: originY };
+        if (remainingRadius > 0.05) {
+          drawWatercolorBlob(cursorPoint, remainingRadius, skillConfirmState.paintArea.isDragging ? 0.38 : 0.3);
+        }
+      }
 
       if (battleUiMode === 'PATH_PLANNING') {
         drawPath(center, pendingPathPoints, 'rgba(250, 204, 21, 0.9)', 'rgba(250, 204, 21, 0.26)', [7, 5], 2.2);

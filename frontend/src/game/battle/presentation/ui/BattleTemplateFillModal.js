@@ -3,6 +3,7 @@ import { createPortal } from 'react-dom';
 import useDraggablePanel from './useDraggablePanel';
 import './Battle.css';
 import { MAX_NAME_DISPLAY_WIDTH } from '../../shared/nameLimits';
+import { formatAttackRange } from '../../../unit/attackRange';
 
 const NUMBER_PAD_ROWS = [
   ['1', '2', '3'],
@@ -70,7 +71,7 @@ const BattleTemplateFillModal = ({
     { label: '总攻击', value: formatCount(stats.totalAtk) },
     { label: '总防御', value: formatCount(stats.totalDef) },
     { label: '编队移速', value: formatMetric(stats.cohesiveSpeed) },
-    { label: '有效射程', value: formatMetric(stats.range) }
+    { label: '攻击范围', value: formatAttackRange(stats.attackRange || { max: stats.range }) }
   ];
   const showTeamSwitch = isTrainingMode && !isEditing;
 

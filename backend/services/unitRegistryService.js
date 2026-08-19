@@ -7,6 +7,7 @@ const {
   resolveUnitClassification
 } = require('./unitTypeDtoService');
 const { buildUnitCatalog } = require('../seed/unitCatalogFactory');
+const { normalizeAttackRange } = require('./attackRangeService');
 
 const DATA_FILE_PATH = path.resolve(__dirname, '../seed/bootstrap_catalog_data.json');
 
@@ -87,6 +88,24 @@ const matchesExpectedUnitCosts = (actualRows = [], expectedRows = []) => {
     });
 };
 
+const matchesExpectedUnitAttackRanges = (actualRows = [], expectedRows = []) => {
+  const actualById = new Map(
+    (Array.isArray(actualRows) ? actualRows : [])
+      .map((row) => [typeof row?.unitTypeId === 'string' ? row.unitTypeId.trim() : '', row])
+      .filter(([unitTypeId]) => Boolean(unitTypeId))
+  );
+  return Array.isArray(expectedRows)
+    && actualById.size === expectedRows.length
+    && expectedRows.every((expected) => {
+      const unitTypeId = typeof expected?.unitTypeId === 'string' ? expected.unitTypeId.trim() : '';
+      const actual = actualById.get(unitTypeId);
+      if (!actual) return false;
+      const expectedRange = normalizeAttackRange(expected);
+      const actualRange = normalizeAttackRange(actual);
+      return actualRange.min === expectedRange.min && actualRange.max === expectedRange.max;
+    });
+};
+
 const isNewCatalogReady = async () => {
   const expectedUnitTypes = buildUnitCatalog(readBootstrapPatch()).unitTypes;
   const expectedIds = expectedUnitTypes
@@ -96,7 +115,7 @@ const isNewCatalogReady = async () => {
     ArmyUnitType.countDocuments({}),
     ArmyUnitType.countDocuments({ enabled: true }),
     ArmyUnitType.find({ unitTypeId: { $in: expectedIds } })
-      .select('unitTypeId unitCategory unitSubtype enabled costKP visuals.preview.palette')
+      .select('unitTypeId unitCategory unitSubtype roleTag enabled costKP attackRange range visuals.preview.palette')
       .lean()
   ]);
   return expectedIds.length === 9
@@ -104,7 +123,8 @@ const isNewCatalogReady = async () => {
     && enabledCount === expectedIds.length
     && matchesExpectedUnitClassifications(actualRows, expectedUnitTypes)
     && matchesExpectedUnitPalettes(actualRows, expectedUnitTypes)
-    && matchesExpectedUnitCosts(actualRows, expectedUnitTypes);
+    && matchesExpectedUnitCosts(actualRows, expectedUnitTypes)
+    && matchesExpectedUnitAttackRanges(actualRows, expectedUnitTypes);
 };
 
 const resetToGeneratedCatalog = async () => {
@@ -196,6 +216,7 @@ module.exports = {
   matchesExpectedUnitClassifications,
   matchesExpectedUnitPalettes,
   matchesExpectedUnitCosts,
+  matchesExpectedUnitAttackRanges,
   fetchUnitTypesWithComponents,
   serializeUnitComponent
 };

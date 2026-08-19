@@ -2,6 +2,7 @@ const ArmyUnitType = require('../models/ArmyUnitType');
 const { ensureGeneratedCatalog } = require('./unitRegistryService');
 const { resolveUnitClassification } = require('./unitTypeDtoService');
 const { resolveUnitPalette } = require('../seed/unitCatalogFactory');
+const { normalizeAttackRange } = require('./attackRangeService');
 
 const serializeArmyUnitType = (doc) => {
   const src = typeof doc?.toObject === 'function' ? doc.toObject() : (doc || {});
@@ -10,6 +11,7 @@ const serializeArmyUnitType = (doc) => {
   const previewVisual = src?.visuals?.preview && typeof src.visuals.preview === 'object' ? src.visuals.preview : {};
   const { unitCategory, unitSubtype } = resolveUnitClassification(src);
   const paletteFallback = resolveUnitPalette(unitCategory, unitSubtype);
+  const attackRange = normalizeAttackRange({ ...src, unitCategory });
   return {
     schemaVersion: 2,
     id: src.unitTypeId || '',
@@ -22,7 +24,8 @@ const serializeArmyUnitType = (doc) => {
     hp: Number(src.hp) || 0,
     atk: Number(src.atk) || 0,
     def: Number(src.def) || 0,
-    range: Number(src.range) || 0,
+    attackRange,
+    range: attackRange.max,
     costKP: Number(src.costKP) || 0,
     level: tier,
     tier,

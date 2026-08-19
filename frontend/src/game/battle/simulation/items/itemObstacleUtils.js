@@ -24,6 +24,18 @@ export const isSoftObstacle = (obstacle = {}) => {
   return true;
 };
 
+export const blocksMovement = (obstacle = {}) => {
+  if (!obstacle || obstacle.destroyed) return false;
+  if (obstacle?.blocksMovement === false) return false;
+  return !isSoftObstacle(obstacle);
+};
+
+export const blocksVision = (obstacle = {}) => {
+  if (!obstacle || obstacle.destroyed) return false;
+  if (obstacle?.blocksVision === false) return false;
+  return !isSoftObstacle(obstacle);
+};
+
 export const resolveObstacleMoveSpeedMul = (obstacle = {}, fallback = DEFAULT_CONCEALMENT_MOVE_SPEED_MUL) => {
   const interaction = getInteractionByKind(obstacle, 'concealment');
   const source = interaction?.params || {};
@@ -74,7 +86,11 @@ export const resolveConcealmentMaskTriggerRadius = (obstacle = {}) => {
 };
 
 export const filterBlockingObstacles = (obstacles = []) => (
-  (Array.isArray(obstacles) ? obstacles : []).filter((obstacle) => obstacle && !obstacle.destroyed && !isSoftObstacle(obstacle))
+  (Array.isArray(obstacles) ? obstacles : []).filter((obstacle) => blocksMovement(obstacle))
+);
+
+export const filterVisionBlockingObstacles = (obstacles = []) => (
+  (Array.isArray(obstacles) ? obstacles : []).filter((obstacle) => blocksVision(obstacle))
 );
 
 export const resolveViewerTeam = (sim = {}) => {
@@ -93,11 +109,14 @@ const itemObstacleUtils = {
   getInteractionByKind,
   isConcealmentObstacle,
   isSoftObstacle,
+  blocksMovement,
+  blocksVision,
   resolveObstacleMoveSpeedMul,
   resolveObstacleFootprintRadius,
   resolveConcealmentMaskRadius,
   resolveConcealmentMaskTriggerRadius,
   filterBlockingObstacles,
+  filterVisionBlockingObstacles,
   resolveViewerTeam,
   isOccupiedByViewerTeam
 };

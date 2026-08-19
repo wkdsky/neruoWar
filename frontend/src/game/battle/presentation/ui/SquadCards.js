@@ -20,6 +20,26 @@ const labelByClass = {
   artillery: '炮兵'
 };
 
+const labelByLane = {
+  top: '上路',
+  mid: '中路',
+  bottom: '下路',
+  jungle: '野区',
+  support: '支援区'
+};
+
+const labelByObjectiveType = {
+  tower: '防御塔',
+  base: '基地',
+  neutralCamp: '野区靶点'
+};
+
+const formatAttackRange = (range = {}) => {
+  const min = Math.max(0, Number(range?.min) || 0);
+  const max = Math.max(min, Number(range?.max) || 0);
+  return `${min.toFixed(1)}–${max.toFixed(1)}`;
+};
+
 const SPEED_MODE_C = 'C_PER_TYPE';
 const speedModeBadge = (row = {}) => {
   if (row?.speedModeAuthority !== 'USER') return 'A';
@@ -319,7 +339,9 @@ const SquadCards = ({
         {isTrainingMode ? (
           <div className="pve2-card-row pve2-card-row-compact">
             <span>{row.remain}/{row.startCount}</span>
-            <span>{row.action || '待命'}</span>
+            <span className={row.towerLocked ? 'is-tower-locked' : ''}>
+              {row.towerLocked ? '塔锁定' : (labelByLane[row.laneId] || row.action || '待命')}
+            </span>
           </div>
         ) : (
           <>
@@ -391,6 +413,16 @@ const SquadCards = ({
             disabled={phase === 'deploy' ? !canConfigureSkills : false}
           />
         </div>
+        {selectedRow.laneId ? (
+          <div className="pve2-training-map-context" aria-label="地图战术信息">
+            <span>{`路线 ${labelByLane[selectedRow.laneId] || selectedRow.laneId}`}</span>
+            <span>{`攻击范围 ${formatAttackRange(selectedRow.unitMetrics?.attackRange)}`}</span>
+            {selectedRow.nearbyTarget ? (
+              <span>{`附近 ${labelByObjectiveType[selectedRow.nearbyTarget.type] || '目标'} ${Math.round(selectedRow.nearbyTarget.distance || 0)}`}</span>
+            ) : null}
+            {selectedRow.towerLocked ? <strong>已被塔锁定</strong> : null}
+          </div>
+        ) : null}
         {(phase === 'deploy' || canShowBattleActions || canShowFormationPicker) ? (
           <div className="pve2-training-squad-command-row">
           {canShowFormationPicker ? (

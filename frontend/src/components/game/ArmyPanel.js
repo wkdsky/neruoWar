@@ -3,6 +3,7 @@ import { createPortal } from 'react-dom';
 import './ArmyPanel.css';
 import { API_BASE } from '../../runtimeConfig';
 import normalizeUnitTypes from '../../game/unit/normalizeUnitTypes';
+import { formatAttackRange, normalizeAttackRange } from '../../game/unit/attackRange';
 import {
   ArmyUnitCloseupCanvasPreview,
   ArmyUnitBattleCanvasPreview
@@ -94,11 +95,11 @@ const buildUnitIntro = (unit = {}) => {
   const classLabel = classMeta.label || `${categoryLabel}-${classMeta.subtypeLabel || '通用型'}`;
   const professionId = typeof unit?.professionId === 'string' ? unit.professionId : '';
   const speed = Number(unit?.speed) || 0;
-  const range = Number(unit?.range) || 0;
+  const attackRange = formatAttackRange(unit);
   if (categoryLabel === '辅助') {
-    return `该兵种定位为${classLabel}（${professionId}），用于为部队提供战术增益或干预效果。当前射程 ${range}，机动 ${speed}。`;
+    return `该兵种定位为${classLabel}（${professionId}），用于为部队提供战术增益或干预效果。当前攻击范围 ${attackRange}，机动 ${speed}。`;
   }
-  return `该兵种定位为${classLabel}（${professionId}），当前射程 ${range}，机动 ${speed}。`;
+  return `该兵种定位为${classLabel}（${professionId}），当前攻击范围 ${attackRange}，机动 ${speed}。`;
 };
 
 const unitsToSummaryText = (units = [], unitNameById = new Map()) => (
@@ -187,7 +188,8 @@ const buildCombatArmyComposerStats = (units = [], unitTypeMap = {}) => {
   let totalHp = 0;
   let totalAtk = 0;
   let totalDef = 0;
-  let totalRange = 0;
+  let totalRangeMin = 0;
+  let totalRangeMax = 0;
   let speedReciprocalSum = 0;
   (Array.isArray(units) ? units : []).forEach((entry) => {
     const unitTypeId = typeof entry?.unitTypeId === 'string' ? entry.unitTypeId.trim() : '';
@@ -198,12 +200,13 @@ const buildCombatArmyComposerStats = (units = [], unitTypeMap = {}) => {
     const atk = Math.max(0, Number(unit?.atk) || 0);
     const def = Math.max(0, Number(unit?.def) || 0);
     const speed = Math.max(0.2, Number(unit?.speed) || 1);
-    const range = Math.max(1, Number(unit?.range) || 1);
+    const attackRange = normalizeAttackRange(unit);
     totalCount += count;
     totalHp += hp * count;
     totalAtk += atk * count;
     totalDef += def * count;
-    totalRange += range * count;
+    totalRangeMin += attackRange.min * count;
+    totalRangeMax += attackRange.max * count;
     speedReciprocalSum += count / speed;
   });
   return {
@@ -212,7 +215,11 @@ const buildCombatArmyComposerStats = (units = [], unitTypeMap = {}) => {
     totalAtk,
     totalDef,
     cohesiveSpeed: totalCount > 0 && speedReciprocalSum > 0 ? totalCount / speedReciprocalSum : 0,
-    range: totalCount > 0 ? totalRange / totalCount : 0
+    attackRange: {
+      min: totalCount > 0 ? totalRangeMin / totalCount : 0,
+      max: totalCount > 0 ? totalRangeMax / totalCount : 0
+    },
+    range: totalCount > 0 ? totalRangeMax / totalCount : 0
   };
 };
 
@@ -592,12 +599,23 @@ const buildTroopAggregateStats = (units = [], unitTypeMap = {}, unitClassMetaByI
     const value = rows.reduce((sum, row) => sum + ((Number(row.unit?.[key]) || 0) * row.count), 0) / total;
     return Math.round(value * 10) / 10;
   };
+  const weightedAttackRange = (key) => {
+    if (total <= 0) return 0;
+    const value = rows.reduce((sum, row) => (
+      sum + (normalizeAttackRange(row.unit)[key] * row.count)
+    ), 0) / total;
+    return Math.round(value * 10) / 10;
+  };
   return {
     total,
     speed: weighted('speed'),
     hp: weighted('hp'),
     atk: weighted('atk'),
     def: weighted('def'),
+    attackRange: {
+      min: weightedAttackRange('min'),
+      max: weightedAttackRange('max')
+    },
     range: weighted('range')
   };
 };
@@ -2007,7 +2025,7 @@ const ArmyPanel = ({
                         <span>生命 {unit.hp}</span>
                         <span>攻击 {unit.atk}</span>
                         <span>防御 {unit.def}</span>
-                        <span>射程 {unit.range}</span>
+                        <span>{`攻击范围 ${formatAttackRange(unit)}`}</span>
                         <span>{formatUnitKnowledgeCost(unit)}</span>
                         <span>{`职业 ${unit.professionId || '-'}`}</span>
                       </div>
@@ -2191,7 +2209,7 @@ const ArmyPanel = ({
                         <span>生命 {unit.hp}</span>
                         <span>攻击 {unit.atk}</span>
                         <span>防御 {unit.def}</span>
-                        <span>射程 {unit.range}</span>
+                        <span>{`攻击范围 ${formatAttackRange(unit)}`}</span>
                         <span>{formatUnitKnowledgeCost(unit)}</span>
                         <span>{`未分配 ${unit.count}`}</span>
                       </div>
@@ -2249,7 +2267,7 @@ const ArmyPanel = ({
               <div><span>生命</span><strong>{Number(detailUnit.hp) || 0}</strong></div>
               <div><span>攻击</span><strong>{Number(detailUnit.atk) || 0}</strong></div>
               <div><span>防御</span><strong>{Number(detailUnit.def) || 0}</strong></div>
-              <div><span>射程</span><strong>{Number(detailUnit.range) || 0}</strong></div>
+              <div><span>攻击范围</span><strong>{formatAttackRange(detailUnit)}</strong></div>
               <div><span>每名知识点</span><strong>{`${getUnitKnowledgeCost(detailUnit)} 点`}</strong></div>
               <div><span>未分配</span><strong>{Number(detailUnit.count) || 0}</strong></div>
               <div><span>升级到</span><strong>{detailUnit.nextUnitTypeId || '无'}</strong></div>
@@ -2645,7 +2663,7 @@ const ArmyPanel = ({
                     <div><span>生命</span><strong>{templateEditorPreviewStats.hp}</strong></div>
                     <div><span>攻击</span><strong>{templateEditorPreviewStats.atk}</strong></div>
                     <div><span>防御</span><strong>{templateEditorPreviewStats.def}</strong></div>
-                    <div><span>射程</span><strong>{templateEditorPreviewStats.range}</strong></div>
+                    <div><span>攻击范围</span><strong>{formatAttackRange(templateEditorPreviewStats.attackRange)}</strong></div>
                   </div>
                   <div className="army-template-troop-info-compose">
                     {templateEditorBasisRows.length <= 0 ? (
@@ -2692,7 +2710,7 @@ const ArmyPanel = ({
                       <div><span>生命</span><strong>{Number(templateEditorDetailUnit.hp) || 0}</strong></div>
                       <div><span>攻击</span><strong>{Number(templateEditorDetailUnit.atk) || 0}</strong></div>
                       <div><span>防御</span><strong>{Number(templateEditorDetailUnit.def) || 0}</strong></div>
-                      <div><span>射程</span><strong>{Number(templateEditorDetailUnit.range) || 0}</strong></div>
+                      <div><span>攻击范围</span><strong>{formatAttackRange(templateEditorDetailUnit)}</strong></div>
                       <div><span>库存</span><strong>{Number(templateEditorDetailUnit.count) || 0}</strong></div>
                     </div>
                   </div>
@@ -2855,7 +2873,7 @@ const ArmyPanel = ({
                     <div><span>生命</span><strong>{templateEditorPreviewStats.hp}</strong></div>
                     <div><span>攻击</span><strong>{templateEditorPreviewStats.atk}</strong></div>
                     <div><span>防御</span><strong>{templateEditorPreviewStats.def}</strong></div>
-                    <div><span>射程</span><strong>{templateEditorPreviewStats.range}</strong></div>
+                    <div><span>攻击范围</span><strong>{formatAttackRange(templateEditorPreviewStats.attackRange)}</strong></div>
                   </div>
                 </section>
                 <section className="army-template-preview-section">

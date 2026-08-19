@@ -8,6 +8,12 @@ import {
 
 const clamp = (value, min, max) => Math.min(max, Math.max(min, value));
 
+const normalizeTrainingFlagTeam = (team = '') => {
+  if (team === 'defender') return 'defender';
+  if (team === 'neutral') return 'neutral';
+  return 'attacker';
+};
+
 const requestFrame = (callback) => {
   if (typeof window === 'undefined') return 0;
   if (typeof window.requestAnimationFrame === 'function') {
@@ -40,13 +46,15 @@ export const buildTrainingFlagRows = (squads = []) => {
     .filter((row) => row && row.placed !== false && (Number(row.remain) || 0) > 0)
     .map((row) => {
       const ratio = resolveTrainingTroopRatio(row);
+      const team = normalizeTrainingFlagTeam(row.team);
       return {
         id: String(row.id || ''),
         name: String(row.name || '部队'),
-        team: row.team === 'defender' ? 'defender' : 'attacker',
+        team,
         remain: Math.max(0, Math.floor(Number(row.remain) || 0)),
         startCount: Math.max(0, Math.floor(Number(row.startCount) || 0)),
         skillPoints: Math.max(0, Math.floor(Number(row?.trainingSkillPoints) || 0)),
+        showSkillPoints: team !== 'neutral',
         x: Number.isFinite(Number(row.centerX)) ? Number(row.centerX) : (Number(row.x) || 0),
         y: Number.isFinite(Number(row.centerY)) ? Number(row.centerY) : (Number(row.y) || 0),
         radius: Math.max(0, Number(row.radius) || 0),
@@ -223,7 +231,7 @@ const TrainingFlagLabels = ({
         seenDamageRef.current.set(id, revision);
         const entry = {
           id,
-          team: event?.team === 'defender' ? 'defender' : 'attacker',
+          team: normalizeTrainingFlagTeam(event?.team),
           x: Number(event?.x) || 0,
           y: Number(event?.y) || 0,
           z: Number(event?.z) || 3,
@@ -362,9 +370,11 @@ const TrainingFlagLabels = ({
             if (node) flagNodesRef.current.set(row.id, node);
             else flagNodesRef.current.delete(row.id);
           }}
-          className={`pve2-training-flag-label is-${row.team} is-${row.troopState} ${row.selected ? 'is-selected' : ''} ${hoveredSquadId === row.id ? 'is-hovered' : ''}`}
+          className={`pve2-training-flag-label is-${row.team} is-${row.troopState} ${row.showSkillPoints ? '' : 'has-no-skill-points'} ${row.selected ? 'is-selected' : ''} ${hoveredSquadId === row.id ? 'is-hovered' : ''}`}
           data-training-flag={row.id}
-          aria-label={`${row.name}：兵力 ${row.remain}/${row.startCount}，技能点 ${row.skillPoints}`}
+          aria-label={row.showSkillPoints
+            ? `${row.name}：兵力 ${row.remain}/${row.startCount}，技能点 ${row.skillPoints}`
+            : `${row.name}：兵力 ${row.remain}/${row.startCount}`}
           onPointerDown={(event) => event.stopPropagation()}
           onMouseDown={(event) => event.stopPropagation()}
           onMouseEnter={() => {
@@ -392,10 +402,12 @@ const TrainingFlagLabels = ({
             <span className="pve2-training-flag-health" aria-hidden="true">
               <i style={{ width: `${Math.round(row.ratio * 100)}%` }} />
             </span>
-            <div className="pve2-training-flag-points">
-              <span>点</span>
-              <strong>{row.skillPoints}</strong>
-            </div>
+            {row.showSkillPoints ? (
+              <div className="pve2-training-flag-points">
+                <span>点</span>
+                <strong>{row.skillPoints}</strong>
+              </div>
+            ) : null}
           </div>
         </div>
       ))}
