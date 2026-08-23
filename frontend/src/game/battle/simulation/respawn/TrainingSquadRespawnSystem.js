@@ -50,10 +50,13 @@ const resetSquadForRespawn = (squad = {}, point = {}, nowSec = 0) => {
     issuedAt: Math.max(0, finiteNumber(nowSec)),
     commitUntil: 0,
     targetPoint: null,
-    targetSquadId: ''
+    targetSquadId: '',
+    targetBuildingId: ''
   };
   squad.waypoints = [];
   squad.targetSquadId = '';
+  squad.targetBuildingId = '';
+  squad._attackMoveResumeWaypoints = [];
   squad.flagBearerAgentId = '';
   squad.underAttackTimer = 0;
   squad.attackCooldown = 0;

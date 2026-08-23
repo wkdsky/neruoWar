@@ -1,8 +1,10 @@
 import { raycastObstacles } from '../crowd/crowdPhysics';
 import { applyDamageToAgent } from '../crowd/crowdCombat';
-import { resolveSquadAttackRange } from '../crowd/attackRange';
+import { isRangedAgent, resolveAgentAttackRange } from '../crowd/attackRange';
 import { acquireHitEffect, acquireProjectile } from '../effects/CombatEffects';
 import { filterVisionBlockingObstacles } from '../items/itemObstacleUtils';
+import { isSquadCombatEnabled } from '../crowd/combatPolicy';
+import { isHostileTeam } from '../crowd/teamRelations';
 
 const TEAM_ATTACKER = 'attacker';
 const TEAM_DEFENDER = 'defender';
@@ -63,6 +65,7 @@ const normalizeObjective = (definition = {}, index = 0) => {
   type: String(definition?.type || 'structure'),
   team: normalizeTeam(definition?.team),
   laneId: String(definition?.laneId || 'jungle'),
+  routeOrder: Math.max(0, Math.floor(finiteNumber(definition?.routeOrder))),
   maxHp: Math.max(1, finiteNumber(definition?.maxHp, 1000)),
   hp: Math.max(1, finiteNumber(definition?.maxHp, 1000)),
   attackRange: Math.max(Math.max(0, finiteNumber(definition?.attackRange)), maxWeaponRange),
@@ -93,9 +96,11 @@ const normalizeObjective = (definition = {}, index = 0) => {
 };
 
 const resolveBuildingByObjectId = (sim = {}, objective = {}) => (
-  (Array.isArray(sim?.buildings) ? sim.buildings : []).find((building) => (
-    String(building?.id || '') === String(objective?.sourceObjectId || '')
-  )) || null
+  sim?._trainingObjectiveBuildingById instanceof Map
+    ? (sim._trainingObjectiveBuildingById.get(String(objective?.sourceObjectId || '')) || null)
+    : ((Array.isArray(sim?.buildings) ? sim.buildings : []).find((building) => (
+      String(building?.id || '') === String(objective?.sourceObjectId || '')
+    )) || null)
 );
 
 const ensureTrainingStats = (sim = {}) => {
@@ -162,9 +167,8 @@ const canObjectiveTargetSquad = (objective = {}, squad = {}) => {
 
 const canSquadAttackObjective = (squad = {}, objective = {}) => {
   if (!squad || finiteNumber(squad?.remain) <= 0 || objective?.destroyed || objective?.targetable === false) return false;
-  if (squad?.behavior === 'standby' || squad?.behavior === 'retreat') return false;
-  if (objective?.team === TEAM_NEUTRAL) return squad?.team === TEAM_ATTACKER || squad?.team === TEAM_DEFENDER;
-  return squad?.team !== objective?.team && (squad?.team === TEAM_ATTACKER || squad?.team === TEAM_DEFENDER);
+  if (!isSquadCombatEnabled(squad)) return false;
+  return isHostileTeam(squad?.team, objective?.team);
 };
 
 const hasObjectiveLineOfSight = (from = {}, to = {}, obstacles = []) => (
@@ -404,21 +408,105 @@ const fireObjectiveWeapon = ({
   return true;
 };
 
-const applyObjectiveDamage = (sim = {}, objective = {}, squad = {}, dt = 0) => {
+const resolveAgentObjectiveAttackInterval = (agent = {}) => {
+  if (agent?.typeCategory === 'artillery') return 4.8;
+  if (agent?.typeCategory === 'archer' || agent?.unitCategory === 'ranged') return 1.16;
+  if (agent?.typeCategory === 'cavalry') return 0.86;
+  return 0.74;
+};
+
+const resolveAgentObjectiveEdgeDistance = (agent = {}, position = {}) => Math.max(
+  0,
+  Math.hypot(finiteNumber(agent?.x) - position.x, finiteNumber(agent?.y) - position.y)
+    - Math.max(0, finiteNumber(agent?.radius, 2.25))
+    - Math.max(0, finiteNumber(position?.radius))
+);
+
+const launchAgentObjectiveProjectile = ({
+  crowd = {},
+  objective = {},
+  building = {},
+  sourceAgent = null
+} = {}) => {
+  if (!sourceAgent || !crowd?.effectsPool) return false;
+  const dx = finiteNumber(building?.x) - finiteNumber(sourceAgent?.x);
+  const dy = finiteNumber(building?.y) - finiteNumber(sourceAgent?.y);
+  const distance = Math.max(1, Math.hypot(dx, dy));
+  const projectileType = sourceAgent?.typeCategory === 'artillery' ? 'shell' : 'arrow';
+  const projectileSpeed = projectileType === 'shell' ? 170 : 220;
+  acquireProjectile(crowd.effectsPool, {
+    type: projectileType,
+    team: sourceAgent.team,
+    squadId: sourceAgent.squadId,
+    sourceAgentId: sourceAgent.id,
+    targetBuildingId: String(building?.id || ''),
+    visualOnly: true,
+    x: finiteNumber(sourceAgent?.x),
+    y: finiteNumber(sourceAgent?.y),
+    z: projectileType === 'shell' ? 6 : 4.2,
+    vx: (dx / distance) * projectileSpeed,
+    vy: (dy / distance) * projectileSpeed,
+    vz: 0,
+    gravity: 0,
+    damage: 0,
+    radius: projectileType === 'shell' ? 4.5 : 2.2,
+    impactRadius: projectileType === 'shell' ? 5.2 : 2.2,
+    ttl: (distance / projectileSpeed) + 0.35,
+    targetTeam: objective?.team
+  });
+  return true;
+};
+
+const applyObjectiveDamage = (sim = {}, crowd = {}, objective = {}, squad = {}) => {
   const position = resolveObjectivePosition(sim, objective);
   const building = position.building;
   if (!building || building.destroyed || !canSquadAttackObjective(squad, objective)) return 0;
-  const attackRange = resolveSquadAttackRange(squad);
-  const squadRadius = Math.max(4, finiteNumber(squad?.radius, 10));
-  const distance = Math.hypot(finiteNumber(squad?.x) - position.x, finiteNumber(squad?.y) - position.y);
-  if (distance > attackRange.max + position.radius + squadRadius) return 0;
+  if (
+    squad?.isMinionWaveUnit === true
+    && objective?.type === 'tower'
+    && String(objective?.laneId || '') !== String(squad?.minionLaneId || '')
+  ) return 0;
   const obstacles = resolveVisionObstacles(sim, objective);
-  if (!hasObjectiveLineOfSight({ x: finiteNumber(squad?.x), y: finiteNumber(squad?.y) }, position, obstacles)) return 0;
-  const populationFactor = Math.sqrt(Math.max(1, finiteNumber(squad?.remain)));
-  const rawDamage = Math.max(0.2, finiteNumber(squad?.stats?.atk, 1) * populationFactor * 0.64 * Math.max(0.001, finiteNumber(dt)));
-  const actualDamage = rawDamage / Math.max(1, finiteNumber(building?.defense, 1));
+  const damageExponent = clamp(finiteNumber(sim?.repConfig?.damageExponent, 0.75), 0.2, 1.25);
+  const agents = (crowd?.agentsBySquad?.get(squad.id) || []).filter((agent) => (
+    agent
+    && !agent.dead
+    && agent.unitCategory !== 'support'
+    && String(agent.targetBuildingId || '') === String(building.id || '')
+  ));
+  let actualDamage = 0;
+  agents.forEach((agent) => {
+    if ((Number(agent.buildingAttackCd) || 0) > 0) return;
+    const attackRange = resolveAgentAttackRange(agent, squad);
+    const edgeDistance = resolveAgentObjectiveEdgeDistance(agent, position);
+    if (edgeDistance < Math.max(0, attackRange.min) - 0.001 || edgeDistance > attackRange.max + 0.001) return;
+    if (!hasObjectiveLineOfSight({ x: finiteNumber(agent?.x), y: finiteNumber(agent?.y) }, position, obstacles)) return;
+    const attackPower = Math.pow(Math.max(1, finiteNumber(agent?.weight, 1)), damageExponent)
+      * Math.max(0.05, finiteNumber(agent?.combatScale, 1));
+    const rawDamage = Math.max(0.18, finiteNumber(squad?.stats?.atk, 1) * 0.035 * attackPower);
+    const dealt = rawDamage / Math.max(1, finiteNumber(building?.defense, 1));
+    actualDamage += dealt;
+    agent.buildingAttackCd = resolveAgentObjectiveAttackInterval(agent) * (0.9 + (((Number(agent.slotOrder) || 0) % 5) * 0.025));
+    agent.state = 'attack';
+    agent.yaw = Math.atan2(position.y - finiteNumber(agent?.y), position.x - finiteNumber(agent?.x));
+    if (isRangedAgent(agent)) {
+      launchAgentObjectiveProjectile({ crowd, objective, building, sourceAgent: agent });
+    } else {
+      acquireHitEffect(crowd.effectsPool, {
+        type: 'slash',
+        x: position.x,
+        y: position.y,
+        z: Math.max(1.2, finiteNumber(building?.height, 24) * 0.24),
+        radius: 3.6,
+        ttl: 0.16,
+        team: squad.team
+      });
+    }
+  });
+  if (actualDamage <= 0) return 0;
   objective.hp = Math.max(0, finiteNumber(objective?.hp) - actualDamage);
   building.hp = objective.hp;
+  squad.targetBuildingId = String(building.id || '');
   objective.damageTaken += actualDamage;
   return actualDamage;
 };
@@ -439,6 +527,14 @@ const destroyObjective = (sim = {}, objective = {}, nowSec = 0, killerSquad = nu
     position.building.hp = 0;
     position.building.destroyed = true;
   }
+  (Array.isArray(sim?.squads) ? sim.squads : []).forEach((squad) => {
+    if (String(squad?.targetBuildingId || '') === String(position?.building?.id || '')) {
+      squad.targetBuildingId = '';
+    }
+    if (String(squad?.order?.targetBuildingId || '') === String(position?.building?.id || '')) {
+      squad.order.targetBuildingId = '';
+    }
+  });
   if (buildingWasActive) {
     sim.destroyedBuildings = Math.max(0, finiteNumber(sim?.destroyedBuildings)) + 1;
   }
@@ -529,9 +625,20 @@ export const getTrainingObjectiveSummary = (sim = {}) => (
 export const updateTrainingObjectives = (sim = {}, crowd = {}, dt = 0) => {
   const objectives = Array.isArray(sim?.trainingObjectives) ? sim.trainingObjectives : [];
   if (objectives.length <= 0) return;
+  sim._trainingObjectiveBuildingById = new Map(
+    (Array.isArray(sim?.buildings) ? sim.buildings : [])
+      .filter((building) => building?.id)
+      .map((building) => [String(building.id), building])
+  );
   const safeDt = clamp(finiteNumber(dt), 0, 0.2);
   const nowSec = Math.max(0, finiteNumber(sim?.timeElapsed));
   const stats = ensureTrainingStats(sim);
+  crowd?.agentsBySquad?.forEach?.((agents) => {
+    (Array.isArray(agents) ? agents : []).forEach((agent) => {
+      if (!agent || agent.dead) return;
+      agent.buildingAttackCd = Math.max(0, finiteNumber(agent.buildingAttackCd) - safeDt);
+    });
+  });
 
   objectives.forEach((objective) => {
     if (!objective) return;
@@ -562,7 +669,7 @@ export const updateTrainingObjectives = (sim = {}, crowd = {}, dt = 0) => {
     }
     let lastDamagingSquad = null;
     (Array.isArray(sim?.squads) ? sim.squads : []).forEach((squad) => {
-      const damage = applyObjectiveDamage(sim, objective, squad, safeDt);
+      const damage = applyObjectiveDamage(sim, crowd, objective, squad);
       if (damage <= 0) return;
       lastDamagingSquad = squad;
       recordObjectiveThreat(objective, squad, damage);

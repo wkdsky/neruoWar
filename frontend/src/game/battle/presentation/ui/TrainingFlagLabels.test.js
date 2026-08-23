@@ -69,6 +69,14 @@ describe('training flag labels', () => {
     ]));
   });
 
+  test('renders minion rows as health-only markers without skill points', () => {
+    const [row] = buildTrainingFlagRows([
+      { id: 'minion-wave', team: 'attacker', isMinionWaveUnit: true, remain: 72, startCount: 72, x: 0, y: 0 }
+    ]);
+
+    expect(row).toMatchObject({ isMinionWaveUnit: true, showSkillPoints: false, skillPoints: 0 });
+  });
+
   test('keeps the distant information label low while enlarging it for overview readability', () => {
     const row = { remain: 64, startCount: 100, radius: 26 };
     const closePresentation = resolveTrainingFlagLabelPresentation(row, 420);
@@ -89,6 +97,14 @@ describe('training flag labels', () => {
     expect(closeFlagPresentation.visible).toBe(false);
     expect(distantLabelPresentation.visible).toBe(true);
     expect(distantLabelPresentation.elevation).toBeLessThanOrEqual(14);
+  });
+
+  test('keeps minion information visible and elevated in the world-flag camera mode', () => {
+    const row = { remain: 72, startCount: 72, radius: 26, isMinionWaveUnit: true };
+    const presentation = resolveTrainingFlagLabelPresentation(row, 420, 50);
+
+    expect(presentation.visible).toBe(true);
+    expect(presentation.elevation).toBeGreaterThanOrEqual(11);
   });
 
   test('stacks overlapping information labels into a vertical column', () => {

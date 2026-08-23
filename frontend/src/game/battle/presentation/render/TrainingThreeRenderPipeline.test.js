@@ -475,11 +475,18 @@ describe('training map static objective placeholders', () => {
     expect(isTrainingMapStaticPlaceholder({ mapStatic: true, category: 'tower' })).toBe(true);
     expect(tower.name).toBe('training-map-placeholder-tower-defender-mid');
     expect(tower.position).toMatchObject({ x: 120, y: -48, z: 28 });
-    expect(tower.children).toHaveLength(5);
+    expect(tower.children).toHaveLength(6);
     expect(tower.getObjectByName('training-map-placeholder-tower-defender-mid-octagon-body').geometry.type).toBe('CylinderGeometry');
     expect(tower.getObjectByName('training-map-placeholder-tower-defender-mid-attack-range').visible).toBe(false);
+    const healthBar = tower.getObjectByName('training-map-placeholder-tower-defender-mid-structure-health-bar');
+    expect(healthBar.userData).toMatchObject({
+      structureHealthBar: true,
+      barKind: 'tower-durability',
+      team: 'defender'
+    });
     expect(applyTrainingMapStaticPlaceholderState(tower, { hp: 1100, maxHp: 2200 })).toBe(true);
     expect(tower.userData.hpRatio).toBeCloseTo(0.5);
+    expect(healthBar.userData.signature).toContain('1100:2200');
     expect(applyTrainingMapStaticPlaceholderState(tower, { hp: 0, maxHp: 2200 })).toBe(false);
     expect(tower.visible).toBe(false);
     tower.traverse((entry) => {
@@ -606,6 +613,7 @@ describe('training direction markers', () => {
 
   test('keeps neutral flags focused on troops and suppresses their ground markers', () => {
     expect(resolveTrainingFlagShowsSkillPoints({ team: 'attacker' })).toBe(true);
+    expect(resolveTrainingFlagShowsSkillPoints({ team: 'attacker', isMinionWaveUnit: true })).toBe(false);
     expect(resolveTrainingFlagShowsSkillPoints({ team: 'neutral', skillPoints: 99 })).toBe(false);
     expect(shouldRenderTrainingUnitGroundMarker(0)).toBe(true);
     expect(shouldRenderTrainingUnitGroundMarker(1)).toBe(true);
@@ -846,6 +854,26 @@ describe('training direction markers', () => {
     expect(dimensions.clothWidth / dimensions.clothHeight).toBeLessThan(2.2);
     expect(dimensions.clothBottom).toBeLessThanOrEqual(3);
     expect(dimensions.clothBottom + dimensions.clothHeight).toBeLessThan(dimensions.poleHeight);
+  });
+
+  test('excludes minion waves from world flags while keeping ordinary squad flags', () => {
+    const rects = resolveTrainingWorldFlagHitRects({
+      anchors: [
+        { id: 'regular', x: 0, y: 0, remain: 72, radius: 26 },
+        { id: 'minion', x: 40, y: 0, remain: 72, radius: 26, isMinionWaveUnit: true }
+      ],
+      camera: {
+        currentPitch: 40,
+        eye: [0, -560, 360],
+        target: [0, 0, 0]
+      },
+      project: (point) => ({ x: 500 + point.x, y: 420 - point.y - point.z, visible: true }),
+      viewportWidth: 1000,
+      viewportHeight: 500,
+      viewportCssHeight: 500
+    });
+
+    expect(rects.map((rect) => rect.id)).toEqual(['regular']);
   });
 
   test('keeps the world flag at a stable screen height across camera depths', () => {

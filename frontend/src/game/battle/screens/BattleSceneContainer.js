@@ -1892,6 +1892,11 @@ const BattleSceneContainer = ({
 
       {!loading && !error ? (
         <div className="pve2-main">
+          {isTrainingMode && phase === 'battle' && Number(battleStatus?.minionCountdownSec) > 0 ? (
+            <div className="pve2-minion-countdown" aria-live="polite" aria-label="兵线倒计时">
+              {Math.max(1, Math.ceil(Number(battleStatus.minionCountdownSec) || 0))}
+            </div>
+          ) : null}
           {isTrainingMode && trainingLoadPresentation && !glError ? (
             <TrainingLoadProgress presentation={trainingLoadPresentation} overlay />
           ) : null}
@@ -1945,7 +1950,9 @@ const BattleSceneContainer = ({
 
             {isTrainingMode ? (
               <TrainingFlagLabels
-                squads={cards}
+                squads={phase === 'battle' || phase === 'ended'
+                  ? (runtimeRef.current?.getBattleFlagRows?.() || cards)
+                  : cards}
                 phase={phase}
                 runtimeRef={runtimeRef}
                 worldToDomRef={worldToDomRef}

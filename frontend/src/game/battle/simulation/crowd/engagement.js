@@ -4,10 +4,9 @@ import {
   hasLineOfSight
 } from './crowdPhysics';
 import { resolveSquadAttackRange } from './attackRange';
+import { isSquadCombatEnabled } from './combatPolicy';
+import { isHostileTeam } from './teamRelations';
 
-const TEAM_ATTACKER = 'attacker';
-const TEAM_DEFENDER = 'defender';
-const TEAM_NEUTRAL = 'neutral';
 const ORDER_MOVE = 'MOVE';
 const ORDER_CHARGE = 'CHARGE';
 
@@ -46,7 +45,8 @@ export const MELEE_ENGAGEMENT_CONFIG = {
   stickyTargetBonus: 18,
   laneOccupancyWeight: 2.1,
   laneDiffWeight: 0.55,
-  laneNeighborBonus: 0.45
+  laneNeighborBonus: 0.45,
+  breakFormationRadius: 92
 };
 
 const toSafeNumber = (value, fallback) => {
@@ -143,6 +143,7 @@ const isChargeCommitted = (squad = {}, nowSec = 0) => (
 );
 
 const canInjectDetourWaypoint = (squad = {}, nowSec = 0) => {
+  if (squad?.isMinionWaveUnit === true) return false;
   const orderType = resolveOrderType(squad);
   const behavior = typeof squad?.behavior === 'string' ? squad.behavior : '';
   if (orderType === ORDER_MOVE) return false;
@@ -237,8 +238,8 @@ const scoreTargetSquad = ({
 const buildPairs = (sim, walls, cfg, nowSec) => {
   const squads = Array.isArray(sim?.squads) ? sim.squads.filter((row) => row && row.remain > 0) : [];
   const meleeSquads = squads.filter((row) => (
-    row.team !== TEAM_NEUTRAL
-    && isSquadMelee(row)
+    isSquadMelee(row)
+    && isSquadCombatEnabled(row)
     && row.behavior !== 'retreat'
   ));
   const pairMap = new Map();
@@ -246,18 +247,41 @@ const buildPairs = (sim, walls, cfg, nowSec) => {
   const byId = new Map(squads.map((row) => [row.id, row]));
 
   meleeSquads.forEach((squad) => {
-    const enemyTeam = squad.team === TEAM_ATTACKER ? TEAM_DEFENDER : TEAM_ATTACKER;
-    const enemyRows = squads.filter((row) => row.team === enemyTeam && row.remain > 0);
+    const minionLaneId = squad?.isMinionWaveUnit === true
+      ? String(squad?.minionLaneId || '').trim()
+      : '';
+    const enemyRows = squads.filter((row) => (
+      isHostileTeam(squad?.team, row?.team)
+      && row.remain > 0
+      && (
+        !minionLaneId
+        || String(row?.minionLaneId || row?.spawnLaneId || '').trim() === minionLaneId
+      )
+      && Math.hypot(
+        (Number(row?.x) || 0) - (Number(squad?.x) || 0),
+        (Number(row?.y) || 0) - (Number(squad?.y) || 0)
+      ) <= Math.max(
+        toSafeNumber(cfg?.breakFormationRadius, 92),
+        (Number(squad?.radius) || 0) + (Number(row?.radius) || 0) + 48
+      )
+    ));
     if (enemyRows.length <= 0) return;
-    let best = null;
+    const lockedTargetId = String(squad?.order?.targetSquadId || squad?.targetSquadId || '');
+    let best = lockedTargetId
+      ? enemyRows.find((enemy) => String(enemy?.id || '') === lockedTargetId) || null
+      : null;
     let bestScore = -Infinity;
-    enemyRows.forEach((enemy) => {
-      const score = scoreTargetSquad({ squad, enemy, walls, cfg, nowSec });
-      if (score > bestScore) {
-        bestScore = score;
-        best = enemy;
-      }
-    });
+    if (best) {
+      bestScore = scoreTargetSquad({ squad, enemy: best, walls, cfg, nowSec });
+    } else {
+      enemyRows.forEach((enemy) => {
+        const score = scoreTargetSquad({ squad, enemy, walls, cfg, nowSec });
+        if (score > bestScore) {
+          bestScore = score;
+          best = enemy;
+        }
+      });
+    }
     if (!best || bestScore <= -900) return;
     squad.targetSquadId = best.id;
     const key = canonicalPairKey(squad.id, best.id);
@@ -288,7 +312,13 @@ const buildPairs = (sim, walls, cfg, nowSec) => {
     const left = byId.get(leftId) || null;
     const right = byId.get(rightId) || null;
     if (!left || !right || left.team === right.team || left.remain <= 0 || right.remain <= 0) return;
-    const attacker = left.team === TEAM_ATTACKER ? left : right;
+    const hasClassicSides = (
+      (left.team === 'attacker' && right.team === 'defender')
+      || (left.team === 'defender' && right.team === 'attacker')
+    );
+    const attacker = hasClassicSides
+      ? (left.team === 'attacker' ? left : right)
+      : left;
     const defender = attacker === left ? right : left;
     pair.attackerId = attacker.id;
     pair.defenderId = defender.id;
@@ -334,7 +364,9 @@ const resolveDepthLayers = (count, cfg) => {
   return clamp(adaptive, minLayers, maxLayers);
 };
 
-const resolveSideSign = (team) => (team === TEAM_ATTACKER ? -1 : 1);
+const resolveSideSign = (pair = {}, squadId = '') => (
+  String(pair?.attackerId || '') === String(squadId || '') ? -1 : 1
+);
 
 const pickLaneIndex = ({
   baseLane = 0,
@@ -366,11 +398,11 @@ const pickLaneIndex = ({
 
 const computeAnchorForAgent = ({
   pair,
-  team,
+  squadId,
   lane,
   depthRank
 }) => {
-  const sideSign = resolveSideSign(team);
+  const sideSign = resolveSideSign(pair, squadId);
   const laneOffset = lane * pair.laneSpacing;
   const depthOffset = sideSign * (depthRank * pair.depthStep);
   return {
@@ -384,19 +416,19 @@ const tryFindClearLane = ({
   pair,
   lane,
   depthRank,
-  team,
+  squadId,
   walls,
   cfg
 }) => {
   const radius = Math.max(1, Math.floor(toSafeNumber(cfg?.laneSearchRadius, 3)));
   for (let shift = 1; shift <= radius; shift += 1) {
     const rightLane = lane + shift;
-    const rightAnchor = computeAnchorForAgent({ pair, team, lane: rightLane, depthRank });
+    const rightAnchor = computeAnchorForAgent({ pair, squadId, lane: rightLane, depthRank });
     if (hasLineOfSight(agent, rightAnchor, walls, toSafeNumber(cfg?.losInflate, 1.2))) {
       return { lane: rightLane, anchor: rightAnchor };
     }
     const leftLane = lane - shift;
-    const leftAnchor = computeAnchorForAgent({ pair, team, lane: leftLane, depthRank });
+    const leftAnchor = computeAnchorForAgent({ pair, squadId, lane: leftLane, depthRank });
     if (hasLineOfSight(agent, leftAnchor, walls, toSafeNumber(cfg?.losInflate, 1.2))) {
       return { lane: leftLane, anchor: leftAnchor };
     }
@@ -431,7 +463,7 @@ const applyAgentEngagementMeta = ({
     const depthRank = Math.min(depthLayers - 1, row);
     let anchor = computeAnchorForAgent({
       pair,
-      team: sideSquad.team,
+      squadId: sideSquad.id,
       lane,
       depthRank
     });
@@ -443,7 +475,7 @@ const applyAgentEngagementMeta = ({
         pair,
         lane,
         depthRank,
-        team: sideSquad.team,
+        squadId: sideSquad.id,
         walls,
         cfg
       });
@@ -454,7 +486,7 @@ const applyAgentEngagementMeta = ({
       }
     }
 
-    const sideSign = resolveSideSign(sideSquad.team);
+    const sideSign = resolveSideSign(pair, sideSquad.id);
     const frontX = pair.contactX + (pair.dirX * sideSign * pair.standOff);
     const frontY = pair.contactY + (pair.dirY * sideSign * pair.standOff);
     const frontDx = pair.dirX * sideSign;
@@ -550,24 +582,28 @@ export const syncMeleeEngagement = (crowd, sim, walls = [], dt = 0, nowSec = 0) 
     if (!attacker || !defender) return;
     const attackerAgents = crowd.agentsBySquad.get(attacker.id) || [];
     const defenderAgents = crowd.agentsBySquad.get(defender.id) || [];
-    const attackerMeta = applyAgentEngagementMeta({
-      sideSquad: attacker,
-      enemySquad: defender,
-      agents: attackerAgents,
-      pair,
-      walls,
-      dt,
-      cfg
-    });
-    const defenderMeta = applyAgentEngagementMeta({
-      sideSquad: defender,
-      enemySquad: attacker,
-      agents: defenderAgents,
-      pair,
-      walls,
-      dt,
-      cfg
-    });
+    const attackerMeta = state.squadPairById.get(attacker.id) === pair.key
+      ? applyAgentEngagementMeta({
+        sideSquad: attacker,
+        enemySquad: defender,
+        agents: attackerAgents,
+        pair,
+        walls,
+        dt,
+        cfg
+      })
+      : { blockedRatio: 0 };
+    const defenderMeta = state.squadPairById.get(defender.id) === pair.key
+      ? applyAgentEngagementMeta({
+        sideSquad: defender,
+        enemySquad: attacker,
+        agents: defenderAgents,
+        pair,
+        walls,
+        dt,
+        cfg
+      })
+      : { blockedRatio: 0 };
     if (attackerMeta.blockedRatio >= toSafeNumber(cfg?.blockedSquadRatio, 0.35)) {
       attacker._engageRetargetUntil = nextNow + toSafeNumber(cfg?.retargetCooldownSec, 0.9);
       attacker._engageBlockedTargetId = defender.id;

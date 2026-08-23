@@ -48,6 +48,7 @@ export const buildTrainingFlagRows = (squads = []) => {
     .map((row) => {
       const ratio = resolveTrainingTroopRatio(row);
       const team = normalizeTrainingFlagTeam(row.team);
+      const isMinionWaveUnit = row?.isMinionWaveUnit === true;
       return {
         id: String(row.id || ''),
         name: String(row.name || '部队'),
@@ -55,10 +56,14 @@ export const buildTrainingFlagRows = (squads = []) => {
         remain: Math.max(0, Math.floor(Number(row.remain) || 0)),
         startCount: Math.max(0, Math.floor(Number(row.startCount) || 0)),
         skillPoints: Math.max(0, Math.floor(Number(row?.trainingSkillPoints) || 0)),
-        showSkillPoints: team !== 'neutral',
+        showSkillPoints: !isMinionWaveUnit && team !== 'neutral',
         x: Number.isFinite(Number(row.centerX)) ? Number(row.centerX) : (Number(row.x) || 0),
         y: Number.isFinite(Number(row.centerY)) ? Number(row.centerY) : (Number(row.y) || 0),
         radius: Math.max(0, Number(row.radius) || 0),
+        isMinionWaveUnit,
+        minionLaneId: String(row?.minionLaneId || '').trim(),
+        minionBarracksLane: String(row?.minionBarracksLane || '').trim(),
+        minionExitId: String(row?.minionExitId || '').trim(),
         ratio,
         troopState: resolveTrainingTroopState(ratio),
         selected: !!row.selected
@@ -114,7 +119,7 @@ export const resolveTrainingFlagLabelPresentation = (row = {}, cameraDistance = 
   return {
     elevation: resolveTrainingInfoLabelElevation(row),
     scale: 1 + (zoomProgress * 0.2),
-    visible: flagLod.infoLabel
+    visible: row?.isMinionWaveUnit === true || flagLod.infoLabel
   };
 };
 
@@ -400,8 +405,9 @@ const TrainingFlagLabels = ({
             if (node) flagNodesRef.current.set(row.id, node);
             else flagNodesRef.current.delete(row.id);
           }}
-          className={`pve2-training-flag-label is-${row.team} is-${row.troopState} ${row.showSkillPoints ? '' : 'has-no-skill-points'} ${row.selected ? 'is-selected' : ''} ${hoveredSquadId === row.id ? 'is-hovered' : ''}`}
+          className={`pve2-training-flag-label is-${row.team} is-${row.troopState} ${row.isMinionWaveUnit ? 'is-minion-wave' : ''} ${row.showSkillPoints ? '' : 'has-no-skill-points'} ${row.selected ? 'is-selected' : ''} ${hoveredSquadId === row.id ? 'is-hovered' : ''}`}
           data-training-flag={row.id}
+          data-training-minion={row.isMinionWaveUnit ? 'true' : undefined}
           aria-label={row.showSkillPoints
             ? `${row.name}：兵力 ${row.remain}/${row.startCount}，技能点 ${row.skillPoints}`
             : `${row.name}：兵力 ${row.remain}/${row.startCount}`}
@@ -420,25 +426,34 @@ const TrainingFlagLabels = ({
           }}
           onClick={(event) => {
             event.stopPropagation();
-            onSelectSquad?.(row.id);
+            if (!row.isMinionWaveUnit) onSelectSquad?.(row.id);
           }}
         >
-          <div className="pve2-training-flag-banner">
-            <div className="pve2-training-flag-troops">
-              <span>兵</span>
+          {row.isMinionWaveUnit ? (
+            <div className="pve2-training-minion-hud">
               <strong>{row.remain}</strong>
-              <em>{`/${row.startCount}`}</em>
+              <span className="pve2-training-minion-health" aria-hidden="true">
+                <i style={{ width: `${Math.round(row.ratio * 100)}%` }} />
+              </span>
             </div>
-            <span className="pve2-training-flag-health" aria-hidden="true">
-              <i style={{ width: `${Math.round(row.ratio * 100)}%` }} />
-            </span>
-            {row.showSkillPoints ? (
-              <div className="pve2-training-flag-points">
-                <span>点</span>
-                <strong>{row.skillPoints}</strong>
+          ) : (
+            <div className="pve2-training-flag-banner">
+              <div className="pve2-training-flag-troops">
+                <span>兵</span>
+                <strong>{row.remain}</strong>
+                <em>{`/${row.startCount}`}</em>
               </div>
-            ) : null}
-          </div>
+              <span className="pve2-training-flag-health" aria-hidden="true">
+                <i style={{ width: `${Math.round(row.ratio * 100)}%` }} />
+              </span>
+              {row.showSkillPoints ? (
+                <div className="pve2-training-flag-points">
+                  <span>点</span>
+                  <strong>{row.skillPoints}</strong>
+                </div>
+              ) : null}
+            </div>
+          )}
         </div>
       ))}
       {damageNumbers.map((event) => (

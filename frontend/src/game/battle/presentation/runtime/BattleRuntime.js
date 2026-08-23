@@ -7,6 +7,7 @@
  * - Deploy phase now supports formation rectangle state for slot expansion/reshape.
  */
 import {
+  addCrowdSquad,
   applyCrowdSquadFormation,
   createCrowdSim,
   releaseCrowdSquadFormationLock,
@@ -94,6 +95,11 @@ const DEFAULT_TRAINING_SKILL_POINT_INTERVAL_SEC = 60;
 const TRAINING_SKILL_POINT_INTERVALS = Object.freeze([10, 30, 60, 120, 300]);
 const DEFAULT_TRAINING_RESPAWN_DELAY_SEC = 20;
 const TRAINING_RESPAWN_DELAY_OPTIONS = Object.freeze([10, 20, 30, 45, 60]);
+const TRAINING_MINION_COUNT_PER_TYPE = 24;
+const TRAINING_MINION_COUNTDOWN_SEC = 5;
+const TRAINING_MINION_WAVE_INTERVAL_SEC = 30;
+const TRAINING_MINION_MAX_ACTIVE_WAVES = 4;
+const TRAINING_MINION_TARGET_ARRIVAL_SEC = 36;
 const TEAM_ATTACKER = 'attacker';
 const TEAM_DEFENDER = 'defender';
 const TEAM_ANY = 'any';
@@ -380,6 +386,57 @@ const buildTrainingNeutralUnitTypes = (mapConfig = null) => {
 
   return unitTypes;
 };
+
+const buildTrainingMinionUnitTypes = () => ([
+  {
+    unitTypeId: 'training_minion_melee',
+    name: '近战小兵',
+    classTag: 'infantry',
+    roleTag: '近战',
+    unitCategory: 'melee',
+    unitSubtype: 'defense',
+    rpsType: 'melee',
+    hp: 115,
+    atk: 14,
+    def: 9,
+    speed: 1,
+    range: 1,
+    attackRange: { min: 0, max: 1 },
+    tags: ['training-minion', 'minion-melee']
+  },
+  {
+    unitTypeId: 'training_minion_ranged',
+    name: '远程小兵',
+    classTag: 'archer',
+    roleTag: '远程',
+    unitCategory: 'ranged',
+    unitSubtype: 'balance',
+    rpsType: 'ranged',
+    hp: 76,
+    atk: 11,
+    def: 5,
+    speed: 1,
+    range: 8,
+    attackRange: { min: 4, max: 8 },
+    tags: ['training-minion', 'minion-ranged']
+  },
+  {
+    unitTypeId: 'training_minion_support',
+    name: '辅助小兵',
+    classTag: 'infantry',
+    roleTag: '远程',
+    unitCategory: 'support',
+    unitSubtype: 'comprehensive',
+    rpsType: 'support',
+    hp: 92,
+    atk: 9,
+    def: 7,
+    speed: 1,
+    range: 6,
+    attackRange: { min: 3, max: 6 },
+    tags: ['training-minion', 'minion-support']
+  }
+]);
 
 const inferClassFromUnitType = (unitType = {}) => {
   const explicit = typeof unitType?.classTag === 'string' ? unitType.classTag.trim().toLowerCase() : '';
@@ -1728,7 +1785,7 @@ const createSquad = ({
     : clampXToTeamZone(rallyDefaultX, fieldWidth, rallyRadius, team);
 
   return {
-    id: `${team}_squad_${index + 1}`,
+    id: String(group?.runtimeId || `${team}_squad_${index + 1}`),
     sourceDeployGroupId: String(group?.id || ''),
     spawnSlotId: String(group?.spawnSlotId || ''),
     spawnRegionId: String(group?.spawnRegionId || ''),
@@ -1736,6 +1793,30 @@ const createSquad = ({
     initialFacingRad: Number.isFinite(Number(group?.initialFacingRad))
       ? Number(group.initialFacingRad)
       : (team === TEAM_DEFENDER ? Math.PI : 0),
+    isMinionWaveUnit: group?.isMinionWaveUnit === true,
+    minionLaneId: String(group?.minionLaneId || '').trim(),
+    minionBarracksLane: String(group?.minionBarracksLane || '').trim(),
+    minionExitId: String(group?.minionExitId || '').trim(),
+    minionWaveIndex: Math.max(0, Math.floor(Number(group?.minionWaveIndex) || 0)),
+    minionPath: Array.isArray(group?.minionPath)
+      ? group.minionPath.map((point) => ({
+        x: Number(point?.x) || 0,
+        y: Number(point?.y) || 0
+      }))
+      : [],
+    minionPathIndex: Math.max(0, Math.floor(Number(group?.minionPathIndex) || 0)),
+    minionPathSpeed: Math.max(0, Number(group?.minionPathSpeed) || 0),
+    minionPathDistance: Math.max(0, Number(group?.minionPathDistance) || 0),
+    minionMidpointDistance: Math.max(0, Number(group?.minionMidpointDistance) || 0),
+    minionMidlinePoint: group?.minionMidlinePoint && typeof group.minionMidlinePoint === 'object'
+      ? {
+        x: Number(group.minionMidlinePoint.x) || 0,
+        y: Number(group.minionMidlinePoint.y) || 0
+      }
+      : null,
+    representativeAgentWeightCap: Number.isFinite(Number(group?.representativeAgentWeightCap))
+      ? Math.max(1, Number(group.representativeAgentWeightCap))
+      : undefined,
     name: group?.name || (team === TEAM_ATTACKER ? `我方${index + 1}` : `守军${index + 1}`),
     team,
     controlMode: group?.controlMode === CONTROL_MODE_AI || group?.controlMode === CONTROL_MODE_USER
@@ -1804,6 +1885,7 @@ const createSquad = ({
     radius,
     waypoints: [],
     autoNavigation: null,
+    targetBuildingId: '',
     action: '待命',
     actionState: {
       kind: 'none',
@@ -1825,13 +1907,16 @@ const createSquad = ({
       transitionRegenPerSec: Math.max(0.1, Number(stabilityProfile.transitionRegenPerSec) || 2.5)
     },
     staggerReaction,
-    behavior: (group?.controlMode === CONTROL_MODE_AI || (!group?.controlMode && team === TEAM_DEFENDER)) ? 'auto' : 'idle',
+    behavior: group?.isMinionWaveUnit === true
+      ? 'auto'
+      : ((group?.controlMode === CONTROL_MODE_AI || (!group?.controlMode && team === TEAM_DEFENDER)) ? 'auto' : 'idle'),
     order: {
       type: ORDER_IDLE,
       issuedAt: 0,
       commitUntil: 0,
       targetPoint: null,
-      targetSquadId: ''
+      targetSquadId: '',
+      targetBuildingId: ''
     },
     speedMode: SPEED_MODE_B,
     speedModeAuthority: SPEED_AUTH_AI,
@@ -1953,6 +2038,7 @@ export default class BattleRuntime {
     this.trainingMap = normalizeTrainingMapConfig(this.initData?.battlefield || {});
     this.unitTypeMap = buildUnitTypeMap([
       ...buildTrainingNeutralUnitTypes(this.trainingMap),
+      ...buildTrainingMinionUnitTypes(),
       ...(this.initData?.unitTypes || [])
     ]);
     this.trainingMapPresetId = this.trainingMap.activePresetId;
@@ -2041,6 +2127,15 @@ export default class BattleRuntime {
     this.trainingSkillTreeProgress = new Map();
     this.trainingSessionActive = false;
     this.trainingInitialSnapshot = null;
+    this.minionWaveState = {
+      countdownSec: TRAINING_MINION_COUNTDOWN_SEC,
+      elapsedSec: 0,
+      released: false,
+      waveIndex: 0,
+      intervalSec: TRAINING_MINION_WAVE_INTERVAL_SEC,
+      nextWaveAtSec: TRAINING_MINION_COUNTDOWN_SEC,
+      maxActiveWaves: TRAINING_MINION_MAX_ACTIVE_WAVES
+    };
 
     this.selectedDeploySquadId = '';
     this.hoveredDeploySquadId = '';
@@ -2094,6 +2189,22 @@ export default class BattleRuntime {
 
   isThreeLaneTrainingMap() {
     return this.isTrainingMode && isTrainingMapConfig(this.trainingMap);
+  }
+
+  hasTrainingMinionWaveInfrastructure() {
+    if (!this.isThreeLaneTrainingMap()) return false;
+    const laneIds = new Set(
+      (Array.isArray(this.trainingMap?.lanes) ? this.trainingMap.lanes : [])
+        .map((lane) => String(lane?.id || '').trim())
+        .filter(Boolean)
+    );
+    if (!['top', 'mid', 'bottom'].every((laneId) => laneIds.has(laneId))) return false;
+    const barracksTeams = new Set(
+      (Array.isArray(this.trainingMapObjects) ? this.trainingMapObjects : [])
+        .filter((object) => object?.category === 'barracks')
+        .map((object) => String(object?.team || '').trim())
+    );
+    return barracksTeams.has(TEAM_ATTACKER) && barracksTeams.has(TEAM_DEFENDER);
   }
 
   getTrainingMapConfig() {
@@ -2716,6 +2827,15 @@ export default class BattleRuntime {
     this.hoveredBattleSquadId = '';
     this.hoveredDeployDirectionArcId = '';
     this.trainingSessionActive = false;
+    this.minionWaveState = {
+      countdownSec: TRAINING_MINION_COUNTDOWN_SEC,
+      elapsedSec: 0,
+      released: false,
+      waveIndex: 0,
+      intervalSec: TRAINING_MINION_WAVE_INTERVAL_SEC,
+      nextWaveAtSec: TRAINING_MINION_COUNTDOWN_SEC,
+      maxActiveWaves: TRAINING_MINION_MAX_ACTIVE_WAVES
+    };
     this.updateCameraAnchor(0);
     return { ok: true, state: this.getTrainingState() };
   }
@@ -2802,13 +2922,13 @@ export default class BattleRuntime {
   }
 
   canControlSquad(squad = null) {
-    if (!squad || squad.remain <= 0) return false;
+    if (!squad || squad.remain <= 0 || squad.isMinionWaveUnit === true) return false;
     if (!this.isTrainingMode) return squad.team === TEAM_ATTACKER;
     return squad.controlMode !== CONTROL_MODE_AI;
   }
 
   canSelectSquad(squad = null) {
-    return !!squad && (Number(squad.remain) || 0) > 0;
+    return !!squad && squad.isMinionWaveUnit !== true && (Number(squad.remain) || 0) > 0;
   }
 
   getDeployGroupById(groupId = '', team = TEAM_ANY) {
@@ -3446,7 +3566,7 @@ export default class BattleRuntime {
       return { ok: false, reason: '仅训练过程中可切换控制权' };
     }
     const squad = this.getSquadById(squadId);
-    if (!squad || squad.remain <= 0) return { ok: false, reason: '部队已无法操作' };
+    if (!squad || squad.remain <= 0 || squad.isMinionWaveUnit === true) return { ok: false, reason: '兵线由训练场 AI 自动控制' };
 
     const nextMode = controlMode === CONTROL_MODE_AI ? CONTROL_MODE_AI : CONTROL_MODE_USER;
     this.focusSquadId = squad.id;
@@ -3666,6 +3786,15 @@ export default class BattleRuntime {
     return best;
   }
 
+  canSquadAttackBuilding(squad = null, building = null) {
+    if (!squad || !building || building.destroyed === true) return false;
+    const objective = (Array.isArray(this.sim?.trainingObjectives) ? this.sim.trainingObjectives : [])
+      .find((entry) => String(entry?.sourceObjectId || '') === String(building?.id || '')) || null;
+    if (objective?.targetable === false || objective?.destroyed === true) return false;
+    const targetTeam = String(building?.team || objective?.team || '').trim();
+    return !!targetTeam && targetTeam !== String(squad?.team || '');
+  }
+
   placeBuilding({ itemId = '', x = 0, y = 0, z = 0, rotation = 0 } = {}) {
     if (this.phase !== 'deploy') return { ok: false, reason: '仅部署阶段可布置物品' };
     const safeItemId = typeof itemId === 'string' ? itemId.trim() : '';
@@ -3747,6 +3876,364 @@ export default class BattleRuntime {
       : attackerCount > 0 && defenderCount > 0;
   }
 
+  resolveTrainingMinionBarracks(team = TEAM_ATTACKER, laneId = 'top', barracksLane = '') {
+    if (!this.isThreeLaneTrainingMap()) return null;
+    const safeTeam = team === TEAM_DEFENDER ? TEAM_DEFENDER : TEAM_ATTACKER;
+    const safeLane = laneId === 'bottom' ? 'bottom' : (laneId === 'mid' ? 'mid' : 'top');
+    const safeBarracksLane = barracksLane === 'bottom' || safeLane === 'bottom' ? 'bottom' : 'top';
+    const highlandId = `${safeTeam}-${safeBarracksLane}`;
+    return (Array.isArray(this.trainingMapObjects) ? this.trainingMapObjects : []).find((object) => (
+      object?.category === 'barracks'
+      && object?.team === safeTeam
+      && String(object?.highlandId || '') === highlandId
+    )) || null;
+  }
+
+  buildTrainingMinionPath(team = TEAM_ATTACKER, laneId = 'top', barracksLane = '', requestedExitId = '') {
+    const lane = (Array.isArray(this.trainingMap?.lanes) ? this.trainingMap.lanes : [])
+      .find((entry) => String(entry?.id || '') === String(laneId || ''));
+    const safeLane = laneId === 'bottom' ? 'bottom' : (laneId === 'mid' ? 'mid' : 'top');
+    const safeBarracksLane = barracksLane === 'bottom' || safeLane === 'bottom' ? 'bottom' : 'top';
+    const defaultExitId = safeLane === 'top'
+      ? 'upper'
+      : (safeLane === 'bottom' ? 'lower' : (safeBarracksLane === 'top' ? 'lower' : 'upper'));
+    const exitId = requestedExitId === 'upper' || requestedExitId === 'lower'
+      ? requestedExitId
+      : defaultExitId;
+    const barracks = this.resolveTrainingMinionBarracks(team, safeLane, safeBarracksLane);
+    const centerline = Array.isArray(lane?.centerline) ? lane.centerline : [];
+    const roadCenterlineFallback = centerline.filter((point) => (
+      Math.abs((Number(point?.y) || 0) - (Number(lane?.centerY) || 0))
+        <= Math.max(24, (Number(lane?.width) || 24) * 0.35)
+    ));
+    const visualCenterline = Array.isArray(lane?.visualCenterline) && lane.visualCenterline.length >= 2
+      ? lane.visualCenterline
+      : (roadCenterlineFallback.length >= 2 ? roadCenterlineFallback : centerline);
+    if (!lane || !barracks || centerline.length < 2 || visualCenterline.length < 2) return null;
+    const enemyTeam = team === TEAM_DEFENDER ? TEAM_ATTACKER : TEAM_DEFENDER;
+    const visualConnectors = Array.isArray(lane?.visualConnectors) ? lane.visualConnectors : [];
+    const terrainRegions = Array.isArray(this.trainingMap?.terrainRegions)
+      ? this.trainingMap.terrainRegions
+      : [];
+    const resolveConnectorPoints = (routeTeam) => {
+      const connectorId = safeLane === 'mid'
+        ? `${routeTeam}-highland-spine`
+        : `${routeTeam}-${safeLane}-highland`;
+      const connector = visualConnectors.find((entry) => String(entry?.id || '') === connectorId);
+      return Array.isArray(connector?.centerline)
+        ? connector.centerline.map((point) => ({
+          x: Number(point?.x) || 0,
+          y: Number(point?.y) || 0
+        }))
+        : [];
+    };
+    const resolveSideRamp = (routeTeam, highlandLane, routeExitId, connectorX = 0) => {
+      const terrainRegion = terrainRegions.find((region) => (
+        String(region?.type || '') === `highland-${routeTeam}`
+        && (
+          String(region?.sourceRegionId || '') === `spawn-${routeTeam}-${highlandLane}`
+          || String(region?.id || '') === `terrain-highland-spawn-${routeTeam}-${highlandLane}`
+        )
+      ));
+      const rampId = routeExitId === 'lower'
+        ? 'lower-outward-road-ramp'
+        : 'upper-outward-road-ramp';
+      const ramp = (Array.isArray(terrainRegion?.ramps) ? terrainRegion.ramps : [])
+        .find((entry) => String(entry?.id || '') === rampId);
+      const rampPoints = Array.isArray(ramp?.points)
+        ? ramp.points.map((point) => ({ x: Number(point?.x) || 0, y: Number(point?.y) || 0 }))
+        : [];
+      if (rampPoints.length < 4) return null;
+      const barracksPoint = this.resolveTrainingMinionBarracks(
+        routeTeam,
+        safeLane,
+        highlandLane
+      );
+      const targetPoint = {
+        x: Number(barracksPoint?.x) || 0,
+        y: Number(barracksPoint?.y) || 0
+      };
+      let outwardEdge = null;
+      for (let index = 0; index < rampPoints.length; index += 1) {
+        const start = rampPoints[index];
+        const end = rampPoints[(index + 1) % rampPoints.length];
+        const midpoint = {
+          x: (start.x + end.x) * 0.5,
+          y: (start.y + end.y) * 0.5
+        };
+        const distance = Math.hypot(
+          midpoint.x - targetPoint.x,
+          midpoint.y - targetPoint.y
+        );
+        if (!outwardEdge || distance > outwardEdge.distance) outwardEdge = { start, end, distance };
+      }
+      if (!outwardEdge) return null;
+      return Math.abs(outwardEdge.start.x - connectorX) <= Math.abs(outwardEdge.end.x - connectorX)
+        ? outwardEdge.start
+        : outwardEdge.end;
+    };
+    const sourceConnectorPoints = resolveConnectorPoints(team);
+    const targetConnectorPoints = resolveConnectorPoints(enemyTeam);
+    const sourceRampEntryPoint = resolveSideRamp(
+      team,
+      safeBarracksLane,
+      exitId,
+      Number(sourceConnectorPoints[0]?.x) || 0
+    );
+    const targetRampEntryPoint = resolveSideRamp(
+      enemyTeam,
+      safeBarracksLane,
+      exitId,
+      Number(targetConnectorPoints[0]?.x) || 0
+    );
+    const resolveConnector = (sourcePoints, highlandLane, rampEntryPoint) => {
+      if (sourcePoints.length < 2) return { toRoad: [], fromRoad: [] };
+      let toRoad = sourcePoints;
+      if (safeLane === 'mid') {
+        if (rampEntryPoint) {
+          const roadPoint = sourcePoints
+            .slice()
+            .sort((left, right) => (
+              Math.abs((Number(left?.y) || 0) - (Number(lane?.centerY) || 0))
+              - Math.abs((Number(right?.y) || 0) - (Number(lane?.centerY) || 0))
+            ))[0];
+          toRoad = [
+            { x: Number(roadPoint?.x) || 0, y: Number(rampEntryPoint?.y) || 0 },
+            { x: Number(roadPoint?.x) || 0, y: Number(roadPoint?.y) || 0 }
+          ];
+        } else {
+          toRoad = highlandLane === 'bottom'
+            ? sourcePoints.slice(1).reverse()
+            : sourcePoints.slice(0, 2);
+        }
+      }
+      return {
+        toRoad,
+        fromRoad: toRoad.slice().reverse()
+      };
+    };
+    const sourceConnector = resolveConnector(sourceConnectorPoints, safeBarracksLane, sourceRampEntryPoint);
+    const targetConnector = resolveConnector(targetConnectorPoints, safeBarracksLane, targetRampEntryPoint);
+    const sourceBarracksPoint = { x: Number(barracks.x) || 0, y: Number(barracks.y) || 0 };
+    const spawnPoint = (() => {
+      if (!sourceRampEntryPoint) {
+        const spawnOffset = Math.max(
+          72,
+          (Math.max(Number(barracks.width) || 0, Number(barracks.depth) || 0) * 0.5) + 42
+        );
+        return {
+          x: sourceBarracksPoint.x + ((team === TEAM_DEFENDER ? -1 : 1) * spawnOffset),
+          y: sourceBarracksPoint.y
+        };
+      }
+      const entryVector = {
+        x: sourceRampEntryPoint.x - sourceBarracksPoint.x,
+        y: sourceRampEntryPoint.y - sourceBarracksPoint.y
+      };
+      const entryDistance = Math.max(1, Math.hypot(entryVector.x, entryVector.y));
+      const leadDistance = Math.min(
+        entryDistance * 0.26,
+        Math.max(72, (Math.max(Number(barracks.width) || 0, Number(barracks.depth) || 0) * 0.5) + 42)
+      );
+      return {
+        x: sourceBarracksPoint.x + ((entryVector.x / entryDistance) * leadDistance),
+        y: sourceBarracksPoint.y + ((entryVector.y / entryDistance) * leadDistance)
+      };
+    })();
+    const points = [spawnPoint];
+    const appendPoint = (point) => {
+      const next = { x: Number(point?.x) || 0, y: Number(point?.y) || 0 };
+      const previous = points[points.length - 1];
+      if (!previous || Math.hypot(next.x - previous.x, next.y - previous.y) > 1) points.push(next);
+    };
+    if (sourceRampEntryPoint) appendPoint(sourceRampEntryPoint);
+    sourceConnector.toRoad.forEach(appendPoint);
+    const roadLine = team === TEAM_DEFENDER ? [...visualCenterline].reverse() : visualCenterline;
+    roadLine.forEach(appendPoint);
+    targetConnector.fromRoad.forEach(appendPoint);
+    if (targetRampEntryPoint) appendPoint(targetRampEntryPoint);
+    const targetBarracks = this.resolveTrainingMinionBarracks(enemyTeam, safeLane, safeBarracksLane);
+    if (targetBarracks) appendPoint(targetBarracks);
+    if (points.length < 2) return null;
+
+    let totalDistance = 0;
+    let midpointDistance = Infinity;
+    let midpointPoint = points[points.length - 1];
+    let closestMidlineDistance = Infinity;
+    for (let index = 1; index < points.length; index += 1) {
+      const start = points[index - 1];
+      const end = points[index];
+      const dx = end.x - start.x;
+      const dy = end.y - start.y;
+      const segmentLength = Math.hypot(dx, dy);
+      if (segmentLength <= 0.001) continue;
+      const startDistanceToMidline = Math.abs(start.x);
+      const endDistanceToMidline = Math.abs(end.x);
+      if (startDistanceToMidline < closestMidlineDistance) {
+        closestMidlineDistance = startDistanceToMidline;
+        midpointDistance = totalDistance;
+        midpointPoint = { ...start };
+      }
+      if (endDistanceToMidline < closestMidlineDistance) {
+        closestMidlineDistance = endDistanceToMidline;
+        midpointDistance = totalDistance + segmentLength;
+        midpointPoint = { ...end };
+      }
+      if ((start.x <= 0 && end.x >= 0) || (start.x >= 0 && end.x <= 0)) {
+        const progress = Math.abs(end.x - start.x) <= 0.001
+          ? 0
+          : clamp((-start.x) / (end.x - start.x), 0, 1);
+        const crossing = {
+          x: 0,
+          y: start.y + ((end.y - start.y) * progress)
+        };
+        midpointDistance = totalDistance + (segmentLength * progress);
+        midpointPoint = crossing;
+        closestMidlineDistance = 0;
+      }
+      totalDistance += segmentLength;
+    }
+    const safeMidpointDistance = Number.isFinite(midpointDistance)
+      ? Math.max(1, midpointDistance)
+      : Math.max(1, totalDistance * 0.5);
+    const firstSegment = points[1] || points[0];
+    return {
+      laneId: String(lane.id || laneId),
+      barracksLane: safeBarracksLane,
+      exitId,
+      points,
+      totalDistance: Math.max(1, totalDistance),
+      midpointDistance: safeMidpointDistance,
+      midpointPoint: { ...midpointPoint },
+      initialFacingRad: Math.atan2(
+        (Number(firstSegment?.y) || 0) - (Number(points[0]?.y) || 0),
+        (Number(firstSegment?.x) || 0) - (Number(points[0]?.x) || 0)
+      ),
+      speed: clamp(safeMidpointDistance / TRAINING_MINION_TARGET_ARRIVAL_SEC, 110, 220)
+    };
+  }
+
+  spawnTrainingMinionWave(waveIndex = 0) {
+    if (!this.hasTrainingMinionWaveInfrastructure() || !this.sim || !this.crowd) return [];
+    const squads = [];
+    const spawnSpecs = [
+      { laneId: 'top', barracksLane: 'top', exitId: 'upper' },
+      { laneId: 'mid', barracksLane: 'top', exitId: 'lower' },
+      { laneId: 'mid', barracksLane: 'bottom', exitId: 'upper' },
+      { laneId: 'bottom', barracksLane: 'bottom', exitId: 'lower' }
+    ];
+    const laneLabels = { top: '上路', mid: '中路', bottom: '下路' };
+    const spawnTeamWave = (team) => {
+      spawnSpecs.forEach((spec) => {
+        const path = this.buildTrainingMinionPath(team, spec.laneId, spec.barracksLane, spec.exitId);
+        if (!path) return;
+        const teamLabel = team === TEAM_ATTACKER ? '我方' : '敌方';
+        const exitLabel = spec.laneId === 'mid' ? (spec.exitId === 'upper' ? '上侧斜坡出口' : '下侧斜坡出口') : '';
+        const groupId = `training-minion-wave-${waveIndex}-${team}-${spec.laneId}-${spec.barracksLane}`;
+        const group = {
+          id: groupId,
+          runtimeId: groupId,
+          team,
+          name: `${teamLabel}${laneLabels[spec.laneId]}兵线${exitLabel ? `（${exitLabel}）` : ''} ${waveIndex + 1}`,
+          controlMode: CONTROL_MODE_AI,
+          units: {
+            training_minion_melee: TRAINING_MINION_COUNT_PER_TYPE,
+            training_minion_ranged: TRAINING_MINION_COUNT_PER_TYPE,
+            training_minion_support: TRAINING_MINION_COUNT_PER_TYPE
+          },
+          x: path.points[0].x,
+          y: path.points[0].y,
+          initialFacingRad: path.initialFacingRad,
+          isMinionWaveUnit: true,
+          minionLaneId: spec.laneId,
+          minionBarracksLane: spec.barracksLane,
+          minionExitId: path.exitId,
+          minionWaveIndex: waveIndex,
+          minionPath: path.points,
+          minionPathIndex: 1,
+          minionPathSpeed: path.speed,
+          minionPathDistance: path.totalDistance,
+          minionMidpointDistance: path.midpointDistance,
+          minionMidlinePoint: path.midpointPoint,
+          representativeAgentWeightCap: 8,
+          formationRect: {
+            area: 54 * 54,
+            width: 54,
+            depth: 54,
+            spacing: 18,
+            facingRad: path.initialFacingRad,
+            directionOffsetRad: 0,
+            directionRad: path.initialFacingRad,
+            slotCount: 9,
+            formationName: '兵线三列阵'
+          },
+          deploySlots: Array.from({ length: 9 }, (_, index) => {
+            const row = Math.floor(index / 3);
+            const col = index % 3;
+            return {
+              side: (col - 1) * 18,
+              front: -row * 18,
+              row,
+              col
+            };
+          })
+        };
+        const squad = createSquad({
+          group,
+          index: this.sim.squads.length + squads.length,
+          team,
+          unitTypeMap: this.unitTypeMap,
+          unitsPerSoldier: this.unitsPerSoldier,
+          fieldWidth: this.field.width,
+          fieldHeight: this.field.height,
+          allowCrossMidline: true
+        });
+        squads.push(squad);
+      });
+    };
+    spawnTeamWave(TEAM_ATTACKER);
+    spawnTeamWave(TEAM_DEFENDER);
+    squads.forEach((squad) => {
+      this.sim.squads.push(squad);
+      this.sim._squadById.set(squad.id, squad);
+      addCrowdSquad(this.crowd, squad);
+    });
+    return squads;
+  }
+
+  updateTrainingMinionWaves(dtSec = 0) {
+    if (!this.hasTrainingMinionWaveInfrastructure() || !this.sim || !this.crowd) return;
+    const state = this.minionWaveState || {};
+    state.elapsedSec = Math.max(0, Number(state.elapsedSec) || 0) + Math.max(0, Number(dtSec) || 0);
+    state.countdownSec = state.released
+      ? 0
+      : Math.max(0, TRAINING_MINION_COUNTDOWN_SEC - state.elapsedSec);
+    const activeWaveIds = new Set(
+      (Array.isArray(this.sim.squads) ? this.sim.squads : [])
+        .filter((squad) => squad?.isMinionWaveUnit === true && (Number(squad?.remain) || 0) > 0)
+        .map((squad) => Math.max(0, Math.floor(Number(squad?.minionWaveIndex) || 0)))
+    );
+    let spawnGuard = 0;
+    while (
+      state.elapsedSec + 1e-6 >= Math.max(0, Number(state.nextWaveAtSec) || TRAINING_MINION_COUNTDOWN_SEC)
+      && activeWaveIds.size < Math.max(1, Number(state.maxActiveWaves) || TRAINING_MINION_MAX_ACTIVE_WAVES)
+      && spawnGuard < 8
+    ) {
+      const waveIndex = Math.max(0, Math.floor(Number(state.waveIndex) || 0));
+      const spawned = this.spawnTrainingMinionWave(waveIndex);
+      if (spawned.length <= 0) break;
+      state.released = true;
+      state.waveIndex = waveIndex + 1;
+      state.nextWaveAtSec = Math.max(0, Number(state.nextWaveAtSec) || TRAINING_MINION_COUNTDOWN_SEC)
+        + Math.max(10, Number(state.intervalSec) || TRAINING_MINION_WAVE_INTERVAL_SEC);
+      activeWaveIds.add(waveIndex);
+      spawnGuard += 1;
+    }
+    if (!state.released) state.countdownSec = Math.max(0, TRAINING_MINION_COUNTDOWN_SEC - state.elapsedSec);
+    else state.countdownSec = 0;
+    this.minionWaveState = state;
+  }
+
   startBattle() {
     if (!this.canStartBattle()) {
       return {
@@ -3758,6 +4245,15 @@ export default class BattleRuntime {
       this.captureTrainingSnapshot();
       this.trainingSkillPointAccumulatorSec = 0;
       this.trainingSessionActive = true;
+      this.minionWaveState = {
+        countdownSec: TRAINING_MINION_COUNTDOWN_SEC,
+        elapsedSec: 0,
+        released: false,
+        waveIndex: 0,
+        intervalSec: TRAINING_MINION_WAVE_INTERVAL_SEC,
+        nextWaveAtSec: TRAINING_MINION_COUNTDOWN_SEC,
+        maxActiveWaves: TRAINING_MINION_MAX_ACTIVE_WAVES
+      };
     }
     const selectedDeployGroupId = String(this.selectedDeploySquadId || '');
     const attackerSquads = this.attackerDeployGroups
@@ -4093,12 +4589,16 @@ export default class BattleRuntime {
     return changed;
   }
 
-  applyOrderToSquad(squad, orderType, safePoint) {
+  applyOrderToSquad(squad, orderType, safePoint, targetSpec = {}) {
     if (!squad) return;
     const prevOrder = typeof squad?.order?.type === 'string' ? squad.order.type : ORDER_IDLE;
     squad.autoNavigation = null;
+    squad._attackMoveResumeWaypoints = [];
     squad.guard = { enabled: false, cx: Number(squad.x) || 0, cy: Number(squad.y) || 0, radius: 0, returnRadius: 0, chaseRadius: 0, activeTargetId: '' };
-    squad.targetSquadId = '';
+    const targetSquadId = String(targetSpec?.targetSquadId || '');
+    const targetBuildingId = String(targetSpec?.targetBuildingId || '');
+    squad.targetSquadId = targetSquadId;
+    squad.targetBuildingId = targetBuildingId;
     const now = Math.max(0, Number(this.sim?.timeElapsed) || 0);
     const kind = orderType === ORDER_ATTACK_MOVE
       ? ORDER_ATTACK_MOVE
@@ -4110,7 +4610,8 @@ export default class BattleRuntime {
       issuedAt: now,
       commitUntil: kind === ORDER_CHARGE ? now + 1.35 : 0,
       targetPoint: safePoint ? { x: safePoint.x, y: safePoint.y } : null,
-      targetSquadId: '',
+      targetSquadId,
+      targetBuildingId,
       pathPoints: kind === ORDER_MOVE ? prevPathPoints : [],
       pathIndex: kind === ORDER_MOVE ? prevPathIndex : 0
     };
@@ -4262,13 +4763,48 @@ export default class BattleRuntime {
     squad.lastMoveMarker = { x: routeTarget.x, y: routeTarget.y, ttl: 1.2 };
     squad.meleeAttackOrder = null;
     squad.guard = { enabled: false, cx: Number(squad.x) || 0, cy: Number(squad.y) || 0, radius: 0, returnRadius: 0, chaseRadius: 0, activeTargetId: '' };
-    this.applyOrderToSquad(squad, orderType, routeTarget);
+    this.applyOrderToSquad(squad, orderType, routeTarget, {
+      targetSquadId: options?.targetSquadId,
+      targetBuildingId: options?.targetBuildingId
+    });
     this.markCommandIssued(options?.inputType || 'move');
     return true;
   }
 
   commandAttackMove(squadId, worldPoint) {
     return this.commandMove(squadId, worldPoint, { append: false, orderType: ORDER_ATTACK_MOVE });
+  }
+
+  commandAttackTarget(squadId, targetSpec = {}) {
+    if (this.phase !== 'battle' || !this.sim) return false;
+    const squad = this.getSquadById(squadId);
+    if (!this.canControlSquad(squad)) return false;
+    const targetSquadId = String(targetSpec?.targetSquadId || '');
+    if (targetSquadId) {
+      const targetSquad = this.getSquadById(targetSquadId);
+      if (
+        !targetSquad
+        || (Number(targetSquad.remain) || 0) <= 0
+        || String(targetSquad.team || '') === String(squad.team || '')
+      ) return false;
+      return this.commandMove(squad.id, targetSquad, {
+        append: false,
+        orderType: ORDER_ATTACK_MOVE,
+        inputType: 'battle_rmb_attack_target',
+        targetSquadId: targetSquad.id
+      });
+    }
+    const targetBuildingId = String(targetSpec?.targetBuildingId || '');
+    if (!targetBuildingId) return false;
+    const targetBuilding = (Array.isArray(this.sim?.buildings) ? this.sim.buildings : [])
+      .find((building) => String(building?.id || '') === targetBuildingId) || null;
+    if (!this.canSquadAttackBuilding(squad, targetBuilding)) return false;
+    return this.commandMove(squad.id, targetBuilding, {
+      append: false,
+      orderType: ORDER_ATTACK_MOVE,
+      inputType: 'battle_rmb_attack_building',
+      targetBuildingId: targetBuilding.id
+    });
   }
 
   commandCharge(squadId, worldPoint) {
@@ -4281,6 +4817,7 @@ export default class BattleRuntime {
     if (!this.canControlSquad(squad)) return false;
     squad.meleeAttackOrder = null;
     squad.autoNavigation = null;
+    squad.targetBuildingId = '';
     if (behavior === 'standby') {
       this.beginSquadTransition(squad, 'move', 'standby');
       squad.behavior = 'standby';
@@ -4289,7 +4826,7 @@ export default class BattleRuntime {
       squad.targetSquadId = '';
       squad.guard = { enabled: false, cx: Number(squad.x) || 0, cy: Number(squad.y) || 0, radius: 0, returnRadius: 0, chaseRadius: 0, activeTargetId: '' };
       squad.action = '待命';
-      squad.order = { type: ORDER_IDLE, issuedAt: Math.max(0, Number(this.sim?.timeElapsed) || 0), commitUntil: 0, targetPoint: null, targetSquadId: '' };
+      squad.order = { type: ORDER_IDLE, issuedAt: Math.max(0, Number(this.sim?.timeElapsed) || 0), commitUntil: 0, targetPoint: null, targetSquadId: '', targetBuildingId: '' };
       this.markCommandIssued('behavior_standby');
       return true;
     }
@@ -4301,7 +4838,7 @@ export default class BattleRuntime {
       squad.targetSquadId = '';
       squad.guard = { enabled: false, cx: Number(squad.x) || 0, cy: Number(squad.y) || 0, radius: 0, returnRadius: 0, chaseRadius: 0, activeTargetId: '' };
       squad.action = '待命';
-      squad.order = { type: ORDER_IDLE, issuedAt: Math.max(0, Number(this.sim?.timeElapsed) || 0), commitUntil: 0, targetPoint: null, targetSquadId: '' };
+      squad.order = { type: ORDER_IDLE, issuedAt: Math.max(0, Number(this.sim?.timeElapsed) || 0), commitUntil: 0, targetPoint: null, targetSquadId: '', targetBuildingId: '' };
       this.markCommandIssued('behavior_idle');
       return true;
     }
@@ -4312,7 +4849,7 @@ export default class BattleRuntime {
       clearPlannedMoveRoute(squad);
       squad.guard = { enabled: false, cx: Number(squad.x) || 0, cy: Number(squad.y) || 0, radius: 0, returnRadius: 0, chaseRadius: 0, activeTargetId: '' };
       squad.action = '自动攻击';
-      squad.order = { type: ORDER_ATTACK_MOVE, issuedAt: Math.max(0, Number(this.sim?.timeElapsed) || 0), commitUntil: 0, targetPoint: null, targetSquadId: '' };
+      squad.order = { type: ORDER_ATTACK_MOVE, issuedAt: Math.max(0, Number(this.sim?.timeElapsed) || 0), commitUntil: 0, targetPoint: null, targetSquadId: '', targetBuildingId: '' };
       this.markCommandIssued('behavior_auto');
       return true;
     }
@@ -4324,7 +4861,7 @@ export default class BattleRuntime {
       squad.targetSquadId = '';
       squad.guard = { enabled: false, cx: Number(squad.x) || 0, cy: Number(squad.y) || 0, radius: 0, returnRadius: 0, chaseRadius: 0, activeTargetId: '' };
       squad.action = '防御';
-      squad.order = { type: ORDER_IDLE, issuedAt: Math.max(0, Number(this.sim?.timeElapsed) || 0), commitUntil: 0, targetPoint: null, targetSquadId: '' };
+      squad.order = { type: ORDER_IDLE, issuedAt: Math.max(0, Number(this.sim?.timeElapsed) || 0), commitUntil: 0, targetPoint: null, targetSquadId: '', targetBuildingId: '' };
       this.markCommandIssued('behavior_defend');
       return true;
     }
@@ -4335,7 +4872,7 @@ export default class BattleRuntime {
       squad.waypoints = [squad.rallyPoint];
       squad.guard = { enabled: false, cx: Number(squad.x) || 0, cy: Number(squad.y) || 0, radius: 0, returnRadius: 0, chaseRadius: 0, activeTargetId: '' };
       squad.action = '撤退';
-      squad.order = { type: ORDER_MOVE, issuedAt: Math.max(0, Number(this.sim?.timeElapsed) || 0), commitUntil: 0, targetPoint: squad.rallyPoint ? { ...squad.rallyPoint } : null, targetSquadId: '' };
+      squad.order = { type: ORDER_MOVE, issuedAt: Math.max(0, Number(this.sim?.timeElapsed) || 0), commitUntil: 0, targetPoint: squad.rallyPoint ? { ...squad.rallyPoint } : null, targetSquadId: '', targetBuildingId: '' };
       if (squad.speedModeAuthority !== SPEED_AUTH_USER) {
         this.commandSpeedMode(squad.id, SPEED_MODE_C, SPEED_AUTH_AI);
       } else {
@@ -4376,7 +4913,8 @@ export default class BattleRuntime {
       squad.behavior = 'idle';
       squad.action = '待命';
       clearPlannedMoveRoute(squad);
-      squad.order = { type: ORDER_IDLE, issuedAt: Math.max(0, Number(this.sim?.timeElapsed) || 0), commitUntil: 0, targetPoint: null, targetSquadId: '' };
+      squad.targetBuildingId = '';
+      squad.order = { type: ORDER_IDLE, issuedAt: Math.max(0, Number(this.sim?.timeElapsed) || 0), commitUntil: 0, targetPoint: null, targetSquadId: '', targetBuildingId: '' };
     }
     this.markCommandIssued(options?.inputType || 'set_waypoints');
     return true;
@@ -4391,6 +4929,7 @@ export default class BattleRuntime {
     const radius = Math.max(12, Number(guardSpec?.radius) || Math.max(42, Number(squad.radius) || 24));
     squad.meleeAttackOrder = null;
     squad.autoNavigation = null;
+    squad.targetBuildingId = '';
     squad.guard = {
       enabled: true,
       cx,
@@ -4404,7 +4943,7 @@ export default class BattleRuntime {
     squad.waypoints = [];
     clearPlannedMoveRoute(squad);
     squad.action = '自由攻击';
-    squad.order = { type: ORDER_ATTACK_MOVE, issuedAt: Math.max(0, Number(this.sim?.timeElapsed) || 0), commitUntil: 0, targetPoint: { x: cx, y: cy }, targetSquadId: '' };
+    squad.order = { type: ORDER_ATTACK_MOVE, issuedAt: Math.max(0, Number(this.sim?.timeElapsed) || 0), commitUntil: 0, targetPoint: { x: cx, y: cy }, targetSquadId: '', targetBuildingId: '' };
     this.markCommandIssued('guard');
     return true;
   }
@@ -4555,6 +5094,7 @@ export default class BattleRuntime {
     if (!this.isTrainingMode) {
       this.sim.timerSec = Math.max(0, Number(this.sim.timerSec) - dt);
     }
+    this.updateTrainingMinionWaves(dt);
     updateCrowdSim(this.crowd, this.sim, dt);
     if (this.isTrainingMode && this.trainingAutoSkillPointGainEnabled) {
       this.trainingSkillPointAccumulatorSec = Math.max(0, Number(this.trainingSkillPointAccumulatorSec) || 0) + dt;
@@ -4719,12 +5259,22 @@ export default class BattleRuntime {
   }
 
   getBattleStatus() {
+    const minionWaveState = this.minionWaveState || {};
+    const countdownSec = this.hasTrainingMinionWaveInfrastructure() && this.phase === 'battle'
+      ? Math.max(0, Number(minionWaveState.countdownSec) || 0)
+      : 0;
+    const nextMinionWaveInSec = this.hasTrainingMinionWaveInfrastructure() && this.phase === 'battle'
+      ? Math.max(0, (Number(minionWaveState.nextWaveAtSec) || 0) - (Number(minionWaveState.elapsedSec) || 0))
+      : 0;
     return {
       phase: this.phase,
       timerSec: Math.max(0, Number(this.sim?.timerSec) || 0),
       timeLimitSec: Math.max(0, Number(this.sim?.timeLimitSec) || 0),
       ended: !!this.sim?.ended,
-      endReason: this.sim?.endReason || ''
+      endReason: this.sim?.endReason || '',
+      minionCountdownSec: countdownSec,
+      minionWavesReleased: !!minionWaveState.released,
+      nextMinionWaveInSec: nextMinionWaveInSec > 0 ? nextMinionWaveInSec : 0
     };
   }
 
@@ -4737,10 +5287,10 @@ export default class BattleRuntime {
     return summary;
   }
 
-  getCardRows() {
+  getCardRows({ includeMinionWaves = false } = {}) {
     const hideDefenderIntelInDeploy = !this.intelVisible && this.phase === 'deploy';
     const squads = this.phase === 'battle' || this.phase === 'ended'
-      ? (this.sim?.squads || [])
+      ? (this.sim?.squads || []).filter((squad) => includeMinionWaves || squad?.isMinionWaveUnit !== true)
       : [
         ...this.attackerDeployGroups.map((group, index) => ({
           id: group.id,
@@ -4812,6 +5362,10 @@ export default class BattleRuntime {
       return {
       id: squad.id,
       team: squad.team,
+      isMinionWaveUnit: squad?.isMinionWaveUnit === true,
+      minionLaneId: String(squad?.minionLaneId || '').trim(),
+      minionBarracksLane: String(squad?.minionBarracksLane || '').trim(),
+      minionExitId: String(squad?.minionExitId || '').trim(),
       controlMode: squad.controlMode === CONTROL_MODE_AI ? CONTROL_MODE_AI : CONTROL_MODE_USER,
       sortOrder: Math.max(0, Math.floor(Number(squad.sortOrder) || 0)),
       name: limitNameByDisplayWidth(String(squad?.name || '').trim()) || '未命名部队',
@@ -4895,6 +5449,11 @@ export default class BattleRuntime {
       ...this.getTrainingMapSquadContext(squad)
       };
     });
+  }
+
+  getBattleFlagRows() {
+    if (this.phase !== 'battle' && this.phase !== 'ended') return this.getCardRows();
+    return this.getCardRows({ includeMinionWaves: true });
   }
 
   getFocusAnchor() {

@@ -842,8 +842,30 @@ export const createBattleInputController = ({
       return;
     }
     if (selected && runtime.canControlSquad?.(selected) && selected.remain > 0) {
+      const trainingFlagHitId = resolveTrainingWorldFlagIdForEvent(event, runtime);
       const world = resolveEventWorldPoint(event);
       if (!world) return;
+      const pickedSquadId = trainingFlagHitId || (getters.isTrainingMode?.()
+        ? runtime.pickSquadAtAgentPoint?.(world.x, world.y, { team: TEAM_ANY })
+        : runtime.pickSquadAtPoint?.(world.x, world.y, { team: TEAM_ANY, maxDist: 34 }));
+      const pickedSquad = pickedSquadId ? runtime.getSquadById(pickedSquadId) : null;
+      if (
+        pickedSquad
+        && pickedSquad.remain > 0
+        && String(pickedSquad.team || '') !== String(selected.team || '')
+        && runtime.commandAttackTarget?.(selected.id, { targetSquadId: pickedSquad.id })
+      ) {
+        callbacks.syncBattleCards?.();
+        return;
+      }
+      const pickedBuilding = runtime.pickBuilding?.(world);
+      if (
+        pickedBuilding
+        && runtime.commandAttackTarget?.(selected.id, { targetBuildingId: pickedBuilding.id })
+      ) {
+        callbacks.syncBattleCards?.();
+        return;
+      }
       runtime.commandMove(selected.id, world, { append: false, replace: true, orderType: constants.ORDER_MOVE, inputType: 'battle_rmb_move' });
       callbacks.syncBattleCards?.();
       return;

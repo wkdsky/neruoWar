@@ -81,12 +81,18 @@ describe('TrainingObjectiveSystem', () => {
       id: 'attacker_agent',
       squadId: 'attacker_squad',
       team: 'attacker',
+      typeCategory: 'archer',
+      unitCategory: 'ranged',
       x: 0,
       y: 0,
       radius: 2,
       weight: 30,
       hpWeight: 30,
       initialWeight: 30,
+      attackRangeMin: 0,
+      attackRangeMax: 140,
+      buildingAttackCd: 0,
+      targetBuildingId: tower.id,
       dead: false
     };
     const crowd = {
@@ -100,6 +106,112 @@ describe('TrainingObjectiveSystem', () => {
     expect(sim.trainingStats.towerDamage).toBeGreaterThan(0);
     expect(sim.trainingObjectives[0].lockedSquadId).toBe('attacker_squad');
     expect(agent.weight).toBeLessThan(30);
+  });
+
+  test('keeps a user-issued move completely passive around hostile towers', () => {
+    const tower = {
+      id: 'tower_defender_mid',
+      team: 'defender',
+      x: 40,
+      y: 0,
+      width: 52,
+      depth: 52,
+      height: 88,
+      hp: 1200,
+      maxHp: 1200,
+      defense: 1,
+      blocksMovement: true,
+      blocksVision: true,
+      destroyed: false
+    };
+    const sim = buildSim({
+      definition: {
+        objectiveId: 'tower_defender_mid',
+        sourceObjectId: 'tower_defender_mid',
+        type: 'tower',
+        team: 'defender',
+        laneId: 'mid',
+        maxHp: 1200,
+        attackEnabled: false
+      },
+      building: tower
+    });
+    sim.squads[0] = buildAttacker({
+      controlMode: 'USER',
+      behavior: 'move',
+      order: { type: 'MOVE', targetSquadId: '', targetBuildingId: '' }
+    });
+
+    updateTrainingObjectives(sim, { agentsBySquad: new Map(), effectsPool: createCombatEffectsPool() }, 0.2);
+
+    expect(tower.hp).toBe(1200);
+  });
+
+  test('clears hostile soldiers before switching damage onto a tower', () => {
+    const tower = {
+      id: 'tower_defender_mid',
+      team: 'defender',
+      x: 60,
+      y: 0,
+      width: 52,
+      depth: 52,
+      height: 88,
+      hp: 1200,
+      maxHp: 1200,
+      defense: 1,
+      blocksMovement: true,
+      blocksVision: true,
+      destroyed: false
+    };
+    const sim = buildSim({
+      definition: {
+        objectiveId: 'tower_defender_mid',
+        sourceObjectId: 'tower_defender_mid',
+        type: 'tower',
+        team: 'defender',
+        laneId: 'mid',
+        maxHp: 1200,
+        attackEnabled: false
+      },
+      building: tower
+    });
+    const attacker = sim.squads[0];
+    const defender = buildAttacker({ id: 'defender_squad', team: 'defender', x: 24, remain: 20 });
+    attacker.targetSquadId = defender.id;
+    sim.squads.push(defender);
+    const attackerAgent = {
+      id: 'attacker_agent',
+      squadId: attacker.id,
+      team: attacker.team,
+      typeCategory: 'archer',
+      unitCategory: 'ranged',
+      x: attacker.x,
+      y: attacker.y,
+      radius: 2,
+      weight: 30,
+      hpWeight: 30,
+      initialWeight: 30,
+      attackRangeMin: 0,
+      attackRangeMax: 140,
+      buildingAttackCd: 0,
+      targetAgentId: 'defender_agent',
+      targetBuildingId: '',
+      dead: false
+    };
+    const crowd = {
+      agentsBySquad: new Map([[attacker.id, [attackerAgent]]]),
+      effectsPool: createCombatEffectsPool()
+    };
+
+    updateTrainingObjectives(sim, crowd, 0.2);
+    expect(tower.hp).toBe(1200);
+
+    defender.remain = 0;
+    attacker.targetSquadId = '';
+    attackerAgent.targetAgentId = '';
+    attackerAgent.targetBuildingId = tower.id;
+    updateTrainingObjectives(sim, crowd, 0.2);
+    expect(tower.hp).toBeLessThan(1200);
   });
 
   test('uses configured tower threat priority and retargets invalid squads', () => {
@@ -151,6 +263,10 @@ describe('TrainingObjectiveSystem', () => {
       weight: 30,
       hpWeight: 30,
       initialWeight: 30,
+      attackRangeMin: 0,
+      attackRangeMax: 20,
+      targetBuildingId: tower.id,
+      buildingAttackCd: 0,
       dead: false
     };
     const aggressorAgent = {
@@ -163,6 +279,10 @@ describe('TrainingObjectiveSystem', () => {
       weight: 30,
       hpWeight: 30,
       initialWeight: 30,
+      attackRangeMin: 0,
+      attackRangeMax: 20,
+      targetBuildingId: tower.id,
+      buildingAttackCd: 0,
       dead: false
     };
     const crowd = {
@@ -279,8 +399,22 @@ describe('TrainingObjectiveSystem', () => {
       },
       building: tower
     });
+    const attackerAgent = {
+      id: 'tower-finisher',
+      squadId: 'attacker_squad',
+      team: 'attacker',
+      x: 0,
+      y: 0,
+      radius: 2,
+      weight: 30,
+      hpWeight: 30,
+      initialWeight: 30,
+      targetBuildingId: tower.id,
+      buildingAttackCd: 0,
+      dead: false
+    };
     const crowd = {
-      agentsBySquad: new Map([['attacker_squad', []]]),
+      agentsBySquad: new Map([['attacker_squad', [attackerAgent]]]),
       effectsPool: createCombatEffectsPool()
     };
 
@@ -329,8 +463,22 @@ describe('TrainingObjectiveSystem', () => {
       },
       building: camp
     });
+    const attackerAgent = {
+      id: 'camp-finisher',
+      squadId: 'attacker_squad',
+      team: 'attacker',
+      x: 0,
+      y: 0,
+      radius: 2,
+      weight: 30,
+      hpWeight: 30,
+      initialWeight: 30,
+      targetBuildingId: camp.id,
+      buildingAttackCd: 0,
+      dead: false
+    };
     const crowd = {
-      agentsBySquad: new Map([['attacker_squad', []]]),
+      agentsBySquad: new Map([['attacker_squad', [attackerAgent]]]),
       effectsPool: createCombatEffectsPool()
     };
 

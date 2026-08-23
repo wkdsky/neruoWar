@@ -22,6 +22,8 @@ const resetProjectile = (item, payload = {}) => {
   next.team = payload.team || '';
   next.squadId = payload.squadId || '';
   next.sourceAgentId = payload.sourceAgentId || '';
+  next.targetBuildingId = payload.targetBuildingId || '';
+  next.visualOnly = !!payload.visualOnly;
   next.x = Number(payload.x) || 0;
   next.y = Number(payload.y) || 0;
   next.z = Number(payload.z) || 3;

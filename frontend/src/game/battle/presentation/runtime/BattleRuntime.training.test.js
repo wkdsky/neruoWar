@@ -647,6 +647,43 @@ describe('BattleRuntime training control', () => {
     expect(squad.lastMoveMarker).toMatchObject({ x: endpoint.x, y: endpoint.y });
   });
 
+  test('preserves explicit squad and building targets on attack-right-click commands', () => {
+    const runtime = new BattleRuntime(buildThreeLaneMapInit());
+    expect(runtime.createDeployGroup('attacker', {
+      units: { infantry_basic: 20 },
+      x: -300,
+      y: 0,
+      placed: true,
+      controlMode: 'USER'
+    }).ok).toBe(true);
+    expect(runtime.createDeployGroup('defender', {
+      units: { infantry_basic: 20 },
+      x: 260,
+      y: 0,
+      placed: true,
+      controlMode: 'AI'
+    }).ok).toBe(true);
+    expect(runtime.startBattle().ok).toBe(true);
+    const attacker = runtime.getSquadById('attacker_squad_1');
+    const defender = runtime.getSquadById('defender_squad_1');
+
+    expect(runtime.commandAttackTarget(attacker.id, { targetSquadId: defender.id })).toBe(true);
+    expect(attacker.order).toMatchObject({
+      type: 'ATTACK_MOVE',
+      targetSquadId: defender.id,
+      targetBuildingId: ''
+    });
+
+    const tower = runtime.sim.buildings.find((building) => building.id === 'training_tower_defender_mid');
+    expect(runtime.commandAttackTarget(attacker.id, { targetBuildingId: tower.id })).toBe(true);
+    expect(attacker.order).toMatchObject({
+      type: 'ATTACK_MOVE',
+      targetSquadId: '',
+      targetBuildingId: tower.id
+    });
+    expect(attacker.targetBuildingId).toBe(tower.id);
+  });
+
   test('detours around a blocking right-click path without truncating its legal destination', () => {
     const runtime = new BattleRuntime(buildThreeLaneMapInit());
     const created = runtime.createDeployGroup('attacker', {

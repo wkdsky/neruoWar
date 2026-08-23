@@ -15,6 +15,7 @@ import {
   initializeTrainingNeutralCamps,
   updateTrainingNeutralCamps
 } from '../objectives/TrainingNeutralCampSystem';
+import { createTrainingObjectives } from '../objectives/TrainingObjectiveSystem';
 
 const { buildReferenceTrainingMapConfig } = require('../../../../../../backend/services/trainingMapDefinitionService');
 
@@ -33,6 +34,298 @@ const createSquad = ({ id, team, x }) => ({
   stats: { atk: 1, speed: 1 },
   behavior: 'idle',
   waypoints: []
+});
+
+describe('individual soldier combat behavior', () => {
+  const unitTypeMap = new Map([
+    ['test_melee', {
+      classTag: 'infantry',
+      roleTag: '近战',
+      unitCategory: 'melee',
+      unitSubtype: 'defense',
+      speed: 1,
+      attackRange: { min: 0, max: 1 }
+    }],
+    ['test_ranged', {
+      classTag: 'archer',
+      roleTag: '远程',
+      unitCategory: 'ranged',
+      unitSubtype: 'balance',
+      speed: 1,
+      attackRange: { min: 4, max: 8 }
+    }],
+    ['test_support_comprehensive', {
+      classTag: 'infantry',
+      roleTag: '远程',
+      unitCategory: 'support',
+      unitSubtype: 'comprehensive',
+      speed: 1,
+      attackRange: { min: 3, max: 6 }
+    }],
+    ['test_support_intervention', {
+      classTag: 'infantry',
+      roleTag: '远程',
+      unitCategory: 'support',
+      unitSubtype: 'intervention',
+      speed: 1,
+      attackRange: { min: 3, max: 6 }
+    }]
+  ]);
+
+  const buildCombatSquad = ({
+    id,
+    team,
+    x,
+    units,
+    isMinionWaveUnit = false,
+    controlMode = 'AI',
+    behavior = 'auto'
+  }) => {
+    const count = Object.values(units).reduce((sum, value) => sum + value, 0);
+    return {
+      id,
+      team,
+      x,
+      y: 0,
+      startCount: count,
+      remain: count,
+      maxHealth: count * 100,
+      health: count * 100,
+      radius: 10,
+      classTag: 'infantry',
+      roleTag: '近战',
+      unitCategory: 'melee',
+      units,
+      stats: { atk: 20, def: 1, speed: 1, range: 1, attackRange: { min: 0, max: 1 } },
+      behavior,
+      controlMode,
+      stamina: 100,
+      waypoints: [],
+      isMinionWaveUnit,
+      minionLaneId: isMinionWaveUnit ? 'mid' : '',
+      spawnLaneId: 'mid',
+      minionPath: isMinionWaveUnit ? [{ x: -100, y: 0 }, { x: 100, y: 0 }] : [],
+      minionPathIndex: 1,
+      minionPathSpeed: 120,
+      order: {
+        type: controlMode === 'USER' ? 'IDLE' : 'ATTACK_MOVE',
+        issuedAt: 0,
+        commitUntil: 0,
+        targetPoint: null,
+        targetSquadId: '',
+        targetBuildingId: ''
+      }
+    };
+  };
+
+  const buildCrowd = (sim) => createCrowdSim(sim, {
+    unitTypeMap,
+    repConfig: { maxAgentWeight: 1, strictAgentMapping: true }
+  });
+
+  test('lets a front soldier break formation and attack before rear soldiers arrive', () => {
+    const attacker = buildCombatSquad({
+      id: 'front-attacker',
+      team: 'attacker',
+      x: 0,
+      units: { test_melee: 3 }
+    });
+    const defender = buildCombatSquad({
+      id: 'front-defender',
+      team: 'defender',
+      x: 140,
+      units: { test_melee: 2 },
+      controlMode: 'USER',
+      behavior: 'idle'
+    });
+    const sim = {
+      timeElapsed: 0,
+      field: { width: 400, height: 160 },
+      buildings: [],
+      trainingObjectives: [],
+      squads: [attacker, defender]
+    };
+    const crowd = buildCrowd(sim);
+    const attackerAgents = getCrowdAgentsForSquad(crowd, attacker.id);
+    const front = attackerAgents.find((agent) => !agent.isFlagBearer);
+    const rear = attackerAgents.find((agent) => agent !== front && !agent.isFlagBearer);
+    const target = getCrowdAgentsForSquad(crowd, defender.id).find((agent) => !agent.isFlagBearer);
+    front.x = 134;
+    front.y = target.y;
+    rear.x = 0;
+    rear.y = 8;
+
+    updateCrowdSim(crowd, sim, 0.05);
+
+    expect(front.targetAgentId).toBe(target.id);
+    expect(target.weight).toBeLessThan(1);
+    expect(rear.targetAgentId).toBe('');
+    expect(attacker.x).toBeLessThan(10);
+  });
+
+  const buildPriorityScenario = ({ enemyX, towerX }) => {
+    const attacker = buildCombatSquad({
+      id: 'priority-attacker',
+      team: 'attacker',
+      x: 0,
+      units: { test_melee: 1 },
+      isMinionWaveUnit: true
+    });
+    const defender = buildCombatSquad({
+      id: 'priority-defender',
+      team: 'defender',
+      x: enemyX,
+      units: { test_melee: 1 },
+      controlMode: 'USER',
+      behavior: 'idle'
+    });
+    const tower = {
+      id: 'priority-tower',
+      team: 'defender',
+      x: towerX,
+      y: 0,
+      width: 20,
+      depth: 20,
+      height: 40,
+      hp: 200,
+      maxHp: 200,
+      defense: 1,
+      blocksMovement: true,
+      blocksVision: true,
+      destroyed: false
+    };
+    const sim = {
+      timeElapsed: 0,
+      field: { width: 260, height: 160 },
+      buildings: [tower],
+      trainingObjectives: createTrainingObjectives([{
+        objectiveId: tower.id,
+        sourceObjectId: tower.id,
+        type: 'tower',
+        team: 'defender',
+        laneId: 'mid',
+        maxHp: tower.maxHp,
+        attackEnabled: false
+      }]),
+      squads: [attacker, defender]
+    };
+    const crowd = buildCrowd(sim);
+    return {
+      attacker,
+      defender,
+      tower,
+      sim,
+      crowd,
+      attackerAgent: getCrowdAgentsForSquad(crowd, attacker.id)[0],
+      defenderAgent: getCrowdAgentsForSquad(crowd, defender.id)[0]
+    };
+  };
+
+  test('stops for a clearly nearer tower instead of chasing soldiers behind it', () => {
+    const scenario = buildPriorityScenario({ enemyX: 72, towerX: 32 });
+
+    updateCrowdSim(scenario.crowd, scenario.sim, 0.05);
+
+    expect(scenario.attackerAgent.targetBuildingId).toBe(scenario.tower.id);
+    expect(scenario.attackerAgent.targetAgentId).toBe('');
+    for (let index = 0; index < 30 && scenario.tower.hp >= scenario.tower.maxHp; index += 1) {
+      updateCrowdSim(scenario.crowd, scenario.sim, 0.05);
+    }
+    expect(scenario.tower.hp).toBeLessThan(scenario.tower.maxHp);
+  });
+
+  test('attacks a nearer soldier and uses soldier priority only inside the distance tie band', () => {
+    const nearerSoldier = buildPriorityScenario({ enemyX: 9, towerX: 40 });
+    updateCrowdSim(nearerSoldier.crowd, nearerSoldier.sim, 0.05);
+    expect(nearerSoldier.attackerAgent.targetAgentId).toBe(nearerSoldier.defenderAgent.id);
+    expect(nearerSoldier.attackerAgent.targetBuildingId).toBe('');
+
+    const tiedTargets = buildPriorityScenario({ enemyX: 20, towerX: 25 });
+    updateCrowdSim(tiedTargets.crowd, tiedTargets.sim, 0.05);
+    expect(tiedTargets.attackerAgent.targetAgentId).toBe(tiedTargets.defenderAgent.id);
+    expect(tiedTargets.attackerAgent.targetBuildingId).toBe('');
+  });
+
+  test('lets comprehensive supports independently buff allies already fighting', () => {
+    const attacker = buildCombatSquad({
+      id: 'support-attacker',
+      team: 'attacker',
+      x: 0,
+      units: { test_melee: 1, test_support_comprehensive: 1 },
+      isMinionWaveUnit: true
+    });
+    const defender = buildCombatSquad({
+      id: 'support-defender',
+      team: 'defender',
+      x: 5,
+      units: { test_melee: 1 },
+      controlMode: 'USER',
+      behavior: 'idle'
+    });
+    const sim = {
+      timeElapsed: 0,
+      field: { width: 220, height: 140 },
+      buildings: [],
+      trainingObjectives: [],
+      squads: [attacker, defender]
+    };
+    const crowd = buildCrowd(sim);
+    const agents = getCrowdAgentsForSquad(crowd, attacker.id);
+    const melee = agents.find((agent) => agent.unitCategory === 'melee');
+    const support = agents.find((agent) => agent.unitCategory === 'support');
+    const [target] = getCrowdAgentsForSquad(crowd, defender.id);
+    melee.x = 0;
+    support.x = -20;
+    target.x = 5;
+
+    updateCrowdSim(crowd, sim, 0.05);
+
+    expect(melee.targetAgentId).toBe(target.id);
+    expect(support.supportTargetSquadId).toBe(attacker.id);
+    expect(support.supportCastCd).toBeGreaterThan(0);
+    expect(attacker.statusEffects.some((effect) => (
+      effect.type === 'buff' && effect.id === `support-comprehensive:${support.id}`
+    ))).toBe(true);
+  });
+
+  test('lets intervention supports independently debuff encountered enemies', () => {
+    const attacker = buildCombatSquad({
+      id: 'intervention-attacker',
+      team: 'attacker',
+      x: 0,
+      units: { test_support_intervention: 1 },
+      isMinionWaveUnit: true
+    });
+    const defender = buildCombatSquad({
+      id: 'intervention-defender',
+      team: 'defender',
+      x: 30,
+      units: { test_melee: 1 },
+      controlMode: 'USER',
+      behavior: 'idle'
+    });
+    const sim = {
+      timeElapsed: 0,
+      field: { width: 220, height: 140 },
+      buildings: [],
+      trainingObjectives: [],
+      squads: [attacker, defender]
+    };
+    const crowd = buildCrowd(sim);
+    const [support] = getCrowdAgentsForSquad(crowd, attacker.id);
+    const [target] = getCrowdAgentsForSquad(crowd, defender.id);
+
+    updateCrowdSim(crowd, sim, 0.05);
+
+    expect(support.supportTargetAgentId).toBe(target.id);
+    expect(support.supportTargetSquadId).toBe(defender.id);
+    expect(defender.statusEffects.some((effect) => (
+      effect.type === 'debuff'
+      && effect.id === `support-intervention:${support.id}`
+      && effect.speedMul < 1
+    ))).toBe(true);
+    expect(target.weight).toBe(1);
+  });
 });
 
 describe('training-map scale calibration', () => {
@@ -73,6 +366,52 @@ describe('training-map narrow passage handling', () => {
 
     expect(columns).toMatchObject({ active: true, columns: 1 });
     expect(columns.width).toBeLessThan(5.55);
+  });
+});
+
+describe('attack-move engagement flow', () => {
+  test('pauses the formation anchor for combat and resumes the saved march route', () => {
+    const attacker = {
+      ...createSquad({ id: 'attacker', team: 'attacker', x: 0 }),
+      behavior: 'move',
+      controlMode: 'USER',
+      stamina: 100,
+      order: { type: 'ATTACK_MOVE', targetSquadId: 'defender' },
+      waypoints: [{ x: 120, y: 0 }]
+    };
+    const defender = {
+      ...createSquad({ id: 'defender', team: 'defender', x: 8 }),
+      behavior: 'idle',
+      controlMode: 'USER',
+      order: { type: 'IDLE' }
+    };
+    const sim = {
+      field: { width: 300, height: 200 },
+      buildings: [],
+      squads: [attacker, defender],
+      timeElapsed: 0
+    };
+    const crowd = createCrowdSim(sim, {
+      repConfig: { maxAgentWeight: 100, strictAgentMapping: true }
+    });
+
+    updateCrowdSim(crowd, sim, 0.05);
+
+    expect(attacker.waypoints).toEqual([]);
+    expect(attacker._attackMoveResumeWaypoints).toEqual([{ x: 120, y: 0 }]);
+    expect(attacker.action).toBe('近战接敌');
+
+    defender.remain = 0;
+    crowd.agentsBySquad.get(defender.id).forEach((agent) => {
+      agent.dead = true;
+      agent.weight = 0;
+      agent.hpWeight = 0;
+    });
+    updateCrowdSim(crowd, sim, 0.05);
+
+    expect(attacker.waypoints).toEqual([{ x: 120, y: 0 }]);
+    expect(attacker._attackMoveResumeWaypoints).toEqual([]);
+    expect(attacker.action).toBe('攻击前进');
   });
 });
 

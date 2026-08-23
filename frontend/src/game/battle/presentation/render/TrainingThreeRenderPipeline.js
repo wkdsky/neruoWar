@@ -76,7 +76,9 @@ const resolveTrainingTeamColor = (teamIndex = 0) => {
 export const shouldRenderTrainingUnitGroundMarker = (teamIndex = 0) => !isTrainingNeutralTeamIndex(teamIndex);
 
 export const resolveTrainingFlagShowsSkillPoints = (anchor = {}) => (
-  anchor?.showSkillPoints !== false && String(anchor?.team || '') !== TEAM_NEUTRAL
+  anchor?.isMinionWaveUnit !== true
+    && anchor?.showSkillPoints !== false
+    && String(anchor?.team || '') !== TEAM_NEUTRAL
 );
 
 export const TRAINING_WORLD_FLAG_MAX_PITCH_DEG = 50;
@@ -379,15 +381,17 @@ export const resolveTrainingWorldFlagScreenScale = ({
   clothHeight = 1,
   viewHeight = 0,
   viewportHeight = 0,
-  verticalScreenFactor = 1
+  verticalScreenFactor = 1,
+  targetScreenHeight = TRAINING_WORLD_FLAG_TARGET_SCREEN_HEIGHT
 } = {}) => {
   const safeClothHeight = Math.max(1, finiteOr(clothHeight, 1));
   const safeViewHeight = Math.max(1e-4, finiteOr(viewHeight));
   const safeViewportHeight = Math.max(1, finiteOr(viewportHeight));
   const safeVerticalScreenFactor = clamp(Math.abs(finiteOr(verticalScreenFactor, 1)), 0.35, 1);
+  const safeTargetScreenHeight = Math.max(1, finiteOr(targetScreenHeight, TRAINING_WORLD_FLAG_TARGET_SCREEN_HEIGHT));
   const targetWorldHeight = (
     safeViewHeight
-    * (TRAINING_WORLD_FLAG_TARGET_SCREEN_HEIGHT / safeViewportHeight)
+    * (safeTargetScreenHeight / safeViewportHeight)
   ) / safeVerticalScreenFactor;
   return clamp(
     targetWorldHeight / safeClothHeight,
@@ -406,17 +410,24 @@ const resolveMarkerStrength = (source = null) => {
 export const resolveTrainingWorldFlagDimensions = (source = null) => {
   const count = Math.max(1, resolveMarkerStrength(source));
   const radius = Math.max(0, finiteOr(source?.radius));
-  const clothHeight = clamp(
+  const isMinionWave = source?.isMinionWaveUnit === true;
+  const baseClothHeight = clamp(
     Math.max(17, radius * 0.16, Math.sqrt(count) * 0.33),
     17,
     25
   );
-  const clothWidth = clamp(
-    Math.max(36, clothHeight * 2.08, radius * 0.28, Math.sqrt(count) * 0.28),
+  const baseClothWidth = clamp(
+    Math.max(36, baseClothHeight * 2.08, radius * 0.28, Math.sqrt(count) * 0.28),
     36,
     54
   );
-  const clothBottom = 2.2;
+  const clothHeight = isMinionWave
+    ? clamp(baseClothHeight * 0.76, 14, 20)
+    : baseClothHeight;
+  const clothWidth = isMinionWave
+    ? clamp(baseClothWidth * 0.76, 28, 42)
+    : baseClothWidth;
+  const clothBottom = isMinionWave ? 1.8 : 2.2;
   const poleHeight = clothBottom + clothHeight + 1.05;
   return {
     poleHeight,
@@ -429,7 +440,10 @@ export const resolveTrainingWorldFlagDimensions = (source = null) => {
 export const resolveTrainingInfoLabelElevation = (source = null) => {
   const count = Math.max(1, resolveMarkerStrength(source));
   const radius = Math.max(0, finiteOr(source?.radius));
-  return clamp(Math.max(6, radius * 0.1, 4 + (Math.sqrt(count) * 0.1)), 6, 14);
+  const baseElevation = Math.max(6, radius * 0.1, 4 + (Math.sqrt(count) * 0.1));
+  return source?.isMinionWaveUnit === true
+    ? clamp(baseElevation + 5, 11, 22)
+    : clamp(baseElevation, 6, 14);
 };
 
 const TRAINING_WORLD_FLAG_CAMERA_FOV_DEG = 48;
@@ -535,7 +549,11 @@ export const resolveTrainingWorldFlagLayout = ({
     1
   );
   const safeAnchors = (Array.isArray(anchors) ? anchors : [])
-    .filter((anchor) => anchor && String(anchor.id || '').trim());
+    .filter((anchor) => (
+      anchor
+      && anchor.isMinionWaveUnit !== true
+      && String(anchor.id || '').trim()
+    ));
   const renderInfoById = {};
   safeAnchors.forEach((anchor) => {
     const dimensions = resolveTrainingWorldFlagDimensions(anchor);
@@ -549,7 +567,10 @@ export const resolveTrainingWorldFlagLayout = ({
       clothHeight: dimensions.clothHeight,
       viewHeight,
       viewportHeight: safeCssHeight,
-      verticalScreenFactor
+      verticalScreenFactor,
+      targetScreenHeight: anchor?.isMinionWaveUnit
+        ? TRAINING_WORLD_FLAG_TARGET_SCREEN_HEIGHT * 0.78
+        : TRAINING_WORLD_FLAG_TARGET_SCREEN_HEIGHT
     });
     renderInfoById[String(anchor.id)] = {
       ...dimensions,
@@ -884,11 +905,13 @@ const buildDirectionArcAnchor = (
     teamIndex: resolveTrainingTeamIndex(team),
     team,
     name: String(source?.name || '部队'),
+    isMinionWaveUnit: source?.isMinionWaveUnit === true,
+    minionLaneId: String(source?.minionLaneId || '').trim(),
     remain,
     startCount,
     ratio: clamp(remain / startCount, 0, 1),
     skillPoints: team === TEAM_NEUTRAL ? 0 : Math.max(0, Math.floor(Number(skillPoints) || 0)),
-    showSkillPoints: team !== TEAM_NEUTRAL,
+    showSkillPoints: source?.isMinionWaveUnit !== true && team !== TEAM_NEUTRAL,
     selected: !!source?.selected || String(source?.id || '') === String(selectedId || ''),
     hovered: String(source?.id || '') === String(hoveredDirectionArcId || ''),
     flagHovered: String(source?.id || '') === String(hoveredFlagId || ''),
@@ -2007,6 +2030,145 @@ const resolveTrainingPlaceholderColor = (value, fallback) => {
   }
 };
 
+const resolveTrainingTowerHealthBarTheme = (team = '', defenseRole = '') => {
+  if (defenseRole === 'highlandOutpost') {
+    return { frame: '#f0abfc', accent: '#d946ef', dark: '#3b123f' };
+  }
+  if (team === TEAM_DEFENDER) {
+    return { frame: '#a5f3fc', accent: '#22d3ee', dark: '#083344' };
+  }
+  return { frame: '#fecaca', accent: '#ef4444', dark: '#450a0a' };
+};
+
+export const drawTrainingTowerHealthBarCanvas = (canvas = null, state = {}) => {
+  if (typeof CanvasRenderingContext2D === 'undefined') return false;
+  const context = canvas?.getContext?.('2d');
+  if (!context) return false;
+  const width = canvas.width;
+  const height = canvas.height;
+  const maxHp = Math.max(1, finiteOr(state?.maxHp, 1));
+  const hp = clamp(finiteOr(state?.hp, maxHp), 0, maxHp);
+  const ratio = clamp(hp / maxHp, 0, 1);
+  const theme = resolveTrainingTowerHealthBarTheme(state?.team, state?.defenseRole);
+  context.clearRect(0, 0, width, height);
+  context.save();
+  context.shadowColor = 'rgba(2, 6, 23, 0.9)';
+  context.shadowBlur = 14;
+  context.shadowOffsetY = 5;
+  context.fillStyle = 'rgba(2, 6, 23, 0.94)';
+  context.fillRect(8, 10, width - 16, height - 20);
+  context.restore();
+  context.strokeStyle = theme.frame;
+  context.lineWidth = 5;
+  context.strokeRect(10.5, 12.5, width - 21, height - 25);
+  context.fillStyle = theme.dark;
+  context.fillRect(22, 25, 88, height - 50);
+  context.strokeStyle = theme.accent;
+  context.lineWidth = 3;
+  context.strokeRect(22.5, 25.5, 87, height - 51);
+  context.fillStyle = theme.frame;
+  context.beginPath();
+  context.moveTo(43, 70);
+  context.lineTo(43, 46);
+  context.lineTo(54, 35);
+  context.lineTo(78, 35);
+  context.lineTo(89, 46);
+  context.lineTo(89, 70);
+  context.lineTo(80, 70);
+  context.lineTo(80, 52);
+  context.lineTo(52, 52);
+  context.lineTo(52, 70);
+  context.closePath();
+  context.fill();
+  context.fillStyle = 'rgba(15, 23, 42, 0.96)';
+  context.fillRect(126, 30, width - 148, 48);
+  const segmentCount = 10;
+  const segmentGap = 4;
+  const segmentWidth = (width - 154 - (segmentGap * (segmentCount - 1))) / segmentCount;
+  const healthColor = ratio <= 0.22 ? '#fb7185' : (ratio <= 0.5 ? '#fbbf24' : '#f8fafc');
+  for (let index = 0; index < segmentCount; index += 1) {
+    const segmentStart = index / segmentCount;
+    const segmentEnd = (index + 1) / segmentCount;
+    const x = 130 + (index * (segmentWidth + segmentGap));
+    context.fillStyle = 'rgba(71, 85, 105, 0.48)';
+    context.fillRect(x, 34, segmentWidth, 40);
+    const filledRatio = clamp((ratio - segmentStart) / Math.max(0.001, segmentEnd - segmentStart), 0, 1);
+    if (filledRatio > 0) {
+      context.fillStyle = healthColor;
+      context.fillRect(x + 2, 36, Math.max(1, (segmentWidth - 4) * filledRatio), 36);
+    }
+  }
+  context.font = '900 24px "Microsoft YaHei", sans-serif';
+  context.textAlign = 'right';
+  context.textBaseline = 'middle';
+  context.lineWidth = 6;
+  context.strokeStyle = 'rgba(2, 6, 23, 0.92)';
+  const label = `防御塔耐久  ${Math.ceil(hp)} / ${Math.ceil(maxHp)}`;
+  context.strokeText(label, width - 22, 96);
+  context.fillStyle = theme.frame;
+  context.fillText(label, width - 22, 96);
+  return true;
+};
+
+const createTrainingTowerHealthBarSprite = ({
+  name = 'training-tower-health-bar',
+  team = '',
+  defenseRole = '',
+  hp = 1,
+  maxHp = 1,
+  width = 64,
+  height = 96
+} = {}) => {
+  if (typeof document === 'undefined') return null;
+  const canvas = document.createElement('canvas');
+  canvas.width = 512;
+  canvas.height = 128;
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.colorSpace = THREE.SRGBColorSpace;
+  texture.generateMipmaps = false;
+  texture.minFilter = THREE.LinearFilter;
+  texture.magFilter = THREE.LinearFilter;
+  const sprite = new THREE.Sprite(new THREE.SpriteMaterial({
+    map: texture,
+    transparent: true,
+    depthWrite: false,
+    depthTest: false,
+    toneMapped: false
+  }));
+  sprite.name = name;
+  sprite.position.z = height + Math.max(22, height * 0.18);
+  sprite.scale.set(Math.max(128, width * 2.45), Math.max(28, height * 0.34), 1);
+  sprite.renderOrder = 18;
+  sprite.frustumCulled = false;
+  sprite.userData.structureHealthBar = true;
+  sprite.userData.barKind = 'tower-durability';
+  sprite.userData.canvas = canvas;
+  sprite.userData.texture = texture;
+  sprite.userData.team = team;
+  sprite.userData.defenseRole = defenseRole;
+  drawTrainingTowerHealthBarCanvas(canvas, { team, defenseRole, hp, maxHp });
+  texture.needsUpdate = true;
+  sprite.userData.signature = '';
+  return sprite;
+};
+
+export const applyTrainingTowerHealthBarState = (sprite = null, state = {}) => {
+  if (!sprite?.userData?.structureHealthBar) return false;
+  const maxHp = Math.max(1, finiteOr(state?.maxHp, 1));
+  const hp = clamp(finiteOr(state?.hp, maxHp), 0, maxHp);
+  const team = String(state?.team || sprite.userData.team || '');
+  const defenseRole = String(state?.defenseRole || sprite.userData.defenseRole || '');
+  const signature = [Math.round(hp), Math.round(maxHp), team, defenseRole].join(':');
+  sprite.visible = hp > 0;
+  if (sprite.userData.signature === signature) return sprite.visible;
+  sprite.userData.signature = signature;
+  sprite.userData.team = team;
+  sprite.userData.defenseRole = defenseRole;
+  drawTrainingTowerHealthBarCanvas(sprite.userData.canvas, { team, defenseRole, hp, maxHp });
+  if (sprite.userData.texture) sprite.userData.texture.needsUpdate = true;
+  return sprite.visible;
+};
+
 const createTrainingAttackRangeMarker = ({
   name = 'training-attack-range',
   radius = 0,
@@ -2068,7 +2230,7 @@ const createTrainingAttackRangeMarker = ({
       new THREE.LineDashedMaterial({
         color,
         transparent: true,
-        opacity: 0.36,
+        opacity: 0.58,
         dashSize: Math.max(3, outerRadius * 0.038),
         gapSize: Math.max(3, outerRadius * 0.026),
         depthWrite: false,
@@ -2097,7 +2259,7 @@ export const applyTrainingAttackRangeMarkerState = (rangeContainer = null, activ
   fillMesh.visible = true;
   fillMesh.material.opacity = isActive ? 0.11 : 0.024;
   ghostOutline.visible = !isActive;
-  ghostOutline.material.opacity = isActive ? 0 : 0.36;
+  ghostOutline.material.opacity = isActive ? 0 : 0.58;
   rangeContainer.userData.attackRangeActive = isActive;
   return true;
 };
@@ -2116,6 +2278,7 @@ export const createTrainingMapStaticPlaceholderMesh = (object = {}, terrainEleva
   );
   group.userData.mapObjectId = objectId;
   group.userData.category = category;
+  group.userData.team = String(object?.team || '');
   group.userData.neutralCampId = String(object?.neutralCampId || '');
   group.userData.maxHp = Math.max(1, finiteOr(object?.maxHp, finiteOr(object?.hp, 1)));
   group.userData.attackRange = Math.max(0, finiteOr(object?.attackRange));
@@ -2199,6 +2362,16 @@ export const createTrainingMapStaticPlaceholderMesh = (object = {}, terrainEleva
       });
       if (attackRangeMarker) group.add(attackRangeMarker);
     }
+    const healthBar = createTrainingTowerHealthBarSprite({
+      name: `${group.name}-structure-health-bar`,
+      team,
+      defenseRole: group.userData.defenseRole,
+      hp: Math.max(0, finiteOr(object?.hp, group.userData.maxHp)),
+      maxHp: group.userData.maxHp,
+      width,
+      height
+    });
+    if (healthBar) group.add(healthBar);
     return group;
   }
   if (category === 'barracks') {
@@ -2241,6 +2414,17 @@ export const applyTrainingMapStaticPlaceholderState = (placeholder = null, build
   const destroyed = building?.destroyed === true || hp <= 0;
   placeholder.visible = !destroyed;
   placeholder.userData.hpRatio = clamp(hp / maxHp, 0, 1);
+  placeholder.userData.hp = hp;
+  placeholder.userData.maxHp = maxHp;
+  const towerHealthBar = placeholder.getObjectByName(`${placeholder.name}-structure-health-bar`);
+  if (towerHealthBar) {
+    applyTrainingTowerHealthBarState(towerHealthBar, {
+      hp,
+      maxHp,
+      team: placeholder?.userData?.team,
+      defenseRole: placeholder?.userData?.defenseRole
+    });
+  }
   return placeholder.visible;
 };
 
@@ -2363,6 +2547,43 @@ const drawTrainingFlagCanvas = (canvas, anchor = {}) => {
   const width = canvas.width;
   const height = canvas.height;
   const theme = resolveTrainingFlagCanvasTheme(anchor.team);
+  if (anchor?.isMinionWaveUnit === true) {
+    context.clearRect(0, 0, width, height);
+    context.save();
+    context.shadowColor = 'rgba(2, 6, 23, 0.82)';
+    context.shadowBlur = 8;
+    context.shadowOffsetY = 3;
+    traceTrainingFlagSilhouette(context, width, height);
+    context.fillStyle = anchor.team === TEAM_DEFENDER ? '#176d8c' : '#8f2e3d';
+    context.fill();
+    context.restore();
+    context.save();
+    traceTrainingFlagSilhouette(context, width, height);
+    context.strokeStyle = theme.accent;
+    context.lineWidth = 5;
+    context.stroke();
+    context.restore();
+    context.textBaseline = 'middle';
+    context.textAlign = 'right';
+    context.font = '900 38px "JetBrains Mono", ui-monospace, monospace';
+    context.fillStyle = '#f8fafc';
+    context.shadowColor = 'rgba(2, 6, 23, 0.95)';
+    context.shadowBlur = 8;
+    context.fillText(String(Math.max(0, Math.floor(Number(anchor.remain) || 0))), 128, 78);
+    context.shadowBlur = 0;
+    const barX = 148;
+    const barY = 91;
+    const barWidth = 300;
+    const barHeight = 20;
+    context.fillStyle = '#08131f';
+    context.fillRect(barX, barY, barWidth, barHeight);
+    context.fillStyle = Number(anchor.ratio) <= 0.25 ? '#fb7185' : (Number(anchor.ratio) <= 0.5 ? '#fbbf24' : theme.accent);
+    context.fillRect(barX + 3, barY + 3, Math.max(1, (barWidth - 6) * clamp(Number(anchor.ratio) || 0, 0, 1)), barHeight - 6);
+    context.strokeStyle = '#f8fafc';
+    context.lineWidth = 2;
+    context.strokeRect(barX, barY, barWidth, barHeight);
+    return;
+  }
   const showSkillPoints = resolveTrainingFlagShowsSkillPoints(anchor);
   context.clearRect(0, 0, width, height);
   context.save();
@@ -2445,6 +2666,7 @@ const trainingFlagTextureSignature = (anchor = {}) => [
   anchor.remain,
   anchor.startCount,
   Number(anchor.ratio || 0).toFixed(3),
+  anchor.isMinionWaveUnit ? 'minion' : 'squad',
   resolveTrainingFlagShowsSkillPoints(anchor) ? anchor.skillPoints : 'hidden',
   anchor.selected ? 'selected' : 'normal',
   anchor.flagHovered ? 'hovered' : 'normal'

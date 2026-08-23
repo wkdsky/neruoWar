@@ -42,6 +42,40 @@ export const resolveSquadAttackRange = (squad = {}) => {
   };
 };
 
+export const isRangedAgent = (agent = {}) => (
+  agent?.typeCategory === 'archer'
+  || agent?.typeCategory === 'artillery'
+  || agent?.unitCategory === 'ranged'
+  || agent?.unitCategory === 'support'
+);
+
+export const resolveAgentAttackRange = (agent = {}, squad = {}) => {
+  const explicitMax = toFiniteNumber(agent?.attackRangeMax);
+  const explicitMin = toFiniteNumber(agent?.attackRangeMin);
+  if (explicitMax !== null && explicitMax > 0) {
+    return {
+      min: Math.min(explicitMax, Math.max(0, explicitMin || 0)),
+      max: explicitMax
+    };
+  }
+  if (isRangedAgent(agent)) return resolveSquadAttackRange(squad);
+  if (agent?.typeCategory === 'cavalry') return { min: 0, max: 7.4 };
+  return { min: 0, max: 6.2 };
+};
+
+export const resolveUnitTypeAttackRange = (unitType = {}) => resolveSquadAttackRange({
+  classTag: unitType?.classTag,
+  roleTag: unitType?.roleTag,
+  stats: {
+    ...unitType,
+    unitCategory: unitType?.unitCategory,
+    attackRange: unitType?.attackRange,
+    attackRangeMin: unitType?.attackRangeMin,
+    attackRangeMax: unitType?.attackRangeMax,
+    range: unitType?.range
+  }
+});
+
 export const isDistanceWithinSquadAttackRange = (distance, range = {}) => {
   const numeric = Number(distance);
   if (!Number.isFinite(numeric)) return false;

@@ -199,6 +199,18 @@ const hasBlockedDirectLine = (squad = {}, candidate = {}, sim = {}, ignoredObjec
   );
 };
 
+export const hasActiveTrainingLaneTower = (squad = {}, sim = {}, laneId = '') => (
+  (Array.isArray(sim?.trainingObjectives) ? sim.trainingObjectives : []).some((objective) => {
+    if (!objective || objective.type !== 'tower' || objective.destroyed || objective.targetable === false) return false;
+    if (String(objective?.laneId || '') !== String(laneId || '')) return false;
+    if (!isHostileTeam(squad?.team, objective?.team)) return false;
+    const building = (Array.isArray(sim?.buildings) ? sim.buildings : []).find((row) => (
+      String(row?.id || '') === String(objective?.sourceObjectId || '')
+    ));
+    return !!building && building.destroyed !== true;
+  })
+);
+
 export const isTrainingMapAiTargetDeferred = (squad = null, targetId = '', nowSec = 0) => {
   const navigation = squad?._trainingTargetNavigation;
   if (!navigation || !targetId) return false;
@@ -244,6 +256,50 @@ export const scoreTrainingMapAiTarget = (squad = {}, candidate = {}, sim = {}, n
   if (!squad || !candidate || !isHostileTeam(squad?.team, candidate?.team)) return null;
   if (finiteNumber(candidate?.remain) <= 0 || isEnemyHiddenForViewer(candidate, squad?.team)) return null;
   if (isTrainingMapAiTargetDeferred(squad, candidate?.id, nowSec)) return null;
+
+  if (squad?.isMinionWaveUnit === true) {
+    const sourceLaneId = String(squad?.minionLaneId || '').trim();
+    const targetLaneId = String(candidate?.minionLaneId || candidate?.spawnLaneId || '').trim();
+    if (!sourceLaneId || !targetLaneId || sourceLaneId !== targetLaneId) return null;
+    const distance = Math.hypot(
+      finiteNumber(candidate?.x) - finiteNumber(squad?.x),
+      finiteNumber(candidate?.y) - finiteNumber(squad?.y)
+    );
+    const targetIsMinion = candidate?.isMinionWaveUnit === true;
+    if (!targetIsMinion && hasActiveTrainingLaneTower(squad, sim, sourceLaneId)) return null;
+    const sameLane = true;
+    const healthRatio = resolveHealthRatio(candidate);
+    const locked = String(squad?.targetSquadId || '') === String(candidate?.id || '');
+    const score = (targetIsMinion ? 1000 : 120)
+      - (distance * 0.04)
+      + ((1 - healthRatio) * 8)
+      + (locked ? 20 : 0);
+    return {
+      target: candidate,
+      targetId: String(candidate?.id || ''),
+      score,
+      distance,
+      sameLane,
+      targetLaneId,
+      threat: clamp(finiteNumber(candidate?.stats?.atk) / 100, 0, 1),
+      healthRatio,
+      inAttackRange: distance <= resolveSquadAttackRange(squad).max + Math.max(0, finiteNumber(candidate?.radius, 10)),
+      attackingAlly: false,
+      protectedArea: false,
+      directLineBlocked: false,
+      terms: {
+        distance: -(distance * 0.04),
+        lane: 0,
+        threat: 0,
+        lowHealth: (1 - healthRatio) * 8,
+        inAttackRange: 0,
+        attackingAlly: 0,
+        targetLock: locked ? 20 : 0,
+        protectedArea: 0,
+        blockedLine: 0
+      }
+    };
+  }
 
   const context = resolveTrainingAiContext(sim);
   const config = resolveTrainingMapAiTargetScoring(sim);
@@ -315,7 +371,16 @@ export const selectTrainingMapAiTarget = (squad = {}, sim = {}, {
   nowSec = 0
 } = {}) => {
   if (!squad || squad?.team === TEAM_NEUTRAL) return null;
-  const rows = Array.isArray(candidates) ? candidates : (Array.isArray(sim?.squads) ? sim.squads : []);
+  const sourceRows = Array.isArray(candidates) ? candidates : (Array.isArray(sim?.squads) ? sim.squads : []);
+  const sourceLaneId = resolveSquadLaneId(squad, sim);
+  const sameLaneRows = sourceLaneId
+    ? sourceRows.filter((candidate) => (
+      candidate
+      && isHostileTeam(squad?.team, candidate?.team)
+      && resolveSquadLaneId(candidate, sim) === sourceLaneId
+    ))
+    : [];
+  const rows = sameLaneRows.length > 0 ? sameLaneRows : sourceRows;
   const safeNow = Math.max(0, finiteNumber(nowSec));
   const cached = squad?._trainingAiTargetCache;
   if (cached && finiteNumber(cached?.nextAt) > safeNow) {

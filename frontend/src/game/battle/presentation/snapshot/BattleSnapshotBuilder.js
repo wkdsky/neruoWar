@@ -467,7 +467,10 @@ export default class BattleSnapshotBuilder {
       units.data[base + 0] = Number(agent.x) || 0;
       units.data[base + 1] = Number(agent.y) || 0;
       units.data[base + 2] = terrainElevation + (isFlying ? 8.5 : 0);
-      units.data[base + 3] = resolveTrainingAgentVisualSize(agent);
+      const agentVisualSize = resolveTrainingAgentVisualSize(agent);
+      units.data[base + 3] = squad?.isMinionWaveUnit === true
+        ? Math.min(15, Math.max(7.2, agentVisualSize * 2.8))
+        : agentVisualSize;
       units.data[base + 4] = Number(agent.yaw) || 0;
       units.data[base + 5] = resolveTeamIndex(agent.team);
       units.data[base + 6] = clamp((Number(agent.hpWeight) || Number(agent.weight) || 1) / Math.max(0.001, Number(agent.initialWeight) || 1), 0, 1);

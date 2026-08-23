@@ -44,6 +44,7 @@ const createFixture = ({
     getSquadById: jest.fn(() => null),
     pickSquadAtPoint: jest.fn(() => ''),
     pickSquadAtAgentPoint: jest.fn(() => ''),
+    pickBuilding: jest.fn(() => null),
     pickDeployGroup: jest.fn(() => null),
     setSelectedDeployGroup: jest.fn(),
     setFocusSquad: jest.fn(),
@@ -998,6 +999,56 @@ describe('BattleInputController training control', () => {
       inputType: 'battle_rmb_move'
     });
     expect(syncBattleCards).toHaveBeenCalledTimes(1);
+  });
+
+  test('turns a right-clicked hostile squad into an explicit attack order', () => {
+    const selected = { id: 'attacker_squad_1', team: 'attacker', remain: 20 };
+    const target = { id: 'neutral_camp_squad', team: 'neutral', remain: 12 };
+    const commandAttackTarget = jest.fn(() => true);
+    const commandMove = jest.fn();
+    const { controller } = createFixture({
+      getters: {
+        getSelectedSquadId: () => selected.id,
+        isTrainingMode: () => true
+      },
+      runtimeOverrides: {
+        getSquadById: jest.fn((id) => (id === selected.id ? selected : target)),
+        pickSquadAtAgentPoint: jest.fn(() => target.id),
+        canControlSquad: jest.fn(() => true),
+        commandAttackTarget,
+        commandMove
+      }
+    });
+
+    controller.onMouseDown(sceneMouseDown({ button: 2, clientX: 420, clientY: 180 }));
+
+    expect(commandAttackTarget).toHaveBeenCalledWith(selected.id, { targetSquadId: target.id });
+    expect(commandMove).not.toHaveBeenCalled();
+  });
+
+  test('turns a right-clicked hostile tower into a building attack order', () => {
+    const selected = { id: 'attacker_squad_1', team: 'attacker', remain: 20 };
+    const tower = { id: 'tower_defender_mid', team: 'defender', category: 'tower' };
+    const commandAttackTarget = jest.fn(() => true);
+    const commandMove = jest.fn();
+    const { controller } = createFixture({
+      getters: {
+        getSelectedSquadId: () => selected.id,
+        isTrainingMode: () => true
+      },
+      runtimeOverrides: {
+        getSquadById: jest.fn(() => selected),
+        pickBuilding: jest.fn(() => tower),
+        canControlSquad: jest.fn(() => true),
+        commandAttackTarget,
+        commandMove
+      }
+    });
+
+    controller.onMouseDown(sceneMouseDown({ button: 2, clientX: 420, clientY: 180 }));
+
+    expect(commandAttackTarget).toHaveBeenCalledWith(selected.id, { targetBuildingId: tower.id });
+    expect(commandMove).not.toHaveBeenCalled();
   });
 });
 
