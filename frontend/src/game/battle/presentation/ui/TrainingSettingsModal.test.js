@@ -6,6 +6,8 @@ const trainingState = {
   points: 4,
   pointIntervals: [10, 30, 60, 120, 300],
   pointIntervalSec: 60,
+  respawnDelayOptions: [10, 20, 30, 45, 60],
+  respawnDelaySec: 20,
   nextPointInSec: 42
 };
 
@@ -13,6 +15,7 @@ describe('TrainingSettingsModal', () => {
   test('keeps automatic skill-point settings as a draft until apply', () => {
     const onChangeAutoSkillPointGain = jest.fn();
     const onChangeInterval = jest.fn();
+    const onChangeRespawnDelay = jest.fn();
     const onApply = jest.fn();
     const onClose = jest.fn();
     render(
@@ -22,6 +25,7 @@ describe('TrainingSettingsModal', () => {
         settings={{ fontSize: 'medium', showGrid: true }}
         onChangeAutoSkillPointGain={onChangeAutoSkillPointGain}
         onChangeInterval={onChangeInterval}
+        onChangeRespawnDelay={onChangeRespawnDelay}
         onApply={onApply}
         onClose={onClose}
       />
@@ -32,6 +36,7 @@ describe('TrainingSettingsModal', () => {
 
     fireEvent.click(screen.getByRole('switch', { name: '自动获得技能点' }));
     fireEvent.click(screen.getByRole('radio', { name: '10 秒 / 点' }));
+    fireEvent.click(screen.getByRole('radio', { name: '30 秒' }));
     fireEvent.click(screen.getByRole('tab', { name: 'UI 设置' }));
     fireEvent.click(screen.getByRole('radio', { name: '大' }));
     fireEvent.click(screen.getByRole('tab', { name: '战场设置' }));
@@ -39,12 +44,14 @@ describe('TrainingSettingsModal', () => {
 
     expect(onChangeAutoSkillPointGain).not.toHaveBeenCalled();
     expect(onChangeInterval).not.toHaveBeenCalled();
+    expect(onChangeRespawnDelay).not.toHaveBeenCalled();
     expect(onApply).not.toHaveBeenCalled();
 
     fireEvent.click(screen.getByRole('button', { name: '应用' }));
 
     expect(onChangeAutoSkillPointGain).toHaveBeenCalledWith(true);
     expect(onChangeInterval).toHaveBeenCalledWith(10);
+    expect(onChangeRespawnDelay).toHaveBeenCalledWith(30);
     expect(onApply).toHaveBeenCalledWith({ fontSize: 'large', showGrid: false });
     expect(onClose).toHaveBeenCalledTimes(1);
   });

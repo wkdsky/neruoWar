@@ -1,0 +1,129 @@
+{
+  "schemaVersion": 1,
+  "mapId": "training-war-map-v1",
+  "coordinateSpace": "normalized",
+  "barracksRuntime": {
+    "width": 30,
+    "depth": 30,
+    "height": 15,
+    "maxHp": 5600,
+    "defense": 6.4,
+    "rangeIndicatorColor": "#ef4b55",
+    "rangeIndicatorMode": "always",
+    "weapons": [
+      {
+        "id": "arrow-tower",
+        "label": "兵营箭塔",
+        "delivery": "projectile",
+        "projectileType": "arrow",
+        "attackRange": 300,
+        "attackIntervalSec": 0.5,
+        "attackDamage": 14,
+        "priority": "highestThreat",
+        "projectileSpeed": 577.5
+      },
+      {
+        "id": "catapult",
+        "label": "兵营投石器",
+        "delivery": "projectile",
+        "projectileType": "shell",
+        "attackRange": 300,
+        "attackIntervalSec": 2.3,
+        "attackDamage": 28,
+        "priority": "highestThreat",
+        "projectileSpeed": 402.5,
+        "splashRadius": 52.5,
+        "splashFalloff": 0.72,
+        "wallDamageMul": 0.72
+      }
+    ]
+  },
+  "outerTowerRuntime": {
+    "width": 10,
+    "depth": 10,
+    "height": 40,
+    "maxHp": 2000,
+    "defense": 4.6,
+    "attackRange": 150,
+    "attackIntervalSec": 0.8,
+    "attackDamage": 23,
+    "priority": "nearest",
+    "threatDecayPerSecond": 0.24,
+    "rangeIndicatorColor": "#53dff0",
+    "rangeIndicatorMode": "always"
+  },
+  "respawnRuntime": {
+    "radiusNormalized": 0.012,
+    "label": "高地重生点"
+  },
+  "highlands": [
+    {
+      "id": "attacker-top",
+      "team": "attacker",
+      "spawnRegionId": "spawn-attacker-top",
+      "mirrorOf": "defender-top",
+      "facingDeg": 0,
+      "barracks": { "position": [0.025, 0.272] },
+      "respawn": { "position": [0.005, 0.272] },
+      "outerTowers": [
+        { "id": "upper-rear", "position": [0.010556, 0.241457] },
+        { "id": "upper-inner", "position": [0.029444, 0.239433] },
+        { "id": "upper-front", "position": [0.044722, 0.25841] },
+        { "id": "lower-front", "position": [0.044722, 0.285519] },
+        { "id": "lower-inner", "position": [0.029444, 0.304497] },
+        { "id": "lower-rear", "position": [0.010556, 0.302473] }
+      ]
+    },
+    {
+      "id": "attacker-bottom",
+      "team": "attacker",
+      "spawnRegionId": "spawn-attacker-bottom",
+      "mirrorOf": "defender-bottom",
+      "facingDeg": 0,
+      "barracks": { "position": [0.025, 0.728] },
+      "respawn": { "position": [0.005, 0.728] },
+      "outerTowers": [
+        { "id": "upper-rear", "position": [0.010556, 0.697527] },
+        { "id": "upper-inner", "position": [0.029444, 0.695503] },
+        { "id": "upper-front", "position": [0.044722, 0.714481] },
+        { "id": "lower-front", "position": [0.044722, 0.74159] },
+        { "id": "lower-inner", "position": [0.029444, 0.760567] },
+        { "id": "lower-rear", "position": [0.010556, 0.758543] }
+      ]
+    },
+    {
+      "id": "defender-top",
+      "team": "defender",
+      "spawnRegionId": "spawn-defender-top",
+      "mirrorOf": "attacker-top",
+      "facingDeg": 180,
+      "barracks": { "position": [0.975, 0.272] },
+      "respawn": { "position": [0.995, 0.272] },
+      "outerTowers": [
+        { "id": "upper-rear", "position": [0.989444, 0.241457] },
+        { "id": "upper-inner", "position": [0.970556, 0.239433] },
+        { "id": "upper-front", "position": [0.955278, 0.25841] },
+        { "id": "lower-front", "position": [0.955278, 0.285519] },
+        { "id": "lower-inner", "position": [0.970556, 0.304497] },
+        { "id": "lower-rear", "position": [0.989444, 0.302473] }
+      ]
+    },
+    {
+      "id": "defender-bottom",
+      "team": "defender",
+      "spawnRegionId": "spawn-defender-bottom",
+      "mirrorOf": "attacker-bottom",
+      "facingDeg": 180,
+      "barracks": { "position": [0.975, 0.728] },
+      "respawn": { "position": [0.995, 0.728] },
+      "outerTowers": [
+        { "id": "upper-rear", "position": [0.989444, 0.697527] },
+        { "id": "upper-inner", "position": [0.970556, 0.695503] },
+        { "id": "upper-front", "position": [0.955278, 0.714481] },
+        { "id": "lower-front", "position": [0.955278, 0.74159] },
+        { "id": "lower-inner", "position": [0.970556, 0.760567] },
+        { "id": "lower-rear", "position": [0.989444, 0.758543] }
+      ]
+    }
+  ]
+}

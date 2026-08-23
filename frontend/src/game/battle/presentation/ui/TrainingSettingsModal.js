@@ -16,6 +16,8 @@ const formatInterval = (seconds = 60) => {
   return `${Math.round(value / 60)} 分钟 / 点`;
 };
 
+const formatRespawnDelay = (seconds = 20) => `${Math.max(0, Number(seconds) || 0)} 秒`;
+
 const normalizeFontSize = (value = '') => (
   TRAINING_FONT_SIZE_OPTIONS.some((option) => option.value === value) ? value : 'medium'
 );
@@ -27,6 +29,7 @@ const TrainingSettingsModal = ({
   onClose,
   onChangeAutoSkillPointGain,
   onChangeInterval,
+  onChangeRespawnDelay,
   onChangeMapPreset,
   onApply
 }) => {
@@ -36,6 +39,7 @@ const TrainingSettingsModal = ({
   const [draftFontSize, setDraftFontSize] = useState('medium');
   const [draftShowGrid, setDraftShowGrid] = useState(true);
   const [draftMapPresetId, setDraftMapPresetId] = useState('');
+  const [draftRespawnDelay, setDraftRespawnDelay] = useState(20);
   const wasOpenRef = useRef(false);
 
   const intervals = Array.isArray(state?.pointIntervals) && state.pointIntervals.length > 0
@@ -46,6 +50,10 @@ const TrainingSettingsModal = ({
   const mapState = state?.map && typeof state.map === 'object' ? state.map : null;
   const mapPresets = Array.isArray(mapState?.presets) ? mapState.presets : [];
   const currentMapPresetId = String(mapState?.activePresetId || '');
+  const respawnDelayOptions = Array.isArray(state?.respawnDelayOptions) && state.respawnDelayOptions.length > 0
+    ? state.respawnDelayOptions
+    : [10, 20, 30, 45, 60];
+  const currentRespawnDelay = Math.max(0, Number(state?.respawnDelaySec) || 20);
 
   useEffect(() => {
     if (open && !wasOpenRef.current) {
@@ -55,9 +63,10 @@ const TrainingSettingsModal = ({
       setDraftFontSize(normalizeFontSize(settings?.fontSize));
       setDraftShowGrid(settings?.showGrid !== false);
       setDraftMapPresetId(currentMapPresetId);
+      setDraftRespawnDelay(currentRespawnDelay);
     }
     wasOpenRef.current = open;
-  }, [currentAutoSkillPointGain, currentInterval, currentMapPresetId, open, settings?.fontSize, settings?.showGrid]);
+  }, [currentAutoSkillPointGain, currentInterval, currentMapPresetId, currentRespawnDelay, open, settings?.fontSize, settings?.showGrid]);
 
   if (!open) return null;
 
@@ -66,6 +75,7 @@ const TrainingSettingsModal = ({
       onChangeAutoSkillPointGain?.(draftAutoSkillPointGain);
     }
     if (draftAutoSkillPointGain && draftInterval !== currentInterval) onChangeInterval?.(draftInterval);
+    if (draftRespawnDelay !== currentRespawnDelay) onChangeRespawnDelay?.(draftRespawnDelay);
     if (draftMapPresetId && draftMapPresetId !== currentMapPresetId) onChangeMapPreset?.(draftMapPresetId);
     onApply?.({
       fontSize: normalizeFontSize(draftFontSize),
@@ -164,6 +174,29 @@ const TrainingSettingsModal = ({
                     </div>
                   </>
                 ) : null}
+              </section>
+              <section className="pve2-training-settings-section pve2-training-settings-respawn">
+                <div className="pve2-training-settings-rate-head is-interval">
+                  <div>
+                    <span className="pve2-training-settings-label">部队重生等待</span>
+                    <small>整支部队覆灭后，在所属高地重生点恢复满编</small>
+                  </div>
+                  <strong>{formatRespawnDelay(draftRespawnDelay)}</strong>
+                </div>
+                <div className="pve2-training-settings-rate-options" role="radiogroup" aria-label="部队重生等待时间">
+                  {respawnDelayOptions.map((delay) => (
+                    <button
+                      key={delay}
+                      type="button"
+                      role="radio"
+                      aria-checked={draftRespawnDelay === Number(delay)}
+                      className={draftRespawnDelay === Number(delay) ? 'is-active' : ''}
+                      onClick={() => setDraftRespawnDelay(Number(delay))}
+                    >
+                      {formatRespawnDelay(delay)}
+                    </button>
+                  ))}
+                </div>
               </section>
             </>
           ) : null}

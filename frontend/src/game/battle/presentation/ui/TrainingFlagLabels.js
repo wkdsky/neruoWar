@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   resolveTrainingFlagLod,
   resolveTrainingInfoLabelElevation,
+  resolveTrainingNeutralPreviewAnchors,
   resolveTrainingWorldFlagDimensions,
   resolveTrainingWorldFlagStackLayout
 } from '../render/TrainingThreeRenderPipeline';
@@ -64,6 +65,32 @@ export const buildTrainingFlagRows = (squads = []) => {
       };
     })
     .filter((row) => row.id);
+};
+
+export const buildTrainingFlagRowsWithNeutralPreview = (squads = [], neutralPreview = null) => {
+  const sourceRows = Array.isArray(squads) ? squads : [];
+  const existingIds = new Set(
+    sourceRows.map((row) => String(row?.id || '')).filter(Boolean)
+  );
+  const neutralAnchors = resolveTrainingNeutralPreviewAnchors(neutralPreview);
+  const neutralRows = [];
+  (Array.isArray(neutralPreview?.squads) ? neutralPreview.squads : []).forEach((squad) => {
+    const id = String(squad?.id || '');
+    if (!id || existingIds.has(id)) return;
+    const anchor = neutralAnchors.get(id);
+    neutralRows.push({
+      ...squad,
+      id,
+      team: 'neutral',
+      placed: true,
+      x: Number.isFinite(Number(anchor?.x)) ? Number(anchor.x) : (Number(squad?.x) || 0),
+      y: Number.isFinite(Number(anchor?.y)) ? Number(anchor.y) : (Number(squad?.y) || 0),
+      centerX: Number.isFinite(Number(anchor?.centerX)) ? Number(anchor.centerX) : (Number(squad?.centerX) || Number(squad?.x) || 0),
+      centerY: Number.isFinite(Number(anchor?.centerY)) ? Number(anchor.centerY) : (Number(squad?.centerY) || Number(squad?.y) || 0)
+    });
+    existingIds.add(id);
+  });
+  return buildTrainingFlagRows([...sourceRows, ...neutralRows]);
 };
 
 const TRAINING_FLAG_LABEL_NEAR_DISTANCE = 460;
@@ -200,9 +227,12 @@ const TrainingFlagLabels = ({
   onHoverSquad = null,
   onSelectSquad = null
 }) => {
+  const neutralPreview = phase === 'deploy'
+    ? runtimeRef?.current?.getTrainingNeutralPreview?.() || null
+    : null;
   const flagRows = useMemo(
-    () => buildTrainingFlagRows(squads),
-    [squads]
+    () => buildTrainingFlagRowsWithNeutralPreview(squads, neutralPreview),
+    [neutralPreview, squads]
   );
   const flagNodesRef = useRef(new Map());
   const damageNodesRef = useRef(new Map());

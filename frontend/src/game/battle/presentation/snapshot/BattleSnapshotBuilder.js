@@ -1,10 +1,17 @@
 import { buildWorldColliderParts } from '../../../battlefield/items/ItemGeometryRegistry';
-import { normalizeUnitsMap, sumUnitsMap } from '../runtime/RepMapping';
+import {
+  normalizeUnitsMap,
+  resolveRepConfigForSquads,
+  sumUnitsMap
+} from '../runtime/RepMapping';
 import { degToRad } from '../../shared/angle';
 import { resolveTrainingMapTerrainElevation } from '../../shared/trainingMap';
+import { resolveTrainingAgentVisualSize } from '../../shared/trainingUnitSelection';
 import BattleSnapshotSchema from './BattleSnapshotSchema';
 import BattleSnapshotPool from './BattleSnapshotPool';
 import { isConcealmentObstacle } from '../../simulation/items/itemObstacleUtils';
+import { createCrowdSim } from '../../simulation/crowd/CrowdSim';
+import { initializeTrainingNeutralCamps } from '../../simulation/objectives/TrainingNeutralCampSystem';
 
 const TEAM_ATTACKER = 'attacker';
 const TEAM_DEFENDER = 'defender';
@@ -98,6 +105,41 @@ const rotateFormationSlot = (group = {}, slot = {}) => {
   };
 };
 
+const buildDeploymentRepSignature = (runtime = null) => (
+  [...(runtime?.attackerDeployGroups || []), ...(runtime?.defenderDeployGroups || [])]
+    .filter((group) => group && group.placed !== false)
+    .map((group) => [
+      String(group?.id || ''),
+      Number(group?.representativeAgentWeightCap) || 0,
+      Object.entries(normalizeUnitsMap(group?.units || {}))
+        .sort(([left], [right]) => left.localeCompare(right, 'zh-Hans-CN'))
+    ])
+    .map((entry) => JSON.stringify(entry))
+    .join('|')
+);
+
+const buildRepConfigSignature = (config = {}) => [
+  Number(config?.maxAgentWeight) || 0,
+  Number(config?.maxTotalAgents) || 0,
+  Number(config?.damageExponent) || 0,
+  config?.strictAgentMapping === false ? 0 : 1,
+  Number(config?.effectiveMaxAgentWeight) || 0,
+  Number(config?.estimatedAgentCount) || 0
+].join(':');
+
+const resolveNeutralPreviewRepConfig = (runtime = null, neutralSquads = []) => {
+  const deploySquads = [...(runtime?.attackerDeployGroups || []), ...(runtime?.defenderDeployGroups || [])]
+    .filter((group) => group && group.placed !== false)
+    .map((group) => ({
+      units: normalizeUnitsMap(group?.units || {}),
+      representativeAgentWeightCap: group?.representativeAgentWeightCap
+    }));
+  return resolveRepConfigForSquads([
+    ...deploySquads,
+    ...(Array.isArray(neutralSquads) ? neutralSquads : [])
+  ], runtime?.repConfig || {});
+};
+
 const buildRenderableBuildingParts = (walls = [], resolveTerrainElevation = () => 0) => {
   const out = [];
   (Array.isArray(walls) ? walls : []).forEach((wall) => {
@@ -107,7 +149,7 @@ const buildRenderableBuildingParts = (walls = [], resolveTerrainElevation = () =
       && Array.isArray(wall?.visualPath)
       && wall.visualPath.length >= 2;
     const rendersAsTrainingMapPlaceholder = wall?.mapStatic === true
-      && (wall?.category === 'tower' || wall?.category === 'neutralCamp');
+      && (wall?.category === 'tower' || wall?.category === 'barracks' || wall?.category === 'neutralCamp');
     if (rendersAsTrainingWallPath || rendersAsTrainingMapPlaceholder) return;
     const hpRatio = clamp((Number(wall?.hp) || 0) / Math.max(1, Number(wall?.maxHp) || 1), 0, 1);
     const colors = wall?.renderColors && typeof wall.renderColors === 'object'
@@ -161,6 +203,62 @@ export default class BattleSnapshotBuilder {
   constructor(schema = BattleSnapshotSchema, pool = new BattleSnapshotPool(schema)) {
     this.schema = schema;
     this.pool = pool;
+    this.neutralPreviewCache = null;
+  }
+
+  getNeutralPreview(runtime = null) {
+    const mapConfigObjectives = runtime?.getTrainingMapConfig?.()?.objectives;
+    const definitions = Array.isArray(runtime?.trainingMapObjectiveDefinitions)
+      ? runtime.trainingMapObjectiveDefinitions
+      : (Array.isArray(mapConfigObjectives) ? mapConfigObjectives : []);
+    if (definitions.length <= 0 || runtime?.sim || runtime?.crowd) return null;
+    const initialBuildings = Array.isArray(runtime?.initialBuildings) ? runtime.initialBuildings : [];
+    const deploymentRepSignature = buildDeploymentRepSignature(runtime);
+    const baseRepConfigSignature = buildRepConfigSignature(runtime?.repConfig);
+    if (
+      this.neutralPreviewCache
+      && this.neutralPreviewCache.definitions === definitions
+      && this.neutralPreviewCache.initialBuildings === initialBuildings
+      && this.neutralPreviewCache.unitTypeMap === runtime?.unitTypeMap
+      && this.neutralPreviewCache.field === runtime?.field
+      && this.neutralPreviewCache.deploymentRepSignature === deploymentRepSignature
+      && this.neutralPreviewCache.baseRepConfigSignature === baseRepConfigSignature
+    ) {
+      return this.neutralPreviewCache;
+    }
+    const state = initializeTrainingNeutralCamps({
+      definitions,
+      buildings: initialBuildings,
+      context: {
+        field: runtime?.field,
+        navigator: runtime?.trainingMapNavigator,
+        obstacles: initialBuildings
+      },
+      nowSec: 0
+    });
+    const repConfig = resolveNeutralPreviewRepConfig(runtime, state.squads);
+    const previewSim = {
+      field: runtime?.field,
+      buildings: initialBuildings,
+      squads: state.squads,
+      repConfig,
+      trainingNavigator: runtime?.trainingMapNavigator
+    };
+    const previewCrowd = createCrowdSim(previewSim, {
+      unitTypeMap: runtime?.unitTypeMap
+    });
+    this.neutralPreviewCache = {
+      definitions,
+      initialBuildings,
+      unitTypeMap: runtime?.unitTypeMap,
+      field: runtime?.field,
+      deploymentRepSignature,
+      baseRepConfigSignature,
+      repConfig,
+      squads: state.squads,
+      agents: previewCrowd.allAgents
+    };
+    return this.neutralPreviewCache;
   }
 
   build(runtime, outSnapshot = this.pool.acquire()) {
@@ -170,6 +268,7 @@ export default class BattleSnapshotBuilder {
     const projectilesSchema = this.schema.projectiles;
     const effectsSchema = this.schema.effects;
 
+    const neutralPreview = this.getNeutralPreview(runtime);
     const deployUnitCount = [...(runtime?.attackerDeployGroups || []), ...(runtime?.defenderDeployGroups || [])]
       .reduce((sum, group) => {
         if (!group) return sum;
@@ -178,8 +277,10 @@ export default class BattleSnapshotBuilder {
         return sum + Math.max(1, slots.length);
       }, 0);
 
-    this.pool.ensureCapacity('units', runtime?.crowd?.allAgents?.length || deployUnitCount);
-    this.pool.ensureCapacity('skillStates', runtime?.crowd?.allAgents?.length || deployUnitCount);
+    const requestedUnitCapacity = runtime?.crowd?.allAgents?.length
+      || (deployUnitCount + (neutralPreview?.agents?.length || 0));
+    this.pool.ensureCapacity('units', requestedUnitCapacity);
+    this.pool.ensureCapacity('skillStates', requestedUnitCapacity);
     const hideDefenderIntelInDeploy = !runtime?.intelVisible && (!runtime?.sim || runtime?.phase === 'deploy');
     const activeBuildings = hideDefenderIntelInDeploy
       ? []
@@ -275,6 +376,42 @@ export default class BattleSnapshotBuilder {
       if (!hideDefenderIntelInDeploy) {
         (runtime.defenderDeployGroups || []).forEach((group) => fillPreviewGroup(group, TEAM_DEFENDER, group.id === runtime.selectedDeploySquadId));
       }
+      const previewSquadsById = new Map((neutralPreview?.squads || []).map((squad) => [String(squad?.id || ''), squad]));
+      (neutralPreview?.agents || []).forEach((agent) => {
+        if (!agent || agent.dead || (Number(agent.weight) || 0) <= 0.001) return;
+        const squad = previewSquadsById.get(String(agent.squadId || '')) || null;
+        const unitType = runtime?.unitTypeMap?.get?.(agent.unitTypeId) || {};
+        const classTag = squad?.classTag || agent.typeCategory || 'infantry';
+        const visual = (typeof runtime?.visualConfig === 'function'
+          ? runtime.visualConfig(agent.unitTypeId, classTag)
+          : {}) || {};
+        const isFlying = !!unitType.isFlying;
+        const terrainElevation = resolveTerrainElevation(agent);
+        const base = previewCount * unitsSchema.stride;
+        unitSquadIds[previewCount] = String(agent.squadId || '');
+        units.data[base + 0] = Number(agent.x) || 0;
+        units.data[base + 1] = Number(agent.y) || 0;
+        units.data[base + 2] = terrainElevation + (isFlying ? 8.5 : 0);
+        units.data[base + 3] = resolveTrainingAgentVisualSize(agent);
+        units.data[base + 4] = Number(agent.yaw) || 0;
+        units.data[base + 5] = resolveTeamIndex(TEAM_NEUTRAL);
+        units.data[base + 6] = clamp((Number(agent.hpWeight) || Number(agent.weight) || 1) / Math.max(0.001, Number(agent.initialWeight) || 1), 0, 1);
+        units.data[base + 7] = visual.bodyIndex || 0;
+        units.data[base + 8] = visual.gearIndex || 0;
+        units.data[base + 9] = visual.vehicleIndex || 0;
+        units.data[base + 10] = visual.silhouetteIndex || 0;
+        units.data[base + 11] = Number.isFinite(Number(visual.tint)) ? Number(visual.tint) : 1;
+        units.data[base + 12] = 0;
+        units.data[base + 13] = agent.isFlagBearer ? 1 : 0;
+        units.data[base + 14] = 0;
+        units.data[base + 15] = 0;
+        units.data[base + 16] = visual.bodyTopIndex || 0;
+        units.data[base + 17] = visual.gearTopIndex || 0;
+        units.data[base + 18] = visual.vehicleTopIndex || 0;
+        units.data[base + 19] = visual.silhouetteTopIndex || 0;
+        writeSkillVisualState(skillStates.data, previewCount * skillStatesSchema.stride, agent);
+        previewCount += 1;
+      });
       units.count = previewCount;
       skillStates.count = previewCount;
       unitSquadIds.length = previewCount;
@@ -330,7 +467,7 @@ export default class BattleSnapshotBuilder {
       units.data[base + 0] = Number(agent.x) || 0;
       units.data[base + 1] = Number(agent.y) || 0;
       units.data[base + 2] = terrainElevation + (isFlying ? 8.5 : 0);
-      units.data[base + 3] = Math.max(2.6, Math.min(10.5, Math.sqrt(Math.max(1, Number(agent.weight) || 1)) * 0.82));
+      units.data[base + 3] = resolveTrainingAgentVisualSize(agent);
       units.data[base + 4] = Number(agent.yaw) || 0;
       units.data[base + 5] = resolveTeamIndex(agent.team);
       units.data[base + 6] = clamp((Number(agent.hpWeight) || Number(agent.weight) || 1) / Math.max(0.001, Number(agent.initialWeight) || 1), 0, 1);

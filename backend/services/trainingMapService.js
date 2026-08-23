@@ -1,7 +1,7 @@
 const { buildReferenceTrainingMapConfig } = require('./trainingMapDefinitionService');
 
 const TRAINING_MAP_ID = 'training-war-map-v1';
-const TRAINING_MAP_VERSION = 8;
+const TRAINING_MAP_VERSION = 33;
 const FIELD_WIDTH = 2700;
 const FIELD_HEIGHT = 1488;
 
@@ -127,6 +127,30 @@ const TRAINING_MAP_ITEM_CATALOG = [
     color: '#d45151',
     secondaryColor: '#6e2834',
     meshId: 'training-tower'
+  }),
+  buildItem({
+    itemId: 'training_map_highland_outpost_tower',
+    name: '高地外围防御塔',
+    width: 48,
+    depth: 48,
+    height: 82,
+    hp: 2000,
+    defense: 4.6,
+    color: '#53dff0',
+    secondaryColor: '#135166',
+    meshId: 'training-highland-outpost-tower'
+  }),
+  buildItem({
+    itemId: 'training_map_barracks',
+    name: '高地兵营',
+    width: 84,
+    depth: 52,
+    height: 18,
+    hp: 5600,
+    defense: 6.4,
+    color: '#ef4b55',
+    secondaryColor: '#5c202a',
+    meshId: 'training-barracks'
   }),
   buildItem({
     itemId: 'training_map_base',
@@ -570,6 +594,55 @@ const isOverlapping = (left = {}, right = {}) => {
     && Math.abs((Number(left?.y) || 0) - (Number(right?.y) || 0)) < (leftHalfDepth + rightHalfDepth);
 };
 
+const isPointInsidePolygon = (point = {}, polygon = []) => {
+  if (!Array.isArray(polygon) || polygon.length < 3) return false;
+  const pointX = Number(point?.x) || 0;
+  const pointY = Number(point?.y) || 0;
+  let inside = false;
+  for (let index = 0, previousIndex = polygon.length - 1; index < polygon.length; previousIndex = index, index += 1) {
+    const current = polygon[index] || {};
+    const previous = polygon[previousIndex] || {};
+    const currentY = Number(current?.y) || 0;
+    const previousY = Number(previous?.y) || 0;
+    const intersects = ((currentY > pointY) !== (previousY > pointY))
+      && (pointX < (((Number(previous?.x) - Number(current?.x)) * (pointY - currentY)) / ((previousY - currentY) || 1e-9)) + Number(current?.x));
+    if (intersects) inside = !inside;
+  }
+  return inside;
+};
+
+const distanceToSegment = (point = {}, start = {}, end = {}) => {
+  const startX = Number(start?.x) || 0;
+  const startY = Number(start?.y) || 0;
+  const deltaX = (Number(end?.x) || 0) - startX;
+  const deltaY = (Number(end?.y) || 0) - startY;
+  const lengthSquared = (deltaX * deltaX) + (deltaY * deltaY);
+  if (lengthSquared <= 1e-9) return Math.hypot((Number(point?.x) || 0) - startX, (Number(point?.y) || 0) - startY);
+  const projection = Math.max(0, Math.min(1, (
+    (((Number(point?.x) || 0) - startX) * deltaX)
+    + (((Number(point?.y) || 0) - startY) * deltaY)
+  ) / lengthSquared));
+  return Math.hypot(
+    (Number(point?.x) || 0) - (startX + (deltaX * projection)),
+    (Number(point?.y) || 0) - (startY + (deltaY * projection))
+  );
+};
+
+const distanceToPolyline = (point = {}, path = []) => {
+  if (!Array.isArray(path) || path.length < 2) return Infinity;
+  return path.slice(1).reduce((shortestDistance, end, index) => (
+    Math.min(shortestDistance, distanceToSegment(point, path[index], end))
+  ), Infinity);
+};
+
+const distanceToObjectFootprint = (point = {}, object = {}) => {
+  const halfWidth = Math.max(1, Number(object?.width) || 1) * 0.5;
+  const halfDepth = Math.max(1, Number(object?.depth) || 1) * 0.5;
+  const horizontalDistance = Math.max(0, Math.abs((Number(point?.x) || 0) - (Number(object?.x) || 0)) - halfWidth);
+  const verticalDistance = Math.max(0, Math.abs((Number(point?.y) || 0) - (Number(object?.y) || 0)) - halfDepth);
+  return Math.hypot(horizontalDistance, verticalDistance);
+};
+
 const validateTrainingMapConfig = (mapConfig = TRAINING_MAP_CONFIG) => {
   const errors = [];
   const layoutMeta = mapConfig?.layoutMeta || {};
@@ -651,6 +724,79 @@ const validateTrainingMapConfig = (mapConfig = TRAINING_MAP_CONFIG) => {
     if (!objectiveId || objectiveIds.has(objectiveId)) errors.push(`目标 ID 无效或重复: ${objectiveId}`);
     objectiveIds.add(objectiveId);
     if (!objectById.has(objective?.sourceObjectId)) errors.push(`目标缺少静态对象: ${objectiveId}`);
+  });
+
+  const terrainRegions = Array.isArray(mapConfig?.terrainRegions) ? mapConfig.terrainRegions : [];
+  const respawnPoints = Array.isArray(mapConfig?.respawnPoints) ? mapConfig.respawnPoints : [];
+  const respawnIds = new Set();
+  const respawnHighlandIds = new Set();
+  const navigation = mapConfig?.navigation || {};
+  const clearance = Math.max(8, (Number(navigation?.agentRadius) || 0) + (Number(navigation?.pathClearance) || 0));
+  respawnPoints.forEach((point) => {
+    const pointId = String(point?.id || '');
+    const highlandId = String(point?.highlandId || '');
+    const spawnRegionId = String(point?.spawnRegionId || '');
+    if (!pointId || respawnIds.has(pointId)) errors.push(`重生点 ID 无效或重复: ${pointId}`);
+    respawnIds.add(pointId);
+    if (!highlandId || respawnHighlandIds.has(highlandId)) errors.push(`高地重生点无效或重复: ${highlandId}`);
+    respawnHighlandIds.add(highlandId);
+    if (!isFiniteCoordinate(point?.x) || !isFiniteCoordinate(point?.y)) {
+      errors.push(`重生点坐标无效: ${pointId}`);
+      return;
+    }
+    const highlandRegion = terrainRegions.find((region) => region?.id === `terrain-highland-${spawnRegionId}`);
+    if (!highlandRegion || !isPointInsidePolygon(point, highlandRegion?.points)) {
+      errors.push(`重生点不在所属高地内: ${pointId}`);
+      return;
+    }
+    const radius = Math.max(0, Number(point?.radius) || 0);
+    const highlandObjects = objects.filter((object) => (
+      object?.highlandId === highlandId && object?.blocksMovement !== false
+    ));
+    highlandObjects.forEach((object) => {
+      if (distanceToObjectFootprint(point, object) < radius + clearance) {
+        errors.push(`重生点过近于高地建筑: ${pointId}/${object.objectId}`);
+      }
+    });
+    const highlandRails = objects.filter((object) => (
+      object?.geometryKind === 'highlandRail'
+      && object?.highlandRegionId === highlandRegion.id
+      && Array.isArray(object?.visualPath)
+      && object.visualPath.length >= 2
+    ));
+    highlandRails.forEach((rail) => {
+      const railClearance = distanceToPolyline(point, rail.visualPath) - (Math.max(1, Number(rail?.depth) || 1) * 0.5);
+      if (railClearance < radius + clearance) {
+        errors.push(`重生点过近于高地栏杆: ${pointId}/${rail.objectId}`);
+      }
+    });
+  });
+
+  objects.filter((object) => String(object?.highlandId || '')).forEach((object) => {
+    const highlandId = String(object?.highlandId || '');
+    const respawnPoint = respawnPoints.find((point) => point?.highlandId === highlandId);
+    const highlandRegion = terrainRegions.find((region) => (
+      region?.id === `terrain-highland-${String(respawnPoint?.spawnRegionId || '')}`
+    ));
+    if (!highlandRegion || !isPointInsidePolygon(object, highlandRegion?.points)) {
+      errors.push(`高地建筑不在所属高地内: ${object.objectId}`);
+      return;
+    }
+    const footprintRadius = Math.hypot(
+      Math.max(1, Number(object?.width) || 1) * 0.5,
+      Math.max(1, Number(object?.depth) || 1) * 0.5
+    );
+    objects.filter((rail) => (
+      rail?.geometryKind === 'highlandRail'
+      && rail?.highlandRegionId === highlandRegion.id
+      && Array.isArray(rail?.visualPath)
+      && rail.visualPath.length >= 2
+    )).forEach((rail) => {
+      const railClearance = distanceToPolyline(object, rail.visualPath) - (Math.max(1, Number(rail?.depth) || 1) * 0.5);
+      if (railClearance < footprintRadius + clearance) {
+        errors.push(`高地建筑过近于栏杆: ${object.objectId}/${rail.objectId}`);
+      }
+    });
   });
 
   return {

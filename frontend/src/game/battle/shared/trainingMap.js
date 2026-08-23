@@ -3,9 +3,9 @@ const DEFAULT_MAP_VERSION = 1;
 const TEAM_ATTACKER = 'attacker';
 const TEAM_DEFENDER = 'defender';
 
-export const TRAINING_MAP_WORLD_WIDTH = 7200;
-export const TRAINING_MAP_WORLD_HEIGHT = 5008;
-export const TRAINING_MAP_SCALE_MULTIPLIER = 8 / 3;
+export const TRAINING_MAP_WORLD_WIDTH = 12600;
+export const TRAINING_MAP_WORLD_HEIGHT = 8764;
+export const TRAINING_MAP_SCALE_MULTIPLIER = 14 / 3;
 
 const finiteNumber = (value, fallback = 0) => (
   Number.isFinite(Number(value)) ? Number(value) : fallback
@@ -51,7 +51,7 @@ const isPointInsideTrainingMapPolygon = (point = {}, polygon = []) => {
   return inside;
 };
 
-const resolveTrainingMapTriangleVertexWeight = (point = {}, triangle = []) => {
+const resolveTrainingMapTriangleWeights = (point = {}, triangle = []) => {
   if (!Array.isArray(triangle) || triangle.length !== 3) return null;
   const [vertex, second, third] = triangle;
   const pointX = finiteNumber(point?.x);
@@ -68,7 +68,37 @@ const resolveTrainingMapTriangleVertexWeight = (point = {}, triangle = []) => {
   const secondWeight = (((thirdY - vertexY) * (pointX - thirdX)) + ((vertexX - thirdX) * (pointY - thirdY))) / denominator;
   const thirdWeight = 1 - vertexWeight - secondWeight;
   if (vertexWeight < -0.0001 || secondWeight < -0.0001 || thirdWeight < -0.0001) return null;
-  return Math.min(1, Math.max(0, vertexWeight));
+  return [vertexWeight, secondWeight, thirdWeight].map((weight) => (
+    Math.min(1, Math.max(0, weight))
+  ));
+};
+
+const resolveTrainingMapRampElevation = (point = {}, ramp = {}, baseElevation = 0, elevation = 0) => {
+  const points = Array.isArray(ramp?.points) ? ramp.points : [];
+  if (points.length === 3) {
+    const weights = resolveTrainingMapTriangleWeights(point, points);
+    return weights === null
+      ? null
+      : baseElevation + (elevation * (weights[1] + weights[2]));
+  }
+  if (points.length !== 4) return null;
+  const [lowStart, highlandStart, highlandEnd, lowEnd] = points;
+  const upperTriangleWeights = resolveTrainingMapTriangleWeights(point, [
+    lowStart,
+    highlandStart,
+    highlandEnd
+  ]);
+  if (upperTriangleWeights !== null) {
+    return baseElevation + (elevation * (upperTriangleWeights[1] + upperTriangleWeights[2]));
+  }
+  const lowerTriangleWeights = resolveTrainingMapTriangleWeights(point, [
+    lowStart,
+    highlandEnd,
+    lowEnd
+  ]);
+  return lowerTriangleWeights === null
+    ? null
+    : baseElevation + (elevation * lowerTriangleWeights[1]);
 };
 
 const resolveTrainingMapRegionElevation = (region = {}, point = {}) => {
@@ -78,10 +108,7 @@ const resolveTrainingMapRegionElevation = (region = {}, point = {}) => {
   const ramps = Array.isArray(region?.ramps) ? region.ramps : [];
   const rampElevation = ramps.reduce((value, ramp) => {
     if (value !== null) return value;
-    const vertexWeight = resolveTrainingMapTriangleVertexWeight(point, ramp?.points);
-    return vertexWeight === null
-      ? null
-      : baseElevation + (elevation * (1 - vertexWeight));
+    return resolveTrainingMapRampElevation(point, ramp, baseElevation, elevation);
   }, null);
   return rampElevation === null ? baseElevation + elevation : rampElevation;
 };
@@ -275,6 +302,8 @@ export const normalizeTrainingMapConfig = (battlefield = {}) => {
       presets: [],
       terrainRegions: [],
       spawnRegions: [],
+      respawnPoints: [],
+      allRespawnPoints: [],
       lanes: [],
       deploySlots: [],
       objectives: [],
@@ -327,6 +356,9 @@ export const normalizeTrainingMapConfig = (battlefield = {}) => {
     presets,
     terrainRegions: Array.isArray(rawMap?.terrainRegions) ? rawMap.terrainRegions : [],
     spawnRegions: Array.isArray(rawMap?.spawnRegions) ? rawMap.spawnRegions : [],
+    respawnPoints: (Array.isArray(rawMap?.respawnPoints) ? rawMap.respawnPoints : [])
+      .filter((entry) => isEnabledForPreset(entry, enabledTags)),
+    allRespawnPoints: Array.isArray(rawMap?.respawnPoints) ? rawMap.respawnPoints : [],
     lanes: Array.isArray(rawMap?.lanes) ? rawMap.lanes : [],
     deploySlots: Array.isArray(rawMap?.deploySlots) ? rawMap.deploySlots : [],
     movementCalibration: rawMap?.movementCalibration && typeof rawMap.movementCalibration === 'object'
@@ -360,7 +392,7 @@ export const resolveTrainingMapPreset = (mapConfig = null, presetId = '') => {
 };
 
 export const resolveTrainingMapElementsForPreset = (mapConfig = null, presetId = '') => {
-  if (!mapConfig?.enabled) return { objects: [], objectives: [], presetId: 'legacy-flat' };
+  if (!mapConfig?.enabled) return { objects: [], objectives: [], respawnPoints: [], presetId: 'legacy-flat' };
   const preset = resolveTrainingMapPreset(mapConfig, presetId)
     || resolveTrainingMapPreset(mapConfig, mapConfig?.defaultPresetId)
     || { id: mapConfig?.activePresetId || 'full-jungle', enabledTags: [] };
@@ -370,6 +402,8 @@ export const resolveTrainingMapElementsForPreset = (mapConfig = null, presetId =
     objects: (Array.isArray(mapConfig?.allObjects) ? mapConfig.allObjects : mapConfig.objects || [])
       .filter((entry) => isEnabledForPreset(entry, enabledTags)),
     objectives: (Array.isArray(mapConfig?.allObjectives) ? mapConfig.allObjectives : mapConfig.objectives || [])
+      .filter((entry) => isEnabledForPreset(entry, enabledTags)),
+    respawnPoints: (Array.isArray(mapConfig?.allRespawnPoints) ? mapConfig.allRespawnPoints : mapConfig.respawnPoints || [])
       .filter((entry) => isEnabledForPreset(entry, enabledTags))
   };
 };
@@ -379,8 +413,45 @@ export const cloneTrainingMapElementsForPreset = (mapConfig = null, presetId = '
   return {
     ...elements,
     objects: cloneMapValue(elements.objects, []),
-    objectives: cloneMapValue(elements.objectives, [])
+    objectives: cloneMapValue(elements.objectives, []),
+    respawnPoints: cloneMapValue(elements.respawnPoints, [])
   };
+};
+
+export const getTrainingMapRespawnPoints = (mapConfig = null, team = '') => (
+  (Array.isArray(mapConfig?.respawnPoints) ? mapConfig.respawnPoints : [])
+    .filter((point) => !team || point?.team === team)
+    .map((point) => ({
+      id: String(point?.id || ''),
+      highlandId: String(point?.highlandId || ''),
+      team: point?.team === TEAM_DEFENDER ? TEAM_DEFENDER : TEAM_ATTACKER,
+      spawnRegionId: String(point?.spawnRegionId || ''),
+      label: String(point?.label || '高地重生点'),
+      x: finiteNumber(point?.x),
+      y: finiteNumber(point?.y),
+      radius: Math.max(0, finiteNumber(point?.radius)),
+      facingRad: finiteNumber(point?.facingRad)
+    }))
+    .filter((point) => point.id)
+);
+
+export const resolveTrainingMapRespawnPoint = (mapConfig = null, {
+  team = TEAM_ATTACKER,
+  spawnRegionId = '',
+  fallbackPoint = null
+} = {}) => {
+  const candidates = getTrainingMapRespawnPoints(mapConfig, team);
+  if (candidates.length <= 0) return null;
+  const requestedSpawnRegionId = String(spawnRegionId || '');
+  const matchingRegion = candidates.find((point) => point.spawnRegionId === requestedSpawnRegionId);
+  if (matchingRegion) return matchingRegion;
+  if (!fallbackPoint) return candidates[0];
+  return candidates.reduce((best, point) => {
+    if (!best) return point;
+    const pointDistance = Math.hypot(point.x - finiteNumber(fallbackPoint?.x), point.y - finiteNumber(fallbackPoint?.y));
+    const bestDistance = Math.hypot(best.x - finiteNumber(fallbackPoint?.x), best.y - finiteNumber(fallbackPoint?.y));
+    return pointDistance < bestDistance ? point : best;
+  }, null);
 };
 
 export const getTrainingMapDeploySlots = (mapConfig = null, team = '') => (

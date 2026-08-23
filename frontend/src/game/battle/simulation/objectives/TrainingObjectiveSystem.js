@@ -1,7 +1,7 @@
 import { raycastObstacles } from '../crowd/crowdPhysics';
 import { applyDamageToAgent } from '../crowd/crowdCombat';
 import { resolveSquadAttackRange } from '../crowd/attackRange';
-import { acquireHitEffect } from '../effects/CombatEffects';
+import { acquireHitEffect, acquireProjectile } from '../effects/CombatEffects';
 import { filterVisionBlockingObstacles } from '../items/itemObstacleUtils';
 
 const TEAM_ATTACKER = 'attacker';
@@ -32,7 +32,32 @@ const normalizeObjectiveTargetPriority = (priority = '') => {
   return OBJECTIVE_TARGET_PRIORITY_NEAREST;
 };
 
-const normalizeObjective = (definition = {}, index = 0) => ({
+const normalizeWeaponProfile = (profile = {}, index = 0) => ({
+  id: String(profile?.id || `weapon-${index + 1}`),
+  label: String(profile?.label || `建筑武器 ${index + 1}`),
+  delivery: profile?.delivery === 'projectile' ? 'projectile' : 'instant',
+  projectileType: profile?.projectileType === 'shell' ? 'shell' : 'arrow',
+  attackRange: Math.max(0, finiteNumber(profile?.attackRange)),
+  attackIntervalSec: Math.max(0.1, finiteNumber(profile?.attackIntervalSec, 1)),
+  attackDamage: Math.max(0, finiteNumber(profile?.attackDamage)),
+  priority: normalizeObjectiveTargetPriority(profile?.priority),
+  projectileSpeed: Math.max(0, finiteNumber(profile?.projectileSpeed)),
+  splashRadius: Math.max(0, finiteNumber(profile?.splashRadius)),
+  splashFalloff: clamp(finiteNumber(profile?.splashFalloff), 0, 1),
+  wallDamageMul: Math.max(0.1, finiteNumber(profile?.wallDamageMul, 1)),
+  cooldown: Math.max(0, finiteNumber(profile?.cooldown))
+});
+
+const normalizeObjectiveWeaponProfiles = (definition = {}) => (
+  (Array.isArray(definition?.weaponProfiles) ? definition.weaponProfiles : [])
+    .map(normalizeWeaponProfile)
+    .filter((profile) => profile.attackRange > 0 && profile.attackDamage > 0)
+);
+
+const normalizeObjective = (definition = {}, index = 0) => {
+  const weaponProfiles = normalizeObjectiveWeaponProfiles(definition);
+  const maxWeaponRange = weaponProfiles.reduce((maxRange, profile) => Math.max(maxRange, profile.attackRange), 0);
+  return {
   id: String(definition?.objectiveId || `training_objective_${index + 1}`),
   sourceObjectId: String(definition?.sourceObjectId || ''),
   type: String(definition?.type || 'structure'),
@@ -40,15 +65,18 @@ const normalizeObjective = (definition = {}, index = 0) => ({
   laneId: String(definition?.laneId || 'jungle'),
   maxHp: Math.max(1, finiteNumber(definition?.maxHp, 1000)),
   hp: Math.max(1, finiteNumber(definition?.maxHp, 1000)),
-  attackRange: Math.max(0, finiteNumber(definition?.attackRange)),
+  attackRange: Math.max(Math.max(0, finiteNumber(definition?.attackRange)), maxWeaponRange),
   attackIntervalSec: Math.max(0.1, finiteNumber(definition?.attackIntervalSec, 1)),
   attackDamage: Math.max(0, finiteNumber(definition?.attackDamage)),
-  attackEnabled: definition?.attackEnabled !== false && finiteNumber(definition?.attackDamage) > 0,
+  attackEnabled: definition?.attackEnabled !== false && (
+    finiteNumber(definition?.attackDamage) > 0 || weaponProfiles.length > 0
+  ),
   targetable: definition?.targetable !== false,
   priority: normalizeObjectiveTargetPriority(definition?.priority),
   threatDecayPerSecond: Math.max(0, finiteNumber(definition?.threatDecayPerSecond, 0.2)),
   respawnSec: Math.max(0, finiteNumber(definition?.respawnSec)),
   rewardLabel: String(definition?.rewardLabel || ''),
+  weaponProfiles,
   presetTags: Array.isArray(definition?.presetTags) ? definition.presetTags.slice() : [],
   destroyed: false,
   respawnAt: 0,
@@ -61,7 +89,8 @@ const normalizeObjective = (definition = {}, index = 0) => ({
   damageTaken: 0,
   damageDealt: 0,
   killCount: 0
-});
+  };
+};
 
 const resolveBuildingByObjectId = (sim = {}, objective = {}) => (
   (Array.isArray(sim?.buildings) ? sim.buildings : []).find((building) => (
@@ -106,6 +135,7 @@ const ensureObjectiveRuntimeState = (objective = {}) => {
   objective.lockedSquadId = String(objective.lockedSquadId || '');
   objective.currentTargetId = String(objective.currentTargetId || objective.lockedSquadId || '');
   objective.lastAttackerSquadId = String(objective.lastAttackerSquadId || '');
+  objective.weaponProfiles = normalizeObjectiveWeaponProfiles(objective);
   objective.destroyedAt = Math.max(0, finiteNumber(objective.destroyedAt));
   objective.killCount = Math.max(0, Math.floor(finiteNumber(objective.killCount)));
   return objective;
@@ -177,9 +207,15 @@ const compareObjectiveTargetCandidates = (objective = {}, left = {}, right = {})
   return String(left?.squad?.id || '').localeCompare(String(right?.squad?.id || ''));
 };
 
-const selectObjectiveTargetSquad = (objective = {}, sim = {}) => {
+const selectObjectiveTargetSquad = (objective = {}, sim = {}, {
+  attackRange = objective?.attackRange,
+  priority = objective?.priority
+} = {}) => {
   const position = resolveObjectivePosition(sim, objective);
   if (!position.building || position.building.destroyed) return null;
+  const targetingObjective = priority === objective?.priority
+    ? objective
+    : { ...objective, priority: normalizeObjectiveTargetPriority(priority) };
   const obstacles = resolveVisionObstacles(sim, objective);
   const candidates = [];
   (Array.isArray(sim?.squads) ? sim.squads : []).forEach((squad) => {
@@ -187,7 +223,7 @@ const selectObjectiveTargetSquad = (objective = {}, sim = {}) => {
     const squadPosition = { x: finiteNumber(squad?.x), y: finiteNumber(squad?.y) };
     const squadRadius = Math.max(4, finiteNumber(squad?.radius, 10));
     const distance = Math.hypot(squadPosition.x - position.x, squadPosition.y - position.y);
-    if (distance > Math.max(0, finiteNumber(objective?.attackRange)) + position.radius + squadRadius) return;
+    if (distance > Math.max(0, finiteNumber(attackRange)) + position.radius + squadRadius) return;
     if (!hasObjectiveLineOfSight(position, squadPosition, obstacles)) return;
     candidates.push({
       squad,
@@ -196,7 +232,7 @@ const selectObjectiveTargetSquad = (objective = {}, sim = {}) => {
       threat: Math.max(0, finiteNumber(objective?.threatBySquadId?.[squad.id]))
     });
   });
-  candidates.sort((left, right) => compareObjectiveTargetCandidates(objective, left, right));
+  candidates.sort((left, right) => compareObjectiveTargetCandidates(targetingObjective, left, right));
   return candidates[0]?.squad || null;
 };
 
@@ -246,6 +282,126 @@ const selectNearestAgent = (crowd = {}, squad = {}, position = {}) => {
     }
   });
   return best;
+};
+
+const resolveObjectiveWeaponProfiles = (objective = {}) => {
+  const profiles = normalizeObjectiveWeaponProfiles(objective);
+  if (profiles.length > 0) return profiles;
+  const attackRange = Math.max(0, finiteNumber(objective?.attackRange));
+  const attackDamage = Math.max(0, finiteNumber(objective?.attackDamage));
+  if (attackRange <= 0 || attackDamage <= 0) return [];
+  return [{
+    id: 'primary',
+    label: '防御攻击',
+    delivery: 'instant',
+    projectileType: objective?.type === 'tower' ? 'shell' : 'arrow',
+    attackRange,
+    attackIntervalSec: Math.max(0.1, finiteNumber(objective?.attackIntervalSec, 1)),
+    attackDamage,
+    priority: normalizeObjectiveTargetPriority(objective?.priority),
+    projectileSpeed: 0,
+    splashRadius: 0,
+    splashFalloff: 0,
+    wallDamageMul: 1,
+    cooldown: Math.max(0, finiteNumber(objective?.attackCooldown))
+  }];
+};
+
+const saveObjectiveWeaponProfiles = (objective = {}, profiles = []) => {
+  if (!Array.isArray(objective?.weaponProfiles) || objective.weaponProfiles.length <= 0) {
+    objective.attackCooldown = Math.max(0, finiteNumber(profiles?.[0]?.cooldown));
+    return;
+  }
+  objective.weaponProfiles = profiles.map((profile) => ({ ...profile }));
+  objective.attackCooldown = Math.max(0, finiteNumber(profiles?.[0]?.cooldown));
+};
+
+const launchObjectiveProjectile = ({
+  crowd = {},
+  objective = {},
+  weapon = {},
+  position = {},
+  targetAgent = null
+} = {}) => {
+  if (!targetAgent || !crowd?.effectsPool) return false;
+  const dx = finiteNumber(targetAgent?.x) - finiteNumber(position?.x);
+  const dy = finiteNumber(targetAgent?.y) - finiteNumber(position?.y);
+  const distance = Math.max(1, Math.hypot(dx, dy));
+  const projectileType = weapon?.projectileType === 'shell' ? 'shell' : 'arrow';
+  const projectileSpeed = Math.max(
+    projectileType === 'shell' ? 120 : 180,
+    finiteNumber(weapon?.projectileSpeed)
+  );
+  const travelSec = clamp(distance / projectileSpeed, projectileType === 'shell' ? 0.48 : 0.25, projectileType === 'shell' ? 2.4 : 1.4);
+  const startZ = Math.max(3.4, finiteNumber(position?.building?.height, 24) * (projectileType === 'shell' ? 0.72 : 0.66));
+  const gravity = projectileType === 'shell' ? 62 : 46;
+  const verticalSpeed = ((0.5 * gravity * travelSec * travelSec) - startZ) / travelSec;
+  acquireProjectile(crowd.effectsPool, {
+    type: projectileType,
+    team: objective?.team === TEAM_DEFENDER ? TEAM_DEFENDER : TEAM_ATTACKER,
+    squadId: '',
+    sourceAgentId: `objective_source_${objective?.id || ''}`,
+    x: finiteNumber(position?.x),
+    y: finiteNumber(position?.y),
+    z: startZ,
+    vx: dx / travelSec,
+    vy: dy / travelSec,
+    vz: verticalSpeed,
+    gravity,
+    damage: Math.max(0.06, finiteNumber(weapon?.attackDamage)),
+    radius: projectileType === 'shell' ? 4.2 : 1.7,
+    impactRadius: projectileType === 'shell' ? Math.max(3.4, finiteNumber(weapon?.splashRadius, 4.2)) : 1.7,
+    blastRadius: projectileType === 'shell' ? Math.max(0, finiteNumber(weapon?.splashRadius)) : 0,
+    blastFalloff: projectileType === 'shell' ? clamp(finiteNumber(weapon?.splashFalloff, 0.72), 0, 1) : 0,
+    wallDamageMul: Math.max(0.1, finiteNumber(weapon?.wallDamageMul, 1)),
+    ttl: travelSec + 0.5,
+    targetTeam: targetAgent?.team
+  });
+  return true;
+};
+
+const fireObjectiveWeapon = ({
+  sim = {},
+  crowd = {},
+  objective = {},
+  weapon = {},
+  targetSquad = null
+} = {}) => {
+  const position = resolveObjectivePosition(sim, objective);
+  const targetAgent = selectNearestAgent(crowd, targetSquad, position);
+  if (!targetAgent) return false;
+  const source = {
+    id: `objective_source_${objective.id}`,
+    squadId: '',
+    team: objective.team === TEAM_NEUTRAL ? TEAM_NEUTRAL : objective.team,
+    x: position.x,
+    y: position.y
+  };
+  const damage = Math.max(0.2, finiteNumber(weapon?.attackDamage));
+  const firedProjectile = weapon?.delivery === 'projectile'
+    && launchObjectiveProjectile({ crowd, objective, weapon, position, targetAgent });
+  if (!firedProjectile) {
+    applyDamageToAgent(
+      sim,
+      crowd,
+      source,
+      targetAgent,
+      damage,
+      weapon?.projectileType === 'shell' ? 'shell' : 'hit',
+      { poiseDamageMul: 0.36 }
+    );
+  }
+  objective.damageDealt += damage;
+  acquireHitEffect(crowd.effectsPool, {
+    type: weapon?.projectileType === 'shell' ? 'shell' : 'hit',
+    x: position.x,
+    y: position.y,
+    z: Math.max(2, finiteNumber(position?.building?.height, 24) * 0.68),
+    radius: weapon?.projectileType === 'shell' ? 4.4 : 2.6,
+    ttl: 0.14,
+    team: objective.team === TEAM_DEFENDER ? TEAM_DEFENDER : TEAM_ATTACKER
+  });
+  return true;
 };
 
 const applyObjectiveDamage = (sim = {}, objective = {}, squad = {}, dt = 0) => {
@@ -421,33 +577,24 @@ export const updateTrainingObjectives = (sim = {}, crowd = {}, dt = 0) => {
       return;
     }
     if (!objective.attackEnabled) return;
-    objective.attackCooldown = Math.max(0, finiteNumber(objective.attackCooldown) - safeDt);
-    const targetSquad = selectObjectiveTargetSquad(objective, sim);
-    updateObjectiveTargetState(objective, targetSquad);
-    if (!targetSquad || objective.attackCooldown > 0) return;
-    const position = resolveObjectivePosition(sim, objective);
-    const targetAgent = selectNearestAgent(crowd, targetSquad, position);
-    if (!targetAgent) return;
-    const source = {
-      id: `objective_source_${objective.id}`,
-      squadId: '',
-      team: objective.team === TEAM_NEUTRAL ? TEAM_NEUTRAL : objective.team,
-      x: position.x,
-      y: position.y
-    };
-    const damage = Math.max(0.2, finiteNumber(objective.attackDamage));
-    applyDamageToAgent(sim, crowd, source, targetAgent, damage, objective.type === 'tower' ? 'shell' : 'hit', { poiseDamageMul: 0.36 });
-    objective.damageDealt += damage;
-    objective.attackCooldown = Math.max(0.1, finiteNumber(objective.attackIntervalSec, 1));
-    acquireHitEffect(crowd.effectsPool, {
-      type: objective.type === 'tower' ? 'shell' : 'hit',
-      x: position.x,
-      y: position.y,
-      z: Math.max(2, finiteNumber(position?.building?.height, 24) * 0.68),
-      radius: objective.type === 'tower' ? 4.4 : 2.6,
-      ttl: 0.14,
-      team: objective.team === TEAM_DEFENDER ? TEAM_DEFENDER : TEAM_ATTACKER
+    const weaponProfiles = resolveObjectiveWeaponProfiles(objective).map((weapon) => ({
+      ...weapon,
+      cooldown: Math.max(0, finiteNumber(weapon?.cooldown) - safeDt)
+    }));
+    const weaponTargets = weaponProfiles.map((weapon) => ({
+      weapon,
+      squad: selectObjectiveTargetSquad(objective, sim, {
+        attackRange: weapon.attackRange,
+        priority: weapon.priority
+      })
+    }));
+    updateObjectiveTargetState(objective, weaponTargets.find((entry) => entry.squad)?.squad || null);
+    weaponTargets.forEach(({ weapon, squad }) => {
+      if (!squad || weapon.cooldown > 0) return;
+      if (!fireObjectiveWeapon({ sim, crowd, objective, weapon, targetSquad: squad })) return;
+      weapon.cooldown = Math.max(0.1, finiteNumber(weapon.attackIntervalSec, 1));
     });
+    saveObjectiveWeaponProfiles(objective, weaponProfiles);
   });
 
   updateLaneEngagement(sim, stats, safeDt);

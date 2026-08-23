@@ -214,6 +214,54 @@ describe('BattleRuntime training control', () => {
     expect(runtime.getTrainingMapState().objectives[0]).toMatchObject({ hp: 1200, destroyed: false });
   });
 
+  test('respawns a defeated training squad at its configured highland point', () => {
+    const init = buildThreeLaneMapInit();
+    init.battlefield.map.respawnPoints = [
+      {
+        id: 'respawn-attacker',
+        team: 'attacker',
+        spawnRegionId: '',
+        x: -430,
+        y: 160,
+        radius: 50,
+        facingRad: 0,
+        presetTags: ['tower']
+      }
+    ];
+    const runtime = new BattleRuntime(init);
+    expect(runtime.setTrainingRespawnDelay(10)).toMatchObject({ ok: true });
+    expect(runtime.createDeployGroup('attacker', {
+      units: { infantry_basic: 20 },
+      placed: true
+    })).toMatchObject({ ok: true });
+    expect(runtime.startBattle()).toMatchObject({ ok: true });
+    const squad = runtime.sim.squads.find((row) => row.team === 'attacker');
+    const agents = runtime.crowd.agentsBySquad.get(squad.id);
+    agents.forEach((agent) => { agent.dead = true; });
+    squad.remain = 0;
+
+    runtime.step(0.05);
+    expect(runtime.getCardRows().find((row) => row.id === squad.id)).toMatchObject({
+      respawning: true,
+      respawnRemainingSec: expect.any(Number)
+    });
+
+    const queuedAt = squad.respawnState.queuedAt;
+    runtime.sim.timeElapsed = 3;
+    expect(runtime.setTrainingRespawnDelay(30)).toMatchObject({ ok: true });
+    expect(squad.respawnState).toMatchObject({
+      delaySec: 30
+    });
+    expect(squad.respawnState.respawnAt).toBeCloseTo(queuedAt + 30);
+    expect(squad.respawnState.remainingSec).toBeCloseTo((queuedAt + 30) - 3);
+
+    runtime.sim.timeElapsed = queuedAt + 30.2;
+    runtime.step(0.05);
+    expect(squad).toMatchObject({ x: -430, y: 160, remain: 20 });
+    expect(squad.respawnState).toMatchObject({ state: 'alive' });
+    expect(runtime.crowd.agentsBySquad.get(squad.id).some((agent) => !agent.dead)).toBe(true);
+  });
+
   test('spawns neutral camp guards while keeping the camp marker out of building collision', () => {
     const init = buildThreeLaneMapInit();
     init.battlefield.map.objects.push({
@@ -260,6 +308,12 @@ describe('BattleRuntime training control', () => {
     });
     init.battlefield.objects = init.battlefield.map.objects;
     const runtime = new BattleRuntime(init);
+    const captureNeutralModels = (snapshot) => Array.from({ length: snapshot.units.count }, (_, index) => {
+      if (snapshot.unitSquadIds[index] !== 'neutral_camp_camp-mid') return null;
+      const base = index * 20;
+      return Array.from(snapshot.units.data.slice(base, base + 20));
+    }).filter(Boolean);
+    const preStartCampModels = captureNeutralModels(runtime.getRenderSnapshot());
     const created = runtime.createDeployGroup('attacker', {
       units: { infantry_basic: 20 },
       placed: true
@@ -276,14 +330,17 @@ describe('BattleRuntime training control', () => {
     expect(runtime.unitTypeMap.get('training_neutral_archer')).toMatchObject({ unitCategory: 'ranged', classTag: 'archer' });
     expect(runtime.unitTypeMap.get('training_neutral_support')).toMatchObject({ unitCategory: 'support' });
     const campAgents = runtime.crowd.agentsBySquad.get('neutral_camp_camp-mid');
-    expect(campAgents).toHaveLength(12);
-    expect(campAgents.every((agent) => agent.initialWeight === 1)).toBe(true);
+    expect(runtime.getSquadById('neutral_camp_camp-mid').representativeAgentWeightCap).toBeUndefined();
+    expect(campAgents).toHaveLength(3);
+    expect(campAgents.map((agent) => agent.initialWeight)).toEqual([6, 4, 2]);
     expect(campAgents.reduce((counts, agent) => ({
       ...counts,
       [agent.unitCategory]: (counts[agent.unitCategory] || 0) + 1
-    }), {})).toEqual({ melee: 6, ranged: 4, support: 2 });
+    }), {})).toEqual({ melee: 1, ranged: 1, support: 1 });
     const campSnapshot = runtime.getRenderSnapshot();
-    expect(campSnapshot.unitSquadIds.filter((squadId) => squadId === 'neutral_camp_camp-mid')).toHaveLength(12);
+    const postStartCampModels = captureNeutralModels(campSnapshot);
+    expect(preStartCampModels).toHaveLength(3);
+    expect(postStartCampModels).toEqual(preStartCampModels);
     expect(runtime.sim.buildings.find((building) => building.id === 'training_neutral_camp_mid').blocksMovement).toBe(false);
     expect(runtime.getTrainingMapState().neutralCamps[0]).toMatchObject({ state: 'alive' });
   });
@@ -352,13 +409,20 @@ describe('BattleRuntime training control', () => {
       expect(guard?.guard?.patrolTarget).toBeTruthy();
       expect(guard?.waypoints?.length).toBeGreaterThan(0);
       const agents = runtime.crowd.agentsBySquad.get(guard.id) || [];
-      expect(guard?.representativeAgentWeightCap).toBe(1);
-      expect(agents).toHaveLength(guard.startCount);
-      expect(agents.every((agent) => agent.initialWeight === 1)).toBe(true);
+      expect(guard?.representativeAgentWeightCap).toBeUndefined();
+      expect(agents.length).toBeLessThan(guard.startCount);
+      expect(agents.length).toBeGreaterThan(1);
+      expect(agents.some((agent) => agent.initialWeight > 1)).toBe(true);
     });
     beforeSnapshotModels.forEach((models, index) => {
-      expect(models).toHaveLength(guards[index].startCount);
-      expect(models.every((model) => model.size > 2.5)).toBe(true);
+      expect(models).toHaveLength(runtime.crowd.agentsBySquad.get(guards[index].id).length);
+      expect(models.every((model) => model.size > 8.5)).toBe(true);
+      const nearestModelDistance = models.reduce((nearest, model, modelIndex) => (
+        models.slice(modelIndex + 1).reduce((pairNearest, candidate) => (
+          Math.min(pairNearest, Math.hypot(model.x - candidate.x, model.y - candidate.y))
+        ), nearest)
+      ), Infinity);
+      expect(nearestModelDistance).toBeGreaterThan(18);
     });
 
     for (let index = 0; index < 60; index += 1) runtime.step(1 / 30);

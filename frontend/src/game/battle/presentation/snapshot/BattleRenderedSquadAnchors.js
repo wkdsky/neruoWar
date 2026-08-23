@@ -73,10 +73,21 @@ export const resolveTrainingRenderedSquadAnchors = (runtime = null, snapshot = n
     const fallbackY = finiteOr(row?.agent?.y);
     const x = finiteOr(data?.[base + 0], fallbackX);
     const y = finiteOr(data?.[base + 1], fallbackY);
-    const aggregate = aggregates.get(squadId) || { x: 0, y: 0, count: 0 };
+    const aggregate = aggregates.get(squadId) || {
+      x: 0,
+      y: 0,
+      count: 0,
+      flagBearer: null
+    };
     aggregate.x += x;
     aggregate.y += y;
     aggregate.count += 1;
+    if (
+      (row?.agent?.team === TEAM_NEUTRAL || row?.squad?.team === TEAM_NEUTRAL)
+      && Number(data?.[base + 13]) > 0.5
+    ) {
+      aggregate.flagBearer = { x, y };
+    }
     aggregates.set(squadId, aggregate);
   }
 
@@ -86,12 +97,12 @@ export const resolveTrainingRenderedSquadAnchors = (runtime = null, snapshot = n
     if (squad.team === TEAM_DEFENDER && squad.hiddenFromAttacker) return;
     const id = String(squad.id);
     const aggregate = aggregates.get(id);
-    const x = aggregate?.count > 0
+    const x = aggregate?.flagBearer?.x ?? (aggregate?.count > 0
       ? aggregate.x / aggregate.count
-      : finiteOr(squad.centerX, finiteOr(squad.x));
-    const y = aggregate?.count > 0
+      : finiteOr(squad.centerX, finiteOr(squad.x)));
+    const y = aggregate?.flagBearer?.y ?? (aggregate?.count > 0
       ? aggregate.y / aggregate.count
-      : finiteOr(squad.centerY, finiteOr(squad.y));
+      : finiteOr(squad.centerY, finiteOr(squad.y)));
     anchors.set(id, {
       id,
       squadId: id,

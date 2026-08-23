@@ -91,6 +91,19 @@ const resolveBlockingObstacles = (obstacles = []) => {
   return blockingObstacles;
 };
 
+const resolveObstacleSourceSignature = (obstacles = []) => (
+  (Array.isArray(obstacles) ? obstacles : []).map((obstacle, index) => ([
+    String(obstacle?.objectId || obstacle?.id || index),
+    finiteNumber(obstacle?.x),
+    finiteNumber(obstacle?.y),
+    finiteNumber(obstacle?.width),
+    finiteNumber(obstacle?.depth),
+    finiteNumber(obstacle?.rotation),
+    obstacle?.blocksMovement !== false,
+    obstacle?.destroyed === true
+  ].join(':'))).join('|')
+);
+
 const resolvePathClearance = (navigation = {}) => {
   const configured = Number(navigation?.pathClearance);
   if (Number.isFinite(configured)) return clamp(configured, 0, 48);
@@ -358,15 +371,6 @@ const reduceRoute = (
   return reduced;
 };
 
-const routeLength = (start = {}, route = []) => {
-  let previous = start;
-  return (Array.isArray(route) ? route : []).reduce((total, point) => {
-    const nextTotal = total + distance(previous, point);
-    previous = point;
-    return nextTotal;
-  }, 0);
-};
-
 const normalizeDirection = (from = {}, to = {}) => {
   const deltaX = finiteNumber(to?.x) - finiteNumber(from?.x);
   const deltaY = finiteNumber(to?.y) - finiteNumber(from?.y);
@@ -384,7 +388,23 @@ const resolveObstacleDetourPoints = ({
   const path = Array.isArray(obstacle?.collisionPath)
     ? obstacle.collisionPath.filter(Boolean)
     : (Array.isArray(obstacle?.visualPath) ? obstacle.visualPath.filter(Boolean) : []);
-  const inset = Math.max(4, finiteNumber(clearance) + 2);
+  const colliderParts = Array.isArray(obstacle?.collider?.parts)
+    ? obstacle.collider.parts
+    : [];
+  const colliderThickness = colliderParts.reduce((maximum, part) => (
+    Math.max(
+      maximum,
+      Math.min(
+        Math.max(0, finiteNumber(part?.w)),
+        Math.max(0, finiteNumber(part?.d))
+      ) * 0.5
+    )
+  ), 0);
+  const inset = Math.max(
+    4,
+    finiteNumber(clearance) + 2,
+    colliderThickness + finiteNumber(clearance) + 2
+  );
   const points = [];
   const appendPoint = (point = {}) => {
     const candidate = clampPointToField(point, field, clearance);
@@ -445,7 +465,8 @@ const resolveLocalDetourRoute = ({
   let current = start;
   const visited = new Set();
   for (let attempt = 0; attempt < 8; attempt += 1) {
-    const hit = raycastObstacles(current, target, obstacles, clearance);
+    const segmentStart = current;
+    const hit = raycastObstacles(segmentStart, target, obstacles, clearance);
     if (!hit) {
       route.push(target);
       segmentCache.set(cacheKey, route.map((point) => ({ ...point })));
@@ -456,14 +477,14 @@ const resolveLocalDetourRoute = ({
     const candidates = resolveObstacleDetourPoints({ obstacle, field, clearance })
       .filter((candidate) => !visited.has(`${obstacleId}:${candidate.x}:${candidate.y}`))
       .sort((left, right) => (
-        (distance(left, target) + (distance(current, left) * 0.08))
-        - (distance(right, target) + (distance(current, right) * 0.08))
+        (distance(left, target) + (distance(segmentStart, left) * 0.08))
+        - (distance(right, target) + (distance(segmentStart, right) * 0.08))
       ));
     let next = null;
     for (let candidateIndex = 0; candidateIndex < candidates.length; candidateIndex += 1) {
       const candidate = candidates[candidateIndex];
       if (!isPointWalkable(candidate, obstacles, clearance, mapConfig, field)) continue;
-      if (!hasDirectPath(current, candidate, obstacles, clearance, mapConfig, field)) continue;
+      if (!hasDirectPath(segmentStart, candidate, obstacles, clearance, mapConfig, field)) continue;
       next = candidate;
       break;
     }
@@ -523,8 +544,17 @@ const resolveLaneGuidedRoute = ({
       let clear = true;
       const route = [];
       for (let pointIndex = 0; pointIndex < candidate.length; pointIndex += 1) {
-        const point = candidate[pointIndex];
-        if (!isPointWalkable(point, obstacles, clearance, mapConfig, field)) {
+        const requestedPoint = candidate[pointIndex];
+        const point = isPointWalkable(requestedPoint, obstacles, clearance, mapConfig, field)
+          ? requestedPoint
+          : findTrainingMapNearestWalkablePoint({
+            field,
+            point: requestedPoint,
+            obstacles,
+            radius: clearance,
+            mapConfig
+          });
+        if (!point || !isPointWalkable(point, obstacles, clearance, mapConfig, field)) {
           clear = false;
           break;
         }
@@ -722,10 +752,11 @@ export const createTrainingMapNavigator = ({ field, mapConfig } = {}) => {
   const obstacleSets = new WeakMap();
   const resolveNavigatorObstacles = (source = []) => {
     if (!Array.isArray(source) || source._obstacleSpatialIndex) return source;
+    const signature = resolveObstacleSourceSignature(source);
     const cached = obstacleSets.get(source);
-    if (cached) return cached;
+    if (cached?.signature === signature) return cached.obstacles;
     const blockingObstacles = resolveBlockingObstacles(source);
-    obstacleSets.set(source, blockingObstacles);
+    obstacleSets.set(source, { signature, obstacles: blockingObstacles });
     return blockingObstacles;
   };
   return {

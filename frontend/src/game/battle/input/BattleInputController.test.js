@@ -128,7 +128,7 @@ test('uses a finer production wheel zoom increment', () => {
 });
 
 test('uses a faster training wheel zoom increment', () => {
-  expect(TRAINING_CAMERA_ZOOM_STEP).toBe(50);
+  expect(TRAINING_CAMERA_ZOOM_STEP).toBe(88);
   expect(TRAINING_CAMERA_ZOOM_STEP).toBeGreaterThan(CAMERA_ZOOM_STEP);
 });
 
@@ -450,9 +450,9 @@ describe('BattleInputController primary-button panning', () => {
     expect(portrait).toBeGreaterThan(landscape);
   });
 
-  test('caps the scaled training overview at a two-road view', () => {
+  test('fits the enlarged training battlefield within the overview band', () => {
     const distance = resolveTrainingOverviewDistance({
-      field: { width: 7200, height: 5008 },
+      field: { width: 12600, height: 8764 },
       viewport: { width: 1600, height: 900 },
       baseDistance: 980,
       extraDistance: 1200,
@@ -460,8 +460,9 @@ describe('BattleInputController primary-button panning', () => {
       padding: 1.08
     });
 
-    expect(TRAINING_OVERVIEW_DISTANCE_MAX).toBe(2560);
-    expect(distance).toBe(TRAINING_OVERVIEW_DISTANCE_MAX);
+    expect(TRAINING_OVERVIEW_DISTANCE_MAX).toBe(12000);
+    expect(distance).toBeGreaterThanOrEqual(10600);
+    expect(distance).toBeLessThanOrEqual(TRAINING_OVERVIEW_DISTANCE_MAX);
   });
 
   test('passes the extended overview band to the training wheel zoom', () => {
@@ -486,7 +487,7 @@ describe('BattleInputController primary-button panning', () => {
     });
 
     expect(setDistanceWithDynamicPitch).toHaveBeenCalledWith(
-      1_030,
+      1_068,
       360,
       TRAINING_PITCH_DISTANCE_MAX,
       expect.any(Number),

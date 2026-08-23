@@ -119,14 +119,14 @@ describe('CameraController focus transition', () => {
 
   test('covers the training battlefield at the end of the overview band', () => {
     const camera = new CameraController({ pitchLow: 40, pitchHigh: 90, distance: 980 });
-    camera.setDistanceWithDynamicPitch(1_880, 420, 980, 1_880);
-    camera.buildMatrices(1000, 500);
+    camera.setDistanceWithDynamicPitch(10_640, 420, 2_000, 10_640);
+    camera.buildMatrices(1600, 900);
 
-    const topLeft = camera.screenToGround(0, 0, { width: 1000, height: 500 });
-    const bottomRight = camera.screenToGround(1000, 500, { width: 1000, height: 500 });
+    const topLeft = camera.screenToGround(0, 0, { width: 1600, height: 900 });
+    const bottomRight = camera.screenToGround(1600, 900, { width: 1600, height: 900 });
 
-    expect(Math.abs(bottomRight.x - topLeft.x)).toBeGreaterThanOrEqual(2700);
-    expect(Math.abs(bottomRight.y - topLeft.y)).toBeGreaterThanOrEqual(1488);
+    expect(Math.abs(bottomRight.x - topLeft.x)).toBeGreaterThanOrEqual(12600);
+    expect(Math.abs(bottomRight.y - topLeft.y)).toBeGreaterThanOrEqual(8764);
   });
 
   test('publishes the world-yaw-adjusted render pose for screen-space picking', () => {

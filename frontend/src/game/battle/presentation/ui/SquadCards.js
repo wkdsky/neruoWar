@@ -40,6 +40,15 @@ const formatAttackRange = (range = {}) => {
   return `${min.toFixed(1)}–${max.toFixed(1)}`;
 };
 
+const formatRespawnCountdown = (seconds = 0) => {
+  const safeSeconds = Math.max(0, Math.ceil(Number(seconds) || 0));
+  const minutes = Math.floor(safeSeconds / 60);
+  const remainder = safeSeconds % 60;
+  return minutes > 0
+    ? `${minutes}:${String(remainder).padStart(2, '0')}`
+    : `${remainder}s`;
+};
+
 const SPEED_MODE_C = 'C_PER_TYPE';
 const speedModeBadge = (row = {}) => {
   if (row?.speedModeAuthority !== 'USER') return 'A';
@@ -220,7 +229,7 @@ const SquadCards = ({
     const isBattle = phase === 'battle';
     const isUserControlled = row.controlMode !== 'AI';
     const isPlaced = row.placed !== false;
-    const controlDisabled = disabled || (isBattle && !row.alive);
+    const controlDisabled = disabled || (isBattle && (!row.alive || row.respawning));
     return (
       <div
         className={`pve2-training-card-controls ${row.team === 'attacker' ? 'is-right' : 'is-left'} ${isBattle ? 'is-battle' : ''}`}
@@ -309,7 +318,7 @@ const SquadCards = ({
     >
       <button
         type="button"
-        className={`pve2-card ${row.team === 'attacker' ? 'ally' : 'enemy'} ${row.selected ? 'selected' : ''} ${row.focus ? 'focused' : ''} ${!row.alive ? 'dead' : ''}`}
+        className={`pve2-card ${row.team === 'attacker' ? 'ally' : 'enemy'} ${row.selected ? 'selected' : ''} ${row.focus ? 'focused' : ''} ${!row.alive ? 'dead' : ''} ${row.respawning ? 'respawning' : ''}`}
         disabled={disabled}
         onPointerDown={(event) => event.stopPropagation()}
         onMouseDown={(event) => event.stopPropagation()}
@@ -340,7 +349,7 @@ const SquadCards = ({
           <div className="pve2-card-row pve2-card-row-compact">
             <span>{row.remain}/{row.startCount}</span>
             <span className={row.towerLocked ? 'is-tower-locked' : ''}>
-              {row.towerLocked ? '塔锁定' : (labelByLane[row.laneId] || row.action || '待命')}
+              {row.respawning ? '重生中' : (row.towerLocked ? '塔锁定' : (labelByLane[row.laneId] || row.action || '待命'))}
             </span>
           </div>
         ) : (
@@ -350,6 +359,20 @@ const SquadCards = ({
           </>
         )}
       </button>
+      {isTrainingMode && phase === 'battle' && row.respawning ? (
+        <div
+          className="pve2-card-respawn-overlay"
+          role="progressbar"
+          aria-label={`${row.name || '部队'}重生倒计时`}
+          aria-valuemin={0}
+          aria-valuemax={Math.max(1, Number(row?.respawnState?.delaySec) || Number(row?.respawnRemainingSec) || 1)}
+          aria-valuenow={Math.max(0, Math.ceil(Number(row?.respawnRemainingSec) || 0))}
+        >
+          <span>重生中</span>
+          <strong>{formatRespawnCountdown(row.respawnRemainingSec)}</strong>
+          <em>返回高地重生点</em>
+        </div>
+      ) : null}
       {renderTrainingControls(row)}
       {row.id === confirmDeleteGroupId && !disabled ? (
         <div

@@ -1,5 +1,6 @@
 import {
   getTrainingMapBalancedDeploySlots,
+  getTrainingMapSpawnRegions,
   getTrainingMapSpawnRegionAtPoint,
   isTrainingMapSpawnPoint,
   resolveTrainingMapSpawnMetadata
@@ -16,6 +17,7 @@ const buildMapConfig = () => ({
       id: 'attacker-top',
       team: 'attacker',
       laneAffinity: 'top',
+      renderFootprintScale: 1.16,
       normalizedPolygon: [[0, 0.1], [0.2, 0.25], [0, 0.4]]
     },
     {
@@ -58,6 +60,11 @@ describe('training map spawn helpers', () => {
     const mapConfig = buildMapConfig();
     const point = { x: -400, y: 200 };
 
+    expect(getTrainingMapSpawnRegions(mapConfig, { field, team: 'attacker' })[0].polygon[1]).toEqual({
+      x: -268,
+      y: 200
+    });
+
     expect(isTrainingMapSpawnPoint(mapConfig, point, { field, team: 'attacker' })).toBe(true);
     expect(isTrainingMapSpawnPoint(mapConfig, point, { field, team: 'defender' })).toBe(false);
     expect(isTrainingMapSpawnPoint(mapConfig, { x: 0, y: 0 }, { field, team: 'attacker' })).toBe(false);
@@ -70,6 +77,25 @@ describe('training map spawn helpers', () => {
       spawnLaneId: 'top',
       initialFacingRad: 0
     });
+  });
+
+  test('uses the runtime highland outline for curved deployment edges', () => {
+    const mapConfig = buildMapConfig();
+    const curvedOutline = [
+      { x: -500, y: 320 },
+      { x: -360, y: 300 },
+      { x: -300, y: 200 },
+      { x: -360, y: 100 },
+      { x: -500, y: 80 }
+    ];
+    mapConfig.terrainRegions = [{
+      id: 'terrain-highland-attacker-top',
+      sourceRegionId: 'attacker-top',
+      points: curvedOutline
+    }];
+
+    expect(getTrainingMapSpawnRegions(mapConfig, { field, team: 'attacker' })[0].polygon).toEqual(curvedOutline);
+    expect(isTrainingMapSpawnPoint(mapConfig, { x: -380, y: 280 }, { field, team: 'attacker' })).toBe(true);
   });
 
   test('uses a seed-stable alternating highland assignment', () => {

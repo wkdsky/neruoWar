@@ -44,8 +44,10 @@ import {
 import {
   cloneTrainingMapElementsForPreset,
   getTrainingMapDeploySlots,
+  getTrainingMapRespawnPoints,
   isTrainingMapConfig,
   normalizeTrainingMapConfig,
+  resolveTrainingMapRespawnPoint,
   resolveTrainingMapLane,
   TRAINING_MAP_WORLD_HEIGHT,
   TRAINING_MAP_WORLD_WIDTH
@@ -65,6 +67,7 @@ import {
   getTrainingNeutralCampSummary,
   initializeTrainingNeutralCamps
 } from '../../simulation/objectives/TrainingNeutralCampSystem';
+import { getTrainingSquadRespawnState } from '../../simulation/respawn/TrainingSquadRespawnSystem';
 import {
   getAllowedSkillTreeCategories,
   getSkillById,
@@ -89,6 +92,8 @@ const DEFAULT_TIME_LIMIT = 240;
 const DEFAULT_UNITS_PER_SOLDIER = 10;
 const DEFAULT_TRAINING_SKILL_POINT_INTERVAL_SEC = 60;
 const TRAINING_SKILL_POINT_INTERVALS = Object.freeze([10, 30, 60, 120, 300]);
+const DEFAULT_TRAINING_RESPAWN_DELAY_SEC = 20;
+const TRAINING_RESPAWN_DELAY_OPTIONS = Object.freeze([10, 20, 30, 45, 60]);
 const TEAM_ATTACKER = 'attacker';
 const TEAM_DEFENDER = 'defender';
 const TEAM_ANY = 'any';
@@ -233,6 +238,14 @@ const normalizeTrainingSkillPointInterval = (value) => {
   return TRAINING_SKILL_POINT_INTERVALS.reduce((closest, candidate) => (
     Math.abs(candidate - requested) < Math.abs(closest - requested) ? candidate : closest
   ), TRAINING_SKILL_POINT_INTERVALS[0]);
+};
+
+const normalizeTrainingRespawnDelay = (value) => {
+  const requested = Number(value);
+  if (!Number.isFinite(requested)) return DEFAULT_TRAINING_RESPAWN_DELAY_SEC;
+  return TRAINING_RESPAWN_DELAY_OPTIONS.reduce((closest, candidate) => (
+    Math.abs(candidate - requested) < Math.abs(closest - requested) ? candidate : closest
+  ), TRAINING_RESPAWN_DELAY_OPTIONS[0]);
 };
 
 const normalizeFormationSpacing = (value) => {
@@ -532,6 +545,28 @@ const buildCompositionMetrics = (unitsMap = {}, unitTypeMap = new Map()) => {
   };
 };
 
+const normalizeTrainingWallBezierOutline = (definition = null) => {
+  if (!definition || !Array.isArray(definition?.start) || !Array.isArray(definition?.segments)) return null;
+  const normalizePoint = (point = []) => ({
+    x: Number(Array.isArray(point) ? point[0] : point?.x) || 0,
+    y: Number(Array.isArray(point) ? point[1] : point?.y) || 0
+  });
+  const segments = definition.segments
+    .filter((segment) => (
+      Array.isArray(segment?.controlPoint1)
+      && Array.isArray(segment?.controlPoint2)
+      && Array.isArray(segment?.end)
+    ))
+    .map((segment) => ({
+      controlPoint1: normalizePoint(segment.controlPoint1),
+      controlPoint2: normalizePoint(segment.controlPoint2),
+      end: normalizePoint(segment.end)
+    }));
+  return segments.length > 0
+    ? { start: normalizePoint(definition.start), segments }
+    : null;
+};
+
 const buildObstacleList = (battlefield = {}) => {
   const itemById = new Map(
     (Array.isArray(battlefield?.itemCatalog) ? battlefield.itemCatalog : [])
@@ -601,6 +636,11 @@ const buildObstacleList = (battlefield = {}) => {
       category: typeof obj?.category === 'string' ? obj.category : '',
       team: obj?.team === TEAM_DEFENDER ? TEAM_DEFENDER : (obj?.team === TEAM_ATTACKER ? TEAM_ATTACKER : ''),
       mapStatic: obj?.mapStatic === true,
+      highlandId: typeof obj?.highlandId === 'string' ? obj.highlandId : '',
+      defenseRole: typeof obj?.defenseRole === 'string' ? obj.defenseRole : '',
+      attackRange: Math.max(0, Number(obj?.attackRange) || 0),
+      rangeIndicatorColor: typeof obj?.rangeIndicatorColor === 'string' ? obj.rangeIndicatorColor : '',
+      rangeIndicatorMode: typeof obj?.rangeIndicatorMode === 'string' ? obj.rangeIndicatorMode : '',
       neutralCampId: typeof obj?.neutralCampId === 'string' ? obj.neutralCampId : '',
       neutralProfileId: typeof obj?.neutralProfileId === 'string' ? obj.neutralProfileId : '',
       neutralFormationFacingRad: Number.isFinite(Number(obj?.neutralFormationFacingRad))
@@ -624,6 +664,7 @@ const buildObstacleList = (battlefield = {}) => {
           y: Number(Array.isArray(point) ? point[1] : point?.y) || 0
         }))
         : [],
+      bezierOutline: normalizeTrainingWallBezierOutline(obj?.bezierOutline),
       objectiveId: typeof obj?.objectiveId === 'string' ? obj.objectiveId : '',
       objectiveType: typeof obj?.objectiveType === 'string' ? obj.objectiveType : '',
       blocksMovement: obj?.blocksMovement !== false && item?.blocksMovement !== false,
@@ -1919,6 +1960,7 @@ export default class BattleRuntime {
     this.trainingMapPresetId = trainingMapElements.presetId;
     this.trainingMapObjects = trainingMapElements.objects;
     this.trainingMapObjectiveDefinitions = trainingMapElements.objectives;
+    this.trainingMapRespawnPoints = trainingMapElements.respawnPoints;
     this.trainingMapNavigator = isTrainingMapConfig(this.trainingMap)
       ? createTrainingMapNavigator({ field: this.field, mapConfig: this.trainingMap })
       : null;
@@ -1990,6 +2032,11 @@ export default class BattleRuntime {
         ?? this.initData?.rules?.skillPointIntervalSec
         ?? DEFAULT_TRAINING_SKILL_POINT_INTERVAL_SEC
     );
+    this.trainingRespawnDelaySec = normalizeTrainingRespawnDelay(
+      trainingConfig.respawnDelaySec
+        ?? this.initData?.rules?.respawnDelaySec
+        ?? DEFAULT_TRAINING_RESPAWN_DELAY_SEC
+    );
     this.trainingSkillPointAccumulatorSec = 0;
     this.trainingSkillTreeProgress = new Map();
     this.trainingSessionActive = false;
@@ -2055,7 +2102,8 @@ export default class BattleRuntime {
       ...this.trainingMap,
       activePresetId: this.trainingMapPresetId,
       objects: this.trainingMapObjects || [],
-      objectives: this.trainingMapObjectiveDefinitions || []
+      objectives: this.trainingMapObjectiveDefinitions || [],
+      respawnPoints: this.trainingMapRespawnPoints || []
     };
   }
 
@@ -2068,7 +2116,8 @@ export default class BattleRuntime {
         mapVersion: 1,
         activePresetId: 'legacy-flat',
         presets: [],
-        objectives: []
+        objectives: [],
+        respawnPoints: []
       };
     }
     return {
@@ -2109,12 +2158,31 @@ export default class BattleRuntime {
             respawnAt: 0,
             lastClearerSquadId: ''
           })),
-      deploySlots: getTrainingMapDeploySlots(mapConfig)
+      deploySlots: getTrainingMapDeploySlots(mapConfig),
+      respawnPoints: getTrainingMapRespawnPoints(mapConfig)
     };
   }
 
   getTrainingMapDeploySlots(team = '') {
     return getTrainingMapDeploySlots(this.getTrainingMapConfig(), team);
+  }
+
+  getTrainingMapRespawnPoints(team = '') {
+    return getTrainingMapRespawnPoints(this.getTrainingMapConfig(), team);
+  }
+
+  assignTrainingRespawnPoints(squads = []) {
+    const mapConfig = this.getTrainingMapConfig();
+    (Array.isArray(squads) ? squads : []).forEach((squad) => {
+      if (!squad || (squad.team !== TEAM_ATTACKER && squad.team !== TEAM_DEFENDER)) return;
+      const respawnPoint = resolveTrainingMapRespawnPoint(mapConfig, {
+        team: squad.team,
+        spawnRegionId: squad.spawnRegionId,
+        fallbackPoint: squad
+      });
+      squad.respawnPoint = respawnPoint ? { ...respawnPoint } : null;
+      squad.respawnState = null;
+    });
   }
 
   isTrainingMapHighlandSpawnEnabled() {
@@ -2323,6 +2391,7 @@ export default class BattleRuntime {
     this.trainingMapPresetId = elements.presetId;
     this.trainingMapObjects = elements.objects;
     this.trainingMapObjectiveDefinitions = elements.objectives;
+    this.trainingMapRespawnPoints = elements.respawnPoints;
     return buildObstacleList({
       ...(this.initData?.battlefield || {}),
       objects: elements.objects
@@ -2364,6 +2433,10 @@ export default class BattleRuntime {
     return [...TRAINING_SKILL_POINT_INTERVALS];
   }
 
+  getTrainingRespawnDelayOptions() {
+    return [...TRAINING_RESPAWN_DELAY_OPTIONS];
+  }
+
   getTrainingState() {
     if (!this.isTrainingMode) return null;
     const interval = Math.max(1, Number(this.trainingSkillPointIntervalSec) || DEFAULT_TRAINING_SKILL_POINT_INTERVAL_SEC);
@@ -2372,6 +2445,8 @@ export default class BattleRuntime {
       autoSkillPointGainEnabled: this.trainingAutoSkillPointGainEnabled === true,
       pointIntervalSec: interval,
       pointIntervals: this.getTrainingSkillPointIntervals(),
+      respawnDelaySec: Math.max(0, Number(this.trainingRespawnDelaySec) || DEFAULT_TRAINING_RESPAWN_DELAY_SEC),
+      respawnDelayOptions: this.getTrainingRespawnDelayOptions(),
       nextPointInSec: this.trainingAutoSkillPointGainEnabled && this.phase === 'battle'
         ? Math.max(0, interval - (accumulator % interval))
         : 0,
@@ -2450,6 +2525,27 @@ export default class BattleRuntime {
     if (!this.isTrainingMode) return { ok: false, reason: '仅训练场可调整技能点获取方式' };
     this.trainingAutoSkillPointGainEnabled = enabled === true;
     this.trainingSkillPointAccumulatorSec = 0;
+    return { ok: true, state: this.getTrainingState() };
+  }
+
+  setTrainingRespawnDelay(delaySec = DEFAULT_TRAINING_RESPAWN_DELAY_SEC) {
+    if (!this.isTrainingMode) return { ok: false, reason: '仅训练场可调整部队重生时间' };
+    this.trainingRespawnDelaySec = normalizeTrainingRespawnDelay(delaySec);
+    if (this.sim?.trainingRespawnConfig) {
+      this.sim.trainingRespawnConfig.delaySec = this.trainingRespawnDelaySec;
+      const nowSec = Math.max(0, Number(this.sim.timeElapsed) || 0);
+      (Array.isArray(this.sim.squads) ? this.sim.squads : []).forEach((squad) => {
+        if (squad?.respawnState?.state !== 'waiting') return;
+        const queuedAtValue = Number(squad.respawnState.queuedAt);
+        const queuedAt = Number.isFinite(queuedAtValue)
+          ? Math.max(0, queuedAtValue)
+          : nowSec;
+        const elapsedSec = Math.max(0, nowSec - queuedAt);
+        squad.respawnState.delaySec = this.trainingRespawnDelaySec;
+        squad.respawnState.respawnAt = queuedAt + this.trainingRespawnDelaySec;
+        squad.respawnState.remainingSec = Math.max(0, this.trainingRespawnDelaySec - elapsedSec);
+      });
+    }
     return { ok: true, state: this.getTrainingState() };
   }
 
@@ -2573,6 +2669,7 @@ export default class BattleRuntime {
       trainingSkillPointsBySquad: Array.from(this.trainingSkillPointsBySquad.entries()),
       trainingAutoSkillPointGainEnabled: this.trainingAutoSkillPointGainEnabled === true,
       trainingSkillPointIntervalSec: this.trainingSkillPointIntervalSec,
+      trainingRespawnDelaySec: this.trainingRespawnDelaySec,
       trainingSkillPointAccumulatorSec: this.trainingSkillPointAccumulatorSec,
       trainingSkillTreeProgress: Array.from(this.trainingSkillTreeProgress.entries())
     };
@@ -2603,6 +2700,7 @@ export default class BattleRuntime {
       );
       this.trainingAutoSkillPointGainEnabled = snapshot.trainingAutoSkillPointGainEnabled === true;
       this.trainingSkillPointIntervalSec = normalizeTrainingSkillPointInterval(snapshot.trainingSkillPointIntervalSec);
+      this.trainingRespawnDelaySec = normalizeTrainingRespawnDelay(snapshot.trainingRespawnDelaySec);
       this.trainingSkillPointAccumulatorSec = Math.max(0, Number(snapshot.trainingSkillPointAccumulatorSec) || 0);
       this.trainingSkillTreeProgress = new Map(Array.isArray(snapshot.trainingSkillTreeProgress) ? snapshot.trainingSkillTreeProgress : []);
     }
@@ -3690,6 +3788,9 @@ export default class BattleRuntime {
       }))
       .filter((row) => row.startCount > 0);
 
+    const combatSquads = [...attackerSquads, ...defenderSquads];
+    this.assignTrainingRespawnPoints(combatSquads);
+
     const battleTimeLimitSec = this.isTrainingMode
       ? 0
       : Math.max(30, Number(this.initData?.timeLimitSec) || DEFAULT_TIME_LIMIT);
@@ -3715,7 +3816,7 @@ export default class BattleRuntime {
       timeLimitSec: battleTimeLimitSec,
       timerSec: battleTimeLimitSec,
       field: this.field,
-      squads: [...attackerSquads, ...defenderSquads, ...neutralCampState.squads],
+      squads: [...combatSquads, ...neutralCampState.squads],
       buildings: battleBuildings,
       effects: [],
       projectiles: [],
@@ -3735,6 +3836,10 @@ export default class BattleRuntime {
       trainingObjectives: this.isThreeLaneTrainingMap()
         ? createTrainingObjectives(this.trainingMapObjectiveDefinitions)
         : [],
+      trainingRespawnConfig: {
+        enabled: this.isThreeLaneTrainingMap() && this.getTrainingMapRespawnPoints().length > 0,
+        delaySec: this.trainingRespawnDelaySec
+      },
       trainingNeutralCamps: neutralCampState.camps,
       trainingStats: this.isThreeLaneTrainingMap()
         ? {
@@ -4563,7 +4668,13 @@ export default class BattleRuntime {
       .filter((row) => row.team === TEAM_DEFENDER)
       .reduce((sum, row) => sum + Math.max(0, Number(row.remain) || 0), 0);
 
-    const noTrainingUnitsRemain = this.isTrainingMode && attackerAlive <= 0 && defenderAlive <= 0;
+    const hasPendingTrainingRespawn = this.isTrainingMode && (this.sim.squads || []).some((squad) => (
+      squad?.respawnState?.state === 'waiting'
+    ));
+    const noTrainingUnitsRemain = this.isTrainingMode
+      && attackerAlive <= 0
+      && defenderAlive <= 0
+      && !hasPendingTrainingRespawn;
     const oneSideDefeated = !this.isTrainingMode && (attackerAlive <= 0 || defenderAlive <= 0);
     const timedOut = !this.isTrainingMode && this.sim.timerSec <= 0;
     if (timedOut || oneSideDefeated || noTrainingUnitsRemain) {
@@ -4693,7 +4804,12 @@ export default class BattleRuntime {
         })) : [])
       ];
 
-    return squads.map((squad) => ({
+    const currentSimTimeSec = Math.max(0, Number(this.sim?.timeElapsed) || 0);
+    return squads.map((squad) => {
+      const respawnState = this.phase === 'battle'
+        ? getTrainingSquadRespawnState(squad, currentSimTimeSec)
+        : null;
+      return {
       id: squad.id,
       team: squad.team,
       controlMode: squad.controlMode === CONTROL_MODE_AI ? CONTROL_MODE_AI : CONTROL_MODE_USER,
@@ -4759,6 +4875,10 @@ export default class BattleRuntime {
         : squad.id === this.selectedDeploySquadId,
       focus: squad.id === this.focusSquadId,
       alive: (Number(squad.remain) || 0) > 0,
+      respawning: !!respawnState,
+      respawnState,
+      respawnRemainingSec: Math.max(0, Number(respawnState?.remainingSec) || 0),
+      respawnPointId: String(respawnState?.pointId || squad?.respawnPoint?.id || ''),
       // Deployment rows are flattened before this projection, so carry their
       // already-built detail model through instead of trying to recover units
       // from the presentation-only row.
@@ -4771,9 +4891,10 @@ export default class BattleRuntime {
           unitMetrics: squad?.unitMetrics || {},
           formationRect: squad?.formationRect || null,
           templateName: String(squad?.templateName || '').trim()
-        }),
+      }),
       ...this.getTrainingMapSquadContext(squad)
-    }));
+      };
+    });
   }
 
   getFocusAnchor() {
@@ -4804,6 +4925,10 @@ export default class BattleRuntime {
     const snapshot = this._snapshotPool.acquire();
     this.snapshotState = this._snapshotBuilder.build(this, snapshot);
     return this.snapshotState;
+  }
+
+  getTrainingNeutralPreview() {
+    return this._snapshotBuilder?.getNeutralPreview(this) || null;
   }
 
   getMinimapSnapshot() {

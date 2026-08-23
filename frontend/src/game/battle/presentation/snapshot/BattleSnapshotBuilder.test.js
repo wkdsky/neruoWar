@@ -156,4 +156,87 @@ describe('BattleSnapshotBuilder map-wall rendering', () => {
     expect(snapshot.units.data[20 + 5]).toBe(1);
     expect(snapshot.units.data[40 + 5]).toBe(2);
   });
+
+  test('renders pre-start neutral camps through the same unit snapshot channel', () => {
+    const builder = new BattleSnapshotBuilder();
+    const runtime = {
+      phase: 'deploy',
+      intelVisible: true,
+      field: { width: 400, height: 300 },
+      attackerDeployGroups: [{
+        id: 'attacker-preview',
+        team: 'attacker',
+        x: -80,
+        y: 0,
+        placed: true,
+        units: { 'attacker-melee': 1 },
+        formationRect: { facingRad: 0 },
+        deploySlots: [{ side: 0, front: 0 }]
+      }],
+      defenderDeployGroups: [],
+      initialBuildings: [{
+        id: 'map-preview-camp',
+        category: 'neutralCamp',
+        mapStatic: true,
+        x: 40,
+        y: -24,
+        width: 42,
+        depth: 42,
+        height: 24,
+        hp: 1200,
+        maxHp: 1200
+      }],
+      trainingMapObjectiveDefinitions: [{
+        objectiveId: 'objective_neutral_preview-camp',
+        sourceObjectId: 'map-preview-camp',
+        type: 'neutralCamp',
+        team: 'neutral',
+        neutralCamp: {
+          campId: 'preview-camp',
+          anchor: { x: 40, y: -24 },
+          spawnPoints: [{ x: 40, y: -24 }],
+          patrolEnabled: false,
+          composition: [
+            { unitTypeId: 'neutral-melee', count: 2, classTag: 'infantry', unitCategory: 'melee' },
+            { unitTypeId: 'neutral-ranged', count: 1, classTag: 'archer', unitCategory: 'ranged' }
+          ]
+        }
+      }],
+      hydrateDeployGroupFormation: () => {},
+      canDeployGroupFitAt: () => true,
+      getTrainingMapConfig: () => ({ terrainRegions: [] }),
+      unitTypeMap: new Map([
+        ['attacker-melee', { classTag: 'infantry', unitCategory: 'melee' }],
+        ['neutral-melee', { classTag: 'infantry', unitCategory: 'melee' }],
+        ['neutral-ranged', { classTag: 'archer', unitCategory: 'ranged' }]
+      ]),
+      visualConfig: () => ({
+        bodyIndex: 1,
+        gearIndex: 2,
+        vehicleIndex: 0,
+        silhouetteIndex: 0,
+        bodyTopIndex: 1,
+        gearTopIndex: 2,
+        vehicleTopIndex: 0,
+        silhouetteTopIndex: 0,
+        tint: 1
+      })
+    };
+    const preview = builder.getNeutralPreview(runtime);
+    const snapshot = builder.build(runtime);
+
+    expect(preview.agents).toHaveLength(2);
+    expect(preview.agents.map((agent) => agent.initialWeight)).toEqual([2, 1]);
+    expect(snapshot.units.count).toBe(3);
+    expect(snapshot.unitSquadIds).toEqual([
+      'attacker-preview',
+      'neutral_camp_preview-camp',
+      'neutral_camp_preview-camp'
+    ]);
+    expect(Array.from({ length: snapshot.units.count }, (_, index) => (
+      snapshot.units.data[(index * 20) + 5]
+    ))).toEqual([0, 2, 2]);
+    expect(snapshot.skillStates.data[4]).toBe(0);
+    expect(snapshot.skillStates.data[8]).toBe(1);
+  });
 });

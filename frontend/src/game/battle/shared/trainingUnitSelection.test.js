@@ -1,6 +1,8 @@
 import {
+  TRAINING_NEUTRAL_UNIT_MAX_VISUAL_SIZE,
   TRAINING_SELECTED_UNIT_MIN_PICK_RADIUS,
   TRAINING_SELECTED_UNIT_RING_SCALE,
+  resolveTrainingAgentVisualSize,
   resolveTrainingAgentSelectionRadius,
   resolveTrainingSelectedUnitRingRadius,
   resolveTrainingUnitVisualSizeFromWeight
@@ -29,5 +31,20 @@ test('keeps a forgiving minimum click radius for diminished training units', () 
   );
   expect(resolveTrainingAgentSelectionRadius({ weight: 1 })).toBe(
     TRAINING_SELECTED_UNIT_MIN_PICK_RADIUS
+  );
+});
+
+test('enlarges weighted neutral representatives and preserves their pick radius', () => {
+  const regular = { weight: 50 };
+  const neutral = { weight: 50, isNeutralCampUnit: true };
+
+  expect(resolveTrainingAgentVisualSize(neutral)).toBeGreaterThan(
+    resolveTrainingAgentVisualSize(regular)
+  );
+  expect(resolveTrainingAgentVisualSize(neutral)).toBeLessThanOrEqual(
+    TRAINING_NEUTRAL_UNIT_MAX_VISUAL_SIZE
+  );
+  expect(resolveTrainingAgentSelectionRadius(neutral)).toBeGreaterThan(
+    resolveTrainingAgentSelectionRadius(regular)
   );
 });

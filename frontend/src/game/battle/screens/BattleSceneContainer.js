@@ -1521,6 +1521,15 @@ const BattleSceneContainer = ({
     setTrainingState(result.state);
   }, [runtimeRef, setDeployNotice, setTrainingState]);
 
+  const handleTrainingRespawnDelayChange = useCallback((delaySec) => {
+    const result = runtimeRef.current?.setTrainingRespawnDelay?.(delaySec);
+    if (!result?.ok) {
+      if (result?.reason) setDeployNotice(result.reason);
+      return;
+    }
+    setTrainingState(result.state);
+  }, [runtimeRef, setDeployNotice, setTrainingState]);
+
   const handleTrainingMapPresetChange = useCallback((presetId) => {
     const result = runtimeRef.current?.setTrainingMapPreset?.(presetId);
     if (!result?.ok) {
@@ -2258,6 +2267,7 @@ const BattleSceneContainer = ({
               onClose={() => setTrainingSettingsOpen(false)}
               onChangeAutoSkillPointGain={handleTrainingAutoSkillPointGainChange}
               onChangeInterval={handleTrainingPointIntervalChange}
+              onChangeRespawnDelay={handleTrainingRespawnDelayChange}
               onChangeMapPreset={handleTrainingMapPresetChange}
               onApply={handleApplyTrainingPresentationSettings}
             />

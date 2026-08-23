@@ -4,7 +4,7 @@
   "coordinateSpace": "normalized",
   "towerRuntime": {
     "maxHp": 2200,
-    "attackRange": 188,
+    "attackRange": 329,
     "attackIntervalSec": 0.8,
     "attackDamage": 20,
     "priority": "nearest",

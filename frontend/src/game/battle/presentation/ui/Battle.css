@@ -692,6 +692,51 @@
   filter: grayscale(0.78);
 }
 
+.pve2-card.respawning {
+  opacity: 0.5;
+  filter: grayscale(0.54);
+}
+
+.pve2-card-respawn-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 5;
+  display: grid;
+  place-content: center;
+  gap: 1px;
+  padding: 4px;
+  border: 1px solid rgba(190, 242, 100, 0.72);
+  border-radius: inherit;
+  background: linear-gradient(135deg, rgba(13, 34, 25, 0.92), rgba(10, 20, 33, 0.9));
+  color: #ecfccb;
+  text-align: center;
+  pointer-events: auto;
+}
+
+.pve2-card-respawn-overlay span,
+.pve2-card-respawn-overlay em {
+  font-size: 8px;
+  font-style: normal;
+  line-height: 1.1;
+}
+
+.pve2-card-respawn-overlay span {
+  color: #bef264;
+  font-weight: 800;
+}
+
+.pve2-card-respawn-overlay strong {
+  color: #f8fafc;
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  font-size: 16px;
+  line-height: 1.05;
+  text-shadow: 0 1px 3px rgba(2, 6, 23, 0.9);
+}
+
+.pve2-card-respawn-overlay em {
+  color: #d9f99d;
+}
+
 .pve2-card-head {
   display: flex;
   justify-content: space-between;

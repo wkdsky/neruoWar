@@ -37,6 +37,20 @@ const toWorldPoint = (value = {}, field = null) => {
   };
 };
 
+const scaleSpawnFootprint = (polygon = [], region = {}, field = null) => {
+  if (!field || !Array.isArray(polygon) || polygon.length <= 0) return polygon;
+  const footprintScale = Math.max(1, Math.min(1.35, finiteNumber(region?.renderFootprintScale, 1)));
+  if (footprintScale <= 1.0001) return polygon;
+  const boundaryX = normalizeTeam(region?.team) === TEAM_DEFENDER
+    ? field.width * 0.5
+    : field.width * -0.5;
+  const centerY = polygon.reduce((sum, point) => sum + finiteNumber(point?.y), 0) / polygon.length;
+  return polygon.map((point) => ({
+    x: boundaryX + ((finiteNumber(point?.x) - boundaryX) * footprintScale),
+    y: centerY + ((finiteNumber(point?.y) - centerY) * footprintScale)
+  }));
+};
+
 const isPointOnSegment = (point = {}, start = {}, end = {}) => {
   const px = finiteNumber(point?.x);
   const py = finiteNumber(point?.y);
@@ -67,10 +81,21 @@ const isPointInsidePolygon = (point = {}, polygon = []) => {
   return inside;
 };
 
-const resolveSpawnPolygon = (region = {}, field = null) => {
+const resolveSpawnPolygon = (region = {}, field = null, mapConfig = null) => {
+  const terrainRegion = (Array.isArray(mapConfig?.terrainRegions) ? mapConfig.terrainRegions : [])
+    .find((candidate) => (
+      candidate?.sourceRegionId === region?.id
+      || candidate?.id === `terrain-highland-${String(region?.id || '')}`
+    ));
+  const terrainPoints = Array.isArray(terrainRegion?.points) ? terrainRegion.points : [];
+  if (terrainPoints.length >= 3) return terrainPoints.map((point) => toPoint(point));
   const normalizedPolygon = Array.isArray(region?.normalizedPolygon) ? region.normalizedPolygon : [];
   if (normalizedPolygon.length >= 3 && field) {
-    return normalizedPolygon.map((point) => toWorldPoint(point, field));
+    return scaleSpawnFootprint(
+      normalizedPolygon.map((point) => toWorldPoint(point, field)),
+      region,
+      field
+    );
   }
   const worldPolygon = Array.isArray(region?.worldPolygon)
     ? region.worldPolygon
@@ -102,7 +127,7 @@ export const getTrainingMapSpawnRegions = (mapConfig = null, { field = null, tea
   return (Array.isArray(mapConfig?.spawnRegions) ? mapConfig.spawnRegions : [])
     .map((region, index) => {
       const regionTeam = normalizeTeam(region?.team);
-      const polygon = resolveSpawnPolygon(region, resolvedField);
+      const polygon = resolveSpawnPolygon(region, resolvedField, mapConfig);
       return {
         id: String(region?.id || `spawn-${regionTeam}-${index + 1}`),
         team: regionTeam,

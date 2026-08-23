@@ -12,6 +12,7 @@ const CAMP_STATE_CLEARED = 'cleared';
 const CAMP_STATE_RESPAWNING = 'respawning';
 const CAMP_STATE_DISABLED = 'disabled';
 const CAMP_PATROL_ARRIVAL_RADIUS = 6;
+const NEUTRAL_FORMATION_SPACING = 5.55;
 
 const clamp = (value, min, max) => Math.min(max, Math.max(min, value));
 
@@ -117,6 +118,73 @@ const sanitizeCampId = (value = '') => String(value || '')
   .trim()
   .replace(/[^a-zA-Z0-9_-]+/g, '_');
 
+const resolveCampPatrolEnabled = (config = {}) => {
+  if (typeof config?.patrolEnabled === 'boolean') return config.patrolEnabled;
+  return Array.isArray(config?.patrolPoints) && config.patrolPoints.length > 0;
+};
+
+const buildNeutralFormationSlots = (totalCount = 1, spacing = NEUTRAL_FORMATION_SPACING) => {
+  const count = Math.max(1, Math.floor(finiteNumber(totalCount, 1)));
+  const safeSpacing = Math.max(0.1, finiteNumber(spacing, NEUTRAL_FORMATION_SPACING));
+  const columns = Math.max(1, Math.ceil(Math.sqrt(count)));
+  const rows = Math.max(1, Math.ceil(count / columns));
+  const slots = [];
+  for (let row = 0; row < rows; row += 1) {
+    for (let col = 0; col < columns; col += 1) {
+      const index = (row * columns) + col;
+      if (index >= count) break;
+      slots.push({
+        side: (col - ((columns - 1) * 0.5)) * safeSpacing,
+        front: ((((rows - 1) * 0.5) - row) * safeSpacing * 0.92),
+        row,
+        col
+      });
+    }
+  }
+  const centerSide = (columns - 1) * 0.5;
+  const centerRow = (rows - 1) * 0.5;
+  return slots.sort((left, right) => {
+    const leftDistance = Math.hypot(left.col - centerSide, left.row - centerRow);
+    const rightDistance = Math.hypot(right.col - centerSide, right.row - centerRow);
+    return leftDistance - rightDistance || left.row - right.row || left.col - right.col;
+  });
+};
+
+const buildTrainingNeutralCampPresentation = ({
+  composition = [],
+  formationFacingRad = null,
+  spacing = NEUTRAL_FORMATION_SPACING
+} = {}) => {
+  const normalizedComposition = normalizeComposition(composition);
+  const metrics = resolveCompositionMetrics(normalizedComposition);
+  const requestedFacing = Number(formationFacingRad);
+  const facingRad = Number.isFinite(requestedFacing) ? requestedFacing : 0;
+  const safeSpacing = Math.max(0.1, finiteNumber(spacing, NEUTRAL_FORMATION_SPACING));
+  const columns = Math.max(1, Math.ceil(Math.sqrt(metrics.totalCount)));
+  const rows = Math.max(1, Math.ceil(metrics.totalCount / columns));
+  const deploySlots = buildNeutralFormationSlots(metrics.totalCount, safeSpacing);
+  const width = Math.max(10, columns * safeSpacing);
+  const depth = Math.max(10, rows * safeSpacing * 0.92);
+  return {
+    composition: normalizedComposition,
+    metrics,
+    facingRad,
+    deploySlots,
+    formationRect: {
+      area: width * depth,
+      width,
+      depth,
+      spacing: safeSpacing,
+      facingRad,
+      directionOffsetRad: 0,
+      directionRad: facingRad,
+      slotCount: metrics.totalCount,
+      formationId: 'neutral-camp-square',
+      formationName: '方阵守卫'
+    }
+  };
+};
+
 const resolveCampAnchor = (definition = {}, building = null) => normalizePoint(
   definition?.neutralCamp?.anchor || definition?.neutralCamp?.position || building,
   building
@@ -135,7 +203,8 @@ const normalizeCampDefinition = (definition = {}, index = 0, buildings = []) => 
   const initialSpawnAtSec = Math.max(0, finiteNumber(config?.initialSpawnAtSec));
   const respawnSec = Math.max(0, finiteNumber(config?.respawnSec, 30));
   const patrolIntervalSec = Math.max(0.5, finiteNumber(config?.patrolIntervalSec, 4));
-  const patrolStartImmediately = config?.patrolStartImmediately === true;
+  const patrolEnabled = resolveCampPatrolEnabled(config);
+  const patrolStartImmediately = patrolEnabled && config?.patrolStartImmediately === true;
   return {
     id: campId,
     objectiveId: String(definition?.objectiveId || campId),
@@ -146,7 +215,8 @@ const normalizeCampDefinition = (definition = {}, index = 0, buildings = []) => 
     anchor,
     formationFacingRad: Number.isFinite(requestedFormationFacingRad) ? requestedFormationFacingRad : null,
     spawnPoints: normalizePoints(config?.spawnPoints, anchor),
-    patrolPoints: normalizePoints(config?.patrolPoints, anchor),
+    patrolEnabled,
+    patrolPoints: patrolEnabled ? normalizePoints(config?.patrolPoints, anchor) : [],
     patrolMode: config?.patrolMode === 'shuttle' ? 'shuttle' : 'loop',
     patrolDirectionRad: finiteNumber(config?.patrolDirectionRad),
     patrolSpan: Math.max(0, finiteNumber(config?.patrolSpan)),
@@ -222,22 +292,26 @@ export const createTrainingNeutralCampState = ({
 );
 
 export const createTrainingNeutralCampSquad = (camp = {}, context = {}) => {
-  const metrics = resolveCompositionMetrics(camp?.composition);
+  const presentation = buildTrainingNeutralCampPresentation({
+    composition: camp?.composition,
+    formationFacingRad: camp?.formationFacingRad
+  });
+  const metrics = presentation.metrics;
   const radius = clamp(7 + (Math.sqrt(metrics.totalCount) * 0.58), 9, 42);
   const spawnIndex = Math.max(0, Math.floor(finiteNumber(camp?.spawnCount)))
     % Math.max(1, camp?.spawnPoints?.length || 1);
-  const spawnPoint = resolveLegalPoint(camp?.spawnPoints?.[spawnIndex] || camp?.anchor, context, radius);
-  const requestedFormationFacingRad = Number(camp?.formationFacingRad);
-  const facingRad = camp?.formationFacingRad !== null && camp?.formationFacingRad !== ''
-    && Number.isFinite(requestedFormationFacingRad)
-    ? requestedFormationFacingRad
-    : (spawnIndex % 4) * (Math.PI * 0.5);
+  const spawnCandidate = camp?.patrolEnabled === true
+    ? (camp?.spawnPoints?.[spawnIndex] || camp?.anchor)
+    : camp?.anchor;
+  const spawnPoint = resolveLegalPoint(spawnCandidate, context, radius);
+  const facingRad = Number.isFinite(Number(camp?.formationFacingRad))
+    ? Number(camp.formationFacingRad)
+    : presentation.facingRad;
   return {
     id: String(camp?.squadId || `neutral_camp_${sanitizeCampId(camp?.id)}`),
     sourceDeployGroupId: '',
     neutralCampId: String(camp?.id || ''),
     isNeutralCampUnit: true,
-    representativeAgentWeightCap: 1,
     name: String(camp?.label || '中立守卫'),
     team: TEAM_NEUTRAL,
     controlMode: 'AI',
@@ -263,18 +337,11 @@ export const createTrainingNeutralCampSquad = (camp = {}, context = {}) => {
     tier: 1,
     mainUnitTypeId: Object.keys(metrics.units)[0] || '',
     formationRect: {
-      area: Math.max(36, radius * radius * 0.9),
-      width: Math.max(10, radius * 1.7),
-      depth: Math.max(10, radius * 1.45),
-      spacing: 5.55,
+      ...presentation.formationRect,
       facingRad,
-      directionOffsetRad: 0,
-      directionRad: facingRad,
-      slotCount: Math.max(1, metrics.totalCount),
-      formationId: 'neutral-camp',
-      formationName: '营地守卫'
+      directionRad: facingRad
     },
-    deploySlots: [],
+    deploySlots: presentation.deploySlots,
     x: spawnPoint.x,
     y: spawnPoint.y,
     vx: 0,
@@ -386,6 +453,10 @@ const resetCampHealth = (crowd = {}, squad = {}) => {
 };
 
 const queueCampPatrol = (camp = {}, squad = {}, context = {}, nowSec = 0) => {
+  if (camp?.patrolEnabled !== true) {
+    if (squad?.guard) squad.guard.patrolTarget = null;
+    return false;
+  }
   if (nowSec < finiteNumber(camp?.nextPatrolAt)) return false;
   const points = Array.isArray(camp?.patrolPoints) ? camp.patrolPoints : [];
   if (points.length <= 0) return false;
@@ -446,6 +517,8 @@ const updateLiveCampState = (camp = {}, squad = {}, sim = {}, crowd = {}, contex
     return;
   }
 
+  if (camp.patrolEnabled !== true) guard.patrolTarget = null;
+
   if (distanceToAnchor > patrolLeashRadius) {
     guard.patrolTarget = null;
     squad.waypoints = buildCampWaypoints(squad, camp.anchor, context);
@@ -464,7 +537,15 @@ const updateLiveCampState = (camp = {}, squad = {}, sim = {}, crowd = {}, contex
   }
 
   if (camp.state === CAMP_STATE_LEASHING) resetCampHealth(crowd, squad);
-  queueCampPatrol(camp, squad, context, nowSec);
+  if (camp.patrolEnabled !== true) {
+    guard.patrolTarget = null;
+    squad.waypoints = [];
+    squad.vx = 0;
+    squad.vy = 0;
+    squad.speed = 0;
+  } else {
+    queueCampPatrol(camp, squad, context, nowSec);
+  }
   camp.state = CAMP_STATE_ALIVE;
 };
 
@@ -484,7 +565,7 @@ export const initializeTrainingNeutralCamps = ({
     camp.spawnCount += 1;
     camp.spawnedAt = nowSec;
     camp.state = CAMP_STATE_ALIVE;
-    if (camp.patrolStartImmediately) queueCampPatrol(camp, squad, context, nowSec);
+    if (camp.patrolEnabled && camp.patrolStartImmediately) queueCampPatrol(camp, squad, context, nowSec);
     squads.push(squad);
   });
   return { camps, squads };
@@ -549,7 +630,7 @@ export const updateTrainingNeutralCamps = ({
       ? 0
       : Math.max(0.5, finiteNumber(camp?.patrolIntervalSec, 4)));
     camp.state = CAMP_STATE_ALIVE;
-    if (camp.patrolStartImmediately) queueCampPatrol(camp, activeSquad, context, safeNow);
+    if (camp.patrolEnabled && camp.patrolStartImmediately) queueCampPatrol(camp, activeSquad, context, safeNow);
     if (typeof spawnSquad === 'function') spawnSquad(activeSquad);
   });
 };
@@ -559,6 +640,7 @@ export const getTrainingNeutralCampSummary = (sim = {}) => (
     id: String(camp?.id || ''),
     label: String(camp?.label || '中立营地'),
     state: String(camp?.state || CAMP_STATE_WAITING),
+    patrolEnabled: camp?.patrolEnabled === true,
     squadId: String(camp?.activeSquadId || camp?.squadId || ''),
     spawnedAt: Math.max(0, finiteNumber(camp?.spawnedAt)),
     clearedAt: Math.max(0, finiteNumber(camp?.clearedAt)),

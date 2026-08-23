@@ -44,6 +44,9 @@ describe('training-map scale calibration', () => {
     expect(resolveTrainingMapMovementScale({
       trainingMap: { movementCalibration: { leaderSpeedMultiplier: 36 } }
     })).toBe(2);
+    expect(resolveTrainingMapMovementScale({
+      trainingMap: { movementCalibration: { leaderSpeedMultiplier: 63 } }
+    })).toBe(3.5);
   });
 });
 
@@ -196,7 +199,7 @@ describe('training-map AI simulation profile', () => {
     expect(manualSamples.every((sample) => Number.isFinite(sample))).toBe(true);
   });
 
-  test('queues real-map AI routes through highland exits', () => {
+  test('moves real-map AI toward enemy targets from highland deployments', () => {
     const mapConfig = buildReferenceTrainingMapConfig();
     const field = {
       width: mapConfig.layoutMeta.fieldWidth,
@@ -245,7 +248,7 @@ describe('training-map AI simulation profile', () => {
 
     expect(planCalls).toBeGreaterThan(0);
     expect(planCalls).toBeLessThanOrEqual(60);
-    expect(squads.some((squad) => squad.waypoints.length > 0)).toBe(true);
+    expect(squads.every((squad) => String(squad.targetSquadId || '').startsWith('reference-'))).toBe(true);
     expect(squads.every((squad) => {
       const initial = initialPositions.get(squad.id);
       return Math.hypot(squad.x - initial.x, squad.y - initial.y) > 8;
@@ -617,6 +620,115 @@ describe('training-map neutral camp combat', () => {
         squads[index].guard.patrolTarget.y - before[index].y
       )).toBeGreaterThan(0);
     });
+  });
+
+  test('keeps a neutral patrol formation fixed while soldiers turn with their movement', () => {
+    const spacing = 5.55;
+    const neutral = {
+      ...createSquad({ id: 'neutral-square-patrol', team: 'neutral', x: 0 }),
+      remain: 9,
+      startCount: 9,
+      units: { neutral_guard: 9 },
+      isNeutralCampUnit: true,
+      stamina: 100,
+      controlMode: 'USER',
+      behavior: 'move',
+      order: { type: 'MOVE', issuedAt: 0, commitUntil: 0, targetPoint: { x: 0, y: 80 }, targetSquadId: '' },
+      waypoints: [{ x: 0, y: 80 }],
+      formationRect: {
+        width: spacing * 3,
+        depth: spacing * 3 * 0.92,
+        spacing,
+        facingRad: 0,
+        directionOffsetRad: 0,
+        directionRad: 0,
+        slotCount: 9,
+        formationId: 'neutral-camp-square'
+      },
+      deploySlots: [
+        { side: 0, front: 0 },
+        { side: -spacing, front: 0 },
+        { side: spacing, front: 0 },
+        { side: 0, front: spacing * 0.92 },
+        { side: 0, front: -spacing * 0.92 },
+        { side: -spacing, front: spacing * 0.92 },
+        { side: spacing, front: spacing * 0.92 },
+        { side: -spacing, front: -spacing * 0.92 },
+        { side: spacing, front: -spacing * 0.92 }
+      ],
+      stats: { atk: 8, def: 1, speed: 1, range: 1, attackRange: { min: 1, max: 1 } }
+    };
+    const sim = {
+      timeElapsed: 0,
+      field: { width: 300, height: 220 },
+      buildings: [],
+      squads: [neutral]
+    };
+    const crowd = createCrowdSim(sim, {
+      unitTypeMap: new Map([['neutral_guard', { classTag: 'infantry', unitCategory: 'melee' }]]),
+      repConfig: { maxAgentWeight: 1 }
+    });
+    const neutralAgents = getCrowdAgentsForSquad(crowd, neutral.id);
+    const flagBearer = neutralAgents.find((row) => row.isFlagBearer);
+    const agent = neutralAgents.find((row) => !row.isFlagBearer);
+    const slot = { ...agent.formationSlot };
+    const flagSlot = { ...flagBearer.formationSlot };
+
+    for (let index = 0; index < 20; index += 1) updateCrowdSim(crowd, sim, 0.05);
+
+    expect(neutral.formationRect.facingRad).toBeCloseTo(0);
+    expect(agent.yaw).toBeGreaterThan(0.2);
+    expect(agent.x - neutral.x).toBeCloseTo(slot.front, 1);
+    expect(agent.y - neutral.y).toBeCloseTo(slot.side, 1);
+    expect(flagBearer.x - neutral.x).toBeCloseTo(flagSlot.front, 1);
+    expect(flagBearer.y - neutral.y).toBeCloseTo(flagSlot.side, 1);
+  });
+
+  test('uses weighted representative agents for a large central neutral camp', () => {
+    const mapConfig = buildReferenceTrainingMapConfig();
+    const field = {
+      width: mapConfig.layoutMeta.fieldWidth,
+      height: mapConfig.layoutMeta.fieldHeight
+    };
+    const definition = mapConfig.objectives.find((objective) => (
+      objective?.type === 'neutralCamp'
+      && objective?.neutralCamp?.campId === 'camp-center-north'
+    ));
+    const context = {
+      field,
+      obstacles: [],
+      navigator: {
+        isWalkable: () => true,
+        findNearestWalkablePoint: (point) => point,
+        planRoute: (_start, target) => [{ x: target.x, y: target.y }]
+      }
+    };
+    const { camps, squads } = initializeTrainingNeutralCamps({ definitions: [definition], context });
+    const sim = {
+      field,
+      buildings: [],
+      squads,
+      trainingNeutralCamps: camps,
+      repConfig: { maxAgentWeight: 50, maxTotalAgents: 360, strictAgentMapping: true }
+    };
+    const crowd = createCrowdSim(sim);
+    const [guard] = squads;
+    const agents = getCrowdAgentsForSquad(crowd, guard.id);
+
+    expect(guard.representativeAgentWeightCap).toBeUndefined();
+    expect(guard.startCount).toBe(480);
+    expect(agents).toHaveLength(11);
+    expect(agents.length).toBeLessThan(guard.startCount);
+    expect(agents.some((agent) => agent.initialWeight > 1)).toBe(true);
+    expect(agents.reduce((sum, agent) => sum + agent.initialWeight, 0)).toBe(guard.startCount);
+    expect(guard.formationRect).toMatchObject({ slotCount: agents.length, spacing: 20 });
+    expect(guard.deploySlots).toHaveLength(agents.length);
+    const nearestPairDistance = agents.reduce((nearest, agent, index) => (
+      agents.slice(index + 1).reduce((pairNearest, candidate) => (
+        Math.min(pairNearest, Math.hypot(agent.x - candidate.x, agent.y - candidate.y))
+      ), nearest)
+    ), Infinity);
+    expect(nearestPairDistance).toBeGreaterThan(18);
   });
 
   test('keeps a ranged neutral guard moving toward its patrol target before acquiring an enemy', () => {

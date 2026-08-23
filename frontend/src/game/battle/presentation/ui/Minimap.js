@@ -52,7 +52,7 @@ const Minimap = ({
         grass: 'rgba(44, 83, 56, 0.94)',
         'highland-attacker': 'rgba(125, 47, 55, 0.92)',
         'highland-defender': 'rgba(24, 101, 110, 0.92)',
-        sand: 'rgba(233, 213, 73, 0.92)',
+        sand: 'rgba(107, 67, 42, 0.92)',
         river: 'rgba(192, 151, 84, 0.9)',
         road: 'rgba(111, 94, 62, 0.96)'
       };
@@ -123,6 +123,22 @@ const Minimap = ({
     ctx.strokeStyle = 'rgba(148, 163, 184, 0.5)';
     ctx.strokeRect(0.5, 0.5, width - 1, height - 1);
 
+    if (hasThreeLaneMap) {
+      (Array.isArray(trainingMap?.respawnPoints) ? trainingMap.respawnPoints : []).forEach((respawnPoint) => {
+        const point = toMap(respawnPoint?.x, respawnPoint?.y);
+        const radius = Math.max(2.5, Number(respawnPoint?.radius) || 0) * Math.max(sx, sy);
+        ctx.beginPath();
+        ctx.fillStyle = 'rgba(190, 242, 100, 0.16)';
+        ctx.arc(point.x, point.y, radius, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.beginPath();
+        ctx.strokeStyle = 'rgba(190, 242, 100, 0.94)';
+        ctx.lineWidth = 1;
+        ctx.arc(point.x, point.y, radius, 0, Math.PI * 2);
+        ctx.stroke();
+      });
+    }
+
     (snapshot.buildings || []).forEach((wall) => {
       if (!wall || wall.destroyed) return;
       const sourceParts = Array.isArray(wall.colliderParts) && wall.colliderParts.length > 0
@@ -147,7 +163,7 @@ const Minimap = ({
           ? 'rgba(69, 148, 81, 0.68)'
           : category === 'neutralCamp'
             ? 'rgba(208, 153, 76, 0.9)'
-            : category === 'tower' || category === 'base'
+            : category === 'tower' || category === 'base' || category === 'barracks'
               ? (team === 'defender' ? 'rgba(67, 204, 212, 0.94)' : 'rgba(229, 83, 91, 0.94)')
               : 'rgba(100, 116, 139, 0.65)';
         ctx.fillRect(-bw / 2, -bh / 2, bw, bh);

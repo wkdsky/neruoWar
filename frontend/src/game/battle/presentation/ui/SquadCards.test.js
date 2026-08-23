@@ -95,6 +95,28 @@ describe('SquadCards training controls', () => {
     expect(onFollow).toHaveBeenCalledWith('training_squad_1', expect.anything());
   });
 
+  test('covers a defeated training card with its highland respawn countdown', () => {
+    render(
+      <SquadCards
+        squads={[{
+          ...selectedSquad,
+          remain: 0,
+          alive: false,
+          respawning: true,
+          respawnRemainingSec: 18.2,
+          respawnState: { delaySec: 20 }
+        }]}
+        phase="battle"
+        isTrainingMode
+      />
+    );
+
+    const overlay = screen.getByRole('progressbar', { name: '混编先锋队重生倒计时' });
+    expect(overlay.textContent).toContain('重生中');
+    expect(overlay.textContent).toContain('19s');
+    expect(screen.getByText('返回高地重生点')).not.toBeNull();
+  });
+
   test('keeps training battle commands and spacing choices together in the selected command strip', () => {
     const onBattleAction = jest.fn();
     const onFormationSpacingPick = jest.fn();

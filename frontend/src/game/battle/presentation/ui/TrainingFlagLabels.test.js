@@ -1,5 +1,6 @@
 import {
   buildTrainingFlagRows,
+  buildTrainingFlagRowsWithNeutralPreview,
   resolveTrainingHoveredSquadId,
   resolveTrainingFlagLabelPresentation,
   resolveTrainingFlagLabelStackLayout,
@@ -35,6 +36,37 @@ describe('training flag labels', () => {
       expect.objectContaining({ id: 'enemy', team: 'defender', troopState: 'critical', skillPoints: 2, showSkillPoints: true }),
       expect.objectContaining({ id: 'neutral', team: 'neutral', troopState: 'healthy', skillPoints: 0, showSkillPoints: false })
     ]);
+  });
+
+  test('adds pre-start neutral squads at their preview flag bearer', () => {
+    const rows = buildTrainingFlagRowsWithNeutralPreview([
+      { id: 'attacker', name: '先锋', team: 'attacker', remain: 20, startCount: 20, x: -100, y: 0 }
+    ], {
+      squads: [{
+        id: 'neutral-preview',
+        name: '中立守卫',
+        team: 'neutral',
+        remain: 80,
+        startCount: 80,
+        x: 12,
+        y: 18
+      }],
+      agents: [
+        { squadId: 'neutral-preview', weight: 40, x: 8, y: 14 },
+        { squadId: 'neutral-preview', weight: 40, isFlagBearer: true, x: 28, y: 34 }
+      ]
+    });
+
+    expect(rows).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: 'attacker', team: 'attacker' }),
+      expect.objectContaining({
+        id: 'neutral-preview',
+        team: 'neutral',
+        x: 28,
+        y: 34,
+        showSkillPoints: false
+      })
+    ]));
   });
 
   test('keeps the distant information label low while enlarging it for overview readability', () => {

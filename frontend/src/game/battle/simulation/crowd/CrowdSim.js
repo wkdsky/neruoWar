@@ -24,6 +24,7 @@ import {
 } from '../items/itemObstacleUtils';
 import { updateTrainingObjectives } from '../objectives/TrainingObjectiveSystem';
 import { updateTrainingNeutralCamps } from '../objectives/TrainingNeutralCampSystem';
+import { updateTrainingSquadRespawns } from '../respawn/TrainingSquadRespawnSystem';
 import { resolveTrainingMapLegalPosition } from '../navigation/TrainingMapNavigator';
 import { snapTrainingDirectionOffset } from '../../shared/trainingDirectionArc';
 import {
@@ -151,6 +152,9 @@ const AGENT_SETTLE_RADIUS = 2.4;
 const AGENT_SETTLE_DEADZONE = 1.08;
 const AGENT_SETTLE_SPEED = 16;
 const FORMATION_MARCH_TURN_RATE = Math.PI * 0.5;
+const NEUTRAL_AGENT_TURN_RATE = Math.PI * 3.2;
+const NEUTRAL_REPRESENTATIVE_FORMATION_SPACING = 20;
+const NEUTRAL_REPRESENTATIVE_FORMATION_DEPTH_SCALE = 0.92;
 const FORMATION_SLOT_REJOIN_HZ = 5.2;
 const FORMATION_SLOT_LOCK_EPSILON = 0.12;
 const FORMATION_SLOT_RELEASE_DISTANCE = 2;
@@ -212,7 +216,7 @@ const DEFAULT_STEERING_WEIGHTS = {
 export const resolveTrainingMapMovementScale = (sim = {}) => {
   const configuredMultiplier = Number(sim?.trainingMap?.movementCalibration?.leaderSpeedMultiplier);
   if (!Number.isFinite(configuredMultiplier) || configuredMultiplier <= 0) return 1;
-  return Math.min(3, Math.max(0.5, configuredMultiplier / REFERENCE_LEADER_SPEED_MULTIPLIER));
+  return Math.min(4, Math.max(0.5, configuredMultiplier / REFERENCE_LEADER_SPEED_MULTIPLIER));
 };
 
 const resolveTrainingNavigationAgentRadius = (squad = {}, sim = {}) => {
@@ -576,11 +580,100 @@ const normalizeFormationSlot = (slot = {}, fallback = {}) => ({
   front: Number.isFinite(Number(slot?.front)) ? Number(slot.front) : (Number(fallback?.front) || 0)
 });
 
+const buildNeutralRepresentativeFormation = (agentCount = 1, spacing = NEUTRAL_REPRESENTATIVE_FORMATION_SPACING) => {
+  const count = Math.max(1, Math.floor(Number(agentCount) || 1));
+  const safeSpacing = Math.max(1, Number(spacing) || NEUTRAL_REPRESENTATIVE_FORMATION_SPACING);
+  const columns = Math.max(1, Math.ceil(Math.sqrt(count)));
+  const rows = Math.max(1, Math.ceil(count / columns));
+  const centerColumn = (columns - 1) * 0.5;
+  const centerRow = (rows - 1) * 0.5;
+  const slots = [];
+  for (let row = 0; row < rows; row += 1) {
+    for (let column = 0; column < columns; column += 1) {
+      const index = (row * columns) + column;
+      if (index >= count) break;
+      slots.push({
+        side: (column - centerColumn) * safeSpacing,
+        front: (centerRow - row) * safeSpacing * NEUTRAL_REPRESENTATIVE_FORMATION_DEPTH_SCALE,
+        row,
+        col: column
+      });
+    }
+  }
+  slots.sort((left, right) => (
+    Math.hypot(left.col - centerColumn, left.row - centerRow)
+      - Math.hypot(right.col - centerColumn, right.row - centerRow)
+    || left.row - right.row
+    || left.col - right.col
+  ));
+  return {
+    columns,
+    rows,
+    spacing: safeSpacing,
+    width: Math.max(safeSpacing, columns * safeSpacing),
+    depth: Math.max(safeSpacing * NEUTRAL_REPRESENTATIVE_FORMATION_DEPTH_SCALE, rows * safeSpacing * NEUTRAL_REPRESENTATIVE_FORMATION_DEPTH_SCALE),
+    slots
+  };
+};
+
+const applyNeutralRepresentativeFormation = (squad = null, agents = [], formationForward = null) => {
+  if (squad?.isNeutralCampUnit !== true || !Array.isArray(agents) || agents.length <= 0) return null;
+  const formation = buildNeutralRepresentativeFormation(agents.length);
+  const forward = normalizeVec(formationForward?.x, formationForward?.y);
+  const forwardX = forward.len > 1e-4 ? forward.x : 1;
+  const forwardY = forward.len > 1e-4 ? forward.y : 0;
+  const sideX = -forwardY;
+  const sideY = forwardX;
+  const currentFormation = squad?.formationRect && typeof squad.formationRect === 'object'
+    ? squad.formationRect
+    : {};
+  squad.formationRect = {
+    ...currentFormation,
+    area: formation.width * formation.depth,
+    width: formation.width,
+    depth: formation.depth,
+    spacing: formation.spacing,
+    slotCount: agents.length,
+    formationId: String(currentFormation?.formationId || 'neutral-camp-square'),
+    formationName: String(currentFormation?.formationName || '方阵守卫')
+  };
+  squad.deploySlots = formation.slots.map((slot) => ({ ...slot }));
+  agents.forEach((agent, index) => {
+    const slot = formation.slots[index] || { side: 0, front: 0 };
+    agent.formationSlot = normalizeFormationSlot(slot);
+    agent.formationSpacingSlots = null;
+    agent._formationLocked = true;
+    agent._formationHold = true;
+    agent._formationHoldSpacing = '';
+    agent.x = (Number(squad?.x) || 0) + (sideX * slot.side) + (forwardX * slot.front);
+    agent.y = (Number(squad?.y) || 0) + (sideY * slot.side) + (forwardY * slot.front);
+    agent.vx = 0;
+    agent.vy = 0;
+  });
+  return formation;
+};
+
 const normalizeAngleDelta = (value = 0) => {
   let delta = Number(value) || 0;
   while (delta > Math.PI) delta -= Math.PI * 2;
   while (delta < -Math.PI) delta += Math.PI * 2;
   return delta;
+};
+
+const advanceAgentYaw = (agent = null, targetYaw = 0, dt = 0) => {
+  if (!agent || !Number.isFinite(Number(targetYaw))) return Number(agent?.yaw) || 0;
+  const currentYaw = Number.isFinite(Number(agent.yaw)) ? Number(agent.yaw) : Number(targetYaw);
+  const maxTurn = NEUTRAL_AGENT_TURN_RATE * Math.max(0, Number(dt) || 0);
+  const step = clamp(normalizeAngleDelta(Number(targetYaw) - currentYaw), -maxTurn, maxTurn);
+  agent.yaw = currentYaw + step;
+  return agent.yaw;
+};
+
+const updateAgentYawFromVelocity = (agent = null, vx = 0, vy = 0, dt = 0) => {
+  if (!agent || Math.abs(Number(vx) || 0) + Math.abs(Number(vy) || 0) <= 0.08) {
+    return Number(agent?.yaw) || 0;
+  }
+  return advanceAgentYaw(agent, Math.atan2(Number(vy) || 0, Number(vx) || 0), dt);
 };
 
 const buildFormationAxisScale = (slots = [], axis = 'side', baseSpacing = 1, scale = 1) => {
@@ -749,6 +842,7 @@ const advanceSquadFormationPose = (
     y: Number(squad?.y) || 0,
     yaw: previous.yaw
   };
+  const isNeutralCamp = squad?.isNeutralCampUnit === true;
   if (!squad?.formationRect || movement.len <= 1e-4) {
     squad._formationPoseX = current.x;
     squad._formationPoseY = current.y;
@@ -767,6 +861,19 @@ const advanceSquadFormationPose = (
       : (Number.isFinite(legacyDirection) ? legacyDirection - previous.yaw : 0)
   );
   const directionRad = Math.atan2(movement.y, movement.x);
+  if (isNeutralCamp) {
+    current.yaw = previous.yaw;
+    squad.formationRect.directionOffsetRad = snapTrainingDirectionOffset(directionRad - current.yaw);
+    squad.formationRect.directionRad = directionRad;
+    squad._formationPoseX = current.x;
+    squad._formationPoseY = current.y;
+    squad._formationPoseYaw = current.yaw;
+    return {
+      previous,
+      current,
+      forward: { x: Math.cos(current.yaw), y: Math.sin(current.yaw) }
+    };
+  }
   const targetFacingRad = directionRad - directionOffsetRad;
   const maxTurn = FORMATION_MARCH_TURN_RATE * Math.max(0, Number(dt) || 0);
   const facingStep = clamp(normalizeAngleDelta(targetFacingRad - previous.yaw), -maxTurn, maxTurn);
@@ -1039,7 +1146,10 @@ const moveMeleeChargeAgent = (agent, destination, squad, sim, walls, dt) => {
   agent.y = clamp(nextY, -halfH + 2, halfH - 2);
   agent.vx = (agent.x - previousX) / Math.max(0.001, Number(dt) || 0.001);
   agent.vy = (agent.y - previousY) / Math.max(0.001, Number(dt) || 0.001);
-  if (Math.abs(agent.vx) + Math.abs(agent.vy) > 0.08) agent.yaw = Math.atan2(agent.vy, agent.vx);
+  if (Math.abs(agent.vx) + Math.abs(agent.vy) > 0.08) {
+    if (agent.isNeutralCampUnit === true) updateAgentYawFromVelocity(agent, agent.vx, agent.vy, dt);
+    else agent.yaw = Math.atan2(agent.vy, agent.vx);
+  }
   return Math.hypot(target.x - agent.x, target.y - agent.y);
 };
 
@@ -2362,7 +2472,9 @@ const createAgent = ({
   formationSpacingSlots = null,
   moveSpeedMul = 1,
   combatScale = 1,
-  isFlagBearer = false
+  isFlagBearer = false,
+  isNeutralCampUnit = false,
+  yaw = 0
 }) => ({
   id,
   squadId,
@@ -2375,7 +2487,7 @@ const createAgent = ({
   y: Number(y) || 0,
   vx: 0,
   vy: 0,
-  yaw: 0,
+  yaw: Number.isFinite(Number(yaw)) ? Number(yaw) : 0,
   radius: AGENT_RADIUS,
   weight: Math.max(0.2, Number(weight) || 1),
   initialWeight: Math.max(0.2, Number(weight) || 1),
@@ -2396,6 +2508,7 @@ const createAgent = ({
   castState: null,
   meleeChargeState: null,
   isFlagBearer: !!isFlagBearer,
+  isNeutralCampUnit: !!isNeutralCampUnit,
   hitTimer: 0,
   dead: false
 });
@@ -2536,7 +2649,11 @@ const createAgentsForSquad = (squad, crowd) => {
         combatScale,
         slotOrder,
         formationSlot,
-        moveSpeedMul
+        moveSpeedMul,
+        isNeutralCampUnit: squad?.isNeutralCampUnit === true,
+        yaw: squad?.isNeutralCampUnit === true
+          ? Math.atan2(formationForward.y, formationForward.x)
+          : 0
       }));
       slotOrder += 1;
     }
@@ -2555,12 +2672,21 @@ const createAgentsForSquad = (squad, crowd) => {
       weight: Math.min(remain, repConfig.maxAgentWeight),
       slotOrder: 0,
       formationSlot: { side: 0, front: 0 },
-      moveSpeedMul: resolveAgentSpeedMul({}, squad?.classTag || 'infantry')
+      moveSpeedMul: resolveAgentSpeedMul({}, squad?.classTag || 'infantry'),
+      isNeutralCampUnit: squad?.isNeutralCampUnit === true,
+      yaw: squad?.isNeutralCampUnit === true
+        ? Math.atan2(formationForward.y, formationForward.x)
+        : 0
     }));
   }
-  assignFormationSpacingSlots(agents, formationSpacing);
+  const neutralFormation = applyNeutralRepresentativeFormation(squad, agents, formationForward);
+  const effectiveFormationSpacing = neutralFormation?.spacing || formationSpacing;
+  assignFormationSpacingSlots(agents, effectiveFormationSpacing);
   squad._repMaxAgentWeight = repConfig.maxAgentWeight;
-  squad._crowdBaseColumns = Math.max(1, hintedCols || Math.ceil(Math.sqrt(agents.length)));
+  squad._crowdBaseColumns = Math.max(
+    1,
+    neutralFormation?.columns || hintedCols || Math.ceil(Math.sqrt(agents.length))
+  );
   const movementForward = resolveSquadMovementForward(squad);
   squad._crowdForward = movementForward;
   squad.dirX = movementForward.x;
@@ -4047,6 +4173,18 @@ export const updateCrowdSim = (crowd, sim, dt) => {
     crowd.agentsBySquad.set(squadId, filtered);
     crowd.allAgents.push(...filtered);
   });
+  updateTrainingSquadRespawns({
+    sim,
+    crowd,
+    nowSec,
+    spawnSquad: (squad) => addCrowdSquad(crowd, squad, { replace: true })
+  });
+  crowd.allAgents = [];
+  crowd.agentsBySquad.forEach((agents, squadId) => {
+    const filtered = (Array.isArray(agents) ? agents : []).filter((agent) => agent && !agent.dead && (agent.weight || 0) > 0.001);
+    crowd.agentsBySquad.set(squadId, filtered);
+    crowd.allAgents.push(...filtered);
+  });
   const spatial = buildSpatialHash(crowd.allAgents, 14);
   crowd.spatial = spatial;
   syncMeleeEngagement(crowd, sim, walls, safeDt, Number(sim?.timeElapsed) || 0);
@@ -4306,7 +4444,7 @@ export const updateCrowdSim = (crowd, sim, dt) => {
         );
         if (handled) return;
       }
-      if (agent.isFlagBearer) {
+      if (agent.isFlagBearer && squad.isNeutralCampUnit !== true) {
         const flagOffsetX = -formationForward.x * flagBack;
         const flagOffsetY = -formationForward.y * flagBack;
         agent.x = (Number(squad.x) || 0) + flagOffsetX;
@@ -4314,9 +4452,13 @@ export const updateCrowdSim = (crowd, sim, dt) => {
         agent.vx = Number(squad.vx) || 0;
         agent.vy = Number(squad.vy) || 0;
         if (Math.abs(agent.vx) + Math.abs(agent.vy) > 0.08) {
-          agent.yaw = formationPose.current.yaw;
+          if (squad.isNeutralCampUnit === true) {
+            updateAgentYawFromVelocity(agent, agent.vx, agent.vy, safeDt);
+          } else {
+            agent.yaw = formationPose.current.yaw;
+          }
         } else {
-          agent.yaw = Math.atan2(formationForward.y, formationForward.x);
+          if (squad.isNeutralCampUnit !== true) agent.yaw = Math.atan2(formationForward.y, formationForward.x);
         }
         agent.state = agent.attackCd > 0 ? 'attack' : 'idle';
         agent.hitTimer = Math.max(0, (Number(agent.hitTimer) || 0) - safeDt);
@@ -4394,7 +4536,11 @@ export const updateCrowdSim = (crowd, sim, dt) => {
         agent.y = formationStep.y;
         agent.vx = (agent.x - previousX) / Math.max(1e-4, safeDt);
         agent.vy = (agent.y - previousY) / Math.max(1e-4, safeDt);
-        agent.yaw = formationPose.current.yaw;
+        if (squad.isNeutralCampUnit === true) {
+          updateAgentYawFromVelocity(agent, agent.vx, agent.vy, safeDt);
+        } else {
+          agent.yaw = formationPose.current.yaw;
+        }
         agent.hitTimer = Math.max(0, (Number(agent.hitTimer) || 0) - safeDt);
         agent.state = Math.abs(agent.vx) + Math.abs(agent.vy) > 0.08 ? 'move' : 'idle';
         return;
@@ -4545,7 +4691,11 @@ export const updateCrowdSim = (crowd, sim, dt) => {
       agent.y = ny;
       agent.hitTimer = Math.max(0, (Number(agent.hitTimer) || 0) - safeDt);
       if (Math.abs(vx) + Math.abs(vy) > 0.08) {
-        agent.yaw = Math.atan2(vy, vx);
+        if (squad.isNeutralCampUnit === true) {
+          updateAgentYawFromVelocity(agent, vx, vy, safeDt);
+        } else {
+          agent.yaw = Math.atan2(vy, vx);
+        }
         agent.state = agent.attackCd > 0 ? 'attack' : 'move';
       } else {
         agent.state = agent.attackCd > 0 ? 'attack' : 'idle';

@@ -1,4 +1,5 @@
 import {
+  createTrainingNeutralCampSquad,
   getTrainingNeutralCampSummary,
   initializeTrainingNeutralCamps,
   updateTrainingNeutralCamps
@@ -70,6 +71,7 @@ describe('TrainingNeutralCampSystem', () => {
       neutralCampId: 'test-camp',
       remain: 6
     });
+    expect(state.squads[0].representativeAgentWeightCap).toBeUndefined();
     expect(state.squads[0].guard).toMatchObject({
       enabled: true,
       chaseRadius: 100
@@ -115,6 +117,73 @@ describe('TrainingNeutralCampSystem', () => {
 
     expect(squad.guard.patrolTarget).toEqual({ x: -20, y: 0 });
     expect(squad.waypoints).toEqual([{ x: -20, y: 0 }]);
+  });
+
+  test('keeps a non-patrolling camp at its spawn position', () => {
+    const context = buildContext();
+    const state = initializeTrainingNeutralCamps({
+      definitions: [buildDefinition({
+        patrolEnabled: false,
+        patrolStartImmediately: true
+      })],
+      buildings: [{ id: 'map-test-camp', x: 0, y: 0, blocksMovement: false }],
+      context
+    });
+    const camp = state.camps[0];
+    const squad = state.squads[0];
+    const spawnPoint = { x: squad.x, y: squad.y };
+
+    expect(spawnPoint).toEqual({ x: 0, y: 0 });
+
+    updateTrainingNeutralCamps({
+      sim: { squads: [squad], trainingNeutralCamps: [camp], trainingStats: { neutralKills: 0 } },
+      crowd: { agentsBySquad: new Map() },
+      context,
+      nowSec: 8
+    });
+
+    expect(camp).toMatchObject({ patrolEnabled: false, patrolPoints: [], state: 'alive' });
+    expect(squad.guard.patrolTarget).toBeNull();
+    expect(squad.waypoints).toEqual([]);
+    expect(squad).toMatchObject(spawnPoint);
+  });
+
+  test('builds high-count neutral troops as a compact square formation', () => {
+    const context = buildContext();
+    const state = initializeTrainingNeutralCamps({
+      definitions: [buildDefinition({
+        patrolEnabled: false,
+        composition: [{
+          unitTypeId: 'training_neutral_guard',
+          count: 480,
+          hp: 80,
+          attack: 14,
+          defense: 7,
+          speed: 1,
+          attackRange: 1,
+          classTag: 'infantry',
+          unitCategory: 'melee',
+          unitSubtype: 'balance'
+        }]
+      })],
+      buildings: [{ id: 'map-test-camp', x: 0, y: 0, blocksMovement: false }],
+      context
+    });
+    const squad = createTrainingNeutralCampSquad(state.camps[0], context);
+    const { formationRect, deploySlots } = squad;
+    const sideSpan = Math.max(...deploySlots.map((slot) => slot.side)) - Math.min(...deploySlots.map((slot) => slot.side));
+    const frontSpan = Math.max(...deploySlots.map((slot) => slot.front)) - Math.min(...deploySlots.map((slot) => slot.front));
+
+    expect(squad.startCount).toBe(480);
+    expect(formationRect).toMatchObject({
+      formationId: 'neutral-camp-square',
+      formationName: '方阵守卫',
+      slotCount: 480
+    });
+    expect(deploySlots).toHaveLength(480);
+    expect(formationRect.width / formationRect.spacing).toBeCloseTo(22);
+    expect(sideSpan / frontSpan).toBeLessThan(1.2);
+    expect(frontSpan / sideSpan).toBeLessThan(1.2);
   });
 
   test('marks a cleared camp once and restores its squad on the simulation respawn timer', () => {

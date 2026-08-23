@@ -15,82 +15,82 @@
   "profiles": {
     "melee-patrol": {
       "label": "林地巡守",
-      "composition": [{ "unitTypeId": "training_neutral_melee_scout", "name": "荒原短刃兵", "count": 7, "hp": 82, "attack": 15, "defense": 8, "speed": 1.02, "attackRange": 1, "classTag": "infantry", "unitCategory": "melee", "unitSubtype": "balance" }]
+      "composition": [{ "unitTypeId": "training_neutral_melee_scout", "name": "荒原短刃兵", "count": 48, "hp": 82, "attack": 15, "defense": 8, "speed": 1.02, "attackRange": 1, "classTag": "infantry", "unitCategory": "melee", "unitSubtype": "balance" }]
     },
     "ranged-nest": {
       "label": "高地哨射",
-      "composition": [{ "unitTypeId": "training_neutral_ranged_scout", "name": "黄沙弓手", "count": 6, "hp": 58, "attack": 18, "defense": 4, "speed": 1.12, "attackRange": 4.8, "classTag": "archer", "unitCategory": "ranged", "unitSubtype": "mobility" }]
+      "composition": [{ "unitTypeId": "training_neutral_ranged_scout", "name": "黄沙弓手", "count": 220, "hp": 58, "attack": 18, "defense": 4, "speed": 1.12, "attackRange": 4.8, "classTag": "archer", "unitCategory": "ranged", "unitSubtype": "mobility" }]
     },
     "sand-skirmish": {
       "label": "沙丘游猎队",
       "composition": [
-        { "unitTypeId": "training_neutral_melee_sand", "name": "沙盾卫", "count": 4, "hp": 112, "attack": 17, "defense": 10, "speed": 0.9, "attackRange": 1, "classTag": "infantry", "unitCategory": "melee", "unitSubtype": "defense" },
-        { "unitTypeId": "training_neutral_ranged_sand", "name": "沙矛投手", "count": 4, "hp": 66, "attack": 20, "defense": 5, "speed": 1.03, "attackRange": 4.2, "classTag": "archer", "unitCategory": "ranged", "unitSubtype": "balance" }
+        { "unitTypeId": "training_neutral_melee_sand", "name": "沙盾卫", "count": 180, "hp": 112, "attack": 17, "defense": 10, "speed": 0.9, "attackRange": 1, "classTag": "infantry", "unitCategory": "melee", "unitSubtype": "defense" },
+        { "unitTypeId": "training_neutral_ranged_sand", "name": "沙矛投手", "count": 120, "hp": 66, "attack": 20, "defense": 5, "speed": 1.03, "attackRange": 4.2, "classTag": "archer", "unitCategory": "ranged", "unitSubtype": "balance" }
       ]
     },
     "river-vanguard": {
       "label": "河道先锋队",
       "composition": [
-        { "unitTypeId": "training_neutral_melee_elite", "name": "石甲卫士", "count": 6, "hp": 124, "attack": 20, "defense": 12, "speed": 0.88, "attackRange": 1, "classTag": "infantry", "unitCategory": "melee", "unitSubtype": "defense" },
-        { "unitTypeId": "training_neutral_ranged_scout", "name": "黄沙弓手", "count": 3, "hp": 58, "attack": 18, "defense": 4, "speed": 1.12, "attackRange": 4.8, "classTag": "archer", "unitCategory": "ranged", "unitSubtype": "mobility" }
+        { "unitTypeId": "training_neutral_melee_elite", "name": "石甲卫士", "count": 48, "hp": 124, "attack": 20, "defense": 12, "speed": 0.88, "attackRange": 1, "classTag": "infantry", "unitCategory": "melee", "unitSubtype": "defense" },
+        { "unitTypeId": "training_neutral_ranged_scout", "name": "黄沙弓手", "count": 24, "hp": 58, "attack": 18, "defense": 4, "speed": 1.12, "attackRange": 4.8, "classTag": "archer", "unitCategory": "ranged", "unitSubtype": "mobility" }
       ]
     },
     "fortified-guard": {
       "label": "沙岩守备队",
       "composition": [
-        { "unitTypeId": "training_neutral_melee_sand", "name": "沙盾卫", "count": 7, "hp": 112, "attack": 17, "defense": 10, "speed": 0.9, "attackRange": 1, "classTag": "infantry", "unitCategory": "melee", "unitSubtype": "defense" },
-        { "unitTypeId": "training_neutral_ranged_sand", "name": "沙矛投手", "count": 2, "hp": 66, "attack": 20, "defense": 5, "speed": 1.03, "attackRange": 4.2, "classTag": "archer", "unitCategory": "ranged", "unitSubtype": "balance" }
+        { "unitTypeId": "training_neutral_melee_sand", "name": "沙盾卫", "count": 210, "hp": 112, "attack": 17, "defense": 10, "speed": 0.9, "attackRange": 1, "classTag": "infantry", "unitCategory": "melee", "unitSubtype": "defense" },
+        { "unitTypeId": "training_neutral_ranged_sand", "name": "沙矛投手", "count": 90, "hp": 66, "attack": 20, "defense": 5, "speed": 1.03, "attackRange": 4.2, "classTag": "archer", "unitCategory": "ranged", "unitSubtype": "balance" }
       ]
     },
     "mixed-hunt": {
       "label": "猎手小队",
       "composition": [
-        { "unitTypeId": "training_neutral_melee_scout", "name": "荒原短刃兵", "count": 5, "hp": 82, "attack": 15, "defense": 8, "speed": 1.02, "attackRange": 1, "classTag": "infantry", "unitCategory": "melee", "unitSubtype": "balance" },
-        { "unitTypeId": "training_neutral_ranged_scout", "name": "黄沙弓手", "count": 4, "hp": 58, "attack": 18, "defense": 4, "speed": 1.12, "attackRange": 4.8, "classTag": "archer", "unitCategory": "ranged", "unitSubtype": "mobility" }
+        { "unitTypeId": "training_neutral_melee_scout", "name": "荒原短刃兵", "count": 150, "hp": 82, "attack": 15, "defense": 8, "speed": 1.02, "attackRange": 1, "classTag": "infantry", "unitCategory": "melee", "unitSubtype": "balance" },
+        { "unitTypeId": "training_neutral_ranged_scout", "name": "黄沙弓手", "count": 110, "hp": 58, "attack": 18, "defense": 4, "speed": 1.12, "attackRange": 4.8, "classTag": "archer", "unitCategory": "ranged", "unitSubtype": "mobility" }
       ]
     },
     "ranged-escort": {
       "label": "远射护卫队",
       "composition": [
-        { "unitTypeId": "training_neutral_melee_scout", "name": "荒原短刃兵", "count": 3, "hp": 82, "attack": 15, "defense": 8, "speed": 1.02, "attackRange": 1, "classTag": "infantry", "unitCategory": "melee", "unitSubtype": "balance" },
-        { "unitTypeId": "training_neutral_ranged_elite", "name": "星火弩手", "count": 6, "hp": 74, "attack": 23, "defense": 6, "speed": 0.96, "attackRange": 5.4, "classTag": "archer", "unitCategory": "ranged", "unitSubtype": "defense" }
+        { "unitTypeId": "training_neutral_melee_scout", "name": "荒原短刃兵", "count": 24, "hp": 82, "attack": 15, "defense": 8, "speed": 1.02, "attackRange": 1, "classTag": "infantry", "unitCategory": "melee", "unitSubtype": "balance" },
+        { "unitTypeId": "training_neutral_ranged_elite", "name": "星火弩手", "count": 48, "hp": 74, "attack": 23, "defense": 6, "speed": 0.96, "attackRange": 5.4, "classTag": "archer", "unitCategory": "ranged", "unitSubtype": "defense" }
       ]
     },
     "elite-triad": {
       "label": "精英三职营",
       "composition": [
-        { "unitTypeId": "training_neutral_melee_elite", "name": "石甲卫士", "count": 6, "hp": 124, "attack": 20, "defense": 12, "speed": 0.88, "attackRange": 1, "classTag": "infantry", "unitCategory": "melee", "unitSubtype": "defense" },
-        { "unitTypeId": "training_neutral_ranged_elite", "name": "星火弩手", "count": 4, "hp": 74, "attack": 23, "defense": 6, "speed": 0.96, "attackRange": 5.4, "classTag": "archer", "unitCategory": "ranged", "unitSubtype": "defense" },
-        { "unitTypeId": "training_neutral_support_oracle", "name": "荒原祭司", "count": 2, "hp": 86, "attack": 11, "defense": 8, "speed": 0.94, "attackRange": 4.4, "classTag": "infantry", "unitCategory": "support", "unitSubtype": "comprehensive" }
+        { "unitTypeId": "training_neutral_melee_elite", "name": "石甲卫士", "count": 44, "hp": 124, "attack": 20, "defense": 12, "speed": 0.88, "attackRange": 1, "classTag": "infantry", "unitCategory": "melee", "unitSubtype": "defense" },
+        { "unitTypeId": "training_neutral_ranged_elite", "name": "星火弩手", "count": 32, "hp": 74, "attack": 23, "defense": 6, "speed": 0.96, "attackRange": 5.4, "classTag": "archer", "unitCategory": "ranged", "unitSubtype": "defense" },
+        { "unitTypeId": "training_neutral_support_oracle", "name": "荒原祭司", "count": 20, "hp": 86, "attack": 11, "defense": 8, "speed": 0.94, "attackRange": 4.4, "classTag": "infantry", "unitCategory": "support", "unitSubtype": "comprehensive" }
       ]
     },
     "center": {
       "label": "中央精英守卫",
       "composition": [
-        { "unitTypeId": "training_neutral_melee_elite", "name": "石甲卫士", "count": 8, "hp": 124, "attack": 20, "defense": 12, "speed": 0.88, "attackRange": 1, "classTag": "infantry", "unitCategory": "melee", "unitSubtype": "defense" },
-        { "unitTypeId": "training_neutral_ranged_elite", "name": "星火弩手", "count": 6, "hp": 74, "attack": 23, "defense": 6, "speed": 0.96, "attackRange": 5.4, "classTag": "archer", "unitCategory": "ranged", "unitSubtype": "defense" },
-        { "unitTypeId": "training_neutral_support_oracle", "name": "荒原祭司", "count": 3, "hp": 86, "attack": 11, "defense": 8, "speed": 0.94, "attackRange": 4.4, "classTag": "infantry", "unitCategory": "support", "unitSubtype": "comprehensive" }
+        { "unitTypeId": "training_neutral_melee_elite", "name": "石甲卫士", "count": 220, "hp": 124, "attack": 20, "defense": 12, "speed": 0.88, "attackRange": 1, "classTag": "infantry", "unitCategory": "melee", "unitSubtype": "defense" },
+        { "unitTypeId": "training_neutral_ranged_elite", "name": "星火弩手", "count": 160, "hp": 74, "attack": 23, "defense": 6, "speed": 0.96, "attackRange": 5.4, "classTag": "archer", "unitCategory": "ranged", "unitSubtype": "defense" },
+        { "unitTypeId": "training_neutral_support_oracle", "name": "荒原祭司", "count": 100, "hp": 86, "attack": 11, "defense": 8, "speed": 0.94, "attackRange": 4.4, "classTag": "infantry", "unitCategory": "support", "unitSubtype": "comprehensive" }
       ]
     }
   },
   "camps": [
-    { "campId": "camp-attacker-north-outer", "sourceCenter": [202, 219], "position": [0.098942, 0.139535], "group": "attacker-north", "profile": "melee-patrol", "formationRotationDeg": 45, "mirrorOf": "camp-defender-south-outer", "spawnRadiusNormalized": 0.032 },
-    { "campId": "camp-attacker-north-inner", "sourceCenter": [557, 212], "position": [0.319851, 0.133274], "group": "attacker-north", "profile": "ranged-nest", "formationRotationDeg": 0, "mirrorOf": "camp-defender-south-inner", "spawnRadiusNormalized": 0.028 },
-    { "campId": "camp-attacker-upper-sand", "sourceCenter": [472, 411], "position": [0.266957, 0.31127], "group": "attacker-upper", "profile": "sand-skirmish", "formationRotationDeg": 90, "mirrorOf": "camp-defender-lower-sand", "spawnRadiusNormalized": 0.032 },
-    { "campId": "camp-attacker-mid", "sourceCenter": [217, 522], "position": [0.108276, 0.410555], "group": "attacker-mid", "profile": "river-vanguard", "formationRotationDeg": -45, "mirrorOf": "camp-defender-lower-mid", "spawnRadiusNormalized": 0.032 },
-    { "campId": "camp-center-north", "sourceCenter": [846, 339], "position": [0.499689, 0.246869], "group": "center", "profile": "center", "formationRotationDeg": 90, "mirrorOf": "camp-center-south", "spawnRadiusNormalized": 0.032, "patrolMode": "shuttle", "patrolSpanNormalized": 0.06, "returnRadiusNormalized": 0.045, "patrolIntervalSec": 2.5, "patrolStartImmediately": true, "showPatrolPreview": true },
-    { "campId": "camp-center-south", "sourceCenter": [846, 905], "position": [0.499689, 0.753131], "group": "center", "profile": "center", "formationRotationDeg": 270, "mirrorOf": "camp-center-north", "spawnRadiusNormalized": 0.032, "patrolMode": "shuttle", "patrolSpanNormalized": 0.06, "returnRadiusNormalized": 0.045, "patrolIntervalSec": 2.5, "patrolStartImmediately": true, "showPatrolPreview": true },
-    { "campId": "camp-defender-upper-sand", "sourceCenter": [1222, 411], "position": [0.733665, 0.31127], "group": "defender-upper", "profile": "fortified-guard", "formationRotationDeg": 135, "mirrorOf": "camp-attacker-lower-sand", "spawnRadiusNormalized": 0.032 },
-    { "campId": "camp-defender-north-inner", "sourceCenter": [1137, 212], "position": [0.680772, 0.133274], "group": "defender-north", "profile": "mixed-hunt", "formationRotationDeg": 180, "mirrorOf": "camp-attacker-south-inner", "spawnRadiusNormalized": 0.028 },
-    { "campId": "camp-defender-north-outer", "sourceCenter": [1490, 219], "position": [0.900436, 0.139535], "group": "defender-north", "profile": "ranged-escort", "formationRotationDeg": 225, "mirrorOf": "camp-attacker-south-outer", "spawnRadiusNormalized": 0.032 },
-    { "campId": "camp-defender-mid", "sourceCenter": [1476, 522], "position": [0.891724, 0.410555], "group": "defender-mid", "profile": "elite-triad", "formationRotationDeg": 135, "mirrorOf": "camp-attacker-lower-mid", "spawnRadiusNormalized": 0.032 },
-    { "campId": "camp-attacker-lower-mid", "sourceCenter": [219, 730], "position": [0.109521, 0.596601], "group": "attacker-lower", "profile": "elite-triad", "formationRotationDeg": 315, "mirrorOf": "camp-defender-mid", "spawnRadiusNormalized": 0.032 },
-    { "campId": "camp-attacker-lower-sand", "sourceCenter": [430, 842], "position": [0.240821, 0.69678], "group": "attacker-lower", "profile": "fortified-guard", "formationRotationDeg": 315, "mirrorOf": "camp-defender-upper-sand", "spawnRadiusNormalized": 0.05 },
-    { "campId": "camp-attacker-south-outer", "sourceCenter": [204, 1025], "position": [0.100187, 0.860465], "group": "attacker-south", "profile": "ranged-escort", "formationRotationDeg": 45, "mirrorOf": "camp-defender-north-outer", "spawnRadiusNormalized": 0.032 },
-    { "campId": "camp-attacker-south-inner", "sourceCenter": [547, 1030], "position": [0.313628, 0.864937], "group": "attacker-south", "profile": "mixed-hunt", "formationRotationDeg": 0, "mirrorOf": "camp-defender-north-inner", "spawnRadiusNormalized": 0.028 },
-    { "campId": "camp-defender-lower-mid", "sourceCenter": [1476, 731], "position": [0.891724, 0.597496], "group": "defender-lower", "profile": "river-vanguard", "formationRotationDeg": 135, "mirrorOf": "camp-attacker-mid", "spawnRadiusNormalized": 0.032 },
-    { "campId": "camp-defender-lower-sand", "sourceCenter": [1263, 842], "position": [0.759179, 0.69678], "group": "defender-lower", "profile": "sand-skirmish", "formationRotationDeg": 270, "mirrorOf": "camp-attacker-upper-sand", "spawnRadiusNormalized": 0.05 },
-    { "campId": "camp-defender-south-outer", "sourceCenter": [1490, 1034], "position": [0.900436, 0.868515], "group": "defender-south", "profile": "melee-patrol", "formationRotationDeg": 225, "mirrorOf": "camp-attacker-north-outer", "spawnRadiusNormalized": 0.032 },
-    { "campId": "camp-defender-south-inner", "sourceCenter": [1142, 1031], "position": [0.683883, 0.865832], "group": "defender-south", "profile": "ranged-nest", "formationRotationDeg": 180, "mirrorOf": "camp-attacker-north-inner", "spawnRadiusNormalized": 0.028 }
+    { "campId": "camp-attacker-north-outer", "sourceCenter": [202, 219], "position": [0.098942, 0.139535], "group": "attacker-north", "profile": "melee-patrol", "strengthTier": "near-highland", "formationRotationDeg": 45, "mirrorOf": "camp-defender-south-outer", "spawnRadiusNormalized": 0.032 },
+    { "campId": "camp-attacker-north-inner", "sourceCenter": [557, 212], "position": [0.319851, 0.133274], "group": "attacker-north", "profile": "ranged-nest", "strengthTier": "remote", "formationRotationDeg": 0, "mirrorOf": "camp-defender-south-inner", "spawnRadiusNormalized": 0.028 },
+    { "campId": "camp-attacker-upper-sand", "sourceCenter": [472, 411], "position": [0.266957, 0.31127], "group": "attacker-upper", "profile": "sand-skirmish", "strengthTier": "remote", "formationRotationDeg": 90, "mirrorOf": "camp-defender-lower-sand", "spawnRadiusNormalized": 0.032 },
+    { "campId": "camp-attacker-mid", "sourceCenter": [217, 522], "position": [0.108276, 0.410555], "group": "attacker-mid", "profile": "river-vanguard", "strengthTier": "near-highland", "formationRotationDeg": -45, "mirrorOf": "camp-defender-lower-mid", "spawnRadiusNormalized": 0.032 },
+    { "campId": "camp-center-north", "sourceCenter": [846, 339], "position": [0.499689, 0.246869], "group": "center", "profile": "center", "strengthTier": "central-sand", "formationRotationDeg": 90, "mirrorOf": "camp-center-south", "spawnRadiusNormalized": 0.032, "patrolMode": "shuttle", "patrolSpanNormalized": 0.06, "returnRadiusNormalized": 0.045, "patrolIntervalSec": 2.5, "patrolStartImmediately": true, "showPatrolPreview": true },
+    { "campId": "camp-center-south", "sourceCenter": [846, 905], "position": [0.499689, 0.753131], "group": "center", "profile": "center", "strengthTier": "central-sand", "formationRotationDeg": 270, "mirrorOf": "camp-center-north", "spawnRadiusNormalized": 0.032, "patrolMode": "shuttle", "patrolSpanNormalized": 0.06, "returnRadiusNormalized": 0.045, "patrolIntervalSec": 2.5, "patrolStartImmediately": true, "showPatrolPreview": true },
+    { "campId": "camp-defender-upper-sand", "sourceCenter": [1222, 411], "position": [0.733665, 0.31127], "group": "defender-upper", "profile": "fortified-guard", "strengthTier": "remote", "formationRotationDeg": 135, "mirrorOf": "camp-attacker-lower-sand", "spawnRadiusNormalized": 0.032 },
+    { "campId": "camp-defender-north-inner", "sourceCenter": [1137, 212], "position": [0.680772, 0.133274], "group": "defender-north", "profile": "mixed-hunt", "strengthTier": "remote", "formationRotationDeg": 180, "mirrorOf": "camp-attacker-south-inner", "spawnRadiusNormalized": 0.028 },
+    { "campId": "camp-defender-north-outer", "sourceCenter": [1490, 219], "position": [0.900436, 0.139535], "group": "defender-north", "profile": "ranged-escort", "strengthTier": "near-highland", "formationRotationDeg": 225, "mirrorOf": "camp-attacker-south-outer", "spawnRadiusNormalized": 0.032 },
+    { "campId": "camp-defender-mid", "sourceCenter": [1476, 522], "position": [0.891724, 0.410555], "group": "defender-mid", "profile": "elite-triad", "strengthTier": "near-highland", "formationRotationDeg": 135, "mirrorOf": "camp-attacker-lower-mid", "spawnRadiusNormalized": 0.032 },
+    { "campId": "camp-attacker-lower-mid", "sourceCenter": [219, 730], "position": [0.109521, 0.596601], "group": "attacker-lower", "profile": "elite-triad", "strengthTier": "near-highland", "formationRotationDeg": 315, "mirrorOf": "camp-defender-mid", "spawnRadiusNormalized": 0.032 },
+    { "campId": "camp-attacker-lower-sand", "sourceCenter": [430, 842], "position": [0.240821, 0.69678], "group": "attacker-lower", "profile": "fortified-guard", "strengthTier": "remote", "formationRotationDeg": 315, "mirrorOf": "camp-defender-upper-sand", "spawnRadiusNormalized": 0.05 },
+    { "campId": "camp-attacker-south-outer", "sourceCenter": [204, 1025], "position": [0.100187, 0.860465], "group": "attacker-south", "profile": "ranged-escort", "strengthTier": "near-highland", "formationRotationDeg": 45, "mirrorOf": "camp-defender-north-outer", "spawnRadiusNormalized": 0.032 },
+    { "campId": "camp-attacker-south-inner", "sourceCenter": [547, 1030], "position": [0.313628, 0.864937], "group": "attacker-south", "profile": "mixed-hunt", "strengthTier": "remote", "formationRotationDeg": 0, "mirrorOf": "camp-defender-north-inner", "spawnRadiusNormalized": 0.028 },
+    { "campId": "camp-defender-lower-mid", "sourceCenter": [1476, 731], "position": [0.891724, 0.597496], "group": "defender-lower", "profile": "river-vanguard", "strengthTier": "near-highland", "formationRotationDeg": 135, "mirrorOf": "camp-attacker-mid", "spawnRadiusNormalized": 0.032 },
+    { "campId": "camp-defender-lower-sand", "sourceCenter": [1263, 842], "position": [0.759179, 0.69678], "group": "defender-lower", "profile": "sand-skirmish", "strengthTier": "remote", "formationRotationDeg": 270, "mirrorOf": "camp-attacker-upper-sand", "spawnRadiusNormalized": 0.05 },
+    { "campId": "camp-defender-south-outer", "sourceCenter": [1490, 1034], "position": [0.900436, 0.868515], "group": "defender-south", "profile": "melee-patrol", "strengthTier": "near-highland", "formationRotationDeg": 225, "mirrorOf": "camp-attacker-north-outer", "spawnRadiusNormalized": 0.032 },
+    { "campId": "camp-defender-south-inner", "sourceCenter": [1142, 1031], "position": [0.683883, 0.865832], "group": "defender-south", "profile": "ranged-nest", "strengthTier": "remote", "formationRotationDeg": 180, "mirrorOf": "camp-attacker-north-inner", "spawnRadiusNormalized": 0.028 }
   ]
 }

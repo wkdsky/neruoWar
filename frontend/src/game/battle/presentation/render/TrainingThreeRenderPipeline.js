@@ -959,6 +959,55 @@ export const resolveTrainingWorldFlagStackLevels = (anchors = [], project = () =
   resolveTrainingWorldFlagStackLayout(anchors, project, options).levels
 );
 
+export const resolveTrainingNeutralPreviewAnchors = (preview = null) => {
+  const aggregates = new Map();
+  (Array.isArray(preview?.agents) ? preview.agents : []).forEach((agent) => {
+    if (!agent || agent.dead || finiteOr(agent?.weight) <= 0.001) return;
+    const squadId = String(agent?.squadId || '');
+    if (!squadId) return;
+    const aggregate = aggregates.get(squadId) || {
+      x: 0,
+      y: 0,
+      count: 0,
+      flagBearer: null
+    };
+    const x = finiteOr(agent?.x);
+    const y = finiteOr(agent?.y);
+    aggregate.x += x;
+    aggregate.y += y;
+    aggregate.count += 1;
+    if (agent?.isFlagBearer === true) aggregate.flagBearer = { x, y };
+    aggregates.set(squadId, aggregate);
+  });
+
+  return new Map(
+    (Array.isArray(preview?.squads) ? preview.squads : [])
+      .filter((squad) => squad?.id && finiteOr(squad?.remain) > 0)
+      .map((squad) => {
+        const id = String(squad.id);
+        const aggregate = aggregates.get(id);
+        const fallbackX = finiteOr(squad?.x);
+        const fallbackY = finiteOr(squad?.y);
+        const x = aggregate?.flagBearer?.x ?? (aggregate?.count > 0
+          ? aggregate.x / aggregate.count
+          : fallbackX);
+        const y = aggregate?.flagBearer?.y ?? (aggregate?.count > 0
+          ? aggregate.y / aggregate.count
+          : fallbackY);
+        return [id, {
+          id,
+          squadId: id,
+          team: TEAM_NEUTRAL,
+          x,
+          y,
+          centerX: x,
+          centerY: y,
+          count: aggregate?.count || 0
+        }];
+      })
+  );
+};
+
 export const resolveTrainingDirectionArcAnchors = (runtime = null, renderedSquadAnchors = null) => {
   const phase = runtime?.getPhase?.() || runtime?.phase || 'deploy';
   const resolveSkillPoints = (source = null) => {
@@ -1021,6 +1070,31 @@ export const resolveTrainingDirectionArcAnchors = (runtime = null, renderedSquad
   };
   appendTeam(runtime?.attackerDeployGroups, TEAM_ATTACKER);
   appendTeam(runtime?.defenderDeployGroups, TEAM_DEFENDER);
+  const neutralPreview = runtime?.getTrainingNeutralPreview?.();
+  const neutralPreviewAnchors = resolveTrainingNeutralPreviewAnchors(neutralPreview);
+  (Array.isArray(neutralPreview?.squads) ? neutralPreview.squads : [])
+    .filter((squad) => squad && finiteOr(squad?.remain) > 0)
+    .forEach((squad) => {
+      const renderedAnchor = neutralPreviewAnchors.get(String(squad?.id || '')) || null;
+      const source = renderedAnchor
+        ? {
+            ...squad,
+            x: renderedAnchor.x,
+            y: renderedAnchor.y,
+            centerX: renderedAnchor.centerX,
+            centerY: renderedAnchor.centerY
+          }
+        : squad;
+      anchors.push(buildDirectionArcAnchor(
+        source,
+        TEAM_NEUTRAL,
+        0,
+        hoveredDirectionArcId,
+        true,
+        selectedDeployGroupId,
+        hoveredFlagId
+      ));
+    });
   return anchors;
 };
 
@@ -1317,8 +1391,8 @@ const resolveTrainingHighlandRamps = (region = {}, points = []) => {
       vertexIndex: Math.max(0, Math.floor(finiteOr(ramp?.vertexIndex, index))),
       points: normalizeTrainingPolygonPoints(ramp?.points)
     }))
-    .filter((ramp) => ramp.points.length === 3);
-  if (explicitRamps.length >= points.length) return explicitRamps;
+    .filter((ramp) => ramp.points.length === 3 || ramp.points.length === 4);
+  if (explicitRamps.length > 0) return explicitRamps;
   const inset = clamp(finiteOr(region?.rampInset, 0.22), 0.08, 0.36);
   return points.map((point, index) => {
     const next = points[(index + 1) % points.length] || point;
@@ -1352,26 +1426,56 @@ const resolveTrainingHighlandTopPolygon = (points = [], ramps = []) => {
     : points;
 };
 
+const resolveTrainingHighlandTopPolygons = (region = {}, points = [], ramps = []) => {
+  const configuredPolygons = (Array.isArray(region?.topPolygons) ? region.topPolygons : [])
+    .map((polygon) => normalizeTrainingPolygonPoints(polygon))
+    .filter((polygon) => polygon.length >= 3);
+  if (configuredPolygons.length > 0) return configuredPolygons;
+  return [resolveTrainingHighlandTopPolygon(points, ramps)];
+};
+
 const createTrainingHighlandRampMesh = (ramp = {}, elevation = 0, color = 0x2b4330) => {
   const points = normalizeTrainingPolygonPoints(ramp?.points);
-  if (points.length !== 3 || elevation <= 0) return null;
-  const [groundPoint, topRight, topLeft] = points;
+  if ((points.length !== 3 && points.length !== 4) || elevation <= 0) return null;
   const geometry = new THREE.BufferGeometry();
-  geometry.setAttribute('position', new THREE.Float32BufferAttribute([
-    groundPoint.x, groundPoint.y, 0,
-    topRight.x, topRight.y, 0,
-    topLeft.x, topLeft.y, 0,
-    topRight.x, topRight.y, elevation,
-    topLeft.x, topLeft.y, elevation
-  ], 3));
-  geometry.setIndex([
-    0, 3, 4,
-    0, 2, 1,
-    0, 1, 3,
-    0, 4, 2,
-    1, 2, 4,
-    1, 4, 3
-  ]);
+  if (points.length === 4) {
+    const [outerStart, highlandStart, highlandEnd, outerEnd] = points;
+    geometry.setAttribute('position', new THREE.Float32BufferAttribute([
+      outerStart.x, outerStart.y, 0,
+      highlandStart.x, highlandStart.y, 0,
+      highlandEnd.x, highlandEnd.y, 0,
+      outerEnd.x, outerEnd.y, 0,
+      highlandStart.x, highlandStart.y, elevation,
+      highlandEnd.x, highlandEnd.y, elevation
+    ], 3));
+    geometry.setIndex([
+      0, 4, 5,
+      0, 5, 3,
+      0, 3, 2,
+      0, 2, 1,
+      0, 1, 4,
+      3, 5, 2,
+      1, 2, 5,
+      1, 5, 4
+    ]);
+  } else {
+    const [groundPoint, topRight, topLeft] = points;
+    geometry.setAttribute('position', new THREE.Float32BufferAttribute([
+      groundPoint.x, groundPoint.y, 0,
+      topRight.x, topRight.y, 0,
+      topLeft.x, topLeft.y, 0,
+      topRight.x, topRight.y, elevation,
+      topLeft.x, topLeft.y, elevation
+    ], 3));
+    geometry.setIndex([
+      0, 3, 4,
+      0, 2, 1,
+      0, 1, 3,
+      0, 4, 2,
+      1, 2, 4,
+      1, 4, 3
+    ]);
+  }
   geometry.computeVertexNormals();
   const mesh = new THREE.Mesh(
     geometry,
@@ -1423,41 +1527,93 @@ const createTrainingHighlandRailSegment = (start = {}, end = {}, elevation = 0, 
   return group;
 };
 
+const createTrainingHighlandRailPath = (points = [], elevation = 0, index = 0) => {
+  const railPoints = normalizeTrainingPolygonPoints(points);
+  if (railPoints.length < 2 || elevation <= 0) return null;
+  const curve = new THREE.CatmullRomCurve3(
+    railPoints.map((point) => new THREE.Vector3(point.x, point.y, 0)),
+    false,
+    'centripetal'
+  );
+  const railThickness = clamp(elevation * 0.08, 1.4, 5.5);
+  const railHeight = Math.max(6, elevation * 0.3);
+  const curveSegments = Math.max(24, (railPoints.length - 1) * 3);
+  const length = Math.max(1, curve.getLength());
+  const group = new THREE.Group();
+  group.name = `training-highland-rail-${index + 1}`;
+  [railHeight * 0.52, railHeight].forEach((height, railIndex) => {
+    const rail = new THREE.Mesh(
+      new THREE.TubeGeometry(curve, curveSegments, railThickness * 0.5, 6, false),
+      new THREE.MeshStandardMaterial({ color: 0x2d343e, roughness: 0.45, metalness: 0.62 })
+    );
+    rail.name = `${group.name}-bar-${railIndex + 1}`;
+    rail.position.z = elevation + height;
+    group.add(rail);
+  });
+  const postCount = Math.max(2, Math.ceil(length / Math.max(20, elevation * 0.7)) + 1);
+  for (let postIndex = 0; postIndex < postCount; postIndex += 1) {
+    const progress = postCount <= 1 ? 0.5 : postIndex / (postCount - 1);
+    const position = curve.getPointAt(progress);
+    const post = new THREE.Mesh(
+      new THREE.BoxGeometry(railThickness, railThickness, railHeight),
+      new THREE.MeshStandardMaterial({ color: 0x1f2937, roughness: 0.48, metalness: 0.58 })
+    );
+    post.name = `${group.name}-post-${postIndex + 1}`;
+    post.position.set(position.x, position.y, elevation + (railHeight * 0.5));
+    group.add(post);
+  }
+  return group;
+};
+
 export const createTrainingHighlandMesh = (region = {}, color = 0x2b4330) => {
   const points = normalizeTrainingPolygonPoints(region?.points);
   const elevation = Math.max(0, finiteOr(region?.elevation));
   if (points.length < 3 || elevation <= 0) return null;
   const ramps = resolveTrainingHighlandRamps(region, points);
-  const topPoints = resolveTrainingHighlandTopPolygon(points, ramps);
-  const shape = new THREE.Shape();
-  shape.moveTo(topPoints[0].x, topPoints[0].y);
-  topPoints.slice(1).forEach((point) => shape.lineTo(point.x, point.y));
-  shape.closePath();
-  const geometry = new THREE.ShapeGeometry(shape);
+  const topPolygons = resolveTrainingHighlandTopPolygons(region, points, ramps);
+  const shapes = topPolygons.map((topPoints) => {
+    const shape = new THREE.Shape();
+    shape.moveTo(topPoints[0].x, topPoints[0].y);
+    topPoints.slice(1).forEach((point) => shape.lineTo(point.x, point.y));
+    shape.closePath();
+    return shape;
+  });
+  const geometry = new THREE.ShapeGeometry(shapes);
   geometry.translate(0, 0, elevation);
   geometry.computeVertexNormals();
   const mesh = new THREE.Mesh(geometry, createBandMaterial(color, 0.74));
   mesh.name = `training-highland-${region?.id || 'region'}`;
   mesh.position.z = finiteOr(region?.z);
   mesh.userData.ramps = ramps;
+  mesh.userData.topPolygons = topPolygons;
   ramps.forEach((ramp) => {
     const rampMesh = createTrainingHighlandRampMesh(ramp, elevation, color);
     if (rampMesh) mesh.add(rampMesh);
   });
-  const railingEdges = Array.isArray(region?.railingEdges) ? region.railingEdges : [0, 1];
-  const inset = clamp(finiteOr(region?.rampInset, 0.22), 0.08, 0.36);
-  railingEdges.forEach((rawEdge, index) => {
-    const edgeIndex = Math.max(0, Math.floor(finiteOr(rawEdge))) % points.length;
-    const start = points[edgeIndex];
-    const end = points[(edgeIndex + 1) % points.length];
-    const rail = createTrainingHighlandRailSegment(
-      interpolateTrainingPolygonPoint(start, end, inset),
-      interpolateTrainingPolygonPoint(start, end, 1 - inset),
-      elevation,
-      index
-    );
-    if (rail) mesh.add(rail);
-  });
+  const railingPaths = (Array.isArray(region?.railingPaths) ? region.railingPaths : [])
+    .map((path) => normalizeTrainingPolygonPoints(path))
+    .filter((path) => path.length >= 2);
+  if (railingPaths.length > 0) {
+    railingPaths.forEach((path, index) => {
+      const rail = createTrainingHighlandRailPath(path, elevation, index);
+      if (rail) mesh.add(rail);
+    });
+  } else {
+    const railingEdges = Array.isArray(region?.railingEdges) ? region.railingEdges : [0, 1];
+    const inset = clamp(finiteOr(region?.rampInset, 0.22), 0.08, 0.36);
+    railingEdges.forEach((rawEdge, index) => {
+      const edgeIndex = Math.max(0, Math.floor(finiteOr(rawEdge))) % points.length;
+      const start = points[edgeIndex];
+      const end = points[(edgeIndex + 1) % points.length];
+      const rail = createTrainingHighlandRailSegment(
+        interpolateTrainingPolygonPoint(start, end, inset),
+        interpolateTrainingPolygonPoint(start, end, 1 - inset),
+        elevation,
+        index
+      );
+      if (rail) mesh.add(rail);
+    });
+  }
   return mesh;
 };
 
@@ -1534,6 +1690,24 @@ const normalizeTrainingWallPath = (points = []) => {
     normalizedPoints.push(nextPoint);
   });
   return normalizedPoints;
+};
+
+const normalizeTrainingWallBezierOutline = (definition = null) => {
+  if (!definition || !definition?.start || !Array.isArray(definition?.segments)) return null;
+  const normalizePoint = (point = {}) => ({
+    x: finiteOr(point?.x),
+    y: finiteOr(point?.y)
+  });
+  const segments = definition.segments
+    .filter((segment) => segment?.controlPoint1 && segment?.controlPoint2 && segment?.end)
+    .map((segment) => ({
+      controlPoint1: normalizePoint(segment.controlPoint1),
+      controlPoint2: normalizePoint(segment.controlPoint2),
+      end: normalizePoint(segment.end)
+    }));
+  return segments.length > 0
+    ? { start: normalizePoint(definition.start), segments }
+    : null;
 };
 
 const normalizeTrainingWallVector = (x = 0, y = 0) => {
@@ -1620,23 +1794,38 @@ const resolveTrainingWallOutline = (wall = {}, thickness = 24) => {
 
 const createTrainingWallExtrusion = ({
   outline = [],
+  bezierOutline = null,
   height = 0,
   bevelSize = 0,
   material = null,
   name = ''
 } = {}) => {
-  if (outline.length < 3 || height <= 0 || !material) return null;
+  if ((outline.length < 3 && !bezierOutline) || height <= 0 || !material) return null;
   const shape = new THREE.Shape();
-  shape.moveTo(outline[0].x, outline[0].y);
-  outline.slice(1).forEach((point) => shape.lineTo(point.x, point.y));
+  if (bezierOutline) {
+    shape.moveTo(bezierOutline.start.x, bezierOutline.start.y);
+    bezierOutline.segments.forEach((segment) => {
+      shape.bezierCurveTo(
+        segment.controlPoint1.x,
+        segment.controlPoint1.y,
+        segment.controlPoint2.x,
+        segment.controlPoint2.y,
+        segment.end.x,
+        segment.end.y
+      );
+    });
+  } else {
+    shape.moveTo(outline[0].x, outline[0].y);
+    outline.slice(1).forEach((point) => shape.lineTo(point.x, point.y));
+  }
   shape.closePath();
   const geometry = new THREE.ExtrudeGeometry(shape, {
     depth: height,
     bevelEnabled: bevelSize > 0,
-    bevelSegments: 1,
+    bevelSegments: bezierOutline ? 2 : 1,
     bevelSize,
     bevelThickness: Math.min(bevelSize, height * 0.08),
-    curveSegments: 1
+    curveSegments: bezierOutline ? 8 : 1
   });
   geometry.computeVertexNormals();
   const mesh = new THREE.Mesh(geometry, material);
@@ -1732,12 +1921,14 @@ const createTrainingWallMesh = (wall = {}, { namePrefix = 'training-ordinary-wal
   const thickWall = wallType === 'thickWall';
   if (!thickWall) return createTrainingThinBarrierMesh(wall, { namePrefix });
   const thickness = resolveTrainingWallVisualThickness(wall);
-  const outline = resolveTrainingWallOutline(wall, thickness);
-  if (outline.length < 3) return null;
+  const bezierOutline = normalizeTrainingWallBezierOutline(wall?.bezierOutline);
+  const outline = bezierOutline ? [] : resolveTrainingWallOutline(wall, thickness);
+  if (outline.length < 3 && !bezierOutline) return null;
   const height = Math.max(8, finiteOr(wall?.height, 34));
   const bevelSize = Math.min(6, Math.max(1.4, thickness * 0.1));
   const mesh = createTrainingWallExtrusion({
     outline,
+    bezierOutline,
     height,
     bevelSize,
     material: new THREE.MeshStandardMaterial({
@@ -1768,7 +1959,7 @@ export const createTrainingHighWallMesh = (wall = {}) => createTrainingWallMesh(
 });
 
 const isTrainingMapStaticPlaceholderCategory = (category = '') => (
-  category === 'tower' || category === 'neutralCamp'
+  category === 'tower' || category === 'barracks'
 );
 
 export const isTrainingMapStaticPlaceholder = (object = {}) => (
@@ -1808,103 +1999,107 @@ const resolveTrainingPlaceholderDimensions = (object = {}) => ({
   height: Math.max(12, finiteOr(object?.height, 64))
 });
 
-const createTrainingNeutralCampSentry = ({
-  name = 'training-neutral-sentry',
-  category = 'melee',
-  x = 0,
-  y = 0,
-  z = 0,
-  scale = 1
-} = {}) => {
-  const sentry = new THREE.Group();
-  sentry.name = name;
-  sentry.userData.isNeutralCampSentry = true;
-  sentry.position.set(x, y, z);
-  const body = new THREE.Mesh(
-    new THREE.SphereGeometry(0.78, 10, 8),
-    createTrainingPlaceholderMaterial(0xf4c542, {
-      roughness: 0.5,
-      metalness: 0.12,
-      emissive: 0xf4c542,
-      emissiveIntensity: 0.06
-    })
-  );
-  body.name = `${name}-body`;
-  body.scale.set(scale * 0.9, scale * 0.82, scale);
-  body.position.z = scale * 0.7;
-  const head = new THREE.Mesh(
-    new THREE.SphereGeometry(0.42, 10, 8),
-    createTrainingPlaceholderMaterial(0xffe6a3, { roughness: 0.58, metalness: 0.04 })
-  );
-  head.name = `${name}-head`;
-  head.scale.setScalar(scale);
-  head.position.z = scale * 1.48;
-  sentry.add(body, head);
-
-  if (category === 'ranged') {
-    const bow = new THREE.Mesh(
-      new THREE.TorusGeometry(scale * 0.5, scale * 0.065, 5, 12, Math.PI * 1.5),
-      createTrainingPlaceholderMaterial(0x8b5a2b, { roughness: 0.68, metalness: 0.04 })
-    );
-    bow.name = `${name}-bow`;
-    bow.rotation.x = Math.PI * 0.5;
-    bow.position.set(scale * 0.62, 0, scale * 0.92);
-    sentry.add(bow);
-  } else if (category === 'support') {
-    const halo = new THREE.Mesh(
-      new THREE.TorusGeometry(scale * 0.54, scale * 0.07, 6, 14),
-      createTrainingPlaceholderMaterial(0xffd766, {
-        roughness: 0.3,
-        metalness: 0.38,
-        emissive: 0xffc542,
-        emissiveIntensity: 0.22
-      })
-    );
-    halo.name = `${name}-halo`;
-    halo.position.z = scale * 2.02;
-    sentry.add(halo);
-  } else {
-    const blade = new THREE.Mesh(
-      new THREE.BoxGeometry(scale * 1.12, scale * 0.12, scale * 0.14),
-      createTrainingPlaceholderMaterial(0xd9e1e8, { roughness: 0.28, metalness: 0.72 })
-    );
-    blade.name = `${name}-blade`;
-    blade.rotation.z = -Math.PI * 0.3;
-    blade.position.set(scale * 0.62, 0, scale * 0.88);
-    sentry.add(blade);
+const resolveTrainingPlaceholderColor = (value, fallback) => {
+  try {
+    return new THREE.Color(value || fallback).getHex();
+  } catch (error) {
+    return fallback;
   }
-
-  return sentry;
 };
 
-const createTrainingNeutralPatrolPreviewArrow = ({
-  name = 'training-neutral-patrol-preview',
-  directionRad = 0,
-  length = 24,
-  elevation = 1
+const createTrainingAttackRangeMarker = ({
+  name = 'training-attack-range',
+  radius = 0,
+  innerRadius = 0,
+  color = 0x7dd3fc,
+  visible = false,
+  fill = false,
+  presentation = 'solid'
 } = {}) => {
-  const direction = new THREE.Vector3(Math.cos(directionRad), Math.sin(directionRad), 0);
-  if (direction.lengthSq() <= 1e-6) return null;
-  const arrowLength = Math.max(8, finiteOr(length, 24));
-  const headLength = Math.min(Math.max(5, arrowLength * 0.24), arrowLength * 0.46);
-  const headWidth = Math.min(Math.max(3, arrowLength * 0.16), arrowLength * 0.32);
-  const arrow = new THREE.ArrowHelper(
-    direction.normalize(),
-    new THREE.Vector3(0, 0, Math.max(0.4, finiteOr(elevation, 1))),
-    arrowLength,
-    0x67e8f9,
-    headLength,
-    headWidth
+  const outerRadius = Math.max(0, finiteOr(radius));
+  const safeInnerRadius = clamp(finiteOr(innerRadius), 0, Math.max(0, outerRadius - 0.2));
+  if (outerRadius <= safeInnerRadius + 0.2) return null;
+  const usesProximityPresentation = presentation === 'proximity';
+  const marker = new THREE.Mesh(
+    new THREE.RingGeometry(safeInnerRadius, outerRadius, 64),
+    new THREE.MeshBasicMaterial({
+      color,
+      transparent: true,
+      opacity: 0.4,
+      side: THREE.DoubleSide,
+      depthWrite: false
+    })
   );
-  arrow.name = name;
-  arrow.userData.isNeutralPatrolPreview = true;
-  arrow.line.material.depthTest = false;
-  arrow.line.material.depthWrite = false;
-  arrow.line.renderOrder = 5;
-  arrow.cone.material.depthTest = false;
-  arrow.cone.material.depthWrite = false;
-  arrow.cone.renderOrder = 5;
-  return arrow;
+  marker.name = name;
+  marker.position.z = 0.12;
+  marker.visible = visible;
+  if ((!fill && !usesProximityPresentation) || safeInnerRadius <= 0.2) return marker;
+  const markerGroup = new THREE.Group();
+  markerGroup.name = `${name}-group`;
+  const fillMesh = new THREE.Mesh(
+    new THREE.CircleGeometry(safeInnerRadius, 64),
+    new THREE.MeshBasicMaterial({
+      color,
+      transparent: true,
+      opacity: 0.075,
+      side: THREE.DoubleSide,
+      depthWrite: false
+    })
+  );
+  fillMesh.name = `${name}-fill`;
+  fillMesh.position.z = 0.105;
+  fillMesh.visible = visible;
+  markerGroup.add(fillMesh, marker);
+  markerGroup.userData.attackRangeMarker = marker;
+  markerGroup.userData.attackRangeFill = fillMesh;
+  markerGroup.userData.attackRangePresentation = presentation;
+  if (usesProximityPresentation) {
+    const segmentCount = 96;
+    const outlinePoints = Array.from({ length: segmentCount + 1 }, (_, index) => {
+      const angle = (index / segmentCount) * Math.PI * 2;
+      return new THREE.Vector3(
+        Math.cos(angle) * outerRadius,
+        Math.sin(angle) * outerRadius,
+        0
+      );
+    });
+    const ghostOutline = new THREE.Line(
+      new THREE.BufferGeometry().setFromPoints(outlinePoints),
+      new THREE.LineDashedMaterial({
+        color,
+        transparent: true,
+        opacity: 0.36,
+        dashSize: Math.max(3, outerRadius * 0.038),
+        gapSize: Math.max(3, outerRadius * 0.026),
+        depthWrite: false,
+        toneMapped: false
+      })
+    );
+    ghostOutline.name = `${name}-ghost-outline`;
+    ghostOutline.position.z = 0.13;
+    ghostOutline.computeLineDistances();
+    markerGroup.add(ghostOutline);
+    markerGroup.userData.attackRangeGhostOutline = ghostOutline;
+    applyTrainingAttackRangeMarkerState(markerGroup, false);
+  }
+  return markerGroup;
+};
+
+export const applyTrainingAttackRangeMarkerState = (rangeContainer = null, active = false) => {
+  if (rangeContainer?.userData?.attackRangePresentation !== 'proximity') return false;
+  const marker = rangeContainer.userData.attackRangeMarker;
+  const fillMesh = rangeContainer.userData.attackRangeFill;
+  const ghostOutline = rangeContainer.userData.attackRangeGhostOutline;
+  if (!marker || !fillMesh || !ghostOutline) return false;
+  const isActive = active === true;
+  marker.visible = isActive;
+  marker.material.opacity = isActive ? 0.72 : 0;
+  fillMesh.visible = true;
+  fillMesh.material.opacity = isActive ? 0.11 : 0.024;
+  ghostOutline.visible = !isActive;
+  ghostOutline.material.opacity = isActive ? 0 : 0.36;
+  rangeContainer.userData.attackRangeActive = isActive;
+  return true;
 };
 
 export const createTrainingMapStaticPlaceholderMesh = (object = {}, terrainElevation = 0) => {
@@ -1924,11 +2119,24 @@ export const createTrainingMapStaticPlaceholderMesh = (object = {}, terrainEleva
   group.userData.neutralCampId = String(object?.neutralCampId || '');
   group.userData.maxHp = Math.max(1, finiteOr(object?.maxHp, finiteOr(object?.hp, 1)));
   group.userData.attackRange = Math.max(0, finiteOr(object?.attackRange));
+  group.userData.rangeIndicatorColor = String(object?.rangeIndicatorColor || '');
+  group.userData.rangeIndicatorMode = String(object?.rangeIndicatorMode || 'locked');
+  group.userData.defenseRole = String(object?.defenseRole || '');
+  group.rotation.z = finiteOr(object?.rotation) * (Math.PI / 180);
 
   if (category === 'tower') {
     const team = object?.team === TEAM_DEFENDER ? TEAM_DEFENDER : TEAM_ATTACKER;
-    const primaryColor = team === TEAM_DEFENDER ? 0x16dfe8 : 0xef2020;
-    const darkColor = team === TEAM_DEFENDER ? 0x0a4a58 : 0x6b151b;
+    const isHighlandOutpost = group.userData.defenseRole === 'highlandOutpost';
+    const primaryColor = isHighlandOutpost
+      ? 0xef76d7
+      : (team === TEAM_DEFENDER ? 0x16dfe8 : 0xef2020);
+    const darkColor = isHighlandOutpost
+      ? 0x6e255f
+      : (team === TEAM_DEFENDER ? 0x0a4a58 : 0x6b151b);
+    const rangeColor = resolveTrainingPlaceholderColor(
+      group.userData.rangeIndicatorColor,
+      isHighlandOutpost ? 0x53dff0 : primaryColor
+    );
     const radius = Math.max(7, Math.min(width, depth) * 0.5);
     const baseHeight = Math.max(7, height * 0.17);
     const bodyHeight = Math.max(12, height * 0.58);
@@ -1978,108 +2186,52 @@ export const createTrainingMapStaticPlaceholderMesh = (object = {}, terrainEleva
     const rangeWidth = Math.max(1.2, Math.min(5, attackRange * 0.014));
     const innerRadius = Math.max(radius * 1.12, attackRange - rangeWidth);
     if (attackRange > innerRadius + 0.5) {
-      const attackRangeMarker = new THREE.Mesh(
-        new THREE.RingGeometry(innerRadius, attackRange, 64),
-        new THREE.MeshBasicMaterial({
-          color: primaryColor,
-          transparent: true,
-          opacity: 0.28,
-          side: THREE.DoubleSide,
-          depthWrite: false
-        })
-      );
-      attackRangeMarker.name = `${group.name}-attack-range`;
-      attackRangeMarker.position.z = 0.12;
-      attackRangeMarker.visible = false;
-      group.add(attackRangeMarker);
+      const rangeIndicatorMode = group.userData.rangeIndicatorMode;
+      const usesProximityIndicator = rangeIndicatorMode === 'proximity';
+      const attackRangeMarker = createTrainingAttackRangeMarker({
+        name: `${group.name}-attack-range`,
+        radius: attackRange,
+        innerRadius,
+        color: rangeColor,
+        visible: rangeIndicatorMode === 'always' || usesProximityIndicator,
+        fill: rangeIndicatorMode === 'always' || usesProximityIndicator,
+        presentation: usesProximityIndicator ? 'proximity' : 'solid'
+      });
+      if (attackRangeMarker) group.add(attackRangeMarker);
     }
     return group;
   }
-
-  const radius = Math.max(8, Math.min(width, depth) * 0.5);
-  const poleHeight = Math.max(12, height * 0.66);
-  const flagHeight = Math.max(7, poleHeight * 0.32);
-  const campGold = 0xf4c542;
-  const campStone = 0x86704a;
-  const pole = createTrainingVerticalCylinder(
-    Math.max(0.7, radius * 0.025),
-    Math.max(0.9, radius * 0.035),
-    poleHeight,
-    createTrainingPlaceholderMaterial(0x3f3422, { roughness: 0.48, metalness: 0.32 }),
-    8
-  );
-  pole.name = `${group.name}-neutral-flag-pole`;
-  pole.position.z = poleHeight * 0.5;
-  const banner = new THREE.Mesh(
-    new THREE.BoxGeometry(radius * 0.92, Math.max(0.42, radius * 0.025), flagHeight),
-    createTrainingPlaceholderMaterial(campGold, {
-      roughness: 0.36,
-      metalness: 0.18,
-      emissive: campGold,
-      emissiveIntensity: 0.12
-    })
-  );
-  banner.name = `${group.name}-neutral-banner`;
-  banner.position.set(radius * 0.42, 0, poleHeight * 0.72);
-  const campfire = new THREE.Mesh(
-    new THREE.SphereGeometry(Math.max(1.6, radius * 0.09), 10, 8),
-    createTrainingPlaceholderMaterial(0xffbf4d, {
-      roughness: 0.3,
-      metalness: 0,
-      emissive: 0xff9d20,
-      emissiveIntensity: 0.3
-    })
-  );
-  campfire.name = `${group.name}-campfire`;
-  campfire.position.z = Math.max(1.3, radius * 0.08);
-  const stones = Array.from({ length: 3 }, (_, index) => {
-    const angle = (Math.PI * 2 * index) / 3;
-    const stone = new THREE.Mesh(
-      new THREE.DodecahedronGeometry(Math.max(1.8, radius * 0.13), 0),
-      createTrainingPlaceholderMaterial(campStone, { roughness: 0.92, metalness: 0.02 })
+  if (category === 'barracks') {
+    const team = object?.team === TEAM_DEFENDER ? TEAM_DEFENDER : TEAM_ATTACKER;
+    const teamColor = team === TEAM_DEFENDER ? 0x16dfe8 : 0xef2020;
+    const rangeColor = resolveTrainingPlaceholderColor(group.userData.rangeIndicatorColor, 0xef4b55);
+    const body = new THREE.Mesh(
+      new THREE.BoxGeometry(width, depth, height),
+      createTrainingPlaceholderMaterial(0x426d95, {
+        roughness: 0.62,
+        metalness: 0.16,
+        emissive: teamColor,
+        emissiveIntensity: 0.08
+      })
     );
-    stone.name = `${group.name}-camp-stone-${index + 1}`;
-    stone.position.set(
-      Math.cos(angle) * radius * 0.58,
-      Math.sin(angle) * radius * 0.58,
-      Math.max(1.2, radius * 0.08)
-    );
-    return stone;
-  });
-  const neutralCategories = Array.from(new Set(
-    (Array.isArray(object?.neutralComposition) ? object.neutralComposition : [
-      { unitCategory: 'melee' },
-      { unitCategory: 'ranged' }
-    ])
-      .map((entry) => String(entry?.unitCategory || '').trim().toLowerCase())
-      .filter((category) => category === 'melee' || category === 'ranged' || category === 'support')
-  )).slice(0, 3);
-  const sentryScale = clamp(radius * 0.045, 1.3, 2.4);
-  const neutralFormationFacingRad = finiteOr(object?.neutralFormationFacingRad);
-  const sentries = neutralCategories.map((category, index) => {
-    const angle = neutralFormationFacingRad
-      + (Math.PI * 2 * index) / Math.max(1, neutralCategories.length)
-      + (Math.PI / 5);
-    return createTrainingNeutralCampSentry({
-      name: `${group.name}-neutral-sentry-${category}`,
-      category,
-      x: Math.cos(angle) * radius * 0.48,
-      y: Math.sin(angle) * radius * 0.48,
-      z: 0,
-      scale: sentryScale
+    body.name = `${group.name}-body`;
+    body.position.z = height * 0.5;
+    group.add(body);
+    const attackRange = group.userData.attackRange;
+    const rangeWidth = Math.max(1.5, Math.min(6, attackRange * 0.014));
+    const innerRadius = Math.max(Math.max(width, depth) * 0.58, attackRange - rangeWidth);
+    const attackRangeMarker = createTrainingAttackRangeMarker({
+      name: `${group.name}-attack-range`,
+      radius: attackRange,
+      innerRadius,
+      color: rangeColor,
+      visible: group.userData.rangeIndicatorMode === 'always',
+      fill: true
     });
-  });
-  const patrolPreview = object?.neutralPatrolPreview === true
-    ? createTrainingNeutralPatrolPreviewArrow({
-      name: `${group.name}-neutral-patrol-preview`,
-      directionRad: finiteOr(object?.neutralPatrolDirectionRad, neutralFormationFacingRad),
-      length: finiteOr(object?.neutralPatrolPreviewLength, radius * 1.2),
-      elevation: Math.max(1.2, radius * 0.12)
-    })
-    : null;
-  group.add(pole, banner, campfire, ...stones, ...sentries);
-  if (patrolPreview) group.add(patrolPreview);
-  return group;
+    if (attackRangeMarker) group.add(attackRangeMarker);
+    return group;
+  }
+  return null;
 };
 
 export const applyTrainingMapStaticPlaceholderState = (placeholder = null, building = null) => {
@@ -2695,27 +2847,28 @@ export default class TrainingThreeRenderPipeline {
         .filter((objective) => objective?.sourceObjectId)
         .map((objective) => [String(objective.sourceObjectId), objective])
     );
-    const activeNeutralCampIds = new Set(
-      (Array.isArray(runtime?.sim?.squads) ? runtime.sim.squads : [])
-        .filter((squad) => squad?.team === TEAM_NEUTRAL && (Number(squad?.remain) || 0) > 0)
-        .map((squad) => String(squad?.neutralCampId || ''))
-        .filter(Boolean)
-    );
-    const phase = runtime?.getPhase?.() || runtime?.phase || 'deploy';
-    const showNeutralPatrolPreview = phase === 'deploy';
     placeholderGroup.children.forEach((placeholder) => {
       const objectId = String(placeholder?.userData?.mapObjectId || '');
       const visible = applyTrainingMapStaticPlaceholderState(placeholder, buildingsById.get(objectId) || null);
-      const hasLiveNeutralCamp = activeNeutralCampIds.has(String(placeholder?.userData?.neutralCampId || ''));
-      const isNeutralCampPlaceholder = placeholder?.userData?.category === 'neutralCamp';
-      placeholder.visible = visible && !(isNeutralCampPlaceholder && phase !== 'deploy');
-      placeholder.children.forEach((child) => {
-        if (child?.userData?.isNeutralCampSentry === true) child.visible = !hasLiveNeutralCamp;
-        if (child?.userData?.isNeutralPatrolPreview === true) child.visible = placeholder.visible && showNeutralPatrolPreview;
-      });
+      placeholder.visible = visible;
       const attackRangeMarker = placeholder.getObjectByName(`${placeholder.name}-attack-range`);
       if (attackRangeMarker) {
-        attackRangeMarker.visible = placeholder.visible && !!objectivesBySourceId.get(objectId)?.lockedSquadId;
+        const rangeContainer = attackRangeMarker?.parent?.userData?.attackRangeMarker === attackRangeMarker
+          ? attackRangeMarker.parent
+          : attackRangeMarker;
+        const rangeMode = String(placeholder?.userData?.rangeIndicatorMode || 'locked');
+        const objective = objectivesBySourceId.get(objectId);
+        if (rangeMode === 'proximity') {
+          rangeContainer.visible = placeholder.visible;
+          applyTrainingAttackRangeMarkerState(
+            rangeContainer,
+            !!objective?.lockedSquadId || !!objective?.currentTargetId
+          );
+        } else {
+          rangeContainer.visible = placeholder.visible && (
+            rangeMode === 'always' || !!objective?.lockedSquadId
+          );
+        }
       }
     });
   }
@@ -2840,7 +2993,7 @@ export default class TrainingThreeRenderPipeline {
         grass: 0x294533,
         'highland-attacker': 0x58272d,
         'highland-defender': 0x194a52,
-        sand: 0xe9d549,
+        sand: 0x6b432a,
         river: 0xb69056,
         road: 0x655943
       };
@@ -2963,6 +3116,48 @@ export default class TrainingThreeRenderPipeline {
           }
         }
       });
+      (Array.isArray(mapConfig?.respawnPoints) ? mapConfig.respawnPoints : []).forEach((point) => {
+        const radius = Math.max(8, finiteOr(point?.radius, 36));
+        const elevation = resolveTerrainElevation(point);
+        const team = point?.team === TEAM_DEFENDER ? TEAM_DEFENDER : TEAM_ATTACKER;
+        const color = team === TEAM_DEFENDER ? 0x9eea94 : 0xb9f58e;
+        const marker = new THREE.Group();
+        marker.name = `training-respawn-point-${String(point?.id || 'point')}`;
+        const fill = new THREE.Mesh(
+          new THREE.CircleGeometry(radius * 0.92, 48),
+          new THREE.MeshBasicMaterial({
+            color,
+            transparent: true,
+            opacity: 0.095,
+            side: THREE.DoubleSide,
+            depthWrite: false
+          })
+        );
+        fill.name = `${marker.name}-fill`;
+        fill.position.z = 0.16;
+        const ring = new THREE.Mesh(
+          new THREE.RingGeometry(radius * 0.84, radius, 48),
+          new THREE.MeshBasicMaterial({
+            color,
+            transparent: true,
+            opacity: 0.88,
+            side: THREE.DoubleSide,
+            depthWrite: false
+          })
+        );
+        ring.name = `${marker.name}-ring`;
+        ring.position.z = 0.18;
+        marker.position.set(finiteOr(point?.x), finiteOr(point?.y), elevation);
+        marker.add(fill, ring);
+        this.groundGroup.add(marker);
+        if (debugEnabled) {
+          const label = createGroundLabelSprite(String(point?.label || '重生点'), '#d9f99d', 0.38);
+          if (label) {
+            label.position.set(finiteOr(point?.x), finiteOr(point?.y) + radius + 18, elevation + 0.22);
+            this.groundGroup.add(label);
+          }
+        }
+      });
       const mapStaticPlaceholderGroup = new THREE.Group();
       mapStaticPlaceholderGroup.name = 'training-map-static-placeholders';
       mapStaticPlaceholderGroup.renderOrder = 2;
@@ -3038,8 +3233,15 @@ export default class TrainingThreeRenderPipeline {
             0.3,
             finiteOr(sourceTerrain?.z) + Math.max(0, finiteOr(sourceTerrain?.elevation)) + 0.3
           );
-          const points = (Array.isArray(region?.normalizedPolygon) ? region.normalizedPolygon : [])
-            .map((point) => ({ ...normalizedToWorld(point), z: debugElevation }));
+          const terrainPoints = Array.isArray(sourceTerrain?.points) ? sourceTerrain.points : [];
+          const points = terrainPoints.length >= 3
+            ? terrainPoints.map((point) => ({
+              x: finiteOr(point?.x),
+              y: finiteOr(point?.y),
+              z: debugElevation
+            }))
+            : (Array.isArray(region?.normalizedPolygon) ? region.normalizedPolygon : [])
+              .map((point) => ({ ...normalizedToWorld(point), z: debugElevation }));
           addDebugLine(points, region?.team === TEAM_DEFENDER ? 0x16dfe8 : 0xef2020, `debug-spawn-${region?.id || 'region'}`, true);
           const centroid = points.reduce((sum, point) => ({ x: sum.x + point.x, y: sum.y + point.y }), { x: 0, y: 0 });
           const label = createGroundLabelSprite(String(region?.id || 'spawn'), '#ffffff', 0.42);

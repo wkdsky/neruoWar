@@ -1,5 +1,7 @@
 import {
+  getTrainingMapRespawnPoints,
   normalizeTrainingMapConfig,
+  resolveTrainingMapRespawnPoint,
   resolveTrainingMapLane,
   resolveTrainingMapTerrainElevation,
   sampleTrainingMapTerrain
@@ -34,6 +36,30 @@ describe('training map contract normalization', () => {
         referenceImage: { url: '/training-war-map-v1-reference.png' }
       }
     });
+  });
+
+  test('filters and resolves highland respawn points with the active preset', () => {
+    const mapConfig = normalizeTrainingMapConfig({
+      map: {
+        mapId: 'training-war-map-v1',
+        mapVersion: 13,
+        defaultPresetId: 'full-jungle',
+        activePresetId: 'full-jungle',
+        presets: [{ id: 'full-jungle', label: '完整野区对抗', enabledTags: ['highlandDefense'] }],
+        respawnPoints: [
+          { id: 'respawn-attacker-top', team: 'attacker', spawnRegionId: 'spawn-attacker-top', x: -320, y: 120, radius: 42, presetTags: ['highlandDefense'] },
+          { id: 'respawn-defender-top', team: 'defender', spawnRegionId: 'spawn-defender-top', x: 320, y: 120, radius: 42, presetTags: ['highlandDefense'] }
+        ]
+      }
+    });
+
+    expect(getTrainingMapRespawnPoints(mapConfig, 'attacker')).toEqual([
+      expect.objectContaining({ id: 'respawn-attacker-top', x: -320, y: 120 })
+    ]);
+    expect(resolveTrainingMapRespawnPoint(mapConfig, {
+      team: 'defender',
+      spawnRegionId: 'spawn-defender-top'
+    })).toMatchObject({ id: 'respawn-defender-top' });
   });
 });
 
@@ -72,6 +98,37 @@ describe('training map terrain elevation', () => {
 
     expect(resolveTrainingMapTerrainElevation(mapConfig, { x: 12.5, y: 12.5 })).toBeCloseTo(14.08);
     expect(resolveTrainingMapTerrainElevation(mapConfig, { x: 70, y: 10 })).toBeCloseTo(28.08);
+  });
+
+  test('interpolates a flared four-point ramp from ground level to the highland plateau', () => {
+    const mapConfig = {
+      terrainRegions: [{
+        id: 'highland-front-ramp',
+        type: 'highland-attacker',
+        shape: 'polygon',
+        z: 0.08,
+        elevation: 28,
+        points: [
+          { x: 0, y: -50 },
+          { x: 40, y: -25 },
+          { x: 40, y: 25 },
+          { x: 0, y: 50 }
+        ],
+        ramps: [{
+          id: 'front-outward-trapezoid-ramp',
+          points: [
+            { x: 0, y: -50 },
+            { x: 40, y: -25 },
+            { x: 40, y: 25 },
+            { x: 0, y: 50 }
+          ]
+        }]
+      }]
+    };
+
+    expect(resolveTrainingMapTerrainElevation(mapConfig, { x: 10, y: 0 })).toBeCloseTo(7.08);
+    expect(resolveTrainingMapTerrainElevation(mapConfig, { x: 20, y: 0 })).toBeCloseTo(14.08);
+    expect(resolveTrainingMapTerrainElevation(mapConfig, { x: 30, y: 0 })).toBeCloseTo(21.08);
   });
 });
 

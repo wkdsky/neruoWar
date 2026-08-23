@@ -37,6 +37,7 @@ import {
   resolveTrainingWallVisualThickness,
   isTrainingMapStaticPlaceholder,
   applyTrainingMapStaticPlaceholderState,
+  applyTrainingAttackRangeMarkerState,
   updateTrainingDirectionArcGeometry,
   TRAINING_WORLD_FLAG_MAX_PITCH_DEG,
   TRAINING_WORLD_FLAG_TARGET_SCREEN_HEIGHT,
@@ -65,7 +66,7 @@ describe('training terrain depth composition', () => {
   test('uses distinct soft-edge widths while retaining separate terrain cores', () => {
     const baseRegion = { shape: 'rect', x: 0, y: 0, width: 120, height: 80 };
     const grass = createTrainingTerrainEdgeMesh({ ...baseRegion, id: 'grass', type: 'grass' }, 0x294533);
-    const sand = createTrainingTerrainEdgeMesh({ ...baseRegion, id: 'sand', type: 'sand' }, 0xe9d549);
+    const sand = createTrainingTerrainEdgeMesh({ ...baseRegion, id: 'sand', type: 'sand' }, 0x6b432a);
     const road = createTrainingTerrainEdgeMesh({ ...baseRegion, id: 'road', type: 'road' }, 0x655943);
 
     expect(sand.geometry.parameters.width).toBeGreaterThan(grass.geometry.parameters.width);
@@ -164,8 +165,50 @@ describe('training map ordinary wall geometry', () => {
 
     expect(mesh.name).toBe('training-thick-wall-crescent-wall');
     expect(mesh.userData.wallType).toBe('thickWall');
+    expect(mesh.material.color.getHex()).toBe(0x46525c);
     mesh.geometry.computeBoundingBox();
     expect(mesh.geometry.boundingBox.max.z).toBeGreaterThan(51);
+    mesh.geometry.dispose();
+    mesh.material.dispose();
+  });
+
+  test('uses smooth bezier curves for reference crescent walls', () => {
+    const mesh = createTrainingOrdinaryWallMesh({
+      objectId: 'smooth-crescent-wall',
+      wallType: 'thickWall',
+      height: 52,
+      bezierOutline: {
+        start: { x: -80, y: 0 },
+        segments: [
+          {
+            controlPoint1: { x: -72, y: -54 },
+            controlPoint2: { x: -22, y: -78 },
+            end: { x: 28, y: -42 }
+          },
+          {
+            controlPoint1: { x: 42, y: -30 },
+            controlPoint2: { x: 54, y: -8 },
+            end: { x: 54, y: 0 }
+          },
+          {
+            controlPoint1: { x: 38, y: 12 },
+            controlPoint2: { x: 16, y: 24 },
+            end: { x: -8, y: 22 }
+          },
+          {
+            controlPoint1: { x: -30, y: 20 },
+            controlPoint2: { x: -48, y: 12 },
+            end: { x: -80, y: 0 }
+          }
+        ]
+      },
+      collider: { parts: [{ d: 40 }] }
+    });
+
+    expect(mesh).not.toBeNull();
+    mesh.geometry.computeBoundingBox();
+    expect(mesh.geometry.boundingBox.max.z).toBeGreaterThan(51);
+    expect(mesh.geometry.attributes.position.count).toBeGreaterThan(100);
     mesh.geometry.dispose();
     mesh.material.dispose();
   });
@@ -218,6 +261,144 @@ describe('training map highland geometry', () => {
     expect(mesh.getObjectByName('training-highland-ramp-ramp-3')).toBeTruthy();
     expect(mesh.getObjectByName('training-highland-rail-1')).toBeTruthy();
     expect(mesh.getObjectByName('training-highland-rail-2')).toBeTruthy();
+    mesh.traverse((entry) => {
+      entry.geometry?.dispose?.();
+      entry.material?.dispose?.();
+    });
+  });
+
+  test('keeps both edge ramps and adds a flared trapezoid across the battle-facing side', () => {
+    const mesh = createTrainingHighlandMesh({
+      id: 'attacker-front-ramp',
+      elevation: 28,
+      points: [
+        { x: -100, y: 100 },
+        { x: -50, y: 100 },
+        { x: -60, y: 80 },
+        { x: -30, y: 55 },
+        { x: 40, y: 85 },
+        { x: 40, y: -85 },
+        { x: -30, y: -55 },
+        { x: -60, y: -80 },
+        { x: -50, y: -100 },
+        { x: -100, y: -100 }
+      ],
+      ramps: [
+        {
+          id: 'upper-outward-road-ramp',
+          vertexIndex: 0,
+          points: [
+            { x: -100, y: 100 },
+            { x: -100, y: 80 },
+            { x: -60, y: 80 },
+            { x: -50, y: 100 }
+          ]
+        },
+        {
+          id: 'front-outward-trapezoid-ramp',
+          vertexIndex: 1,
+          points: [
+            { x: 40, y: 85 },
+            { x: -30, y: 55 },
+            { x: -30, y: -55 },
+            { x: 40, y: -85 }
+          ]
+        },
+        {
+          id: 'lower-outward-road-ramp',
+          vertexIndex: 2,
+          points: [
+            { x: -100, y: -100 },
+            { x: -100, y: -80 },
+            { x: -60, y: -80 },
+            { x: -50, y: -100 }
+          ]
+        }
+      ],
+      topPolygons: [[
+        { x: -100, y: 80 },
+        { x: -60, y: 80 },
+        { x: -30, y: 55 },
+        { x: -30, y: -55 },
+        { x: -60, y: -80 },
+        { x: -100, y: -80 }
+      ]],
+      railingPaths: [
+        [{ x: -60, y: 80 }, { x: -45, y: 70 }, { x: -30, y: 55 }],
+        [{ x: -30, y: -55 }, { x: -45, y: -70 }, { x: -60, y: -80 }]
+      ]
+    }, 0x58272d);
+
+    expect(mesh.userData.ramps).toHaveLength(3);
+    mesh.userData.ramps.forEach((ramp) => expect(ramp.points).toHaveLength(4));
+    expect(mesh.userData.topPolygons).toHaveLength(1);
+    expect(mesh.userData.topPolygons[0]).toEqual([
+      { x: -100, y: 80 },
+      { x: -60, y: 80 },
+      { x: -30, y: 55 },
+      { x: -30, y: -55 },
+      { x: -60, y: -80 },
+      { x: -100, y: -80 }
+    ]);
+    expect(mesh.getObjectByName('training-highland-rail-1')).toBeTruthy();
+    expect(mesh.getObjectByName('training-highland-rail-2')).toBeTruthy();
+    const upperSideRampMesh = mesh.getObjectByName('training-highland-ramp-upper-outward-road-ramp');
+    const rampMesh = mesh.getObjectByName('training-highland-ramp-front-outward-trapezoid-ramp');
+    const lowerSideRampMesh = mesh.getObjectByName('training-highland-ramp-lower-outward-road-ramp');
+    expect(upperSideRampMesh).toBeTruthy();
+    expect(rampMesh).toBeTruthy();
+    expect(lowerSideRampMesh).toBeTruthy();
+    const upperSidePositions = upperSideRampMesh.geometry.getAttribute('position');
+    const lowerSidePositions = lowerSideRampMesh.geometry.getAttribute('position');
+    [upperSidePositions, lowerSidePositions].forEach((positions) => {
+      expect(positions.count).toBe(6);
+      expect(positions.getZ(0)).toBeCloseTo(0);
+      expect(positions.getZ(4)).toBeCloseTo(28);
+    });
+    expect(upperSidePositions.getY(0)).toBeGreaterThan(upperSidePositions.getY(4));
+    expect(lowerSidePositions.getY(0)).toBeLessThan(lowerSidePositions.getY(4));
+    const rampPositions = rampMesh.geometry.getAttribute('position');
+    expect(rampPositions.count).toBe(6);
+    expect(rampPositions.getZ(0)).toBeCloseTo(0);
+    expect(rampPositions.getZ(3)).toBeCloseTo(0);
+    expect(rampPositions.getZ(4)).toBeCloseTo(28);
+    expect(rampPositions.getZ(5)).toBeCloseTo(28);
+    expect(rampPositions.getX(0)).toBeGreaterThan(rampPositions.getX(4));
+    expect(rampPositions.getX(3)).toBeGreaterThan(rampPositions.getX(5));
+    expect(Math.abs(rampPositions.getY(0) - rampPositions.getY(3))).toBeGreaterThan(
+      Math.abs(rampPositions.getY(4) - rampPositions.getY(5))
+    );
+    mesh.traverse((entry) => {
+      entry.geometry?.dispose?.();
+      entry.material?.dispose?.();
+    });
+  });
+
+  test('curves a railing along the matching highland edge path', () => {
+    const railingPath = [
+      { x: -56, y: 78 },
+      { x: -0.845, y: 55.154 },
+      { x: 22, y: 0 },
+      { x: -0.845, y: -55.154 },
+      { x: -56, y: -78 }
+    ];
+    const mesh = createTrainingHighlandMesh({
+      id: 'attacker-curved-edge',
+      elevation: 28,
+      points: [{ x: -100, y: 78 }, ...railingPath, { x: -100, y: -78 }],
+      topPolygons: [[{ x: -100, y: 78 }, ...railingPath, { x: -100, y: -78 }]],
+      railingPaths: [railingPath]
+    }, 0x58272d);
+
+    const rail = mesh.getObjectByName('training-highland-rail-1');
+    expect(rail).toBeTruthy();
+    expect(mesh.getObjectByName('training-highland-rail-2')).toBeFalsy();
+    expect(rail.getObjectByName('training-highland-rail-1-bar-1').geometry.type).toBe('TubeGeometry');
+    const posts = rail.children.filter((entry) => entry.name.includes('-post-'));
+    expect(posts[0].position.x).toBeCloseTo(railingPath[0].x);
+    expect(posts[0].position.y).toBeCloseTo(railingPath[0].y);
+    expect(posts[posts.length - 1].position.x).toBeCloseTo(railingPath[railingPath.length - 1].x);
+    expect(posts[posts.length - 1].position.y).toBeCloseTo(railingPath[railingPath.length - 1].y);
     mesh.traverse((entry) => {
       entry.geometry?.dispose?.();
       entry.material?.dispose?.();
@@ -307,7 +488,7 @@ describe('training map static objective placeholders', () => {
     });
   });
 
-  test('renders a yellow banner camp instead of an X placeholder', () => {
+  test('does not create a static neutral-camp model alongside real troops', () => {
     const camp = createTrainingMapStaticPlaceholderMesh({
       objectId: 'camp-center-north',
       mapStatic: true,
@@ -327,75 +508,89 @@ describe('training map static objective placeholders', () => {
       ]
     });
 
-    expect(isTrainingMapStaticPlaceholder({ mapStatic: true, category: 'neutralCamp' })).toBe(true);
-    expect(camp.name).toBe('training-map-placeholder-camp-center-north');
-    expect(camp.getObjectByName('training-map-placeholder-camp-center-north-neutral-banner')).toBeTruthy();
-    expect(camp.getObjectByName('training-map-placeholder-camp-center-north-neutral-flag-pole')).toBeTruthy();
-    expect(camp.getObjectByName('training-map-placeholder-camp-center-north-neutral-sentry-melee')).toBeTruthy();
-    expect(camp.getObjectByName('training-map-placeholder-camp-center-north-neutral-sentry-ranged')).toBeTruthy();
-    expect(camp.getObjectByName('training-map-placeholder-camp-center-north-neutral-sentry-support')).toBeTruthy();
-    const patrolPreview = camp.getObjectByName('training-map-placeholder-camp-center-north-neutral-patrol-preview');
-    expect(patrolPreview).toBeTruthy();
-    expect(patrolPreview.userData.isNeutralPatrolPreview).toBe(true);
-    expect(camp.getObjectByName('training-map-placeholder-camp-center-north-x-arm-1')).toBeFalsy();
-    expect(camp.getObjectByName('training-map-placeholder-camp-center-north-camp-platform')).toBeFalsy();
-    expect(camp.getObjectByName('training-map-placeholder-camp-center-north-camp-ring')).toBeFalsy();
-    camp.traverse((entry) => {
+    expect(isTrainingMapStaticPlaceholder({ mapStatic: true, category: 'neutralCamp' })).toBe(false);
+    expect(camp).toBeNull();
+  });
+
+  test('renders a low rectangular highland barracks with a permanent range marker', () => {
+    const barracks = createTrainingMapStaticPlaceholderMesh({
+      objectId: 'barracks-attacker-top',
+      mapStatic: true,
+      category: 'barracks',
+      team: 'attacker',
+      x: -320,
+      y: 120,
+      width: 84,
+      depth: 52,
+      height: 18,
+      maxHp: 5600,
+      attackRange: 630,
+      rangeIndicatorColor: '#ef4b55',
+      rangeIndicatorMode: 'always'
+    }, 28);
+
+    expect(isTrainingMapStaticPlaceholder({ mapStatic: true, category: 'barracks' })).toBe(true);
+    expect(barracks.position).toMatchObject({ x: -320, y: 120, z: 28 });
+    expect(barracks.getObjectByName('training-map-placeholder-barracks-attacker-top-body')).toBeTruthy();
+    expect(barracks.getObjectByName('training-map-placeholder-barracks-attacker-top-arrow-tower')).toBeFalsy();
+    expect(barracks.getObjectByName('training-map-placeholder-barracks-attacker-top-catapult-arm')).toBeFalsy();
+    expect(barracks.getObjectByName('training-map-placeholder-barracks-attacker-top-attack-range')).toBeTruthy();
+    expect(barracks.getObjectByName('training-map-placeholder-barracks-attacker-top-attack-range').visible).toBe(true);
+    barracks.traverse((entry) => {
       entry.geometry?.dispose?.();
       entry.material?.dispose?.();
     });
   });
 
-  test('hides the complete static camp during battle and restores it for deploy', () => {
-    const camp = createTrainingMapStaticPlaceholderMesh({
-      objectId: 'map-camp-center-north',
-      neutralCampId: 'camp-center-north',
+  test('keeps a highland outpost range visible without a target lock', () => {
+    const tower = createTrainingMapStaticPlaceholderMesh({
+      objectId: 'outpost-attacker-top-upper',
       mapStatic: true,
-      category: 'neutralCamp',
-      x: 0,
-      y: 260,
-      width: 72,
-      depth: 72,
-      height: 48,
-      neutralComposition: [{ unitCategory: 'melee' }, { unitCategory: 'ranged' }]
-    });
-    const placeholders = new THREE.Group();
-    placeholders.add(camp);
-    const pipeline = { mapStaticPlaceholderGroup: placeholders };
-    const meleeSentry = camp.getObjectByName('training-map-placeholder-map-camp-center-north-neutral-sentry-melee');
-
-    expect(meleeSentry.visible).toBe(true);
-    TrainingThreeRenderPipeline.prototype.updateTrainingMapStaticPlaceholderStates.call(pipeline, {
-      getPhase: () => 'battle',
-      sim: {
-        buildings: [{ id: 'map-camp-center-north', hp: 1200, maxHp: 1200 }],
-        squads: [{ team: 'neutral', remain: 12, neutralCampId: 'camp-center-north' }],
-        trainingObjectives: []
-      }
+      category: 'tower',
+      defenseRole: 'highlandOutpost',
+      team: 'attacker',
+      width: 48,
+      depth: 48,
+      height: 82,
+      attackRange: 260,
+      rangeIndicatorColor: '#53dff0',
+      rangeIndicatorMode: 'always'
     });
 
-    expect(meleeSentry.visible).toBe(false);
-    expect(camp.visible).toBe(false);
-
-    TrainingThreeRenderPipeline.prototype.updateTrainingMapStaticPlaceholderStates.call(pipeline, {
-      getPhase: () => 'battle',
-      sim: {
-        buildings: [{ id: 'map-camp-center-north', hp: 1200, maxHp: 1200 }],
-        squads: [],
-        trainingObjectives: []
-      }
+    expect(tower.getObjectByName('training-map-placeholder-outpost-attacker-top-upper-attack-range').visible).toBe(true);
+    tower.traverse((entry) => {
+      entry.geometry?.dispose?.();
+      entry.material?.dispose?.();
     });
+  });
 
-    expect(camp.visible).toBe(false);
-
-    TrainingThreeRenderPipeline.prototype.updateTrainingMapStaticPlaceholderStates.call(pipeline, {
-      getPhase: () => 'deploy',
-      intelVisible: true,
-      initialBuildings: [{ id: 'map-camp-center-north', hp: 1200, maxHp: 1200 }]
+  test('uses a ghost range until a regular tower locks an approaching enemy', () => {
+    const tower = createTrainingMapStaticPlaceholderMesh({
+      objectId: 'tower-attacker-mid',
+      mapStatic: true,
+      category: 'tower',
+      team: 'attacker',
+      width: 32,
+      depth: 32,
+      height: 96,
+      attackRange: 188,
+      rangeIndicatorMode: 'proximity'
     });
+    const attackRange = tower.getObjectByName('training-map-placeholder-tower-attacker-mid-attack-range');
+    const rangeContainer = attackRange.parent;
+    const ghostOutline = rangeContainer.getObjectByName('training-map-placeholder-tower-attacker-mid-attack-range-ghost-outline');
 
-    expect(camp.visible).toBe(true);
-    camp.traverse((entry) => {
+    expect(rangeContainer.visible).toBe(true);
+    expect(rangeContainer.userData.attackRangeActive).toBe(false);
+    expect(attackRange.visible).toBe(false);
+    expect(ghostOutline.visible).toBe(true);
+
+    expect(applyTrainingAttackRangeMarkerState(rangeContainer, true)).toBe(true);
+    expect(rangeContainer.userData.attackRangeActive).toBe(true);
+    expect(attackRange.visible).toBe(true);
+    expect(ghostOutline.visible).toBe(false);
+
+    tower.traverse((entry) => {
       entry.geometry?.dispose?.();
       entry.material?.dispose?.();
     });
@@ -423,6 +618,7 @@ describe('training direction markers', () => {
     unitData[1] = -36;
     unitData[UNIT_INSTANCE_STRIDE] = 144;
     unitData[UNIT_INSTANCE_STRIDE + 1] = -12;
+    unitData[UNIT_INSTANCE_STRIDE + 13] = 1;
     const runtime = {
       getPhase: () => 'battle',
       sim: {
@@ -453,9 +649,53 @@ describe('training direction markers', () => {
     expect(anchor).toMatchObject({
       id: 'neutral-center',
       team: 'neutral',
-      x: 120,
-      y: -24
+      x: 144,
+      y: -12
     });
+  });
+
+  test('anchors a pre-start neutral flag to its preview flag bearer', () => {
+    const anchors = resolveTrainingDirectionArcAnchors({
+      getPhase: () => 'deploy',
+      getTrainingNeutralPreview: () => ({
+        squads: [{
+          id: 'neutral_camp_preview',
+          team: 'neutral',
+          name: '预览守卫',
+          remain: 120,
+          startCount: 120,
+          x: 12,
+          y: 18
+        }],
+        agents: [
+          {
+            id: 'preview-flag-bearer',
+            squadId: 'neutral_camp_preview',
+            team: 'neutral',
+            weight: 40,
+            isFlagBearer: true,
+            x: 28,
+            y: 34
+          },
+          {
+            id: 'preview-guard',
+            squadId: 'neutral_camp_preview',
+            team: 'neutral',
+            weight: 40,
+            x: 8,
+            y: 14
+          }
+        ]
+      })
+    });
+
+    expect(anchors).toEqual([expect.objectContaining({
+      id: 'neutral_camp_preview',
+      team: 'neutral',
+      x: 28,
+      y: 34,
+      showSkillPoints: false
+    })]);
   });
 
   test('hard switches between the world flag and the distant information label at 50 degrees', () => {
