@@ -4616,6 +4616,26 @@
   box-shadow: 0 5px 16px rgba(2, 6, 23, 0.5);
 }
 
+.pve2-training-flag-label.is-stacked.is-stack-top .pve2-training-flag-banner {
+  border-radius: 5px 5px 0 0;
+}
+
+.pve2-training-flag-label.is-stacked.is-stack-middle .pve2-training-flag-banner {
+  border-radius: 0;
+}
+
+.pve2-training-flag-label.is-stacked.is-stack-bottom .pve2-training-flag-banner {
+  border-radius: 0 0 5px 5px;
+}
+
+.pve2-training-flag-label.is-stacked.is-minion-wave .pve2-training-minion-hud {
+  width: 100%;
+}
+
+.pve2-training-flag-label.is-stacked.is-minion-wave .pve2-training-minion-health {
+  flex: 1;
+}
+
 .pve2-training-flag-label.has-no-skill-points .pve2-training-flag-banner {
   grid-template-columns: auto minmax(46px, 1fr);
   min-width: 86px;
@@ -4715,6 +4735,10 @@
   border-color: var(--pve2-flag-team);
   box-shadow: 0 0 0 2px var(--pve2-flag-team-soft), 0 0 22px var(--pve2-flag-team-soft), 0 5px 16px rgba(2, 6, 23, 0.58);
   transform: translateY(-1px) scale(1.035);
+}
+
+.pve2-training-flag-label.is-stacked.is-hovered .pve2-training-flag-banner {
+  transform: none;
 }
 
 .pve2-training-flag-troops,

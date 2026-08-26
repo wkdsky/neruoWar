@@ -241,6 +241,7 @@ const buildPairs = (sim, walls, cfg, nowSec) => {
     isSquadMelee(row)
     && isSquadCombatEnabled(row)
     && row.behavior !== 'retreat'
+    && row.isMinionWaveUnit !== true
   ));
   const pairMap = new Map();
   const squadPairById = new Map();

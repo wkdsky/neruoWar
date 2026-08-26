@@ -3,6 +3,122 @@ import { buildSpatialHash } from './crowdPhysics';
 import { createCombatEffectsPool } from '../effects/CombatEffects';
 
 describe('ranged automatic target selection', () => {
+  const buildProjectileScenario = ({
+    targetX = 70,
+    targetY = 0,
+    targetVx = 0,
+    targetVy = 0,
+    minionWave = false
+  } = {}) => {
+    const attacker = {
+      id: 'projectile-attacker',
+      team: 'attacker',
+      x: 0,
+      y: 0,
+      remain: 1,
+      startCount: 1,
+      health: 100,
+      maxHealth: 100,
+      radius: 10,
+      classTag: 'archer',
+      unitCategory: 'ranged',
+      isMinionWaveUnit: minionWave,
+      behavior: 'auto',
+      controlMode: 'AI',
+      order: { type: 'ATTACK_MOVE', targetSquadId: 'projectile-defender' },
+      stats: { atk: 20, def: 1, speed: 1, range: 8, attackRange: { min: 4, max: 8 } }
+    };
+    if (minionWave) {
+      attacker._minionAi = {
+        state: 'ATTACK_HOLD',
+        targetKind: 'squad',
+        targetId: 'projectile-defender'
+      };
+      attacker.targetSquadId = 'projectile-defender';
+    }
+    const defender = {
+      id: 'projectile-defender',
+      team: 'defender',
+      x: targetX,
+      y: targetY,
+      remain: 1,
+      startCount: 1,
+      health: 100,
+      maxHealth: 100,
+      radius: 10,
+      classTag: 'infantry',
+      behavior: 'idle',
+      controlMode: 'USER',
+      order: { type: 'IDLE' },
+      stats: { atk: 10, def: 1, speed: 1 }
+    };
+    const shooter = {
+      id: 'projectile-shooter',
+      squadId: attacker.id,
+      team: attacker.team,
+      x: 0,
+      y: 0,
+      vx: 0,
+      vy: 0,
+      radius: 2,
+      weight: 1,
+      hpWeight: 1,
+      initialWeight: 1,
+      typeCategory: 'archer',
+      unitCategory: 'ranged',
+      attackRangeMin: 56,
+      attackRangeMax: 112,
+      targetAgentId: 'projectile-target',
+      isMinionWaveUnit: minionWave,
+      dead: false
+    };
+    const target = {
+      id: 'projectile-target',
+      squadId: defender.id,
+      team: defender.team,
+      x: targetX,
+      y: targetY,
+      vx: targetVx,
+      vy: targetVy,
+      radius: 2,
+      weight: 1,
+      hpWeight: 1,
+      initialWeight: 1,
+      typeCategory: 'infantry',
+      unitCategory: 'melee',
+      dead: false
+    };
+    const allAgents = [shooter, target];
+    const crowd = {
+      agentsBySquad: new Map([
+        [attacker.id, [shooter]],
+        [defender.id, [target]]
+      ]),
+      allAgents,
+      spatial: buildSpatialHash(allAgents, 14),
+      effectsPool: createCombatEffectsPool(),
+      engagement: { enabled: false, config: {} }
+    };
+    const sim = {
+      timeElapsed: 1,
+      field: { width: 240, height: 160 },
+      buildings: [],
+      squads: [attacker, defender]
+    };
+    return { attacker, target, crowd, sim };
+  };
+
+  const finishProjectileFlight = ({ attacker, target, crowd, sim }, frames = 12) => {
+    updateCrowdCombat(sim, crowd, 0.05);
+    attacker.behavior = 'standby';
+    for (let frame = 0; frame < frames && !target.dead; frame += 1) {
+      target.x += (Number(target.vx) || 0) * 0.05;
+      target.y += (Number(target.vy) || 0) * 0.05;
+      crowd.spatial = buildSpatialHash(crowd.allAgents, 14);
+      updateCrowdCombat(sim, crowd, 0.05);
+    }
+  };
+
   test('prefers a low-health enemy already inside weapon range', () => {
     const shooter = { x: 0, y: 0 };
     const healthy = { id: 'healthy', x: 24, y: 0, weight: 10, hpWeight: 10, initialWeight: 10 };
@@ -120,5 +236,59 @@ describe('ranged automatic target selection', () => {
       projectile.sourceAgentId === rangedAgent.id && projectile.type === 'arrow'
     ))).toBe(true);
     expect(meleeAgent.targetAgentId).toBe('');
+  });
+
+  test('hits a target crossed between two fast projectile frames', () => {
+    const scenario = buildProjectileScenario({ targetX: 70 });
+
+    finishProjectileFlight(scenario);
+
+    expect(scenario.target.hpWeight).toBeLessThan(1);
+  });
+
+  test('leads a laterally moving target before firing', () => {
+    const scenario = buildProjectileScenario({ targetX: 70, targetVy: 20 });
+
+    finishProjectileFlight(scenario);
+
+    expect(scenario.target.hpWeight).toBeLessThan(1);
+  });
+
+  test('keeps assigned minion shots accurate even at the worst random roll', () => {
+    const random = jest.spyOn(Math, 'random').mockReturnValue(1);
+    const scenario = buildProjectileScenario({ targetX: 70, targetVy: 20, minionWave: true });
+
+    finishProjectileFlight(scenario);
+
+    expect(scenario.target.hpWeight).toBeLessThan(1);
+    random.mockRestore();
+  });
+
+  test('does not let an assigned minion arrow damage a crossing decoy', () => {
+    const scenario = buildProjectileScenario({ targetX: 70, minionWave: true });
+    const decoy = {
+      id: 'projectile-decoy',
+      squadId: scenario.target.squadId,
+      team: scenario.target.team,
+      x: 35,
+      y: 0,
+      vx: 0,
+      vy: 0,
+      radius: 2,
+      weight: 1,
+      hpWeight: 1,
+      initialWeight: 1,
+      typeCategory: 'infantry',
+      unitCategory: 'melee',
+      dead: false
+    };
+    scenario.crowd.agentsBySquad.get(scenario.target.squadId).push(decoy);
+    scenario.crowd.allAgents.push(decoy);
+    scenario.crowd.spatial = buildSpatialHash(scenario.crowd.allAgents, 14);
+
+    finishProjectileFlight(scenario, 16);
+
+    expect(scenario.target.hpWeight).toBeLessThan(1);
+    expect(decoy.hpWeight).toBe(1);
   });
 });

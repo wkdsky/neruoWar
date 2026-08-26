@@ -47,6 +47,69 @@ const buildSim = ({ definition, building }) => {
   };
 };
 
+const buildTowerTargetScenario = () => {
+  const tower = {
+    id: 'tower_defender_mid',
+    team: 'defender',
+    x: 100,
+    y: 0,
+    width: 52,
+    depth: 52,
+    height: 88,
+    hp: 1200,
+    maxHp: 1200,
+    defense: 1,
+    blocksMovement: true,
+    blocksVision: true,
+    destroyed: false
+  };
+  const sim = buildSim({
+    definition: {
+      objectiveId: tower.id,
+      sourceObjectId: tower.id,
+      type: 'tower',
+      team: 'defender',
+      laneId: 'mid',
+      maxHp: tower.maxHp,
+      attackRange: 180,
+      attackIntervalSec: 0.1,
+      attackDamage: 8,
+      priority: 'nearest'
+    },
+    building: tower
+  });
+  sim.squads = [];
+  sim._squadById = new Map();
+  const crowd = {
+    agentsBySquad: new Map(),
+    effectsPool: createCombatEffectsPool()
+  };
+  const addTarget = (overrides = {}) => {
+    const squad = buildAttacker(overrides);
+    const agent = {
+      id: `${squad.id}_agent`,
+      squadId: squad.id,
+      team: squad.team,
+      x: squad.x,
+      y: squad.y,
+      radius: 2,
+      weight: 30,
+      hpWeight: 30,
+      initialWeight: 30,
+      attackRangeMin: 0,
+      attackRangeMax: 140,
+      buildingAttackCd: 0,
+      targetBuildingId: '',
+      dead: false
+    };
+    sim.squads.push(squad);
+    sim._squadById.set(squad.id, squad);
+    crowd.agentsBySquad.set(squad.id, [agent]);
+    return { squad, agent };
+  };
+  return { tower, sim, crowd, addTarget };
+};
+
 describe('TrainingObjectiveSystem', () => {
   test('lets squads damage towers and exposes tower lock feedback', () => {
     const tower = {
@@ -106,6 +169,72 @@ describe('TrainingObjectiveSystem', () => {
     expect(sim.trainingStats.towerDamage).toBeGreaterThan(0);
     expect(sim.trainingObjectives[0].lockedSquadId).toBe('attacker_squad');
     expect(agent.weight).toBeLessThan(30);
+  });
+
+  test('keeps attacking minions when a closer regular army enters later', () => {
+    const { sim, crowd, addTarget } = buildTowerTargetScenario();
+    const minions = addTarget({
+      id: 'attacker_minions',
+      x: 40,
+      isMinionWaveUnit: true,
+      minionLaneId: 'mid'
+    });
+
+    updateTrainingObjectives(sim, crowd, 0.2);
+
+    const minionWeightAfterLock = minions.agent.weight;
+    expect(sim.trainingObjectives[0].lockedSquadId).toBe(minions.squad.id);
+
+    const army = addTarget({ id: 'attacker_army', x: 80 });
+    updateTrainingObjectives(sim, crowd, 0.2);
+
+    expect(sim.trainingObjectives[0].lockedSquadId).toBe(minions.squad.id);
+    expect(minions.agent.weight).toBeLessThan(minionWeightAfterLock);
+    expect(army.agent.weight).toBe(30);
+  });
+
+  test('keeps attacking an army until it leaves range, then locks entering minions', () => {
+    const { sim, crowd, addTarget } = buildTowerTargetScenario();
+    const army = addTarget({ id: 'attacker_army', x: 40 });
+
+    updateTrainingObjectives(sim, crowd, 0.2);
+
+    const armyWeightAfterLock = army.agent.weight;
+    const minions = addTarget({
+      id: 'attacker_minions',
+      x: 80,
+      isMinionWaveUnit: true,
+      minionLaneId: 'mid'
+    });
+    updateTrainingObjectives(sim, crowd, 0.2);
+
+    expect(sim.trainingObjectives[0].lockedSquadId).toBe(army.squad.id);
+    expect(army.agent.weight).toBeLessThan(armyWeightAfterLock);
+    expect(minions.agent.weight).toBe(30);
+
+    army.squad.x = -500;
+    army.agent.x = -500;
+    updateTrainingObjectives(sim, crowd, 0.2);
+
+    expect(sim.trainingObjectives[0].lockedSquadId).toBe(minions.squad.id);
+    expect(minions.agent.weight).toBeLessThan(30);
+  });
+
+  test('keeps neutral units and towers mutually passive', () => {
+    const { tower, sim, crowd, addTarget } = buildTowerTargetScenario();
+    const neutral = addTarget({
+      id: 'neutral_patrol',
+      team: 'neutral',
+      x: 80,
+      underAttackTimer: 1
+    });
+    neutral.agent.targetBuildingId = tower.id;
+
+    updateTrainingObjectives(sim, crowd, 0.2);
+
+    expect(tower.hp).toBe(tower.maxHp);
+    expect(sim.trainingObjectives[0].lockedSquadId).toBe('');
+    expect(neutral.agent.weight).toBe(30);
   });
 
   test('keeps a user-issued move completely passive around hostile towers', () => {

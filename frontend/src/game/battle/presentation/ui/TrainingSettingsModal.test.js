@@ -22,7 +22,7 @@ describe('TrainingSettingsModal', () => {
       <TrainingSettingsModal
         open
         state={trainingState}
-        settings={{ fontSize: 'medium', showGrid: true }}
+        settings={{ fontSize: 'medium', showGrid: true, cameraZoomSensitivity: 1.25 }}
         onChangeAutoSkillPointGain={onChangeAutoSkillPointGain}
         onChangeInterval={onChangeInterval}
         onChangeRespawnDelay={onChangeRespawnDelay}
@@ -40,6 +40,7 @@ describe('TrainingSettingsModal', () => {
     fireEvent.click(screen.getByRole('tab', { name: 'UI 设置' }));
     fireEvent.click(screen.getByRole('radio', { name: '大' }));
     fireEvent.click(screen.getByRole('tab', { name: '战场设置' }));
+    fireEvent.click(screen.getByRole('radio', { name: '高 150%' }));
     fireEvent.click(screen.getByRole('checkbox', { name: '显示网格线' }));
 
     expect(onChangeAutoSkillPointGain).not.toHaveBeenCalled();
@@ -52,7 +53,11 @@ describe('TrainingSettingsModal', () => {
     expect(onChangeAutoSkillPointGain).toHaveBeenCalledWith(true);
     expect(onChangeInterval).toHaveBeenCalledWith(10);
     expect(onChangeRespawnDelay).toHaveBeenCalledWith(30);
-    expect(onApply).toHaveBeenCalledWith({ fontSize: 'large', showGrid: false });
+    expect(onApply).toHaveBeenCalledWith({
+      fontSize: 'large',
+      showGrid: false,
+      cameraZoomSensitivity: 1.5
+    });
     expect(onClose).toHaveBeenCalledTimes(1);
   });
 
@@ -64,7 +69,7 @@ describe('TrainingSettingsModal', () => {
       <TrainingSettingsModal
         open
         state={trainingState}
-        settings={{ fontSize: 'medium', showGrid: true }}
+        settings={{ fontSize: 'medium', showGrid: true, cameraZoomSensitivity: 1.25 }}
         onChangeAutoSkillPointGain={onChangeAutoSkillPointGain}
         onApply={onApply}
         onClose={onClose}
@@ -78,5 +83,20 @@ describe('TrainingSettingsModal', () => {
     expect(onApply).not.toHaveBeenCalled();
     expect(onChangeAutoSkillPointGain).not.toHaveBeenCalled();
     expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  test('uses the higher camera zoom sensitivity by default', () => {
+    render(
+      <TrainingSettingsModal
+        open
+        state={trainingState}
+        settings={{ fontSize: 'medium', showGrid: true }}
+        onClose={jest.fn()}
+      />
+    );
+
+    fireEvent.click(screen.getByRole('tab', { name: '战场设置' }));
+
+    expect(screen.getByRole('radio', { name: '较高 125%' }).getAttribute('aria-checked')).toBe('true');
   });
 });

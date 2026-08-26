@@ -735,15 +735,46 @@ const buildPolylineCollider = (worldPath = [], center = {}, thickness = 24, heig
     const length = Math.hypot(dx, dy);
     if (length <= 0.1) continue;
     parts.push({
-      cx: ((finiteNumber(start?.x) + finiteNumber(end?.x)) * 0.5) - finiteNumber(center?.x),
-      cy: ((finiteNumber(start?.y) + finiteNumber(end?.y)) * 0.5) - finiteNumber(center?.y),
-      w: length + thickness,
-      d: thickness,
+      ax: finiteNumber(start?.x) - finiteNumber(center?.x),
+      ay: finiteNumber(start?.y) - finiteNumber(center?.y),
+      bx: finiteNumber(end?.x) - finiteNumber(center?.x),
+      by: finiteNumber(end?.y) - finiteNumber(center?.y),
+      r: Math.max(0.5, finiteNumber(thickness) * 0.5),
       h: Math.max(1, finiteNumber(height, 32)),
-      yawDeg: Math.atan2(dy, dx) * 180 / Math.PI
     });
   }
-  return parts.length > 0 ? { kind: 'compositeObb', parts } : null;
+  return parts.length > 0 ? { kind: 'compositeCapsule', parts } : null;
+};
+
+const resolveRoadsideTowerPosition = (definition = {}, layout = resolveLayout(), basePosition = {}, towerSize = 0) => {
+  const laneId = String(definition?.laneId || 'mid');
+  const route = (Array.isArray(navigation?.routes) ? navigation.routes : [])
+    .find((entry) => String(entry?.id || '') === laneId);
+  const side = String(definition?.roadSide || '').trim();
+  if (!route || !side) return { ...basePosition, roadSide: '', roadSideOffset: 0 };
+  let sideSign = 0;
+  if (side === 'upper') sideSign = 1;
+  if (side === 'lower') sideSign = -1;
+  if (side === 'outer') {
+    if (laneId === 'top') sideSign = 1;
+    if (laneId === 'bottom') sideSign = -1;
+  }
+  if (sideSign === 0) return { ...basePosition, roadSide: '', roadSideOffset: 0 };
+  const roadWidth = Math.max(
+    24,
+    finiteNumber(route?.visualWidthNormalized, 0.028) * finiteNumber(layout?.fieldHeight)
+  );
+  const offsetRatio = Math.max(0.28, Math.min(0.48, finiteNumber(definition?.roadSideOffsetRatio, 0.36)));
+  const roadSideOffset = Math.max(
+    Math.max(1, finiteNumber(towerSize)) * 0.72,
+    roadWidth * offsetRatio
+  );
+  return {
+    x: finiteNumber(basePosition?.x),
+    y: finiteNumber(basePosition?.y) + (roadSideOffset * sideSign),
+    roadSide: side,
+    roadSideOffset
+  };
 };
 
 const buildTerrainRegions = (layout) => {
@@ -1073,12 +1104,15 @@ const buildHighlandRailingObjects = (layout) => {
 
 const buildTowerObjectsAndObjectives = (layout) => (
   (Array.isArray(objectiveData?.objectives) ? objectiveData.objectives : []).map((definition, index) => {
-    const position = tupleToWorld(definition?.position, layout);
     const objectiveId = `objective_tower_${String(definition?.objectiveId || `tower-${index + 1}`)}`;
     const team = normalizeTeam(definition?.team);
     const towerRuntime = resolveTowerRuntimeConfig();
     const maxHp = towerRuntime.maxHp;
     const staticScale = resolveRuntimeScale(layout);
+    const towerSize = NORMAL_TOWER_BASE_SIZE * NORMAL_TOWER_FOOTPRINT_SCALE * staticScale;
+    const towerHeight = NORMAL_TOWER_BASE_HEIGHT * staticScale;
+    const sourcePosition = tupleToWorld(definition?.position, layout);
+    const position = resolveRoadsideTowerPosition(definition, layout, sourcePosition, towerSize);
     return {
       object: {
         objectId: `map-${objectiveId}`,
@@ -1086,9 +1120,9 @@ const buildTowerObjectsAndObjectives = (layout) => (
         x: position.x,
         y: position.y,
         z: 0,
-        width: NORMAL_TOWER_BASE_SIZE * NORMAL_TOWER_FOOTPRINT_SCALE * staticScale,
-        depth: NORMAL_TOWER_BASE_SIZE * NORMAL_TOWER_FOOTPRINT_SCALE * staticScale,
-        height: NORMAL_TOWER_BASE_HEIGHT * staticScale,
+        width: towerSize,
+        depth: towerSize,
+        height: towerHeight,
         category: 'tower',
         team,
         mapStatic: true,
@@ -1101,7 +1135,18 @@ const buildTowerObjectsAndObjectives = (layout) => (
         rangeIndicatorMode: 'proximity',
         blocksMovement: true,
         blocksVision: true,
-        sourceCenter: Array.isArray(definition?.sourceCenter) ? definition.sourceCenter.slice() : []
+        sourceCenter: Array.isArray(definition?.sourceCenter) ? definition.sourceCenter.slice() : [],
+        roadSide: position.roadSide,
+        roadSideOffset: position.roadSideOffset,
+        roadCenterX: sourcePosition.x,
+        roadCenterY: sourcePosition.y,
+        collider: {
+          kind: 'circle',
+          cx: 0,
+          cy: 0,
+          r: towerSize * 0.5,
+          h: towerHeight
+        }
       },
       objective: {
         objectiveId,
@@ -1240,6 +1285,8 @@ const buildHighlandDefenseObjectsAndObjectives = (layout) => {
       const objectiveId = `objective_highland_outpost_${highlandId}_${towerId}`;
       const objectId = `map-highland-outpost-${highlandId}-${towerId}`;
       const maxHp = Math.max(1, finiteNumber(outerTowerRuntime?.maxHp, 2000));
+      const towerSize = Math.max(12, finiteNumber(outerTowerRuntime?.width, 48) * runtimeScale);
+      const towerHeight = Math.max(16, finiteNumber(outerTowerRuntime?.height, 82) * runtimeScale);
       objects.push({
         objectId,
         itemId: 'training_map_highland_outpost_tower',
@@ -1247,9 +1294,9 @@ const buildHighlandDefenseObjectsAndObjectives = (layout) => {
         y: position.y,
         z: 0,
         rotation: facingDeg,
-        width: Math.max(12, finiteNumber(outerTowerRuntime?.width, 48) * runtimeScale),
-        depth: Math.max(12, finiteNumber(outerTowerRuntime?.depth, 48) * runtimeScale),
-        height: Math.max(16, finiteNumber(outerTowerRuntime?.height, 82) * runtimeScale),
+        width: towerSize,
+        depth: towerSize,
+        height: towerHeight,
         category: 'tower',
         team,
         mapStatic: true,
@@ -1265,7 +1312,14 @@ const buildHighlandDefenseObjectsAndObjectives = (layout) => {
         rangeIndicatorColor: String(outerTowerRuntime?.rangeIndicatorColor || '#53dff0'),
         rangeIndicatorMode: String(outerTowerRuntime?.rangeIndicatorMode || 'always'),
         blocksMovement: true,
-        blocksVision: true
+        blocksVision: true,
+        collider: {
+          kind: 'circle',
+          cx: 0,
+          cy: 0,
+          r: towerSize * 0.5,
+          h: towerHeight
+        }
       });
       objectives.push({
         objectiveId,
@@ -1457,12 +1511,18 @@ const buildMovementCalibration = (deploySlots, towerEntries) => {
   ));
   const objectiveId = `objective_tower_${String(definition?.referenceObjectiveId || 'tower-attacker-mid-outer')}`;
   const tower = (Array.isArray(towerEntries) ? towerEntries : []).find((entry) => entry?.objective?.objectiveId === objectiveId);
+  const calibrationTarget = tower
+    ? {
+      x: Number.isFinite(Number(tower.object?.roadCenterX)) ? Number(tower.object.roadCenterX) : finiteNumber(tower.object?.x),
+      y: Number.isFinite(Number(tower.object?.roadCenterY)) ? Number(tower.object.roadCenterY) : finiteNumber(tower.object?.y)
+    }
+    : null;
   const distances = spawnSlotIds.map((slotId) => {
     const spawn = (Array.isArray(deploySlots) ? deploySlots : []).find((slot) => slot?.id === slotId);
-    return spawn && tower
+    return spawn && calibrationTarget
       ? Math.hypot(
-        finiteNumber(spawn.x) - finiteNumber(tower.object?.x),
-        finiteNumber(spawn.y) - finiteNumber(tower.object?.y)
+        finiteNumber(spawn.x) - calibrationTarget.x,
+        finiteNumber(spawn.y) - calibrationTarget.y
       )
       : 0;
   }).filter((value) => value > 0);
@@ -1551,6 +1611,7 @@ const buildReferenceTrainingMapConfig = ({ itemCatalog = [] } = {}) => {
       wallClearance: Math.max(2, finiteNumber(navigation?.navigationRules?.wallClearanceNormalized, 0.012) * layout.fieldWidth),
       pathClearance: Math.max(0.5, Math.min(12, finiteNumber(navigation?.navigationRules?.pathClearance, 1.2))),
       agentRadius: Math.max(1, Math.min(8, finiteNumber(navigation?.navigationRules?.agentRadius, 2.25))),
+      minionRecoveryPlansPerStep: 3,
       narrowPassage: {
         cellSize: Math.max(4, Math.min(32, finiteNumber(navigation?.navigationRules?.narrowPassage?.cellSize, 8))),
         probeDistance: Math.max(12, Math.min(120, finiteNumber(navigation?.navigationRules?.narrowPassage?.probeDistance, 48))),

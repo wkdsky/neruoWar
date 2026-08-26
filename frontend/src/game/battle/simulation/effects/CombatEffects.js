@@ -22,6 +22,7 @@ const resetProjectile = (item, payload = {}) => {
   next.team = payload.team || '';
   next.squadId = payload.squadId || '';
   next.sourceAgentId = payload.sourceAgentId || '';
+  next.targetAgentId = payload.targetAgentId || '';
   next.targetBuildingId = payload.targetBuildingId || '';
   next.visualOnly = !!payload.visualOnly;
   next.x = Number(payload.x) || 0;
@@ -58,6 +59,8 @@ const resetProjectile = (item, payload = {}) => {
   next.elapsed = 0;
   next.spawnedAt = payload.spawnedAt || nowMs();
   next.targetTeam = payload.targetTeam || '';
+  next.guaranteedHit = !!payload.guaranteedHit;
+  next.targetImpactDelay = Math.max(0, Number(payload.targetImpactDelay) || 0);
   next.hit = false;
   return next;
 };

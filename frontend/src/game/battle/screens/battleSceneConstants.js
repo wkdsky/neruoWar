@@ -13,8 +13,24 @@ export const CAMERA_DISTANCE_MIN = 420;
 export const CAMERA_DISTANCE_MAX = 980;
 export const TRAINING_PITCH_DISTANCE_MAX = 2000;
 export const TRAINING_OVERVIEW_DISTANCE_EXTRA = 1200;
-export const TRAINING_OVERVIEW_DISTANCE_MAX = 12000;
+export const TRAINING_OVERVIEW_DISTANCE_MAX = 4480;
 export const TRAINING_OVERVIEW_VIEW_PADDING = 1.08;
+export const TRAINING_CAMERA_ZOOM_DEFAULT_SENSITIVITY = 1.25;
+
+export const TRAINING_CAMERA_ZOOM_SENSITIVITY_OPTIONS = Object.freeze([
+  { value: 0.7, label: '低' },
+  { value: 0.85, label: '较低' },
+  { value: 1, label: '标准' },
+  { value: 1.25, label: '较高' },
+  { value: 1.5, label: '高' }
+]);
+
+export const normalizeTrainingCameraZoomSensitivity = (value = TRAINING_CAMERA_ZOOM_DEFAULT_SENSITIVITY) => {
+  const normalized = Number(value);
+  return TRAINING_CAMERA_ZOOM_SENSITIVITY_OPTIONS.some((option) => option.value === normalized)
+    ? normalized
+    : TRAINING_CAMERA_ZOOM_DEFAULT_SENSITIVITY;
+};
 
 export const DEPLOY_ROTATE_SENSITIVITY = 0.28;
 export const DEPLOY_ROTATE_CLICK_THRESHOLD = 3;
@@ -148,7 +164,8 @@ export const createDefaultQuickDeployRandomForm = () => ({ ...QUICK_DEPLOY_RANDO
 
 export const createDefaultTrainingPresentationSettings = () => ({
   fontSize: 'medium',
-  showGrid: true
+  showGrid: true,
+  cameraZoomSensitivity: TRAINING_CAMERA_ZOOM_DEFAULT_SENSITIVITY
 });
 
 export const createDefaultDeployInfoState = () => ({

@@ -77,6 +77,24 @@ export default function useBattleActions({
     setCards(runtime.getCardRows());
   }, [runtimeRef, setCards]);
 
+  const attackBattleSquadTarget = useCallback((targetSquadId) => {
+    const runtime = runtimeRef.current;
+    if (!runtime || runtime.getPhase() !== 'battle' || battleUiMode !== BATTLE_UI_MODE_NONE) return false;
+    const selected = runtime.getSquadById?.(selectedSquadId);
+    const target = runtime.getSquadById?.(String(targetSquadId || '').trim());
+    if (
+      !selected
+      || !target
+      || (Number(selected.remain) || 0) <= 0
+      || (Number(target.remain) || 0) <= 0
+      || !runtime.canControlSquad?.(selected)
+      || String(selected.team || '') === String(target.team || '')
+    ) return false;
+    if (!runtime.commandAttackTarget?.(selected.id, { targetSquadId: target.id })) return false;
+    syncBattleCards();
+    return true;
+  }, [battleUiMode, runtimeRef, selectedSquadId, syncBattleCards]);
+
   const selectBattleSquad = useCallback((squadId, showActions = true) => {
     const runtime = runtimeRef.current;
     if (!runtime || runtime.getPhase() !== 'battle') return false;
@@ -410,6 +428,7 @@ export default function useBattleActions({
 
   return {
     syncBattleCards,
+    attackBattleSquadTarget,
     selectBattleSquad,
     followBattleSquad,
     closeSkillConfirm,

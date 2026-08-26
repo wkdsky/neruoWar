@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
+  areTrainingFlagAnchorsInMapContact,
   resolveTrainingFlagLod,
   resolveTrainingInfoLabelElevation,
   resolveTrainingNeutralPreviewAnchors,
@@ -8,6 +9,33 @@ import {
 } from '../render/TrainingThreeRenderPipeline';
 
 const clamp = (value, min, max) => Math.min(max, Math.max(min, value));
+
+export const resolveTrainingFlagLabelCameraDepth = (source = {}, elevation = 0, camera = null) => {
+  const eye = Array.isArray(camera?.eye) ? camera.eye : [0, 0, 0];
+  const configuredForward = Array.isArray(camera?.renderForward) ? camera.renderForward : null;
+  const target = Array.isArray(camera?.target) ? camera.target : null;
+  const forward = configuredForward || (target
+    ? [
+        (Number(target[0]) || 0) - (Number(eye[0]) || 0),
+        (Number(target[1]) || 0) - (Number(eye[1]) || 0),
+        (Number(target[2]) || 0) - (Number(eye[2]) || 0)
+      ]
+    : null);
+  const delta = [
+    (Number(source?.x) || 0) - (Number(eye[0]) || 0),
+    (Number(source?.y) || 0) - (Number(eye[1]) || 0),
+    (Number(elevation) || 0) - (Number(eye[2]) || 0)
+  ];
+  const forwardLength = forward
+    ? Math.hypot(Number(forward[0]) || 0, Number(forward[1]) || 0, Number(forward[2]) || 0)
+    : 0;
+  if (forwardLength <= 1e-6) return Math.hypot(...delta);
+  return Math.max(0, (
+    (delta[0] * (Number(forward[0]) || 0))
+      + (delta[1] * (Number(forward[1]) || 0))
+      + (delta[2] * (Number(forward[2]) || 0))
+  ) / forwardLength);
+};
 
 const normalizeTrainingFlagTeam = (team = '') => {
   if (team === 'defender') return 'defender';
@@ -42,6 +70,34 @@ export const resolveTrainingTroopState = (ratio = 1) => {
   return 'healthy';
 };
 
+export const resolveTrainingFlagCombatTargetIds = (source = {}) => {
+  const underAttack = (Number(source?.underAttackTimer) || 0) > 0.05;
+  const minionCombatActive = source?.isMinionWaveUnit !== true
+    || String(source?.minionAiState || '') === 'ATTACK_HOLD'
+    || String(source?.action || '') === '兵线交战'
+    || underAttack;
+  return Array.from(new Set([
+    minionCombatActive ? source?._combatEngagementTargetId : '',
+    underAttack ? source?.lastDamagedBySquadId : ''
+  ]
+    .map((value) => String(value || '').trim())
+    .filter(Boolean)));
+};
+
+export const areTrainingFlagRowsCombatLinked = (left = {}, right = {}) => {
+  const leftId = String(left?.id || '').trim();
+  const rightId = String(right?.id || '').trim();
+  if (!leftId || !rightId || leftId === rightId) return false;
+  const leftTargets = Array.isArray(left?.combatTargetIds)
+    ? left.combatTargetIds
+    : resolveTrainingFlagCombatTargetIds(left);
+  const rightTargets = Array.isArray(right?.combatTargetIds)
+    ? right.combatTargetIds
+    : resolveTrainingFlagCombatTargetIds(right);
+  return leftTargets.some((targetId) => String(targetId || '') === rightId)
+    || rightTargets.some((targetId) => String(targetId || '') === leftId);
+};
+
 export const buildTrainingFlagRows = (squads = []) => {
   return (Array.isArray(squads) ? squads : [])
     .filter((row) => row && row.placed !== false && (Number(row.remain) || 0) > 0)
@@ -59,11 +115,15 @@ export const buildTrainingFlagRows = (squads = []) => {
         showSkillPoints: !isMinionWaveUnit && team !== 'neutral',
         x: Number.isFinite(Number(row.centerX)) ? Number(row.centerX) : (Number(row.x) || 0),
         y: Number.isFinite(Number(row.centerY)) ? Number(row.centerY) : (Number(row.y) || 0),
+        contactX: Number.isFinite(Number(row.centerX)) ? Number(row.centerX) : (Number(row.x) || 0),
+        contactY: Number.isFinite(Number(row.centerY)) ? Number(row.centerY) : (Number(row.y) || 0),
         radius: Math.max(0, Number(row.radius) || 0),
+        contactRadius: Math.max(0, Number(row.contactRadius) || Number(row.radius) || 0),
         isMinionWaveUnit,
         minionLaneId: String(row?.minionLaneId || '').trim(),
         minionBarracksLane: String(row?.minionBarracksLane || '').trim(),
         minionExitId: String(row?.minionExitId || '').trim(),
+        combatTargetIds: resolveTrainingFlagCombatTargetIds(row),
         ratio,
         troopState: resolveTrainingTroopState(ratio),
         selected: !!row.selected
@@ -98,6 +158,18 @@ export const buildTrainingFlagRowsWithNeutralPreview = (squads = [], neutralPrev
   return buildTrainingFlagRows([...sourceRows, ...neutralRows]);
 };
 
+export const resolveTrainingFlagLiveSource = (runtime = null, phase = '', row = {}) => {
+  const squadId = String(row?.id || '');
+  if (phase === 'battle' || phase === 'ended') {
+    const squad = runtime?.getSquadById?.(squadId) || null;
+    const renderedAnchor = runtime?.getRenderedBattleSquadAnchor?.(squadId) || null;
+    if (!renderedAnchor) return squad;
+    if (!squad) return renderedAnchor;
+    return { ...squad, ...renderedAnchor };
+  }
+  return runtime?.getDeployGroupById?.(squadId, 'any') || null;
+};
+
 const TRAINING_FLAG_LABEL_NEAR_DISTANCE = 460;
 const TRAINING_FLAG_LABEL_FAR_DISTANCE = 760;
 
@@ -126,19 +198,29 @@ export const resolveTrainingFlagLabelPresentation = (row = {}, cameraDistance = 
 export const resolveTrainingFlagLabelStackLayout = (items = [], {
   horizontalThreshold = 118,
   verticalThreshold = 34,
-  verticalGap = 38
+  fallbackHeight = 14,
+  columnGap = 6,
+  canMerge = areTrainingFlagAnchorsInMapContact
 } = {}) => {
   const entries = (Array.isArray(items) ? items : [])
     .map((item) => ({
       id: String(item?.id || ''),
       point: item?.point,
+      source: item?.source || item,
+      height: Math.max(1, Number(item?.height) || fallbackHeight),
+      width: Math.max(1, Number(item?.width) || 1),
+      team: String((item?.source || item)?.team || ''),
       visible: item?.point?.visible !== false
     }))
     .filter((item) => item.id && item.visible && Number.isFinite(Number(item.point?.x)) && Number.isFinite(Number(item.point?.y)));
   const groups = [];
+  const canMergeEntries = typeof canMerge === 'function'
+    ? (left, right) => canMerge(left.source, right.source)
+    : () => false;
   entries.forEach((entry) => {
     const matches = groups.filter((group) => group.some((member) => (
-      Math.abs(Number(member.point.x) - Number(entry.point.x)) <= horizontalThreshold
+      canMergeEntries(member, entry)
+      && Math.abs(Number(member.point.x) - Number(entry.point.x)) <= horizontalThreshold
       && Math.abs(Number(member.point.y) - Number(entry.point.y)) <= verticalThreshold
     )));
     if (matches.length <= 0) {
@@ -156,25 +238,76 @@ export const resolveTrainingFlagLabelStackLayout = (items = [], {
 
   const layout = {};
   groups.forEach((group) => {
-    if (group.length <= 1) {
-      const item = group[0];
-      layout[item.id] = { x: Number(item.point.x), y: Number(item.point.y) };
-      return;
-    }
-    const centerX = group.reduce((sum, item) => sum + Number(item.point.x), 0) / group.length;
-    const centerY = group.reduce((sum, item) => sum + Number(item.point.y), 0) / group.length;
-    const sorted = [...group].sort((left, right) => (
-      (Number(left.point.y) - Number(right.point.y))
-      || left.id.localeCompare(right.id)
-    ));
-    sorted.forEach((item, index) => {
-      layout[item.id] = {
-        x: centerX,
-        y: centerY + ((index - ((sorted.length - 1) * 0.5)) * verticalGap)
-      };
+    const columnsByTeam = new Map();
+    group.forEach((item) => {
+      const key = item.team || 'unknown';
+      if (!columnsByTeam.has(key)) columnsByTeam.set(key, []);
+      columnsByTeam.get(key).push(item);
+    });
+    const teamOrder = { attacker: 0, neutral: 1, defender: 2, unknown: 3 };
+    const columns = [...columnsByTeam.entries()]
+      .map(([team, columnItems]) => ({
+        team,
+        items: columnItems,
+        width: Math.max(...columnItems.map((item) => item.width)),
+        height: columnItems.reduce((sum, item) => sum + item.height, 0),
+        anchorX: columnItems.reduce((sum, item) => sum + Number(item.point.x), 0) / columnItems.length,
+        anchorY: columnItems.reduce((sum, item) => (
+          sum + Number(item.point.y) - (item.height * 0.5)
+        ), 0) / columnItems.length
+      }))
+      .sort((left, right) => (
+        (teamOrder[left.team] ?? 4) - (teamOrder[right.team] ?? 4)
+        || left.team.localeCompare(right.team)
+      ));
+    const centerX = columns.reduce((sum, column) => sum + column.anchorX, 0) / columns.length;
+    const centerY = columns.reduce((sum, column) => sum + column.anchorY, 0) / columns.length;
+    const safeColumnGap = Math.max(0, Number(columnGap) || 0);
+    const totalWidth = columns.reduce((sum, column) => sum + column.width, 0)
+      + (Math.max(0, columns.length - 1) * safeColumnGap);
+    let cursorX = centerX - (totalWidth * 0.5);
+    columns.forEach((column, columnIndex) => {
+      const columnX = cursorX + (column.width * 0.5);
+      const sorted = [...column.items].sort((left, right) => (
+        (Number(left.point.y) - Number(right.point.y))
+        || left.id.localeCompare(right.id)
+      ));
+      let cursorY = centerY - (column.height * 0.5);
+      sorted.forEach((item, index) => {
+        cursorY += item.height;
+        layout[item.id] = {
+          x: columnX,
+          y: cursorY,
+          width: column.width,
+          height: item.height,
+          stackIndex: index,
+          stackSize: sorted.length,
+          clusterSize: group.length,
+          clusterCenterX: centerX,
+          clusterCenterY: centerY,
+          columnIndex,
+          columnCount: columns.length
+        };
+      });
+      cursorX += column.width + safeColumnGap;
     });
   });
   return layout;
+};
+
+export const resolveTrainingFlagLabelDepthOrder = (items = []) => {
+  const order = {};
+  (Array.isArray(items) ? items : [])
+    .filter((item) => item?.id && Number.isFinite(Number(item?.distance)))
+    .slice()
+    .sort((left, right) => (
+      Number(right.distance) - Number(left.distance)
+      || String(left.id).localeCompare(String(right.id))
+    ))
+    .forEach((item, index) => {
+      order[String(item.id)] = index + 1;
+    });
+  return order;
 };
 
 const placeWorldNode = (
@@ -214,7 +347,8 @@ const placeWorldNode = (
   node.style.opacity = isWorldHidden ? '0' : '1';
   if (anchor === 'flag') node.classList.toggle('is-world-hidden', isWorldHidden);
   if (anchor === 'flag') {
-    node.style.transform = `translate3d(${Math.round(point.x)}px, ${Math.round(point.y)}px, 0) translate(-50%, ${isWorldHidden ? '-50%' : '-100%'}) scale(${flagPresentation.scale.toFixed(3)})`;
+    node.style.zIndex = String(Math.max(0, Math.floor(Number(point?.zIndex) || 0)));
+    node.style.transform = `translate3d(${Number(point.x).toFixed(2)}px, ${Number(point.y).toFixed(2)}px, 0) translate(-50%, ${isWorldHidden ? '-50%' : '-100%'}) scale(${flagPresentation.scale.toFixed(3)})`;
     return;
   }
   node.style.setProperty('--pve2-world-x', `${Math.round(point.x)}px`);
@@ -230,7 +364,8 @@ const TrainingFlagLabels = ({
   worldToDomRef,
   cameraRef,
   onHoverSquad = null,
-  onSelectSquad = null
+  onSelectSquad = null,
+  onAttackSquadTarget = null
 }) => {
   const neutralPreview = phase === 'deploy'
     ? runtimeRef?.current?.getTrainingNeutralPreview?.() || null
@@ -302,23 +437,29 @@ const TrainingFlagLabels = ({
         setHoveredSquadId(runtimeHoveredSquadId);
       }
       const liveFlagRows = flagRows.map((row) => {
-        const source = phase === 'battle'
-          ? runtime?.getSquadById?.(row.id)
-          : runtime?.getDeployGroupById?.(row.id, 'any');
+        const source = resolveTrainingFlagLiveSource(runtime, phase, row);
         if (!source) return row;
         return {
           ...row,
           x: Number.isFinite(Number(source.centerX)) ? Number(source.centerX) : (Number(source.x) || 0),
-          y: Number.isFinite(Number(source.centerY)) ? Number(source.centerY) : (Number(source.y) || 0)
+          y: Number.isFinite(Number(source.centerY)) ? Number(source.centerY) : (Number(source.y) || 0),
+          contactX: Number.isFinite(Number(source.centerX)) ? Number(source.centerX) : (Number(source.x) || 0),
+          contactY: Number.isFinite(Number(source.centerY)) ? Number(source.centerY) : (Number(source.y) || 0),
+          radius: Math.max(0, Number(source.radius) || Number(row.radius) || 0),
+          contactRadius: Math.max(
+            0,
+            Number(source.contactRadius) || Number(source.radius) || Number(row.contactRadius) || Number(row.radius) || 0
+          ),
+          combatTargetIds: resolveTrainingFlagCombatTargetIds(source)
         };
       });
       const cameraDistance = Number(cameraRef?.current?.distance) || 0;
       const requestedCameraPitch = Number(cameraRef?.current?.currentPitch);
       const cameraPitch = Number.isFinite(requestedCameraPitch) ? requestedCameraPitch : 90;
       const worldFlagBasePoints = {};
-      const cameraEye = Array.isArray(cameraRef?.current?.eye) ? cameraRef.current.eye : [0, 0, 0];
+      const camera = cameraRef?.current;
       const worldFlagStackLayout = resolveTrainingWorldFlagStackLayout(
-        liveFlagRows,
+        liveFlagRows.filter((row) => row.isMinionWaveUnit !== true),
         (row) => {
           const dimensions = resolveTrainingWorldFlagDimensions(row);
           const point = typeof worldToDomRef?.current === 'function'
@@ -332,11 +473,7 @@ const TrainingFlagLabels = ({
           return point
             ? {
                 ...point,
-                distance: Math.hypot(
-                  (Number(row.x) || 0) - (Number(cameraEye[0]) || 0),
-                  (Number(row.y) || 0) - (Number(cameraEye[1]) || 0),
-                  dimensions.clothBottom - (Number(cameraEye[2]) || 0)
-                )
+                distance: resolveTrainingFlagLabelCameraDepth(row, dimensions.clothBottom, camera)
               }
             : point;
         }
@@ -344,6 +481,11 @@ const TrainingFlagLabels = ({
       const projectedFlags = liveFlagRows.map((row) => {
         const presentation = resolveTrainingFlagLabelPresentation(row, cameraDistance, cameraPitch);
         const worldFlagDimensions = resolveTrainingWorldFlagDimensions(row);
+        const node = flagNodesRef.current.get(row.id);
+        if (node) {
+          node.style.width = 'max-content';
+          node.classList.remove('is-stacked', 'is-stack-top', 'is-stack-middle', 'is-stack-bottom');
+        }
         let point = typeof worldToDomRef?.current === 'function'
           ? worldToDomRef.current({
               x: Number(row.x) || 0,
@@ -360,20 +502,46 @@ const TrainingFlagLabels = ({
             y: Number(leaderPoint.y) - 38 - (stackLevel * 34)
           };
         }
-        return { id: row.id, point, worldFlag: !presentation.visible };
+        return {
+          id: row.id,
+          point,
+          worldFlag: !presentation.visible,
+          source: row,
+          height: Math.max(1, Number(node?.offsetHeight) || 14) * presentation.scale,
+          width: Math.max(1, Number(node?.offsetWidth) || (row.showSkillPoints ? 102 : 86)),
+          distance: resolveTrainingFlagLabelCameraDepth(row, presentation.elevation, camera)
+        };
       });
-      const stackLayout = resolveTrainingFlagLabelStackLayout(
-        projectedFlags.filter((item) => !item.worldFlag),
-        { verticalGap: 38 }
+      const visibleInfoLabels = projectedFlags.filter((item) => (
+        !item.worldFlag && item.point?.visible !== false
+      ));
+      const stackLayout = resolveTrainingFlagLabelStackLayout(visibleInfoLabels);
+      const depthOrder = resolveTrainingFlagLabelDepthOrder(
+        visibleInfoLabels
       );
       liveFlagRows.forEach((row) => {
         const sourcePoint = projectedFlags.find((item) => item.id === row.id)?.point;
         const stackedPoint = stackLayout[row.id] || sourcePoint;
+        const node = flagNodesRef.current.get(row.id);
+        const stackSize = Math.max(1, Math.floor(Number(stackedPoint?.stackSize) || 1));
+        const stackIndex = Math.max(0, Math.floor(Number(stackedPoint?.stackIndex) || 0));
+        if (node && stackSize > 1) {
+          node.style.width = `${Math.max(1, Number(stackedPoint?.width) || 1)}px`;
+          node.classList.add('is-stacked');
+          node.classList.add(stackIndex === 0
+            ? 'is-stack-top'
+            : (stackIndex === stackSize - 1 ? 'is-stack-bottom' : 'is-stack-middle'));
+        }
         const point = sourcePoint && stackedPoint
-          ? { ...sourcePoint, x: stackedPoint.x, y: stackedPoint.y }
+          ? {
+              ...sourcePoint,
+              x: stackedPoint.x,
+              y: stackedPoint.y,
+              zIndex: depthOrder[row.id] || 0
+            }
           : sourcePoint;
         placeWorldNode(
-          flagNodesRef.current.get(row.id),
+          node,
           row,
           worldToDomRef,
           'flag',
@@ -412,7 +580,16 @@ const TrainingFlagLabels = ({
             ? `${row.name}：兵力 ${row.remain}/${row.startCount}，技能点 ${row.skillPoints}`
             : `${row.name}：兵力 ${row.remain}/${row.startCount}`}
           onPointerDown={(event) => event.stopPropagation()}
-          onMouseDown={(event) => event.stopPropagation()}
+          onMouseDown={(event) => {
+            event.stopPropagation();
+            if (event.button !== 2) return;
+            event.preventDefault();
+            onAttackSquadTarget?.(row.id);
+          }}
+          onContextMenu={(event) => {
+            event.preventDefault();
+            event.stopPropagation();
+          }}
           onMouseEnter={() => {
             hoveredSquadRef.current = row.id;
             setHoveredSquadId(row.id);
@@ -426,7 +603,7 @@ const TrainingFlagLabels = ({
           }}
           onClick={(event) => {
             event.stopPropagation();
-            if (!row.isMinionWaveUnit) onSelectSquad?.(row.id);
+            onSelectSquad?.(row.id);
           }}
         >
           {row.isMinionWaveUnit ? (

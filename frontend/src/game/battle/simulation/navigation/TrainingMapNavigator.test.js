@@ -304,4 +304,51 @@ describe('TrainingMapNavigator', () => {
     expect(route[route.length - 1]).toEqual(target);
     expect(cachedRoute).toEqual(route);
   });
+
+  test('keeps a manual route local around the reference crescent instead of joining a distant lane', () => {
+    const referenceMap = buildReferenceTrainingMapConfig();
+    const field = {
+      width: referenceMap.layoutMeta.fieldWidth,
+      height: referenceMap.layoutMeta.fieldHeight
+    };
+    const obstacles = referenceMap.objects
+      .filter((entry) => entry?.blocksMovement)
+      .map((entry) => ({ ...entry, collisionPath: undefined }));
+    const crescent = obstacles.find((entry) => entry?.geometryRefId === 'ordinary-upper-west-crescent');
+    const start = {
+      x: crescent.x - (crescent.width * 0.7),
+      y: crescent.y - (crescent.depth * 0.7)
+    };
+    const target = {
+      x: crescent.x + (crescent.width * 0.7),
+      y: crescent.y + (crescent.depth * 0.7)
+    };
+    const route = planTrainingMapRoute({
+      field,
+      mapConfig: referenceMap,
+      start,
+      target,
+      obstacles,
+      radius: 2.25,
+      preferLocalDetour: true
+    });
+    const routeLength = route.reduce((sum, point, index) => (
+      sum + Math.hypot(
+        point.x - (index === 0 ? start.x : route[index - 1].x),
+        point.y - (index === 0 ? start.y : route[index - 1].y)
+      )
+    ), 0);
+    const directLength = Math.hypot(target.x - start.x, target.y - start.y);
+
+    expect(crescent.collider).toMatchObject({ kind: 'compositeCapsule' });
+    expect(crescent.collider.parts).toHaveLength(crescent.visualPath.length - 1);
+    expect(route[route.length - 1]).toEqual(target);
+    expect(route.length).toBeGreaterThan(1);
+    expect(routeLength).toBeLessThan(directLength * 1.3);
+    let previous = start;
+    route.forEach((point) => {
+      expect(raycastObstacles(previous, point, obstacles, 3.45)).toBeNull();
+      previous = point;
+    });
+  });
 });

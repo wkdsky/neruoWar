@@ -155,6 +155,54 @@ describe('BattleSnapshotBuilder map-wall rendering', () => {
     expect(snapshot.units.data[5]).toBe(0);
     expect(snapshot.units.data[20 + 5]).toBe(1);
     expect(snapshot.units.data[40 + 5]).toBe(2);
+    expect(snapshot.unitAgentIds).toHaveLength(3);
+    expect(new Set(snapshot.unitAgentIds).size).toBe(3);
+  });
+
+  test('keeps render identities stable across reordering but replaces them for new agent objects', () => {
+    const ally = {
+      id: 'shared-agent-id',
+      squadId: 'ally-squad',
+      team: 'attacker',
+      unitTypeId: 'infantry',
+      x: 0,
+      y: 0,
+      weight: 1,
+      hpWeight: 1,
+      initialWeight: 1
+    };
+    const enemy = {
+      id: 'enemy-agent',
+      squadId: 'enemy-squad',
+      team: 'defender',
+      unitTypeId: 'infantry',
+      x: 100,
+      y: 0,
+      weight: 1,
+      hpWeight: 1,
+      initialWeight: 1
+    };
+    const runtime = {
+      sim: { buildings: [], projectiles: [], hitEffects: [] },
+      crowd: { allAgents: [ally, enemy] },
+      unitTypeMap: new Map([['infantry', { unitCategory: 'melee' }]]),
+      visualConfig: () => ({}),
+      selectedBattleSquadId: '',
+      hoveredBattleSquadId: ''
+    };
+    const builder = new BattleSnapshotBuilder();
+    const first = builder.build(runtime);
+    const allyIdentity = first.unitAgentIds[0];
+    const enemyIdentity = first.unitAgentIds[1];
+
+    runtime.crowd.allAgents = [enemy, ally];
+    const reordered = builder.build(runtime);
+    expect(reordered.unitAgentIds).toEqual([enemyIdentity, allyIdentity]);
+
+    runtime.crowd.allAgents = [{ ...ally }, enemy];
+    const replaced = builder.build(runtime);
+    expect(replaced.unitAgentIds[0]).not.toBe(allyIdentity);
+    expect(replaced.unitAgentIds[1]).toBe(enemyIdentity);
   });
 
   test('renders pre-start neutral camps through the same unit snapshot channel', () => {
@@ -233,6 +281,8 @@ describe('BattleSnapshotBuilder map-wall rendering', () => {
       'neutral_camp_preview-camp',
       'neutral_camp_preview-camp'
     ]);
+    expect(snapshot.unitAgentIds[0]).toBe('deploy:attacker-preview:0');
+    expect(new Set(snapshot.unitAgentIds).size).toBe(3);
     expect(Array.from({ length: snapshot.units.count }, (_, index) => (
       snapshot.units.data[(index * 20) + 5]
     ))).toEqual([0, 2, 2]);

@@ -13,6 +13,7 @@ export default function useBattleUiSync({
 } = {}) {
   const [battleStatus, setBattleStatus] = useState(EMPTY_STATUS);
   const [cardRows, setCardRows] = useState([]);
+  const [battleFlagRows, setBattleFlagRows] = useState([]);
   const [minimapSnapshot, setMinimapSnapshot] = useState(null);
   const [trainingState, setTrainingState] = useState(null);
 
@@ -20,6 +21,7 @@ export default function useBattleUiSync({
     if (!enabled) {
       setBattleStatus(EMPTY_STATUS);
       setCardRows([]);
+      setBattleFlagRows([]);
       setMinimapSnapshot(null);
       setTrainingState(null);
       return undefined;
@@ -29,6 +31,7 @@ export default function useBattleUiSync({
       if (!runtime) return;
       const nextBattleStatus = runtime.getBattleStatus?.() || EMPTY_STATUS;
       const nextCardRows = runtime.getCardRows?.() || [];
+      const nextBattleFlagRows = runtime.getBattleFlagRows?.() || nextCardRows;
       const nextMinimapSnapshot = runtime.getMinimapSnapshot?.() || null;
       const nextTrainingState = runtime.getTrainingState?.() || null;
       setBattleStatus((previous) => (
@@ -36,6 +39,9 @@ export default function useBattleUiSync({
       ));
       setCardRows((previous) => (
         areJsonValuesEqual(previous, nextCardRows) ? previous : nextCardRows
+      ));
+      setBattleFlagRows((previous) => (
+        areJsonValuesEqual(previous, nextBattleFlagRows) ? previous : nextBattleFlagRows
       ));
       setMinimapSnapshot((previous) => (
         areJsonValuesEqual(previous, nextMinimapSnapshot) ? previous : nextMinimapSnapshot
@@ -52,6 +58,7 @@ export default function useBattleUiSync({
     phase: battleStatus?.phase || 'deploy',
     battleStatus,
     cardRows,
+    battleFlagRows,
     minimapSnapshot,
     trainingState,
     setBattleStatus,

@@ -73,6 +73,7 @@ import {
   createDefaultDeployInfoState,
   createDefaultResultState,
   createDefaultTrainingPresentationSettings,
+  normalizeTrainingCameraZoomSensitivity,
   TRAINING_FONT_SCALE_BY_SIZE,
   speedModeLabel
 } from './battleSceneConstants';
@@ -417,6 +418,7 @@ const BattleSceneContainer = ({
   const {
     battleStatus,
     cardRows: cards,
+    battleFlagRows,
     minimapSnapshot,
     trainingState,
     setBattleStatus,
@@ -1101,6 +1103,7 @@ const BattleSceneContainer = ({
 
   const {
     syncBattleCards,
+    attackBattleSquadTarget,
     selectBattleSquad,
     followBattleSquad,
     closeSkillConfirm,
@@ -1225,6 +1228,7 @@ const BattleSceneContainer = ({
     CAMERA_DISTANCE_MIN,
     CAMERA_DISTANCE_MAX,
     TRAINING_CAMERA_ZOOM_STEP,
+    TRAINING_CAMERA_ZOOM_SENSITIVITY: trainingPresentationSettings.cameraZoomSensitivity,
     TRAINING_PITCH_DISTANCE_MAX,
     TRAINING_OVERVIEW_DISTANCE_EXTRA,
     TRAINING_OVERVIEW_DISTANCE_MAX,
@@ -1546,7 +1550,8 @@ const BattleSceneContainer = ({
       : 'medium';
     setTrainingPresentationSettings({
       fontSize,
-      showGrid: nextSettings.showGrid !== false
+      showGrid: nextSettings.showGrid !== false,
+      cameraZoomSensitivity: normalizeTrainingCameraZoomSensitivity(nextSettings.cameraZoomSensitivity)
     });
   }, []);
 
@@ -1951,7 +1956,7 @@ const BattleSceneContainer = ({
             {isTrainingMode ? (
               <TrainingFlagLabels
                 squads={phase === 'battle' || phase === 'ended'
-                  ? (runtimeRef.current?.getBattleFlagRows?.() || cards)
+                  ? battleFlagRows
                   : cards}
                 phase={phase}
                 runtimeRef={runtimeRef}
@@ -1964,6 +1969,7 @@ const BattleSceneContainer = ({
                   else runtime.setHoveredBattleSquad?.(squadId);
                 }}
                 onSelectSquad={(squadId) => handleCardSelect(squadId)}
+                onAttackSquadTarget={attackBattleSquadTarget}
               />
             ) : null}
 

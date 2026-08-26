@@ -14,6 +14,7 @@ const createChannel = (stride, capacity = DEFAULT_CAPACITY) => ({
 
 const createSnapshot = (schema) => ({
   schemaVersion: schema.version,
+  unitAgentIds: [],
   unitSquadIds: [],
   units: createChannel(schema.units.stride),
   skillStates: createChannel(schema.skillStates.stride),

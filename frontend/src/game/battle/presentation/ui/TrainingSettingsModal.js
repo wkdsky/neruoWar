@@ -7,7 +7,11 @@ import {
   Swords,
   X
 } from 'lucide-react';
-import { TRAINING_FONT_SIZE_OPTIONS } from '../../screens/battleSceneConstants';
+import {
+  TRAINING_CAMERA_ZOOM_SENSITIVITY_OPTIONS,
+  TRAINING_FONT_SIZE_OPTIONS,
+  normalizeTrainingCameraZoomSensitivity
+} from '../../screens/battleSceneConstants';
 
 const formatInterval = (seconds = 60) => {
   const value = Math.max(1, Number(seconds) || 60);
@@ -38,6 +42,7 @@ const TrainingSettingsModal = ({
   const [draftInterval, setDraftInterval] = useState(60);
   const [draftFontSize, setDraftFontSize] = useState('medium');
   const [draftShowGrid, setDraftShowGrid] = useState(true);
+  const [draftCameraZoomSensitivity, setDraftCameraZoomSensitivity] = useState(1.25);
   const [draftMapPresetId, setDraftMapPresetId] = useState('');
   const [draftRespawnDelay, setDraftRespawnDelay] = useState(20);
   const wasOpenRef = useRef(false);
@@ -54,6 +59,7 @@ const TrainingSettingsModal = ({
     ? state.respawnDelayOptions
     : [10, 20, 30, 45, 60];
   const currentRespawnDelay = Math.max(0, Number(state?.respawnDelaySec) || 20);
+  const currentCameraZoomSensitivity = normalizeTrainingCameraZoomSensitivity(settings?.cameraZoomSensitivity);
 
   useEffect(() => {
     if (open && !wasOpenRef.current) {
@@ -62,11 +68,21 @@ const TrainingSettingsModal = ({
       setDraftInterval(currentInterval);
       setDraftFontSize(normalizeFontSize(settings?.fontSize));
       setDraftShowGrid(settings?.showGrid !== false);
+      setDraftCameraZoomSensitivity(currentCameraZoomSensitivity);
       setDraftMapPresetId(currentMapPresetId);
       setDraftRespawnDelay(currentRespawnDelay);
     }
     wasOpenRef.current = open;
-  }, [currentAutoSkillPointGain, currentInterval, currentMapPresetId, currentRespawnDelay, open, settings?.fontSize, settings?.showGrid]);
+  }, [
+    currentAutoSkillPointGain,
+    currentCameraZoomSensitivity,
+    currentInterval,
+    currentMapPresetId,
+    currentRespawnDelay,
+    open,
+    settings?.fontSize,
+    settings?.showGrid
+  ]);
 
   if (!open) return null;
 
@@ -79,7 +95,8 @@ const TrainingSettingsModal = ({
     if (draftMapPresetId && draftMapPresetId !== currentMapPresetId) onChangeMapPreset?.(draftMapPresetId);
     onApply?.({
       fontSize: normalizeFontSize(draftFontSize),
-      showGrid: draftShowGrid !== false
+      showGrid: draftShowGrid !== false,
+      cameraZoomSensitivity: normalizeTrainingCameraZoomSensitivity(draftCameraZoomSensitivity)
     });
     onClose?.();
   };
@@ -244,6 +261,31 @@ const TrainingSettingsModal = ({
                   {state?.sessionActive === true ? <small>重置训练后可切换地图预设</small> : null}
                 </>
               ) : null}
+              <div className="pve2-training-settings-rate-head">
+                <div>
+                  <span className="pve2-training-settings-label">滚轮缩放灵敏度</span>
+                  <small>控制每次滚轮输入改变的镜头距离</small>
+                </div>
+                <strong>
+                  {TRAINING_CAMERA_ZOOM_SENSITIVITY_OPTIONS.find((option) => (
+                    option.value === draftCameraZoomSensitivity
+                  ))?.label || '较高'}
+                </strong>
+              </div>
+              <div className="pve2-training-settings-rate-options" role="radiogroup" aria-label="滚轮缩放灵敏度">
+                {TRAINING_CAMERA_ZOOM_SENSITIVITY_OPTIONS.map((option) => (
+                  <button
+                    key={option.value}
+                    type="button"
+                    role="radio"
+                    aria-checked={draftCameraZoomSensitivity === option.value}
+                    className={draftCameraZoomSensitivity === option.value ? 'is-active' : ''}
+                    onClick={() => setDraftCameraZoomSensitivity(option.value)}
+                  >
+                    {option.label} {Math.round(option.value * 100)}%
+                  </button>
+                ))}
+              </div>
               <label className="pve2-training-settings-toggle">
                 <span>显示网格线</span>
                 <input

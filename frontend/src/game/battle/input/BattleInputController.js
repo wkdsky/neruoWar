@@ -21,9 +21,10 @@ const PAN_DRAG_THRESHOLD_PX = 4;
 const TEAM_ANY = 'any';
 const CAMERA_VERTICAL_FOV_DEG = 48;
 const DEFAULT_TRAINING_CAMERA_ZOOM_STEP = 88;
+const DEFAULT_TRAINING_CAMERA_ZOOM_SENSITIVITY = 1.25;
 const DEFAULT_TRAINING_PITCH_DISTANCE_MAX = 2000;
 const DEFAULT_TRAINING_OVERVIEW_DISTANCE_EXTRA = 1200;
-const DEFAULT_TRAINING_OVERVIEW_DISTANCE_MAX = 12000;
+const DEFAULT_TRAINING_OVERVIEW_DISTANCE_MAX = 4480;
 const DEFAULT_TRAINING_OVERVIEW_VIEW_PADDING = 1.08;
 const TRAINING_DIRECTION_ARC_PRIORITY_HIT_OPTIONS = Object.freeze({
   minimumHitRadius: 3,
@@ -928,9 +929,17 @@ export const createBattleInputController = ({
         padding: constants.TRAINING_OVERVIEW_VIEW_PADDING
       })
       : baseDistanceMax;
-    const zoomStep = isTrainingMode
+    const zoomStepBase = isTrainingMode
       ? Math.max(1, Number(constants.TRAINING_CAMERA_ZOOM_STEP) || DEFAULT_TRAINING_CAMERA_ZOOM_STEP)
       : Math.max(1, Number(constants.CAMERA_ZOOM_STEP) || 24);
+    const zoomSensitivity = isTrainingMode
+      ? clamp(
+        Number(constants.TRAINING_CAMERA_ZOOM_SENSITIVITY) || DEFAULT_TRAINING_CAMERA_ZOOM_SENSITIVITY,
+        0.5,
+        2
+      )
+      : 1;
+    const zoomStep = zoomStepBase * zoomSensitivity;
     const pitchDistanceMax = isTrainingMode
       ? Math.min(
         overviewDistanceMax,

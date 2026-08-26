@@ -28,10 +28,16 @@ import {
 import {
   TEAM_ATTACKER,
   TEAM_DEFENDER,
+  canAcquireSquadTarget,
   isHostileTeam
 } from './teamRelations';
 import { selectTrainingMapAiTarget } from '../TrainingMapAi';
-import { isSquadCombatEnabled } from './combatPolicy';
+import {
+  completeTargetOnlyAttackOrder,
+  isSquadCombatEnabled,
+  isTargetOnlyAttackOrder
+} from './combatPolicy';
+import { resolveMinionWaveAgentAttackRange } from './MinionWaveAi';
 
 const ORDER_ATTACK_MOVE = 'ATTACK_MOVE';
 const ORDER_CHARGE = 'CHARGE';
@@ -53,6 +59,18 @@ const isSquadHiddenForViewerTeam = (enemySquad, viewerTeam) => {
   if (viewerTeam === TEAM_ATTACKER) return !!enemySquad?.hiddenFromAttacker;
   if (viewerTeam === TEAM_DEFENDER) return !!enemySquad?.hiddenFromDefender;
   return false;
+};
+
+const clearCrowdCombatAgentTargets = (agents = [], preserveBuildingTarget = false) => {
+  (Array.isArray(agents) ? agents : []).forEach((agent) => {
+    if (!agent) return;
+    agent.targetAgentId = '';
+    if (!preserveBuildingTarget) agent.targetBuildingId = '';
+    agent.supportTargetAgentId = '';
+    agent.supportTargetSquadId = '';
+    agent._combatTargetSquadId = '';
+    agent._combatTargetLockUntil = 0;
+  });
 };
 
 const sqr = (v) => v * v;
@@ -85,6 +103,41 @@ const damageScaleFromAgent = (agent = null, exponent = 0.75) => (
 const projectileCountFromWeight = (weight = 1) => {
   const safe = Math.max(1, Number(weight) || 1);
   return Math.max(1, Math.min(5, 1 + Math.floor(Math.log2(safe))));
+};
+
+const resolveProjectileAimOffset = (sourceAgent = {}, targetAgent = {}, projectileSpeed = 0, predictionLimitSec = 0) => {
+  const relativeX = (Number(targetAgent?.x) || 0) - (Number(sourceAgent?.x) || 0);
+  const relativeY = (Number(targetAgent?.y) || 0) - (Number(sourceAgent?.y) || 0);
+  const targetVelocityX = Number(targetAgent?.vx) || 0;
+  const targetVelocityY = Number(targetAgent?.vy) || 0;
+  const speed = Math.max(0.001, Number(projectileSpeed) || 0);
+  const quadraticA = (targetVelocityX * targetVelocityX) + (targetVelocityY * targetVelocityY) - (speed * speed);
+  const quadraticB = 2 * ((relativeX * targetVelocityX) + (relativeY * targetVelocityY));
+  const quadraticC = (relativeX * relativeX) + (relativeY * relativeY);
+  let interceptTime = 0;
+  if (Math.abs(quadraticA) <= 0.000001) {
+    if (Math.abs(quadraticB) > 0.000001) {
+      const linearTime = -quadraticC / quadraticB;
+      if (linearTime > 0) interceptTime = linearTime;
+    }
+  } else {
+    const discriminant = (quadraticB * quadraticB) - (4 * quadraticA * quadraticC);
+    if (discriminant >= 0) {
+      const root = Math.sqrt(discriminant);
+      const firstTime = (-quadraticB - root) / (2 * quadraticA);
+      const secondTime = (-quadraticB + root) / (2 * quadraticA);
+      const validTimes = [firstTime, secondTime].filter((value) => Number.isFinite(value) && value > 0);
+      if (validTimes.length > 0) interceptTime = Math.min(...validTimes);
+    }
+  }
+  const maximumPrediction = Math.max(0, Number(predictionLimitSec) || 0);
+  const predictionTime = maximumPrediction > 0
+    ? clamp(interceptTime, 0, maximumPrediction)
+    : Math.max(0, interceptTime);
+  return {
+    x: relativeX + (targetVelocityX * predictionTime),
+    y: relativeY + (targetVelocityY * predictionTime)
+  };
 };
 
 const ensureActionState = (squad) => {
@@ -293,9 +346,11 @@ const isMeleeAgent = (agent = {}) => {
 };
 
 const pickEnemyAgentsFromSpatial = (crowd, agent, sourceTeam, radius = 24, viewerTeam = '', squadMap = new Map()) => {
-  const nearby = querySpatialNearby(crowd?.spatial, agent?.x, agent?.y, radius);
+  const safeRadius = Math.max(0, Number(radius) || 0);
+  const nearby = querySpatialNearby(crowd?.spatial, agent?.x, agent?.y, safeRadius);
   return nearby.filter((row) => {
     if (!row || row.dead || !isHostileTeam(sourceTeam, row.team)) return false;
+    if (distanceSq(agent, row) > safeRadius * safeRadius) return false;
     const enemySquad = squadMap instanceof Map ? squadMap.get(row.squadId) : null;
     if (enemySquad && isSquadHiddenForViewerTeam(enemySquad, viewerTeam)) return false;
     return true;
@@ -344,6 +399,14 @@ export const applyDamageToAgent = (sim, crowd, sourceAgent, targetAgent, amount 
     targetSquad.underAttackTimer = 1.1;
     targetSquad.lastAttackedAt = Date.now();
     targetSquad.lastDamagedBySquadId = String(sourceSquad?.id || sourceAgent?.squadId || '');
+    if (targetSquad.team === 'neutral' && sourceSquad?.id) {
+      targetSquad.targetSquadId = String(sourceSquad.id);
+      targetSquad._combatEngagementTargetId = String(sourceSquad.id);
+      targetSquad._combatEngagementUntil = Math.max(
+        Number(targetSquad?._combatEngagementUntil) || 0,
+        (Number(sim?.timeElapsed) || 0) + 1.35
+      );
+    }
   }
   if (targetSquad && sourceSquad) {
     applySquadStabilityHit(targetSquad, sourceSquad, safeAmount, { poiseDamageMul: Number(options?.poiseDamageMul) || 1 });
@@ -387,11 +450,26 @@ const spawnRangedProjectiles = (sim, crowd, attackerSquad, sourceAgent, targetAg
   const movingPenaltyEnabled = !!options?.movingPenalty && !options?.forceAccurate;
   const spreadRadius = movingPenaltyEnabled ? (2 + (MOVING_FIRE_MAX_SPREAD * speedRatio)) : 0;
   const rpsHitMul = Math.max(0.4, Number(options?.rpsHitMul) || 1);
-  const hitChance = clamp(
-    (movingPenaltyEnabled ? Math.max(MOVING_FIRE_MIN_HIT, 1 - (0.45 * speedRatio)) : 1) * rpsHitMul,
-    MOVING_FIRE_MIN_HIT * 0.8,
-    1
+  const hitChance = options?.forceAccurate
+    ? 1
+    : clamp(
+      (movingPenaltyEnabled ? Math.max(MOVING_FIRE_MIN_HIT, 1 - (0.45 * speedRatio)) : 1) * rpsHitMul,
+      MOVING_FIRE_MIN_HIT * 0.8,
+      1
+    );
+  const aimOffset = resolveProjectileAimOffset(
+    sourceAgent,
+    targetAgent,
+    speed,
+    category === 'artillery' ? 1.2 : 0.75
   );
+  const targetAgentId = category === 'archer'
+    ? String(options?.targetAgentId || targetAgent?.id || '')
+    : '';
+  const guaranteedHit = !!options?.guaranteedHit;
+  const targetImpactDelay = guaranteedHit
+    ? Math.max(0.05, Math.hypot(aimOffset.x, aimOffset.y) / Math.max(0.001, speed))
+    : 0;
   let spawned = 0;
   for (let i = 0; i < count; i += 1) {
     if (Math.random() > hitChance && (i + 1) < count) continue;
@@ -403,14 +481,15 @@ const spawnRangedProjectiles = (sim, crowd, attackerSquad, sourceAgent, targetAg
     const spreadX = randR * Math.cos(randA);
     const spreadY = randR * Math.sin(randA);
     const dir = normalizeVec(
-      (targetAgent.x - sourceAgent.x) + spreadX + (jitter * (category === 'artillery' ? 9 : 6)),
-      (targetAgent.y - sourceAgent.y) + spreadY + (jitter * (category === 'artillery' ? 9 : 6))
+      aimOffset.x + spreadX + (jitter * (category === 'artillery' ? 9 : 6)),
+      aimOffset.y + spreadY + (jitter * (category === 'artillery' ? 9 : 6))
     );
     acquireProjectile(crowd.effectsPool, {
       type: category === 'artillery' ? 'shell' : 'arrow',
       team: sourceAgent.team,
       squadId: attackerSquad.id,
       sourceAgentId: sourceAgent.id,
+      targetAgentId,
       x: sourceAgent.x,
       y: sourceAgent.y,
       z: category === 'artillery' ? 6 : 4.2,
@@ -421,17 +500,20 @@ const spawnRangedProjectiles = (sim, crowd, attackerSquad, sourceAgent, targetAg
       damage: baseDamage * (category === 'artillery' ? (1.05 + (i * 0.06)) : (0.9 + (i * 0.08))),
       radius: category === 'artillery' ? 4.5 : 2.2,
       ttl: category === 'artillery' ? 2.2 : 1.5,
-      targetTeam: targetAgent.team
+      targetTeam: targetAgent.team,
+      guaranteedHit,
+      targetImpactDelay
     });
     spawned += 1;
   }
   if (spawned <= 0) {
-    const dir = normalizeVec((targetAgent.x - sourceAgent.x), (targetAgent.y - sourceAgent.y));
+    const dir = normalizeVec(aimOffset.x, aimOffset.y);
     acquireProjectile(crowd.effectsPool, {
       type: category === 'artillery' ? 'shell' : 'arrow',
       team: sourceAgent.team,
       squadId: attackerSquad.id,
       sourceAgentId: sourceAgent.id,
+      targetAgentId,
       x: sourceAgent.x,
       y: sourceAgent.y,
       z: category === 'artillery' ? 6 : 4.2,
@@ -442,7 +524,9 @@ const spawnRangedProjectiles = (sim, crowd, attackerSquad, sourceAgent, targetAg
       damage: baseDamage,
       radius: category === 'artillery' ? 4.5 : 2.2,
       ttl: category === 'artillery' ? 2.2 : 1.5,
-      targetTeam: targetAgent.team
+      targetTeam: targetAgent.team,
+      guaranteedHit,
+      targetImpactDelay
     });
   }
 };
@@ -516,8 +600,21 @@ const applyAreaDamageToAgents = (sim, crowd, projectile, center, walls = []) => 
     ? Math.max(0.6, Number(projectile?.blastRadius) || Number(projectile?.impactRadius) || Number(projectile?.radius) || 1)
     : Math.max(0.5, Number(projectile?.impactRadius) || Number(projectile?.radius) || 1);
   const nearby = querySpatialNearby(crowd?.spatial, center.x, center.y, Math.max(6, radius + 4));
-  const targets = nearby
-    .filter((agent) => agent && !agent.dead && agent.team === projectile?.targetTeam)
+  const lockedTarget = projectile?.targetAgentId
+    ? (Array.isArray(crowd?.allAgents)
+      ? crowd.allAgents.find((agent) => String(agent?.id || '') === String(projectile.targetAgentId || ''))
+      : null)
+    : null;
+  const candidates = lockedTarget && !nearby.includes(lockedTarget)
+    ? [...nearby, lockedTarget]
+    : nearby;
+  const targets = candidates
+    .filter((agent) => (
+      agent
+      && !agent.dead
+      && agent.team === projectile?.targetTeam
+      && (!projectile?.targetAgentId || String(agent.id || '') === String(projectile.targetAgentId))
+    ))
     .sort((a, b) => distanceSq(a, center) - distanceSq(b, center));
   const maxHits = isShell ? 999 : Math.max(1, Math.floor(Number(projectile?.maxHits) || 1));
   let hits = 0;
@@ -582,6 +679,26 @@ const detectWallSweepHit = (projectile, prev, walls = []) => {
   return null;
 };
 
+const resolveSegmentTargetHit = (start = {}, end = {}, target = {}, hitRadius = 0) => {
+  const startX = Number(start?.x) || 0;
+  const startY = Number(start?.y) || 0;
+  const segmentX = (Number(end?.x) || 0) - startX;
+  const segmentY = (Number(end?.y) || 0) - startY;
+  const segmentLengthSq = (segmentX * segmentX) + (segmentY * segmentY);
+  const targetX = Number(target?.x) || 0;
+  const targetY = Number(target?.y) || 0;
+  const hitTime = segmentLengthSq > 0.000001
+    ? clamp((((targetX - startX) * segmentX) + ((targetY - startY) * segmentY)) / segmentLengthSq, 0, 1)
+    : 0;
+  const closestX = startX + (segmentX * hitTime);
+  const closestY = startY + (segmentY * hitTime);
+  const deltaX = targetX - closestX;
+  const deltaY = targetY - closestY;
+  const radius = Math.max(0, Number(hitRadius) || 0);
+  if ((deltaX * deltaX) + (deltaY * deltaY) > radius * radius) return null;
+  return { target, hitTime };
+};
+
 const detonateProjectile = (sim, crowd, projectile, center, walls, hitWall = null) => {
   projectile.hit = true;
   projectile.hitCount = Math.max(0, Number(projectile.hitCount) || 0) + 1;
@@ -622,9 +739,17 @@ const stepProjectiles = (sim, crowd, dt) => {
   const live = crowd.effectsPool?.projectileLive || [];
   const walls = filterBlockingObstacles(sim?.buildings || []);
   const squadMap = sim?._squadById instanceof Map ? sim._squadById : new Map();
+  const agentMap = new Map(
+    (Array.isArray(crowd?.allAgents) ? crowd.allAgents : [])
+      .filter((agent) => agent?.id)
+      .map((agent) => [String(agent.id), agent])
+  );
   for (let i = 0; i < live.length; i += 1) {
     const p = live[i];
     if (!p || p.hit) continue;
+    const lockedTarget = p.targetAgentId
+      ? agentMap.get(String(p.targetAgentId || '')) || null
+      : null;
     const prev = {
       x: Number(p.x) || 0,
       y: Number(p.y) || 0,
@@ -651,22 +776,131 @@ const stepProjectiles = (sim, crowd, dt) => {
 
     if (p.visualOnly && p.targetBuildingId) continue;
 
-    const nearbyAgents = querySpatialNearby(crowd?.spatial, p.x, p.y, Math.max(8, (Number(p.radius) || 2) * 2.8));
+    const segmentLength = Math.hypot((Number(p.x) || 0) - prev.x, (Number(p.y) || 0) - prev.y);
+    const segmentCenterX = prev.x + (((Number(p.x) || 0) - prev.x) * 0.5);
+    const segmentCenterY = prev.y + (((Number(p.y) || 0) - prev.y) * 0.5);
+    const nearbyAgents = querySpatialNearby(
+      crowd?.spatial,
+      segmentCenterX,
+      segmentCenterY,
+      Math.max(8, (segmentLength * 0.5) + ((Number(p.radius) || 2) * 2.8))
+    );
     const targetAgents = nearbyAgents.filter((agent) => {
       if (!agent || agent.team !== p.targetTeam || agent.dead) return false;
+      if (lockedTarget && String(agent.id || '') !== String(lockedTarget.id || '')) return false;
       const targetSquad = squadMap.get(agent.squadId);
       if (targetSquad && isSquadHiddenForViewerTeam(targetSquad, p.team)) return false;
       return true;
     });
-    for (let k = 0; k < targetAgents.length; k += 1) {
-      const target = targetAgents[k];
-      if (!withinGroundTargetArea(p, target.x, target.y)) continue;
-      const hitRadius = Math.max(1.6, (target.radius || 2.6) + (p.radius * 0.25));
-      if (distanceSq(p, target) > (hitRadius * hitRadius)) continue;
-      detonateProjectile(sim, crowd, p, { x: target.x || p.x, y: target.y || p.y }, walls, null);
-      break;
+    const targetHit = targetAgents
+      .map((target) => {
+        if (!withinGroundTargetArea(p, target.x, target.y)) return null;
+        const hitRadius = Math.max(
+          1.6,
+          (target.radius || 2.6) + (p.radius * 0.25) + (p.guaranteedHit ? 6 : 0)
+        );
+        return resolveSegmentTargetHit(prev, p, target, hitRadius);
+      })
+      .filter(Boolean)
+      .sort((left, right) => left.hitTime - right.hitTime)[0] || null;
+    if (targetHit?.target) {
+      detonateProjectile(sim, crowd, p, {
+        x: Number(targetHit.target.x) || p.x,
+        y: Number(targetHit.target.y) || p.y
+      }, walls, null);
+      continue;
+    }
+    if (
+      p.guaranteedHit
+      && lockedTarget
+      && !lockedTarget.dead
+      && (Number(p.elapsed) || 0) + Math.max(0, Number(dt) || 0) >= (Number(p.targetImpactDelay) || 0)
+    ) {
+      detonateProjectile(sim, crowd, p, {
+        x: Number(lockedTarget.x) || p.x,
+        y: Number(lockedTarget.y) || p.y
+      }, walls, null);
     }
   }
+};
+
+const updateAssignedMinionCombat = ({
+  sim = {},
+  crowd = {},
+  squad = {},
+  squadMap = new Map(),
+  agentMap = new Map(),
+  safeDt = 0,
+  damageExponent = 0.75
+} = {}) => {
+  const agents = crowd?.agentsBySquad?.get?.(squad.id) || [];
+  agents.forEach((agent) => {
+    if (!agent || agent.dead) return;
+    agent.attackCd = Math.max(0, (Number(agent.attackCd) || 0) - safeDt);
+  });
+  const minionAi = squad?._minionAi;
+  if (minionAi?.targetKind !== 'squad' || !minionAi?.targetId) return;
+  const targetSquad = squadMap.get(String(minionAi.targetId || '')) || null;
+  if (!targetSquad || (Number(targetSquad?.remain) || 0) <= 0 || !canAcquireSquadTarget(squad, targetSquad)) return;
+  agents.forEach((agent) => {
+    if (!agent || agent.dead || agent.unitCategory === 'support' || agent.targetBuildingId) return;
+    const target = agentMap.get(String(agent?.targetAgentId || '')) || null;
+    if (
+      !target
+      || target.dead
+      || String(target?.squadId || '') !== String(targetSquad.id || '')
+    ) return;
+    const attackRange = resolveMinionWaveAgentAttackRange(agent, squad);
+    const distance = Math.hypot(
+      (Number(target.x) || 0) - (Number(agent.x) || 0),
+      (Number(target.y) || 0) - (Number(agent.y) || 0)
+    );
+    if (distance > Math.max(0, Number(attackRange?.max) || 0) + 0.001) return;
+    if ((Number(agent.attackCd) || 0) > 0) return;
+    const weightScale = damageScaleFromWeight(agent.weight, damageExponent);
+    const baseDamage = Math.max(
+      0.18,
+      ((Number(squad.stats?.atk) || 10) * 0.035) * damageScaleFromAgent(agent, damageExponent)
+    );
+    const targetAgentSquad = squadMap.get(target.squadId) || targetSquad;
+    const rpsMul = resolveRpsMul(squad, targetAgentSquad);
+    if (isRangedAgent(agent)) {
+      spawnRangedProjectiles(
+        sim,
+        crowd,
+        squad,
+        agent,
+        target,
+        agent.typeCategory === 'artillery' ? 'artillery' : 'archer',
+        baseDamage,
+        {
+          movingPenalty: false,
+          speedRatio: 0,
+          forceAccurate: true,
+          rpsHitMul: 1,
+          targetAgentId: target.id,
+          guaranteedHit: true
+        }
+      );
+    } else {
+      applyDamageToAgent(sim, crowd, agent, target, baseDamage, 'slash', {
+        poiseDamageMul: rpsMul.poiseDamageMul || 1
+      });
+      acquireHitEffect(crowd.effectsPool, {
+        type: 'slash',
+        x: ((Number(agent.x) || 0) + (Number(target.x) || 0)) * 0.5,
+        y: ((Number(agent.y) || 0) + (Number(target.y) || 0)) * 0.5,
+        z: 1.8,
+        radius: Math.max(2, Math.min(5.5, weightScale * 1.2)),
+        ttl: 0.12,
+        team: squad.team
+      });
+    }
+    agent.state = 'attack';
+    const cadenceOffset = (Math.max(0, Math.floor(Number(agent.slotOrder) || 0)) % 5) * 0.02;
+    agent.attackCd = cooldownByCategory(agent.typeCategory || squad.classTag) * (0.96 + cadenceOffset);
+    squad.action = '兵线交战';
+  });
 };
 
 export const updateCrowdCombat = (sim, crowd, dt) => {
@@ -704,6 +938,38 @@ export const updateCrowdCombat = (sim, crowd, dt) => {
     if (behavior === 'standby') return;
     const orderType = typeof squad?.order?.type === 'string' ? squad.order.type : '';
     const nowSec = Number(sim?.timeElapsed) || 0;
+    const squadAgents = crowd.agentsBySquad.get(squad.id) || [];
+    if (isTargetOnlyAttackOrder(squad)) {
+      const targetBuildingId = String(squad?.order?.targetBuildingId || '');
+      if (targetBuildingId) {
+        const targetBuilding = (Array.isArray(sim?.buildings) ? sim.buildings : []).find((building) => (
+          String(building?.id || '') === targetBuildingId
+          && building?.destroyed !== true
+          && (!Number.isFinite(Number(building?.hp)) || Number(building.hp) > 0)
+        )) || null;
+        if (!targetBuilding) {
+          completeTargetOnlyAttackOrder(squad, nowSec);
+          clearCrowdCombatAgentTargets(squadAgents);
+        } else {
+          squad.targetSquadId = '';
+          clearCrowdCombatAgentTargets(squadAgents, true);
+        }
+        return;
+      }
+      const targetSquadId = String(squad?.order?.targetSquadId || '');
+      const targetSquad = targetSquadId
+        ? activeSquads.find((candidate) => (
+            String(candidate?.id || '') === targetSquadId
+            && canAcquireSquadTarget(squad, candidate)
+            && !isSquadHiddenForViewerTeam(candidate, squad.team)
+          )) || null
+        : null;
+      if (!targetSquad) {
+        completeTargetOnlyAttackOrder(squad, nowSec);
+        clearCrowdCombatAgentTargets(squadAgents);
+        return;
+      }
+    }
     const chargeCommitted = orderType === ORDER_CHARGE && (Number(squad?.order?.commitUntil) || 0) > (Number(sim?.timeElapsed) || 0);
     if (behavior === 'retreat') return;
     if (!isSquadCombatEnabled(squad)) {
@@ -719,8 +985,29 @@ export const updateCrowdCombat = (sim, crowd, dt) => {
       return;
     }
     if (squad.activeSkill && (squad.classTag === 'archer' || squad.classTag === 'artillery')) return;
-    const enemySquads = activeSquads.filter((candidate) => isHostileTeam(squad.team, candidate?.team));
-    if (enemySquads.length <= 0) return;
+    if (squad?.isMinionWaveUnit === true) {
+      updateAssignedMinionCombat({
+        sim,
+        crowd,
+        squad,
+        squadMap,
+        agentMap,
+        safeDt,
+        damageExponent
+      });
+      return;
+    }
+    const enemySquads = activeSquads.filter((candidate) => canAcquireSquadTarget(squad, candidate));
+    if (enemySquads.length <= 0) {
+      squad.targetSquadId = '';
+      const agents = crowd.agentsBySquad.get(squad.id) || [];
+      agents.forEach((agent) => {
+        if (!agent) return;
+        agent.targetAgentId = '';
+        agent.targetBuildingId = '';
+      });
+      return;
+    }
     const visibleEnemySquads = enemySquads.filter((enemy) => !isSquadHiddenForViewerTeam(enemy, squad.team));
     if (visibleEnemySquads.length <= 0) {
       squad.targetSquadId = '';
@@ -734,18 +1021,30 @@ export const updateCrowdCombat = (sim, crowd, dt) => {
     const explicitTargetSquadId = orderType === ORDER_ATTACK_MOVE
       ? String(squad?.order?.targetSquadId || '')
       : '';
-    const squadAgents = crowd.agentsBySquad.get(squad.id) || [];
     const lockedTargetSquad = squadAgents.reduce((picked, agent) => {
-      if (picked || !agent?.targetAgentId) return picked;
+      if (picked || agent?._formationDetached === true || !agent?.targetAgentId) return picked;
       const targetAgent = agentMap.get(String(agent.targetAgentId)) || null;
       if (!targetAgent || targetAgent.dead || !isHostileTeam(squad.team, targetAgent.team)) return null;
-      return squadMap.get(targetAgent.squadId) || null;
+      const targetSquad = squadMap.get(targetAgent.squadId) || null;
+      return targetSquad && canAcquireSquadTarget(squad, targetSquad) ? targetSquad : null;
     }, null);
+    const assignedTargetSquad = visibleEnemySquads.find((enemy) => (
+      String(enemy?.id || '') === String(squad?.targetSquadId || '')
+    )) || null;
     let targetSquad = explicitTargetSquadId
       ? visibleEnemySquads.find((enemy) => String(enemy?.id || '') === explicitTargetSquadId) || null
-      : lockedTargetSquad;
+      : (assignedTargetSquad || lockedTargetSquad);
+    const usesLocalMinionPriority = squad?.isMinionWaveUnit === true;
     const guard = squad?.guard?.enabled ? squad.guard : null;
-    if (guard && nowSec >= (Number(squad._guardRetargetAt) || 0)) {
+    const neutralRetaliationId = squad?.team === 'neutral'
+      ? String(squad?.lastDamagedBySquadId || squad?.targetSquadId || squad?._combatEngagementTargetId || '')
+      : '';
+    if (!targetSquad && neutralRetaliationId) {
+      targetSquad = visibleEnemySquads.find((enemy) => (
+        String(enemy?.id || '') === neutralRetaliationId
+      )) || null;
+    }
+    if (guard && squad?.team !== 'neutral' && nowSec >= (Number(squad._guardRetargetAt) || 0)) {
       let bestGuardTarget = null;
       let bestGuardScore = -Infinity;
       const gcx = Number(guard.cx) || (Number(squad.x) || 0);
@@ -817,7 +1116,7 @@ export const updateCrowdCombat = (sim, crowd, dt) => {
           .sort((a, b) => Math.hypot((a.x || 0) - (squad.x || 0), (a.y || 0) - (squad.y || 0))
             - Math.hypot((b.x || 0) - (squad.x || 0), (b.y || 0) - (squad.y || 0)))[0]
         || null;
-    } else {
+    } else if (!usesLocalMinionPriority) {
       const trainingSelection = !targetSquad && sim?.trainingMap
         ? selectTrainingMapAiTarget(squad, sim, { candidates: visibleEnemySquads, nowSec })
         : null;
@@ -872,7 +1171,7 @@ export const updateCrowdCombat = (sim, crowd, dt) => {
         return;
       }
       const rankedShooters = [...agents]
-        .filter((agent) => agent && !agent.dead)
+        .filter((agent) => agent && !agent.dead && agent._formationDetached !== true)
         .sort((a, b) => (Number(b.weight) || 0) - (Number(a.weight) || 0));
       const shooterCount = Math.max(2, Math.min(7, Math.floor(Math.sqrt(rankedShooters.length)) + 1));
       const shooters = rankedShooters.slice(0, shooterCount);
@@ -886,7 +1185,9 @@ export const updateCrowdCombat = (sim, crowd, dt) => {
           squad.team,
           squadMap
         );
-        const pool = localEnemies;
+        const pool = localEnemies.filter((target) => (
+          String(target?.squadId || '') === String(targetSquad?.id || '')
+        ));
         const target = pickRangedEnemyAgent(agent, pool, attackRange);
         if (!target) return;
         const dist = Math.hypot((target.x || 0) - (agent.x || 0), (target.y || 0) - (agent.y || 0));
@@ -916,6 +1217,10 @@ export const updateCrowdCombat = (sim, crowd, dt) => {
     agents.forEach((agent) => {
       if (!agent || agent.dead) return;
       agent.attackCd = Math.max(0, (Number(agent.attackCd) || 0) - safeDt);
+      if (agent._formationDetached === true) {
+        agent.targetAgentId = '';
+        return;
+      }
       if (agent.unitCategory === 'support' || agent.targetBuildingId) return;
       const agentIsRanged = isRangedAgent(agent);
       const agentAttackRange = resolveAgentAttackRange(agent, squad);
@@ -923,13 +1228,20 @@ export const updateCrowdCombat = (sim, crowd, dt) => {
         ? Math.max(engageScanRadius * 1.25, agentAttackRange.max * 1.35)
         : Math.max(engageScanRadius, agentAttackRange.max * 2);
       const localEnemies = pickEnemyAgentsFromSpatial(crowd, agent, squad.team, searchRadius, squad.team, squadMap);
-      const pool = localEnemies;
+      const pool = localEnemies.filter((candidate) => (
+        String(candidate?.squadId || '') === String(targetSquad?.id || '')
+      ));
       const lockedTarget = agent.targetAgentId
         ? agentMap.get(String(agent.targetAgentId)) || null
         : null;
+      const lockedTargetSquad = lockedTarget
+        ? squadMap.get(String(lockedTarget.squadId || '')) || null
+        : null;
       const validLockedTarget = lockedTarget
         && !lockedTarget.dead
-        && isHostileTeam(squad.team, lockedTarget.team)
+        && lockedTargetSquad
+        && canAcquireSquadTarget(squad, lockedTargetSquad)
+        && String(lockedTarget?.squadId || '') === String(targetSquad?.id || '')
         ? lockedTarget
         : null;
       const target = validLockedTarget || (agentIsRanged

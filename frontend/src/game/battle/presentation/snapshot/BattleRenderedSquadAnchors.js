@@ -1,4 +1,5 @@
 import { UNIT_INSTANCE_STRIDE } from './BattleSnapshotSchema';
+import { resolveSquadSpatialAnchor } from '../../shared/squadSpatialAnchor';
 
 const TEAM_DEFENDER = 'defender';
 const TEAM_NEUTRAL = 'neutral';
@@ -13,33 +14,10 @@ const resolveRuntimeSquads = (runtime = null) => (
     : (Array.isArray(runtime?.squads) ? runtime.squads : [])
 );
 
-const resolveSquadById = (runtime = null, squadsById = new Map(), squadId = '') => (
-  squadsById.get(String(squadId || ''))
-    || runtime?.getSquadById?.(String(squadId || ''))
-    || null
-);
-
-const resolveRenderableBattleAgents = (runtime = null, squadsById = new Map()) => {
-  const agents = Array.isArray(runtime?.crowd?.allAgents) ? runtime.crowd.allAgents : [];
-  const rows = [];
-  agents.forEach((agent) => {
-    if (!agent || agent.dead || (Number(agent.weight) || 0) <= 0.001) return;
-    const squadId = String(agent.squadId || '');
-    const squad = resolveSquadById(runtime, squadsById, squadId);
-    if (agent.team === TEAM_DEFENDER && squad?.hiddenFromAttacker) return;
-    rows.push({
-      squadId,
-      agent,
-      squad
-    });
-  });
-  return rows;
-};
-
-const resolveSnapshotUnitSquadId = (snapshot = null, index = 0, fallback = '') => {
+const resolveSnapshotUnitSquadId = (snapshot = null, index = 0) => {
   const ids = snapshot?.unitSquadIds;
   if (Array.isArray(ids) && ids[index]) return String(ids[index]);
-  return String(fallback || '');
+  return '';
 };
 
 export const resolveTrainingRenderedSquadAnchors = (runtime = null, snapshot = null) => {
@@ -58,32 +36,27 @@ export const resolveTrainingRenderedSquadAnchors = (runtime = null, snapshot = n
       .filter((squad) => squad?.id)
       .map((squad) => [String(squad.id), squad])
   );
-  const agentRows = resolveRenderableBattleAgents(runtime, squadsById);
   const units = snapshot?.units;
   const data = units?.data;
   const unitCount = Math.max(0, Math.floor(Number(units?.count) || 0));
   const aggregates = new Map();
 
   for (let index = 0; index < unitCount; index += 1) {
-    const row = agentRows[index] || null;
-    const squadId = resolveSnapshotUnitSquadId(snapshot, index, row?.squadId);
+    const squadId = resolveSnapshotUnitSquadId(snapshot, index);
     if (!squadId) continue;
+    const squad = squadsById.get(squadId) || null;
     const base = index * UNIT_INSTANCE_STRIDE;
-    const fallbackX = finiteOr(row?.agent?.x);
-    const fallbackY = finiteOr(row?.agent?.y);
+    const fallbackX = finiteOr(squad?.centerX, finiteOr(squad?.x));
+    const fallbackY = finiteOr(squad?.centerY, finiteOr(squad?.y));
     const x = finiteOr(data?.[base + 0], fallbackX);
     const y = finiteOr(data?.[base + 1], fallbackY);
     const aggregate = aggregates.get(squadId) || {
-      x: 0,
-      y: 0,
-      count: 0,
+      points: [],
       flagBearer: null
     };
-    aggregate.x += x;
-    aggregate.y += y;
-    aggregate.count += 1;
+    aggregate.points.push({ x, y });
     if (
-      (row?.agent?.team === TEAM_NEUTRAL || row?.squad?.team === TEAM_NEUTRAL)
+      (squad?.team === TEAM_NEUTRAL || Number(data?.[base + 5]) >= 1.5)
       && Number(data?.[base + 13]) > 0.5
     ) {
       aggregate.flagBearer = { x, y };
@@ -97,12 +70,16 @@ export const resolveTrainingRenderedSquadAnchors = (runtime = null, snapshot = n
     if (squad.team === TEAM_DEFENDER && squad.hiddenFromAttacker) return;
     const id = String(squad.id);
     const aggregate = aggregates.get(id);
-    const x = aggregate?.flagBearer?.x ?? (aggregate?.count > 0
-      ? aggregate.x / aggregate.count
-      : finiteOr(squad.centerX, finiteOr(squad.x)));
-    const y = aggregate?.flagBearer?.y ?? (aggregate?.count > 0
-      ? aggregate.y / aggregate.count
-      : finiteOr(squad.centerY, finiteOr(squad.y)));
+    const fallbackX = finiteOr(squad.centerX, finiteOr(squad.x));
+    const fallbackY = finiteOr(squad.centerY, finiteOr(squad.y));
+    const spatialAnchor = resolveSquadSpatialAnchor(aggregate?.points, {
+      fallbackX,
+      fallbackY,
+      minimumRadius: 8,
+      radiusPadding: 6
+    });
+    const x = aggregate?.flagBearer?.x ?? spatialAnchor.x;
+    const y = aggregate?.flagBearer?.y ?? spatialAnchor.y;
     anchors.set(id, {
       id,
       squadId: id,
@@ -111,7 +88,11 @@ export const resolveTrainingRenderedSquadAnchors = (runtime = null, snapshot = n
       y,
       centerX: x,
       centerY: y,
-      count: aggregate?.count || 0
+      contactX: x,
+      contactY: y,
+      radius: spatialAnchor.radius,
+      count: spatialAnchor.count,
+      inlierCount: spatialAnchor.inlierCount
     });
   });
   return anchors;

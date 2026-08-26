@@ -58,7 +58,7 @@ describe('melee engagement contact', () => {
     expect(defenderAgent.weight).toBeLessThan(defenderWeight);
   });
 
-  test('keeps minion engagement locked to the same lane', () => {
+  test('does not write generic engagement metadata into minion waves', () => {
     const attackerTop = {
       ...createMeleeSquad({ id: 'attacker-top', team: 'attacker', x: -40 }),
       y: 200,
@@ -93,10 +93,11 @@ describe('melee engagement contact', () => {
 
     const [attackerAgent] = crowd.agentsBySquad.get(attackerTop.id);
     expect(attackerTop.targetSquadId).toBe(defenderTop.id);
-    expect(attackerAgent.engageEnemySquadId).toBe(defenderTop.id);
+    expect(attackerAgent.engageEnemySquadId).toBe('');
+    expect(attackerAgent.engagePairKey).toBe('');
   });
 
-  test('creates melee anchors against a hostile neutral squad', () => {
+  test('keeps neutral melee passive until it is attacked', () => {
     const attacker = createMeleeSquad({ id: 'attacker', team: 'attacker', x: -6 });
     const neutral = {
       ...createMeleeSquad({ id: 'neutral', team: 'neutral', x: 6 }),
@@ -115,6 +116,13 @@ describe('melee engagement contact', () => {
     syncMeleeEngagement(crowd, sim, [], 0.1, sim.timeElapsed);
 
     expect(crowd.agentsBySquad.get(attacker.id)[0].engageEnemySquadId).toBe(neutral.id);
+    expect(crowd.agentsBySquad.get(neutral.id)[0].engageEnemySquadId).toBe('');
+
+    neutral.underAttackTimer = 1;
+    neutral.lastDamagedBySquadId = attacker.id;
+    sim.timeElapsed = 0.2;
+    syncMeleeEngagement(crowd, sim, [], 0.1, sim.timeElapsed);
+
     expect(crowd.agentsBySquad.get(neutral.id)[0].engageEnemySquadId).toBe(attacker.id);
   });
 

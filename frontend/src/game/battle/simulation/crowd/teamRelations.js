@@ -19,3 +19,24 @@ export const isHostileTeam = (sourceTeam = '', targetTeam = '') => {
 export const resolveDefaultHostileTeam = (team = '') => (
   team === TEAM_ATTACKER ? TEAM_DEFENDER : TEAM_ATTACKER
 );
+
+export const isNeutralRetaliating = (squad = {}) => (
+  squad?.team === TEAM_NEUTRAL
+  && (
+    (Number(squad?.underAttackTimer) || 0) > 0.05
+    || !!String(squad?.targetSquadId || '').trim()
+    || !!String(squad?._combatEngagementTargetId || '').trim()
+  )
+);
+
+export const canAcquireSquadTarget = (sourceSquad = {}, targetSquad = {}) => {
+  if (!isHostileTeam(sourceSquad?.team, targetSquad?.team)) return false;
+  if (targetSquad?.team !== TEAM_NEUTRAL) return true;
+  const explicitTargetId = String(
+    sourceSquad?.order?.targetSquadId
+      || sourceSquad?.targetSquadId
+      || ''
+  ).trim();
+  if (explicitTargetId && explicitTargetId === String(targetSquad?.id || '').trim()) return true;
+  return isNeutralRetaliating(targetSquad);
+};

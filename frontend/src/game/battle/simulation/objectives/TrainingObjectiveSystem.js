@@ -168,6 +168,7 @@ const canObjectiveTargetSquad = (objective = {}, squad = {}) => {
 const canSquadAttackObjective = (squad = {}, objective = {}) => {
   if (!squad || finiteNumber(squad?.remain) <= 0 || objective?.destroyed || objective?.targetable === false) return false;
   if (!isSquadCombatEnabled(squad)) return false;
+  if (objective?.type === 'tower' && squad?.team === TEAM_NEUTRAL) return false;
   return isHostileTeam(squad?.team, objective?.team);
 };
 
@@ -211,6 +212,28 @@ const compareObjectiveTargetCandidates = (objective = {}, left = {}, right = {})
   return String(left?.squad?.id || '').localeCompare(String(right?.squad?.id || ''));
 };
 
+const resolveObjectiveTargetCandidate = (objective = {}, sim = {}, squad = {}, {
+  attackRange = objective?.attackRange,
+  position = null,
+  obstacles = null
+} = {}) => {
+  const targetPosition = position || resolveObjectivePosition(sim, objective);
+  if (!targetPosition.building || targetPosition.building.destroyed) return null;
+  if (!canObjectiveTargetSquad(objective, squad)) return null;
+  const squadPosition = { x: finiteNumber(squad?.x), y: finiteNumber(squad?.y) };
+  const squadRadius = Math.max(4, finiteNumber(squad?.radius, 10));
+  const distance = Math.hypot(squadPosition.x - targetPosition.x, squadPosition.y - targetPosition.y);
+  if (distance > Math.max(0, finiteNumber(attackRange)) + targetPosition.radius + squadRadius) return null;
+  const visionObstacles = obstacles || resolveVisionObstacles(sim, objective);
+  if (!hasObjectiveLineOfSight(targetPosition, squadPosition, visionObstacles)) return null;
+  return {
+    squad,
+    distance,
+    healthRatio: resolveSquadHealthRatio(squad),
+    threat: Math.max(0, finiteNumber(objective?.threatBySquadId?.[squad.id]))
+  };
+};
+
 const selectObjectiveTargetSquad = (objective = {}, sim = {}, {
   attackRange = objective?.attackRange,
   priority = objective?.priority
@@ -223,21 +246,24 @@ const selectObjectiveTargetSquad = (objective = {}, sim = {}, {
   const obstacles = resolveVisionObstacles(sim, objective);
   const candidates = [];
   (Array.isArray(sim?.squads) ? sim.squads : []).forEach((squad) => {
-    if (!canObjectiveTargetSquad(objective, squad)) return;
-    const squadPosition = { x: finiteNumber(squad?.x), y: finiteNumber(squad?.y) };
-    const squadRadius = Math.max(4, finiteNumber(squad?.radius, 10));
-    const distance = Math.hypot(squadPosition.x - position.x, squadPosition.y - position.y);
-    if (distance > Math.max(0, finiteNumber(attackRange)) + position.radius + squadRadius) return;
-    if (!hasObjectiveLineOfSight(position, squadPosition, obstacles)) return;
-    candidates.push({
-      squad,
-      distance,
-      healthRatio: resolveSquadHealthRatio(squad),
-      threat: Math.max(0, finiteNumber(objective?.threatBySquadId?.[squad.id]))
+    const candidate = resolveObjectiveTargetCandidate(objective, sim, squad, {
+      attackRange,
+      position,
+      obstacles
     });
+    if (candidate) candidates.push(candidate);
   });
   candidates.sort((left, right) => compareObjectiveTargetCandidates(targetingObjective, left, right));
   return candidates[0]?.squad || null;
+};
+
+const resolveLockedObjectiveTargetSquad = (objective = {}, sim = {}, attackRange = objective?.attackRange) => {
+  const lockedSquadId = String(objective?.lockedSquadId || objective?.currentTargetId || '');
+  if (!lockedSquadId) return null;
+  const squad = (Array.isArray(sim?.squads) ? sim.squads : []).find((candidate) => (
+    String(candidate?.id || '') === lockedSquadId
+  )) || null;
+  return resolveObjectiveTargetCandidate(objective, sim, squad, { attackRange })?.squad || null;
 };
 
 const decayObjectiveThreat = (objective = {}, sim = {}, dt = 0) => {
@@ -688,14 +714,35 @@ export const updateTrainingObjectives = (sim = {}, crowd = {}, dt = 0) => {
       ...weapon,
       cooldown: Math.max(0, finiteNumber(weapon?.cooldown) - safeDt)
     }));
+    const towerAttackRange = weaponProfiles.reduce((maxRange, weapon) => (
+      Math.max(maxRange, Math.max(0, finiteNumber(weapon?.attackRange)))
+    ), 0);
+    const towerTarget = objective.type === 'tower'
+      ? (
+        resolveLockedObjectiveTargetSquad(objective, sim, towerAttackRange)
+        || selectObjectiveTargetSquad(objective, sim, {
+          attackRange: towerAttackRange,
+          priority: objective.priority
+        })
+      )
+      : null;
     const weaponTargets = weaponProfiles.map((weapon) => ({
       weapon,
-      squad: selectObjectiveTargetSquad(objective, sim, {
-        attackRange: weapon.attackRange,
-        priority: weapon.priority
-      })
+      squad: objective.type === 'tower'
+        ? resolveObjectiveTargetCandidate(objective, sim, towerTarget, {
+          attackRange: weapon.attackRange
+        })?.squad || null
+        : selectObjectiveTargetSquad(objective, sim, {
+          attackRange: weapon.attackRange,
+          priority: weapon.priority
+        })
     }));
-    updateObjectiveTargetState(objective, weaponTargets.find((entry) => entry.squad)?.squad || null);
+    updateObjectiveTargetState(
+      objective,
+      objective.type === 'tower'
+        ? towerTarget
+        : weaponTargets.find((entry) => entry.squad)?.squad || null
+    );
     weaponTargets.forEach(({ weapon, squad }) => {
       if (!squad || weapon.cooldown > 0) return;
       if (!fireObjectiveWeapon({ sim, crowd, objective, weapon, targetSquad: squad })) return;

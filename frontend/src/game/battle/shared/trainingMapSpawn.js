@@ -87,6 +87,9 @@ const resolveSpawnPolygon = (region = {}, field = null, mapConfig = null) => {
       candidate?.sourceRegionId === region?.id
       || candidate?.id === `terrain-highland-${String(region?.id || '')}`
     ));
+  const topPolygon = (Array.isArray(terrainRegion?.topPolygons) ? terrainRegion.topPolygons : [])
+    .find((polygon) => Array.isArray(polygon) && polygon.length >= 3);
+  if (topPolygon) return topPolygon.map((point) => toPoint(point));
   const terrainPoints = Array.isArray(terrainRegion?.points) ? terrainRegion.points : [];
   if (terrainPoints.length >= 3) return terrainPoints.map((point) => toPoint(point));
   const normalizedPolygon = Array.isArray(region?.normalizedPolygon) ? region.normalizedPolygon : [];

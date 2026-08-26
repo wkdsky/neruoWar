@@ -12,6 +12,7 @@ import {
   createTrainingMapStaticPlaceholderMesh,
   createTrainingFlagClothGeometry,
   prepareInstanceColorGeometry,
+  publishTrainingRenderedSquadAnchors,
   resolveTrainingDirectionArcAnchors,
   resolveTrainingRenderedSquadAnchors,
   resolveTrainingMeleeAlertRect,
@@ -28,6 +29,7 @@ import {
   resolveTrainingFlagCanvasTheme,
   resolveTrainingWorldFlagStackLayout,
   resolveTrainingWorldFlagStackLevels,
+  areTrainingFlagAnchorsInMapContact,
   resolveTrainingWorldFlagScreenScale,
   resolveTrainingWorldFlagDimensions,
   resolveTrainingFlagShowsSkillPoints,
@@ -38,9 +40,13 @@ import {
   isTrainingMapStaticPlaceholder,
   applyTrainingMapStaticPlaceholderState,
   applyTrainingAttackRangeMarkerState,
+  applyTrainingStructureHealthBarScreenScale,
+  formatTrainingStructureDurability,
+  resolveTrainingStructureHealthBarScreenScale,
   updateTrainingDirectionArcGeometry,
   TRAINING_WORLD_FLAG_MAX_PITCH_DEG,
   TRAINING_WORLD_FLAG_TARGET_SCREEN_HEIGHT,
+  TRAINING_STRUCTURE_HEALTH_BAR_TARGET_SCREEN_HEIGHT,
   TRAINING_DIRECTION_ARC_GROUND_ELEVATION
 } from './TrainingThreeRenderPipeline';
 
@@ -457,6 +463,42 @@ describe('training map highland geometry', () => {
 });
 
 describe('training map static objective placeholders', () => {
+  test('formats structure durability as compact numbers only', () => {
+    expect(formatTrainingStructureDurability(1100, 2200)).toBe('1100/2200');
+  });
+
+  test('keeps structure durability labels at a stable screen height across zoom levels', () => {
+    const viewportHeight = 720;
+    const baseWorldHeight = 28;
+    const toScreenHeight = (cameraDepth, scale) => (
+      (baseWorldHeight * scale)
+      / (2 * cameraDepth * Math.tan((48 * Math.PI / 180) * 0.5))
+      * viewportHeight
+    );
+    const nearDepth = 560;
+    const distantDepth = 2800;
+    const nearScale = resolveTrainingStructureHealthBarScreenScale({
+      baseWorldHeight,
+      cameraDepth: nearDepth,
+      viewportHeight
+    });
+    const distantScale = resolveTrainingStructureHealthBarScreenScale({
+      baseWorldHeight,
+      cameraDepth: distantDepth,
+      viewportHeight
+    });
+
+    expect(distantScale).toBeGreaterThan(nearScale);
+    expect(toScreenHeight(nearDepth, nearScale)).toBeCloseTo(
+      TRAINING_STRUCTURE_HEALTH_BAR_TARGET_SCREEN_HEIGHT,
+      6
+    );
+    expect(toScreenHeight(distantDepth, distantScale)).toBeCloseTo(
+      TRAINING_STRUCTURE_HEALTH_BAR_TARGET_SCREEN_HEIGHT,
+      6
+    );
+  });
+
   test('renders a team-colored octagonal tower on its terrain surface', () => {
     const tower = createTrainingMapStaticPlaceholderMesh({
       objectId: 'tower-defender-mid',
@@ -482,8 +524,24 @@ describe('training map static objective placeholders', () => {
     expect(healthBar.userData).toMatchObject({
       structureHealthBar: true,
       barKind: 'tower-durability',
-      team: 'defender'
+      team: 'defender',
+      screenStableSize: true,
+      targetScreenHeight: TRAINING_STRUCTURE_HEALTH_BAR_TARGET_SCREEN_HEIGHT
     });
+    expect(healthBar.userData.canvas).toMatchObject({ width: 384, height: 96 });
+    expect(
+      TRAINING_STRUCTURE_HEALTH_BAR_TARGET_SCREEN_HEIGHT
+        * (healthBar.userData.canvas.width / healthBar.userData.canvas.height)
+    ).toBeLessThanOrEqual(120);
+    expect(TRAINING_STRUCTURE_HEALTH_BAR_TARGET_SCREEN_HEIGHT).toBeLessThanOrEqual(30);
+    const baseScale = { ...healthBar.userData.baseWorldScale };
+    const screenScale = applyTrainingStructureHealthBarScreenScale(healthBar, {
+      cameraDepth: 1200,
+      viewportHeight: 720
+    });
+    expect(screenScale).toBeGreaterThan(0);
+    expect(healthBar.scale.x).toBeCloseTo(baseScale.x * screenScale, 6);
+    expect(healthBar.scale.y).toBeCloseTo(baseScale.y * screenScale, 6);
     expect(applyTrainingMapStaticPlaceholderState(tower, { hp: 1100, maxHp: 2200 })).toBe(true);
     expect(tower.userData.hpRatio).toBeCloseTo(0.5);
     expect(healthBar.userData.signature).toContain('1100:2200');
@@ -543,6 +601,15 @@ describe('training map static objective placeholders', () => {
     expect(barracks.getObjectByName('training-map-placeholder-barracks-attacker-top-catapult-arm')).toBeFalsy();
     expect(barracks.getObjectByName('training-map-placeholder-barracks-attacker-top-attack-range')).toBeTruthy();
     expect(barracks.getObjectByName('training-map-placeholder-barracks-attacker-top-attack-range').visible).toBe(true);
+    const healthBar = barracks.getObjectByName('training-map-placeholder-barracks-attacker-top-structure-health-bar');
+    expect(healthBar.userData).toMatchObject({
+      structureHealthBar: true,
+      barKind: 'barracks-durability',
+      team: 'attacker'
+    });
+    expect(applyTrainingMapStaticPlaceholderState(barracks, { hp: 2800, maxHp: 5600 })).toBe(true);
+    expect(barracks.userData.hpRatio).toBeCloseTo(0.5);
+    expect(healthBar.userData.signature).toContain('2800:5600');
     barracks.traverse((entry) => {
       entry.geometry?.dispose?.();
       entry.material?.dispose?.();
@@ -662,6 +729,93 @@ describe('training direction markers', () => {
     });
   });
 
+  test('publishes the current rendered troop center for DOM overlays', () => {
+    const unitData = new Float32Array(UNIT_INSTANCE_STRIDE * 2);
+    unitData[0] = -180;
+    unitData[1] = 24;
+    unitData[UNIT_INSTANCE_STRIDE] = -140;
+    unitData[UNIT_INSTANCE_STRIDE + 1] = 40;
+    const setRenderedBattleSquadAnchors = jest.fn();
+    const runtime = {
+      getPhase: () => 'battle',
+      setRenderedBattleSquadAnchors,
+      sim: {
+        squads: [{
+          id: 'minion-wave',
+          team: 'attacker',
+          remain: 72,
+          centerX: 420,
+          centerY: -220
+        }]
+      },
+      crowd: {
+        allAgents: [
+          { squadId: 'minion-wave', team: 'attacker', weight: 1 },
+          { squadId: 'minion-wave', team: 'attacker', weight: 1 }
+        ]
+      }
+    };
+    const snapshot = {
+      unitSquadIds: ['minion-wave', 'minion-wave'],
+      units: { count: 2, data: unitData }
+    };
+
+    const anchors = publishTrainingRenderedSquadAnchors(runtime, snapshot);
+
+    expect(setRenderedBattleSquadAnchors).toHaveBeenCalledWith(anchors);
+    expect(anchors.get('minion-wave')).toMatchObject({
+      x: -160,
+      y: 32,
+      centerX: -160,
+      centerY: 32
+    });
+  });
+
+  test('keeps the rendered squad anchor on the visible majority when soldiers fall behind', () => {
+    const positions = [
+      [-168, 28],
+      [-160, 24],
+      [-152, 30],
+      [-166, 38],
+      [-156, 40],
+      [-148, 36],
+      [720, -240],
+      [780, 260]
+    ];
+    const unitData = new Float32Array(UNIT_INSTANCE_STRIDE * positions.length);
+    positions.forEach(([x, y], index) => {
+      const base = index * UNIT_INSTANCE_STRIDE;
+      unitData[base] = x;
+      unitData[base + 1] = y;
+    });
+    const runtime = {
+      getPhase: () => 'battle',
+      sim: {
+        squads: [{
+          id: 'minion-majority',
+          team: 'attacker',
+          remain: 72,
+          centerX: 400,
+          centerY: -200
+        }]
+      },
+      crowd: { allAgents: [] }
+    };
+    const snapshot = {
+      unitSquadIds: positions.map(() => 'minion-majority'),
+      units: { count: positions.length, data: unitData }
+    };
+
+    const anchor = resolveTrainingRenderedSquadAnchors(runtime, snapshot).get('minion-majority');
+
+    expect(anchor.x).toBeGreaterThan(-164);
+    expect(anchor.x).toBeLessThan(-154);
+    expect(anchor.y).toBeGreaterThan(30);
+    expect(anchor.y).toBeLessThan(35);
+    expect(anchor).toMatchObject({ count: 8, inlierCount: 6 });
+    expect(anchor.radius).toBeLessThan(24);
+  });
+
   test('anchors a pre-start neutral flag to its preview flag bearer', () => {
     const anchors = resolveTrainingDirectionArcAnchors({
       getPhase: () => 'deploy',
@@ -719,9 +873,9 @@ describe('training direction markers', () => {
 
   test('assigns overlapping world flags to descending vertical stack levels', () => {
     const levels = resolveTrainingWorldFlagStackLevels([
-      { id: 'a', x: 0, y: 0 },
-      { id: 'b', x: 2, y: 1 },
-      { id: 'c', x: 500, y: 0 }
+      { id: 'a', x: 0, y: 0, radius: 12 },
+      { id: 'b', x: 2, y: 1, radius: 12 },
+      { id: 'c', x: 500, y: 0, radius: 12 }
     ], (anchor) => ({
       x: anchor.x,
       y: anchor.y,
@@ -735,8 +889,8 @@ describe('training direction markers', () => {
 
   test('keeps the nearest overlapping flag as the only visible pole owner', () => {
     const layout = resolveTrainingWorldFlagStackLayout([
-      { id: 'rear', x: 0, y: 0 },
-      { id: 'front', x: 2, y: 1 }
+      { id: 'rear', x: 0, y: 0, radius: 12 },
+      { id: 'front', x: 2, y: 1, radius: 12 }
     ], (anchor) => ({
       x: anchor.x,
       y: anchor.y,
@@ -747,6 +901,24 @@ describe('training direction markers', () => {
     expect(layout.leaderById.rear).toBe('front');
     expect(layout.leaderById.front).toBe('front');
     expect(layout.maxLevelByLeader.front).toBe(1);
+  });
+
+  test('does not stack screen-near flags whose squads are separated on the map', () => {
+    const layout = resolveTrainingWorldFlagStackLayout([
+      { id: 'left', x: -200, y: 0, radius: 20 },
+      { id: 'right', x: 200, y: 0, radius: 20 }
+    ], (anchor) => ({
+      x: anchor.id === 'left' ? 300 : 308,
+      y: anchor.id === 'left' ? 200 : 206,
+      visible: true
+    }));
+
+    expect(areTrainingFlagAnchorsInMapContact(
+      { id: 'left', x: -200, y: 0, radius: 20 },
+      { id: 'right', x: 200, y: 0, radius: 20 }
+    )).toBe(false);
+    expect(layout.leaderById).toMatchObject({ left: 'left', right: 'right' });
+    expect(layout.levels).toMatchObject({ left: 0, right: 0 });
   });
 
   test('creates one direction arc per visible squad without requiring a flag bearer agent', () => {

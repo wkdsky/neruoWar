@@ -71,6 +71,7 @@ test('reference training map projects all image-derived static elements into the
   assert.equal(map.navigation.roadCost, 1);
   assert.equal(map.navigation.pathClearance, 1.2);
   assert.equal(map.navigation.agentRadius, 2.25);
+  assert.equal(map.navigation.minionRecoveryPlansPerStep, 3);
   assert.equal(map.navigation.narrowPassage.cellSize, 8);
   assert.equal(map.navigation.aiTargetUnreachableFailureLimit, 3);
   assert.equal(map.navigation.aiTargetUnreachableCooldownSeconds, 2);
@@ -385,6 +386,18 @@ test('reference training map projects all image-derived static elements into the
   const highlandOutposts = map.objects.filter((object) => object.defenseRole === 'highlandOutpost');
   const barracks = map.objects.filter((object) => object.category === 'barracks');
   assert.equal(roadTowers.length, 14);
+  roadTowers.forEach((tower) => {
+    const road = map.terrainRegions.find((region) => region.id === `terrain-road-${tower.objectiveId.split('_tower_').pop().split('-')[2]}`);
+    assert.ok(road, `${tower.objectId} lost its road`);
+    assert.equal(tower.collider?.kind, 'circle');
+    assert.ok(Number(tower.collider?.r) > 0, `${tower.objectId} lost its circular base`);
+    assert.ok(String(tower.roadSide || '').length > 0, `${tower.objectId} lost its roadside assignment`);
+    assert.equal(tower.x, tower.roadCenterX);
+    const centerOffset = Math.abs(tower.y - tower.roadCenterY);
+    const centerlineClearance = centerOffset - Number(tower.collider.r);
+    assert.ok(centerOffset >= road.height * 0.34, `${tower.objectId} must leave the road centerline`);
+    assert.ok(centerlineClearance > 24, `${tower.objectId} must leave formation clearance on the road centerline`);
+  });
   assert.equal(highlandOutposts.length, 24);
   assert.equal(barracks.length, 4);
   const worldPoint = (position = []) => ({
@@ -406,6 +419,8 @@ test('reference training map projects all image-derived static elements into the
       ));
       assert.equal(towerObject.x, expectedTowerPosition.x);
       assert.equal(towerObject.y, expectedTowerPosition.y);
+      assert.equal(towerObject.collider?.kind, 'circle');
+      assert.equal(towerObject.collider?.r, towerObject.width * 0.5);
     });
   });
   assert.equal(map.respawnPoints.length, 4);
@@ -429,7 +444,7 @@ test('reference training map projects all image-derived static elements into the
   assert.equal(ordinaryWalls.length, 28);
   ordinaryWalls.forEach((wall) => {
     assert.ok(Array.isArray(wall.visualPath) && wall.visualPath.length >= 6, `${wall.objectId} lost its visual trace`);
-    assert.equal(wall.collider?.kind, 'compositeObb');
+    assert.equal(wall.collider?.kind, 'compositeCapsule');
     assert.ok(wall.collider.parts.length >= wall.visualPath.length - 1, `${wall.objectId} lost collision segments`);
   });
   const highWalls = map.objects.filter((object) => object.geometryKind === 'highWall');
@@ -439,7 +454,7 @@ test('reference training map projects all image-derived static elements into the
     assert.equal(wall.visualKind, 'sine-wave');
     assert.ok(Array.isArray(wall.visualPath) && wall.visualPath.length === 17, `${wall.objectId} lost its smooth wave trace`);
     assert.ok(new Set(wall.visualPath.map((point) => `${point.x}:${point.y}`)).size >= 3, `${wall.objectId} collapsed its visual trace`);
-    assert.equal(wall.collider?.kind, 'compositeObb');
+    assert.equal(wall.collider?.kind, 'compositeCapsule');
     assert.ok(wall.collider.parts.length >= wall.visualPath.length - 1, `${wall.objectId} lost collision segments`);
   });
   const thickWalls = ordinaryWalls.filter((wall) => wall.wallType === 'thickWall');
@@ -470,6 +485,7 @@ test('reference training map projects all image-derived static elements into the
     assert.equal(rail.blocksMovement, true);
     assert.equal(rail.blocksVision, false);
     assert.equal(rail.visualPath.length, 9);
+    assert.equal(rail.collider?.kind, 'compositeCapsule');
     assert.equal(rail.collider.parts.length, rail.visualPath.length - 1);
   });
   map.deploySlots.forEach((slot) => {
@@ -643,7 +659,7 @@ test('central high walls remain symmetric low-amplitude waves outside roads and 
   assert.ok(centralSand, 'central sand region is missing');
   const centralSandWestEdge = centralSand.x - (centralSand.width * 0.5);
   const centralSandEastEdge = centralSand.x + (centralSand.width * 0.5);
-  const highWallHalfThickness = highWalls[0].collider.parts[0].d * 0.5;
+  const highWallHalfThickness = highWalls[0].collider.parts[0].r;
   ['high-wall-upper-west', 'high-wall-lower-west'].forEach((wallId) => {
     const path = highWallByGeometryId[wallId].visualPath;
     assert.ok(
@@ -729,7 +745,7 @@ test('middle inner towers retain four reference-traced crescent thick walls', ()
   });
   const middleRoad = map.terrainRegions.find((region) => region.id === 'terrain-road-mid');
   crescents.forEach((wall) => {
-    const halfThickness = wall.collider.parts[0].d * 0.5;
+    const halfThickness = wall.collider.parts[0].r;
     const yValues = wall.visualPath.map((point) => point.y);
     const lowerEdge = Math.min(...yValues) - halfThickness;
     const upperEdge = Math.max(...yValues) + halfThickness;

@@ -65,7 +65,9 @@ const getWorldColliderCacheEntry = (obs = {}) => {
   const entry = {
     ...transform,
     parts: null,
-    polygon: null
+    polygon: null,
+    circle: null,
+    capsules: null
   };
   worldColliderCache.set(obs, entry);
   return entry;
@@ -118,11 +120,188 @@ const getWorldPolygon = (obs = {}) => {
   return cached.polygon;
 };
 
+const getWorldCircle = (obs = {}) => {
+  const cached = getWorldColliderCacheEntry(obs);
+  if (cached.circle) return cached.circle;
+  const source = obs?.collider && typeof obs.collider === 'object' ? obs.collider : {};
+  const yaw = normalizeDeg(obs?.rotation || 0);
+  const offset = rotate2D(Number(source?.cx) || 0, Number(source?.cy) || 0, yaw);
+  cached.circle = {
+    cx: (Number(obs?.x) || 0) + offset.x,
+    cy: (Number(obs?.y) || 0) + offset.y,
+    r: Math.max(0.5, Number(source?.r) || (Math.min(
+      Math.max(1, Number(obs?.width) || 1),
+      Math.max(1, Number(obs?.depth) || 1)
+    ) * 0.5))
+  };
+  return cached.circle;
+};
+
+const getWorldCapsuleParts = (obs = {}) => {
+  const cached = getWorldColliderCacheEntry(obs);
+  if (cached.capsules) return cached.capsules;
+  const source = obs?.collider && typeof obs.collider === 'object' ? obs.collider : {};
+  const yaw = normalizeDeg(obs?.rotation || 0);
+  const parts = (Array.isArray(source?.parts) ? source.parts : []).map((part) => {
+    const startOffset = rotate2D(Number(part?.ax) || 0, Number(part?.ay) || 0, yaw);
+    const endOffset = rotate2D(Number(part?.bx) || 0, Number(part?.by) || 0, yaw);
+    return {
+      ax: (Number(obs?.x) || 0) + startOffset.x,
+      ay: (Number(obs?.y) || 0) + startOffset.y,
+      bx: (Number(obs?.x) || 0) + endOffset.x,
+      by: (Number(obs?.y) || 0) + endOffset.y,
+      r: Math.max(0.5, Number(part?.r) || 0.5)
+    };
+  });
+  cached.capsules = parts;
+  return cached.capsules;
+};
+
 const getColliderKind = (obs = {}) => {
   const kind = typeof obs?.collider?.kind === 'string' ? obs.collider.kind : '';
   if (kind === 'polygon') return 'polygon';
+  if (kind === 'circle') return 'circle';
+  if (kind === 'compositeCapsule') return 'compositeCapsule';
   if (kind === 'compositeObb') return 'compositeObb';
   return 'rect';
+};
+
+const closestPointOnSegment = (point = {}, start = {}, end = {}) => {
+  const startX = Number(start?.x) || 0;
+  const startY = Number(start?.y) || 0;
+  const dx = (Number(end?.x) || 0) - startX;
+  const dy = (Number(end?.y) || 0) - startY;
+  const lengthSquared = (dx * dx) + (dy * dy);
+  const progress = lengthSquared <= 1e-9
+    ? 0
+    : clamp(
+      ((((Number(point?.x) || 0) - startX) * dx)
+        + (((Number(point?.y) || 0) - startY) * dy)) / lengthSquared,
+      0,
+      1
+    );
+  return {
+    x: startX + (dx * progress),
+    y: startY + (dy * progress),
+    progress
+  };
+};
+
+const distanceToSegment = (point = {}, start = {}, end = {}) => {
+  const closest = closestPointOnSegment(point, start, end);
+  return Math.hypot(
+    (Number(point?.x) || 0) - closest.x,
+    (Number(point?.y) || 0) - closest.y
+  );
+};
+
+const distanceToPolygonBoundary = (point = {}, polygon = []) => {
+  let best = null;
+  for (let index = 0; index < polygon.length; index += 1) {
+    const closest = closestPointOnSegment(point, polygon[index], polygon[(index + 1) % polygon.length]);
+    const distance = Math.hypot(
+      (Number(point?.x) || 0) - closest.x,
+      (Number(point?.y) || 0) - closest.y
+    );
+    if (!best || distance < best.distance) best = { ...closest, distance };
+  }
+  return best;
+};
+
+const pointInsideCircle = (point = {}, circle = {}, inflate = 0) => (
+  Math.hypot(
+    (Number(point?.x) || 0) - (Number(circle?.cx) || 0),
+    (Number(point?.y) || 0) - (Number(circle?.cy) || 0)
+  ) <= Math.max(0.5, Number(circle?.r) || 0.5) + Math.max(0, Number(inflate) || 0)
+);
+
+const pointInsideCapsule = (point = {}, capsule = {}, inflate = 0) => (
+  distanceToSegment(
+    point,
+    { x: capsule?.ax, y: capsule?.ay },
+    { x: capsule?.bx, y: capsule?.by }
+  ) <= Math.max(0.5, Number(capsule?.r) || 0.5) + Math.max(0, Number(inflate) || 0)
+);
+
+const pushOutOfCircle = (point = {}, circle = {}, inflate = 0) => {
+  const pointX = Number(point?.x) || 0;
+  const pointY = Number(point?.y) || 0;
+  const centerX = Number(circle?.cx) || 0;
+  const centerY = Number(circle?.cy) || 0;
+  const radius = Math.max(0.5, Number(circle?.r) || 0.5) + Math.max(0, Number(inflate) || 0);
+  const dx = pointX - centerX;
+  const dy = pointY - centerY;
+  const distance = Math.hypot(dx, dy);
+  if (distance > radius) return { x: pointX, y: pointY, pushed: false };
+  const direction = distance > 1e-6 ? { x: dx / distance, y: dy / distance } : { x: 1, y: 0 };
+  return {
+    x: centerX + (direction.x * (radius + 0.001)),
+    y: centerY + (direction.y * (radius + 0.001)),
+    pushed: true
+  };
+};
+
+const pushOutOfCapsule = (point = {}, capsule = {}, inflate = 0) => {
+  const pointX = Number(point?.x) || 0;
+  const pointY = Number(point?.y) || 0;
+  const start = { x: Number(capsule?.ax) || 0, y: Number(capsule?.ay) || 0 };
+  const end = { x: Number(capsule?.bx) || 0, y: Number(capsule?.by) || 0 };
+  const closest = closestPointOnSegment(point, start, end);
+  const radius = Math.max(0.5, Number(capsule?.r) || 0.5) + Math.max(0, Number(inflate) || 0);
+  const dx = pointX - closest.x;
+  const dy = pointY - closest.y;
+  const distance = Math.hypot(dx, dy);
+  if (distance > radius) return { x: pointX, y: pointY, pushed: false };
+  let direction;
+  if (distance > 1e-6) {
+    direction = { x: dx / distance, y: dy / distance };
+  } else {
+    const segment = normalizeVec(end.x - start.x, end.y - start.y);
+    direction = segment.len > 1e-6 ? { x: -segment.y, y: segment.x } : { x: 1, y: 0 };
+  }
+  return {
+    x: closest.x + (direction.x * (radius + 0.001)),
+    y: closest.y + (direction.y * (radius + 0.001)),
+    pushed: true
+  };
+};
+
+const pushOutOfComposite = (point = {}, parts = [], inflate = 0, isInsidePart, pushOutPart) => {
+  const source = { x: Number(point?.x) || 0, y: Number(point?.y) || 0 };
+  const blockers = parts.filter((part) => isInsidePart(source, part, inflate));
+  if (blockers.length <= 0) return { ...source, pushed: false };
+  let best = null;
+  blockers.forEach((seedPart) => {
+    let candidate = pushOutPart(source, seedPart, inflate);
+    if (!candidate?.pushed) return;
+    for (let iteration = 0; iteration < Math.max(4, parts.length * 2); iteration += 1) {
+      const remaining = [];
+      for (let partIndex = 0; partIndex < parts.length; partIndex += 1) {
+        if (isInsidePart(candidate, parts[partIndex], inflate)) remaining.push(parts[partIndex]);
+      }
+      if (remaining.length <= 0) break;
+      let next = null;
+      let nextMove = -Infinity;
+      for (let partIndex = 0; partIndex < remaining.length; partIndex += 1) {
+        const option = pushOutPart(candidate, remaining[partIndex], inflate);
+        if (!option?.pushed) continue;
+        const optionMove = Math.hypot(option.x - source.x, option.y - source.y);
+        if (optionMove > nextMove) {
+          next = option;
+          nextMove = optionMove;
+        }
+      }
+      if (!next) break;
+      if (Math.hypot(next.x - candidate.x, next.y - candidate.y) <= 1e-6) break;
+      candidate = next;
+    }
+    const cleared = parts.every((part) => !isInsidePart(candidate, part, inflate));
+    const move = Math.hypot(candidate.x - source.x, candidate.y - source.y);
+    if (cleared && (!best || move < best.move)) best = { ...candidate, move };
+  });
+  if (best) return { x: best.x, y: best.y, pushed: true };
+  const fallback = pushOutPart(source, blockers[0], inflate);
+  return fallback?.pushed ? fallback : { ...source, pushed: false };
 };
 
 const pointInPolygon = (point, polygon = []) => {
@@ -257,12 +436,83 @@ const raycastObbPart = (start, end, part, inflate = 0) => {
   };
 };
 
+const raycastCirclePart = (start = {}, end = {}, circle = {}, inflate = 0) => {
+  const startX = Number(start?.x) || 0;
+  const startY = Number(start?.y) || 0;
+  const endX = Number(end?.x) || 0;
+  const endY = Number(end?.y) || 0;
+  const centerX = Number(circle?.cx) || 0;
+  const centerY = Number(circle?.cy) || 0;
+  const radius = Math.max(0.5, Number(circle?.r) || 0.5) + Math.max(0, Number(inflate) || 0);
+  if (Math.hypot(startX - centerX, startY - centerY) <= radius) {
+    return { t: 0, x: startX, y: startY };
+  }
+  const dx = endX - startX;
+  const dy = endY - startY;
+  const a = (dx * dx) + (dy * dy);
+  if (a <= 1e-12) return null;
+  const offsetX = startX - centerX;
+  const offsetY = startY - centerY;
+  const b = 2 * ((offsetX * dx) + (offsetY * dy));
+  const c = (offsetX * offsetX) + (offsetY * offsetY) - (radius * radius);
+  const discriminant = (b * b) - (4 * a * c);
+  if (discriminant < 0) return null;
+  const root = Math.sqrt(discriminant);
+  const roots = [(-b - root) / (2 * a), (-b + root) / (2 * a)]
+    .filter((value) => value >= 0 && value <= 1)
+    .sort((left, right) => left - right);
+  if (roots.length <= 0) return null;
+  const t = roots[0];
+  return {
+    t,
+    x: startX + (dx * t),
+    y: startY + (dy * t)
+  };
+};
+
+const raycastCapsulePart = (start = {}, end = {}, capsule = {}, inflate = 0) => {
+  const startPoint = { x: Number(capsule?.ax) || 0, y: Number(capsule?.ay) || 0 };
+  const endPoint = { x: Number(capsule?.bx) || 0, y: Number(capsule?.by) || 0 };
+  const radius = Math.max(0.5, Number(capsule?.r) || 0.5) + Math.max(0, Number(inflate) || 0);
+  if (pointInsideCapsule(start, capsule, inflate)) {
+    return { t: 0, x: Number(start?.x) || 0, y: Number(start?.y) || 0 };
+  }
+  const dx = endPoint.x - startPoint.x;
+  const dy = endPoint.y - startPoint.y;
+  const length = Math.hypot(dx, dy);
+  const hits = [
+    raycastCirclePart(start, end, { cx: startPoint.x, cy: startPoint.y, r: radius }, 0),
+    raycastCirclePart(start, end, { cx: endPoint.x, cy: endPoint.y, r: radius }, 0)
+  ].filter(Boolean);
+  if (length > 1e-6) {
+    const bodyHit = raycastObbPart(start, end, {
+      cx: (startPoint.x + endPoint.x) * 0.5,
+      cy: (startPoint.y + endPoint.y) * 0.5,
+      w: length,
+      d: radius * 2,
+      yawDeg: Math.atan2(dy, dx) * 180 / Math.PI
+    }, 0);
+    if (bodyHit) hits.push(bodyHit);
+  }
+  return hits.sort((left, right) => left.t - right.t)[0] || null;
+};
+
 export const isInsideCollider = (point, obstacle, inflate = 0) => {
   if (!obstacle) return false;
   const kind = getColliderKind(obstacle);
   if (kind === 'polygon') {
     const poly = getWorldPolygon(obstacle);
-    if (poly.length >= 3) return pointInPolygon(point, poly);
+    if (poly.length >= 3) {
+      if (pointInPolygon(point, poly)) return true;
+      const boundary = distanceToPolygonBoundary(point, poly);
+      return !!boundary && boundary.distance <= Math.max(0, Number(inflate) || 0);
+    }
+  }
+  if (kind === 'circle') {
+    return pointInsideCircle(point, getWorldCircle(obstacle), inflate);
+  }
+  if (kind === 'compositeCapsule') {
+    return getWorldCapsuleParts(obstacle).some((part) => pointInsideCapsule(point, part, inflate));
   }
   const parts = getWorldCompositeParts(obstacle);
   for (let i = 0; i < parts.length; i += 1) {
@@ -278,30 +528,40 @@ export const pushOutOfCollider = (point, obstacle, inflate = 0) => {
   const kind = getColliderKind(obstacle);
   if (kind === 'polygon') {
     const poly = getWorldPolygon(obstacle);
-    if (!pointInPolygon(point, poly)) {
+    const inside = pointInPolygon(point, poly);
+    const boundary = distanceToPolygonBoundary(point, poly);
+    const padding = Math.max(0, Number(inflate) || 0);
+    if (!inside && (!boundary || boundary.distance > padding)) {
       return { x: Number(point?.x) || 0, y: Number(point?.y) || 0, pushed: false };
     }
-    const center = {
-      x: poly.reduce((sum, p) => sum + p.x, 0) / Math.max(1, poly.length),
-      y: poly.reduce((sum, p) => sum + p.y, 0) / Math.max(1, poly.length)
-    };
-    const dir = normalizeVec((Number(point?.x) || 0) - center.x, (Number(point?.y) || 0) - center.y);
+    if (!boundary) return { x: Number(point?.x) || 0, y: Number(point?.y) || 0, pushed: false };
+    const boundaryToPoint = normalizeVec(
+      (Number(point?.x) || 0) - boundary.x,
+      (Number(point?.y) || 0) - boundary.y
+    );
+    const direction = inside
+      ? { x: -boundaryToPoint.x, y: -boundaryToPoint.y }
+      : { x: boundaryToPoint.x, y: boundaryToPoint.y };
     return {
-      x: (Number(point?.x) || 0) + (dir.x * Math.max(0.4, inflate + 0.4)),
-      y: (Number(point?.y) || 0) + (dir.y * Math.max(0.4, inflate + 0.4)),
+      x: boundary.x + (direction.x * (padding + 0.001)),
+      y: boundary.y + (direction.y * (padding + 0.001)),
       pushed: true
     };
   }
-  const parts = getWorldCompositeParts(obstacle);
-  let best = { x: Number(point?.x) || 0, y: Number(point?.y) || 0, pushed: false, move: Infinity };
-  for (let i = 0; i < parts.length; i += 1) {
-    const pushed = pushOutOfObb(point, parts[i], inflate);
-    if (!pushed.pushed) continue;
-    const move = Math.hypot(pushed.x - (Number(point?.x) || 0), pushed.y - (Number(point?.y) || 0));
-    if (move < best.move) best = { ...pushed, move };
+  if (kind === 'circle') {
+    return pushOutOfCircle(point, getWorldCircle(obstacle), inflate);
   }
-  if (!best.pushed) return { x: Number(point?.x) || 0, y: Number(point?.y) || 0, pushed: false };
-  return { x: best.x, y: best.y, pushed: true };
+  if (kind === 'compositeCapsule') {
+    return pushOutOfComposite(
+      point,
+      getWorldCapsuleParts(obstacle),
+      inflate,
+      pointInsideCapsule,
+      pushOutOfCapsule
+    );
+  }
+  const parts = getWorldCompositeParts(obstacle);
+  return pushOutOfComposite(point, parts, inflate, pointInsideObb, pushOutOfObb);
 };
 
 export const raycastCollider = (start, end, obstacle, inflate = 0) => {
@@ -309,16 +569,49 @@ export const raycastCollider = (start, end, obstacle, inflate = 0) => {
   const kind = getColliderKind(obstacle);
   if (kind === 'polygon') {
     const poly = getWorldPolygon(obstacle);
-    const hit = raycastPolygon(
+    const hits = [];
+    const polygonHit = raycastPolygon(
       { x: Number(start?.x) || 0, y: Number(start?.y) || 0 },
       { x: Number(end?.x) || 0, y: Number(end?.y) || 0 },
       poly
     );
+    if (polygonHit) hits.push(polygonHit);
+    const padding = Math.max(0, Number(inflate) || 0);
+    if (padding > 0 && poly.length >= 3) {
+      if (isInsideCollider(start, obstacle, padding)) {
+        hits.push({ t: 0, x: Number(start?.x) || 0, y: Number(start?.y) || 0 });
+      } else {
+        for (let index = 0; index < poly.length; index += 1) {
+          const edgeHit = raycastCapsulePart(start, end, {
+            ax: poly[index].x,
+            ay: poly[index].y,
+            bx: poly[(index + 1) % poly.length].x,
+            by: poly[(index + 1) % poly.length].y,
+            r: padding
+          });
+          if (edgeHit) hits.push(edgeHit);
+        }
+      }
+    }
+    const hit = hits.sort((left, right) => left.t - right.t)[0] || null;
     if (!hit) return null;
     return {
       ...hit,
       obstacle
     };
+  }
+  if (kind === 'circle') {
+    const hit = raycastCirclePart(start, end, getWorldCircle(obstacle), inflate);
+    return hit ? { ...hit, obstacle } : null;
+  }
+  if (kind === 'compositeCapsule') {
+    const parts = getWorldCapsuleParts(obstacle);
+    let best = null;
+    for (let index = 0; index < parts.length; index += 1) {
+      const hit = raycastCapsulePart(start, end, parts[index], inflate);
+      if (hit && (!best || hit.t < best.t)) best = hit;
+    }
+    return best ? { ...best, obstacle } : null;
   }
   const parts = getWorldCompositeParts(obstacle);
   let best = null;
@@ -373,6 +666,20 @@ const resolveObstacleBounds = (obstacle = {}) => {
       minY = Math.min(minY, Number(point?.y) || 0);
       maxX = Math.max(maxX, Number(point?.x) || 0);
       maxY = Math.max(maxY, Number(point?.y) || 0);
+    });
+  } else if (kind === 'circle') {
+    const circle = getWorldCircle(obstacle);
+    minX = circle.cx - circle.r;
+    minY = circle.cy - circle.r;
+    maxX = circle.cx + circle.r;
+    maxY = circle.cy + circle.r;
+  } else if (kind === 'compositeCapsule') {
+    getWorldCapsuleParts(obstacle).forEach((part) => {
+      const radius = Math.max(0.5, Number(part?.r) || 0.5);
+      minX = Math.min(minX, Number(part?.ax) - radius, Number(part?.bx) - radius);
+      minY = Math.min(minY, Number(part?.ay) - radius, Number(part?.by) - radius);
+      maxX = Math.max(maxX, Number(part?.ax) + radius, Number(part?.bx) + radius);
+      maxY = Math.max(maxY, Number(part?.ay) + radius, Number(part?.by) + radius);
     });
   } else {
     const parts = getWorldCompositeParts(obstacle);

@@ -98,6 +98,32 @@ describe('training map spawn helpers', () => {
     expect(isTrainingMapSpawnPoint(mapConfig, { x: -380, y: 280 }, { field, team: 'attacker' })).toBe(true);
   });
 
+  test('uses only the highland top surface for deployment', () => {
+    const mapConfig = buildMapConfig();
+    const footprint = [
+      { x: -500, y: 320 },
+      { x: -280, y: 320 },
+      { x: -280, y: 80 },
+      { x: -500, y: 80 }
+    ];
+    const topSurface = [
+      { x: -500, y: 280 },
+      { x: -360, y: 280 },
+      { x: -360, y: 120 },
+      { x: -500, y: 120 }
+    ];
+    mapConfig.terrainRegions = [{
+      id: 'terrain-highland-attacker-top',
+      sourceRegionId: 'attacker-top',
+      points: footprint,
+      topPolygons: [topSurface]
+    }];
+
+    expect(getTrainingMapSpawnRegions(mapConfig, { field, team: 'attacker' })[0].polygon).toEqual(topSurface);
+    expect(isTrainingMapSpawnPoint(mapConfig, { x: -420, y: 200 }, { field, team: 'attacker' })).toBe(true);
+    expect(isTrainingMapSpawnPoint(mapConfig, { x: -300, y: 200 }, { field, team: 'attacker' })).toBe(false);
+  });
+
   test('uses a seed-stable alternating highland assignment', () => {
     const mapConfig = buildMapConfig();
     const first = getTrainingMapBalancedDeploySlots(mapConfig, 'attacker', { field, seed: 'match-42' });

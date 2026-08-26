@@ -204,6 +204,19 @@ export default class BattleSnapshotBuilder {
     this.schema = schema;
     this.pool = pool;
     this.neutralPreviewCache = null;
+    this.unitAgentIds = new WeakMap();
+    this.nextUnitAgentId = 1;
+  }
+
+  resolveUnitAgentId(agent = null) {
+    if (!agent || typeof agent !== 'object') return '';
+    const existing = this.unitAgentIds.get(agent);
+    if (existing) return existing;
+    const sourceId = String(agent?.id || agent?.squadId || 'agent');
+    const identity = `${sourceId}@${this.nextUnitAgentId}`;
+    this.nextUnitAgentId += 1;
+    this.unitAgentIds.set(agent, identity);
+    return identity;
   }
 
   getNeutralPreview(runtime = null) {
@@ -293,6 +306,7 @@ export default class BattleSnapshotBuilder {
     this.pool.ensureCapacity('effects', runtime?.sim?.hitEffects?.length || 0);
 
     const units = outSnapshot.units;
+    const unitAgentIds = Array.isArray(outSnapshot.unitAgentIds) ? outSnapshot.unitAgentIds : [];
     const unitSquadIds = Array.isArray(outSnapshot.unitSquadIds) ? outSnapshot.unitSquadIds : [];
     const skillStates = outSnapshot.skillStates;
     const buildings = outSnapshot.buildings;
@@ -337,6 +351,7 @@ export default class BattleSnapshotBuilder {
           const representedWeight = showFullFormation ? Math.max(1, total / slotCount) : total;
           const terrainElevation = resolveTerrainElevation(world);
           const base = previewCount * unitsSchema.stride;
+          unitAgentIds[previewCount] = `deploy:${String(group?.id || '')}:${slotIndex}`;
           unitSquadIds[previewCount] = String(group?.id || '');
           units.data[base + 0] = Number(world.x) || 0;
           units.data[base + 1] = Number(world.y) || 0;
@@ -388,6 +403,7 @@ export default class BattleSnapshotBuilder {
         const isFlying = !!unitType.isFlying;
         const terrainElevation = resolveTerrainElevation(agent);
         const base = previewCount * unitsSchema.stride;
+        unitAgentIds[previewCount] = this.resolveUnitAgentId(agent);
         unitSquadIds[previewCount] = String(agent.squadId || '');
         units.data[base + 0] = Number(agent.x) || 0;
         units.data[base + 1] = Number(agent.y) || 0;
@@ -414,7 +430,9 @@ export default class BattleSnapshotBuilder {
       });
       units.count = previewCount;
       skillStates.count = previewCount;
+      unitAgentIds.length = previewCount;
       unitSquadIds.length = previewCount;
+      outSnapshot.unitAgentIds = unitAgentIds;
       outSnapshot.unitSquadIds = unitSquadIds;
 
       let wallCount = 0;
@@ -463,6 +481,7 @@ export default class BattleSnapshotBuilder {
       const isFlying = !!runtime.unitTypeMap.get(agent.unitTypeId)?.isFlying;
       const terrainElevation = resolveTerrainElevation(agent);
       const base = unitCount * unitsSchema.stride;
+      unitAgentIds[unitCount] = this.resolveUnitAgentId(agent);
       unitSquadIds[unitCount] = String(agent.squadId || '');
       units.data[base + 0] = Number(agent.x) || 0;
       units.data[base + 1] = Number(agent.y) || 0;
@@ -496,7 +515,9 @@ export default class BattleSnapshotBuilder {
     }
     units.count = unitCount;
     skillStates.count = unitCount;
+    unitAgentIds.length = unitCount;
     unitSquadIds.length = unitCount;
+    outSnapshot.unitAgentIds = unitAgentIds;
     outSnapshot.unitSquadIds = unitSquadIds;
 
     let wallCount = 0;

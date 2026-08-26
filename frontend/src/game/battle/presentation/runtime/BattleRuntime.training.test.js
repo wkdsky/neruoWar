@@ -2,6 +2,15 @@ import BattleRuntime from './BattleRuntime';
 import CameraController from '../render/CameraController';
 import { resolveTrainingAgentSelectionRadius } from '../../shared/trainingUnitSelection';
 
+const readSquadHighlight = (snapshot = {}, squadId = '', offset = 12) => {
+  const values = [];
+  for (let index = 0; index < (Number(snapshot?.units?.count) || 0); index += 1) {
+    if (snapshot.unitSquadIds[index] !== squadId) continue;
+    values.push(snapshot.units.data[(index * 20) + offset]);
+  }
+  return values;
+};
+
 const buildInit = () => ({
   mode: 'training',
   rules: { allowCrossMidline: true, maxDeployGroupTotal: 10000 },
@@ -341,6 +350,23 @@ describe('BattleRuntime training control', () => {
     const postStartCampModels = captureNeutralModels(campSnapshot);
     expect(preStartCampModels).toHaveLength(3);
     expect(postStartCampModels).toEqual(preStartCampModels);
+    const neutralSquad = runtime.getSquadById('neutral_camp_camp-mid');
+    const [neutralAgent] = campAgents;
+    expect(runtime.canControlSquad(neutralSquad)).toBe(false);
+    expect(runtime.setTrainingBattleSquadControlMode(neutralSquad.id, 'USER')).toMatchObject({ ok: false });
+    expect(runtime.pickSquadAtAgentPoint(neutralAgent.x, neutralAgent.y, { team: 'any' })).toBe(neutralSquad.id);
+    expect(runtime.setHoveredBattleSquad(neutralSquad.id)).toBe(true);
+    const hoveredNeutralValues = readSquadHighlight(runtime.getRenderSnapshot(), neutralSquad.id, 15);
+    expect(hoveredNeutralValues.length).toBeGreaterThan(0);
+    expect(hoveredNeutralValues.every((value) => value === 1)).toBe(true);
+    expect(runtime.setSelectedBattleSquad(neutralSquad.id)).toBe(true);
+    runtime.setHoveredBattleSquad('');
+    runtime.step(0.05);
+    expect(runtime.selectedBattleSquadId).toBe(neutralSquad.id);
+    const selectedNeutralValues = readSquadHighlight(runtime.getRenderSnapshot(), neutralSquad.id, 12);
+    expect(selectedNeutralValues.length).toBeGreaterThan(0);
+    expect(selectedNeutralValues.every((value) => value === 1)).toBe(true);
+    expect(runtime.commandMove(neutralSquad.id, { x: 80, y: 180 })).toBe(false);
     expect(runtime.sim.buildings.find((building) => building.id === 'training_neutral_camp_mid').blocksMovement).toBe(false);
     expect(runtime.getTrainingMapState().neutralCamps[0]).toMatchObject({ state: 'alive' });
   });
@@ -624,6 +650,56 @@ describe('BattleRuntime training control', () => {
     expect(wall.visualPath).toHaveLength(3);
   });
 
+  test('preserves smooth static circle and capsule colliders at runtime', () => {
+    const battleInit = buildThreeLaneMapInit();
+    const towerSource = battleInit.battlefield.map.objects.find((entry) => (
+      entry.objectId === 'training_tower_defender_mid'
+    ));
+    towerSource.collider = { kind: 'circle', cx: 0, cy: 0, r: 26, h: 88 };
+    battleInit.battlefield.itemCatalog.push({
+      itemId: 'training_map_capsule_wall',
+      width: 100,
+      depth: 20,
+      height: 32,
+      hp: 1000,
+      defense: 2,
+      blocksMovement: true,
+      blocksVision: false,
+      style: { color: '#8c785b', shape: 'training-low-wall' }
+    });
+    battleInit.battlefield.map.objects.push({
+      objectId: 'smooth_capsule_wall',
+      itemId: 'training_map_capsule_wall',
+      x: 0,
+      y: 180,
+      width: 100,
+      depth: 20,
+      height: 32,
+      category: 'wall',
+      team: 'neutral',
+      mapStatic: true,
+      maxHp: 1000,
+      blocksMovement: true,
+      blocksVision: false,
+      collider: {
+        kind: 'compositeCapsule',
+        parts: [{ ax: -40, ay: 0, bx: 40, by: 0, r: 10, h: 32 }]
+      }
+    });
+
+    const runtime = new BattleRuntime(battleInit);
+    const tower = runtime.initialBuildings.find((building) => (
+      building.id === 'training_tower_defender_mid'
+    ));
+    const wall = runtime.initialBuildings.find((building) => building.id === 'smooth_capsule_wall');
+
+    expect(tower.collider).toMatchObject({ kind: 'circle', r: 26 });
+    expect(tower.colliderParts).toHaveLength(1);
+    expect(wall.collider).toMatchObject({ kind: 'compositeCapsule' });
+    expect(wall.collider.parts).toHaveLength(1);
+    expect(wall.colliderParts).toHaveLength(1);
+  });
+
   test('moves toward the nearest legal point when a training-map command targets a tower', () => {
     const runtime = new BattleRuntime(buildThreeLaneMapInit());
     const created = runtime.createDeployGroup('attacker', {
@@ -671,7 +747,8 @@ describe('BattleRuntime training control', () => {
     expect(attacker.order).toMatchObject({
       type: 'ATTACK_MOVE',
       targetSquadId: defender.id,
-      targetBuildingId: ''
+      targetBuildingId: '',
+      stopAfterTarget: true
     });
 
     const tower = runtime.sim.buildings.find((building) => building.id === 'training_tower_defender_mid');
@@ -679,7 +756,8 @@ describe('BattleRuntime training control', () => {
     expect(attacker.order).toMatchObject({
       type: 'ATTACK_MOVE',
       targetSquadId: '',
-      targetBuildingId: tower.id
+      targetBuildingId: tower.id,
+      stopAfterTarget: true
     });
     expect(attacker.targetBuildingId).toBe(tower.id);
   });
@@ -705,9 +783,15 @@ describe('BattleRuntime training control', () => {
       depth: 160,
       blocksMovement: true
     });
+    const planRoute = jest.spyOn(runtime.trainingMapNavigator, 'planRoute');
 
     expect(runtime.commandMove(squad.id, { x: 300, y: -250 })).toBe(true);
 
+    expect(planRoute).toHaveBeenCalledWith(
+      expect.any(Object),
+      expect.any(Object),
+      expect.objectContaining({ preferLocalDetour: true })
+    );
     expect(squad.waypoints.length).toBeGreaterThan(1);
     expect(squad.waypoints[squad.waypoints.length - 1]).toEqual({ x: 300, y: -250 });
     expect(squad.waypoints.some((point) => point.y !== -250)).toBe(true);
@@ -1297,9 +1381,21 @@ describe('BattleRuntime training control', () => {
     expect(runtime.startBattle().ok).toBe(true);
 
     const squad = runtime.getSquadById('defender_squad_1');
+    const [agent] = runtime.crowd.agentsBySquad.get(squad.id);
     expect(runtime.canControlSquad(squad)).toBe(false);
+    expect(runtime.pickSquadAtAgentPoint(agent.x, agent.y, { team: 'any' })).toBe(squad.id);
+    expect(runtime.setHoveredBattleSquad(squad.id)).toBe(true);
+    const hoveredValues = readSquadHighlight(runtime.getRenderSnapshot(), squad.id, 15);
+    expect(hoveredValues.length).toBeGreaterThan(0);
+    expect(hoveredValues.every((value) => value === 1)).toBe(true);
     expect(runtime.setSelectedBattleSquad(squad.id)).toBe(true);
+    runtime.setHoveredBattleSquad('');
     runtime.setFocusSquad(squad.id);
+    runtime.step(0.05);
+    expect(runtime.selectedBattleSquadId).toBe(squad.id);
+    const selectedValues = readSquadHighlight(runtime.getRenderSnapshot(), squad.id, 12);
+    expect(selectedValues.length).toBeGreaterThan(0);
+    expect(selectedValues.every((value) => value === 1)).toBe(true);
     expect(runtime.getCardRows().find((row) => row.id === squad.id)?.selected).toBe(true);
     expect(runtime.getFocusAnchor()).toMatchObject({ squadId: squad.id });
     expect(runtime.commandMove(squad.id, { x: 300, y: 40 })).toBe(false);
@@ -1724,6 +1820,36 @@ describe('BattleRuntime training control', () => {
       { team: 'any' }
     )).toBe('');
     expect(runtime.pickSquadAtAgentPoint(agent.x + 16, agent.y, { team: 'any' })).toBe('');
+  });
+
+  test('uses the rendered troop majority for camera follow and squad-center picking', () => {
+    const runtime = new BattleRuntime(buildInit());
+    expect(runtime.createDeployGroup('attacker', {
+      units: { infantry_basic: 1 },
+      x: -440,
+      y: 0,
+      placed: true,
+      controlMode: 'USER'
+    }).ok).toBe(true);
+    expect(runtime.startBattle().ok).toBe(true);
+
+    const squad = runtime.getSquadById('attacker_squad_1');
+    squad.x = 420;
+    squad.y = -220;
+    squad.centerX = -120;
+    squad.centerY = 36;
+    runtime.setRenderedBattleSquadAnchors(new Map([[
+      squad.id,
+      { squadId: squad.id, centerX: -160, centerY: 32, radius: 18 }
+    ]]));
+
+    expect(runtime.getSquadCameraAnchor(squad.id)).toMatchObject({
+      x: -160,
+      y: 32,
+      squadId: squad.id
+    });
+    expect(runtime.pickSquadAtPoint(-160, 32, { team: 'any', maxDist: 24 })).toBe(squad.id);
+    expect(runtime.pickSquadAtPoint(420, -220, { team: 'any', maxDist: 24 })).toBe('');
   });
 
   test('captures bounded performance metrics with training-map context', () => {

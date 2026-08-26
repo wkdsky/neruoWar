@@ -1,7 +1,7 @@
 import { resolveTrainingMapLane } from '../shared/trainingMap';
 import { buildObstacleSpatialIndex, raycastObstacles } from './crowd/crowdPhysics';
 import { isRangedSquad, resolveSquadAttackRange } from './crowd/attackRange';
-import { isHostileTeam, TEAM_NEUTRAL } from './crowd/teamRelations';
+import { canAcquireSquadTarget, isHostileTeam, TEAM_NEUTRAL } from './crowd/teamRelations';
 import { filterBlockingObstacles } from './items/itemObstacleUtils';
 
 export const TRAINING_MAP_AI_STATE = Object.freeze({
@@ -138,6 +138,42 @@ const resolveSquadLaneId = (squad = {}, sim = {}) => {
   return resolveTrainingMapLane(sim?.trainingMap, squad, fallback);
 };
 
+const pointToSegmentDistance = (point = {}, start = {}, end = {}) => {
+  const px = finiteNumber(point?.x);
+  const py = finiteNumber(point?.y);
+  const ax = finiteNumber(start?.x);
+  const ay = finiteNumber(start?.y);
+  const bx = finiteNumber(end?.x);
+  const by = finiteNumber(end?.y);
+  const dx = bx - ax;
+  const dy = by - ay;
+  const lengthSq = (dx * dx) + (dy * dy);
+  if (lengthSq <= 0.0001) return Math.hypot(px - ax, py - ay);
+  const t = clamp((((px - ax) * dx) + ((py - ay) * dy)) / lengthSq, 0, 1);
+  return Math.hypot(px - (ax + (dx * t)), py - (ay + (dy * t)));
+};
+
+const isMinionRoadCandidate = (squad = {}, candidate = {}, sim = {}) => {
+  if (squad?.isMinionWaveUnit !== true) return true;
+  const laneId = String(squad?.minionLaneId || squad?.spawnLaneId || '').trim();
+  const lane = (Array.isArray(sim?.trainingMap?.lanes) ? sim.trainingMap.lanes : [])
+    .find((entry) => String(entry?.id || '') === laneId) || null;
+  const path = Array.isArray(squad?.minionPath) && squad.minionPath.length >= 2
+    ? squad.minionPath
+    : (Array.isArray(lane?.centerline) ? lane.centerline : []);
+  if (path.length < 2) return true;
+  let distance = Infinity;
+  for (let index = 1; index < path.length; index += 1) {
+    distance = Math.min(distance, pointToSegmentDistance(candidate, path[index - 1], path[index]));
+  }
+  const configuredWidth = Number(sim?.trainingMap?.navigation?.fixedLaneCorridorWidth);
+  const laneWidth = Math.max(
+    24,
+    Number(squad?.minionPathCorridorWidth) || Number(lane?.width) || (Number.isFinite(configuredWidth) ? configuredWidth : 96)
+  );
+  return distance <= (laneWidth * 0.5) + 24;
+};
+
 const resolveObjectiveBuilding = (sim = {}, objective = {}, context = null) => (
   context?.buildingsById?.get(String(objective?.sourceObjectId || ''))
     || (Array.isArray(sim?.buildings) ? sim.buildings : []).find((building) => (
@@ -253,7 +289,7 @@ export const resolveTrainingMapAiTargetScoring = (sim = {}) => {
 };
 
 export const scoreTrainingMapAiTarget = (squad = {}, candidate = {}, sim = {}, nowSec = 0) => {
-  if (!squad || !candidate || !isHostileTeam(squad?.team, candidate?.team)) return null;
+  if (!squad || !candidate || !canAcquireSquadTarget(squad, candidate)) return null;
   if (finiteNumber(candidate?.remain) <= 0 || isEnemyHiddenForViewer(candidate, squad?.team)) return null;
   if (isTrainingMapAiTargetDeferred(squad, candidate?.id, nowSec)) return null;
 
@@ -376,11 +412,14 @@ export const selectTrainingMapAiTarget = (squad = {}, sim = {}, {
   const sameLaneRows = sourceLaneId
     ? sourceRows.filter((candidate) => (
       candidate
-      && isHostileTeam(squad?.team, candidate?.team)
+      && canAcquireSquadTarget(squad, candidate)
       && resolveSquadLaneId(candidate, sim) === sourceLaneId
+      && isMinionRoadCandidate(squad, candidate, sim)
     ))
     : [];
-  const rows = sameLaneRows.length > 0 ? sameLaneRows : sourceRows;
+  const rows = squad?.isMinionWaveUnit === true
+    ? sameLaneRows
+    : (sameLaneRows.length > 0 ? sameLaneRows : sourceRows);
   const safeNow = Math.max(0, finiteNumber(nowSec));
   const cached = squad?._trainingAiTargetCache;
   if (cached && finiteNumber(cached?.nextAt) > safeNow) {
@@ -413,6 +452,17 @@ export const selectTrainingMapAiTarget = (squad = {}, sim = {}, {
 export const selectTrainingMapAiObjective = (squad = {}, sim = {}) => {
   if (!squad || squad?.team === TEAM_NEUTRAL) return null;
   const nowSec = Math.max(0, finiteNumber(sim?.timeElapsed));
+  const context = resolveTrainingAiContext(sim);
+  const config = resolveTrainingMapAiTargetScoring(sim);
+  const sourceLaneId = resolveSquadLaneId(squad, sim);
+  const objectives = Array.isArray(sim?.trainingObjectives) ? sim.trainingObjectives : [];
+  const hasSameLaneObjective = !!sourceLaneId && objectives.some((objective) => {
+    if (!objective || objective.destroyed || objective.targetable === false) return false;
+    if (!isHostileTeam(squad?.team, objective?.team)) return false;
+    if (String(objective?.laneId || '') !== sourceLaneId) return false;
+    const building = resolveObjectiveBuilding(sim, objective, context);
+    return !!building && building.destroyed !== true;
+  });
   const cached = squad?._trainingAiObjectiveCache;
   if (cached && finiteNumber(cached?.nextAt) > nowSec) {
     const cachedObjective = cached.selection?.objective;
@@ -424,20 +474,26 @@ export const selectTrainingMapAiObjective = (squad = {}, sim = {}) => {
       && cachedObjective.destroyed !== true
       && cachedObjective.targetable !== false
       && cachedBuilding.destroyed !== true
+      && (!hasSameLaneObjective || String(cachedObjective?.laneId || '') === sourceLaneId)
     ) {
       return cached.selection;
     }
     if (!cached.selection) return null;
   }
-  const context = resolveTrainingAiContext(sim);
-  const config = resolveTrainingMapAiTargetScoring(sim);
-  const sourceLaneId = resolveSquadLaneId(squad, sim);
   const attackRange = resolveSquadAttackRange(squad);
   const lockedGoalId = String(squad?.autoNavigation?.goalId || '');
+  const explicitBuildingIds = new Set([
+    String(squad?.order?.targetBuildingId || ''),
+    String(squad?.targetBuildingId || '')
+  ].filter(Boolean));
   let best = null;
-  (Array.isArray(sim?.trainingObjectives) ? sim.trainingObjectives : []).forEach((objective) => {
+  objectives.forEach((objective) => {
     if (!objective || objective.destroyed || objective.targetable === false) return;
     if (!isHostileTeam(squad?.team, objective?.team)) return;
+    if (
+      objective?.team === TEAM_NEUTRAL
+      && !explicitBuildingIds.has(String(objective?.sourceObjectId || ''))
+    ) return;
     const building = resolveObjectiveBuilding(sim, objective, context);
     if (!building || building.destroyed) return;
     const targetRadius = Math.max(4, Math.max(finiteNumber(building?.width), finiteNumber(building?.depth)) * 0.5);
@@ -446,6 +502,7 @@ export const selectTrainingMapAiObjective = (squad = {}, sim = {}) => {
       finiteNumber(building?.y) - finiteNumber(squad?.y)
     );
     const targetLaneId = String(objective?.laneId || '');
+    if (hasSameLaneObjective && targetLaneId !== sourceLaneId) return;
     const sameLane = !!sourceLaneId && sourceLaneId === targetLaneId;
     const healthRatio = clamp(
       finiteNumber(objective?.hp, finiteNumber(objective?.maxHp, 1)) / Math.max(1, finiteNumber(objective?.maxHp, finiteNumber(objective?.hp, 1))),

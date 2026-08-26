@@ -37,6 +37,7 @@ const tempPos = new THREE.Vector3();
 const tempColor = new THREE.Color();
 const tempWorldFlagCameraForward = new THREE.Vector3();
 const tempWorldFlagCameraUp = new THREE.Vector3();
+const tempStructureHealthBarWorldPosition = new THREE.Vector3();
 
 const TEAM_ATTACKER_COLOR = new THREE.Color(0xd95155);
 const TEAM_DEFENDER_COLOR = new THREE.Color(0x32b4bd);
@@ -86,6 +87,9 @@ export const TRAINING_WORLD_FLAG_TARGET_SCREEN_HEIGHT = 76;
 export const TRAINING_WORLD_FLAG_MIN_SCREEN_SCALE = 0.85;
 export const TRAINING_WORLD_FLAG_MAX_SCREEN_SCALE = 8;
 export const TRAINING_DIRECTION_ARC_GROUND_ELEVATION = 0.1;
+export const TRAINING_STRUCTURE_HEALTH_BAR_TARGET_SCREEN_HEIGHT = 30;
+const TRAINING_STRUCTURE_HEALTH_BAR_MIN_SCREEN_SCALE = 0.2;
+const TRAINING_STRUCTURE_HEALTH_BAR_MAX_SCREEN_SCALE = 12;
 
 export const resolveTrainingFlagLod = (pitchDeg = 90) => {
   const normalizedPitch = Number.isFinite(Number(pitchDeg)) ? Number(pitchDeg) : 90;
@@ -447,6 +451,29 @@ export const resolveTrainingInfoLabelElevation = (source = null) => {
 };
 
 const TRAINING_WORLD_FLAG_CAMERA_FOV_DEG = 48;
+export const resolveTrainingStructureHealthBarScreenScale = ({
+  baseWorldHeight = 1,
+  cameraDepth = 1,
+  viewportHeight = 1,
+  targetScreenHeight = TRAINING_STRUCTURE_HEALTH_BAR_TARGET_SCREEN_HEIGHT
+} = {}) => {
+  const safeBaseWorldHeight = Math.max(0.1, finiteOr(baseWorldHeight, 1));
+  const safeCameraDepth = Math.max(1, finiteOr(cameraDepth, 1));
+  const safeViewportHeight = Math.max(1, finiteOr(viewportHeight, 1));
+  const safeTargetScreenHeight = Math.max(
+    1,
+    finiteOr(targetScreenHeight, TRAINING_STRUCTURE_HEALTH_BAR_TARGET_SCREEN_HEIGHT)
+  );
+  const viewHeight = 2
+    * safeCameraDepth
+    * Math.tan((TRAINING_WORLD_FLAG_CAMERA_FOV_DEG * Math.PI / 180) * 0.5);
+  const targetWorldHeight = viewHeight * (safeTargetScreenHeight / safeViewportHeight);
+  return clamp(
+    targetWorldHeight / safeBaseWorldHeight,
+    TRAINING_STRUCTURE_HEALTH_BAR_MIN_SCREEN_SCALE,
+    TRAINING_STRUCTURE_HEALTH_BAR_MAX_SCREEN_SCALE
+  );
+};
 const TRAINING_FLAG_CANVAS_WIDTH = 512;
 const TRAINING_FLAG_CANVAS_HEIGHT = 232;
 const TRAINING_FLAG_CANVAS_HORIZONTAL_INSET = 12;
@@ -595,7 +622,7 @@ export const resolveTrainingWorldFlagLayout = ({
     return point
       ? {
           ...point,
-          distance: Math.hypot(dx, dy, dz)
+          distance: Math.max(1, (dx * forward[0]) + (dy * forward[1]) + (dz * forward[2]))
         }
       : point;
   };
@@ -637,10 +664,11 @@ export const resolveTrainingWorldFlagLayout = ({
       worldFlagScale: leaderInfo.worldFlagScale,
       stackGapWorld: leaderInfo.stackGapWorld,
       stackedPoleHeight: leaderInfo.scaledPoleHeight + (maxLevel * leaderInfo.stackGapWorld),
-      distance: Math.hypot(
-        displayX - (Number(eye[0]) || 0),
-        displayY - (Number(eye[1]) || 0),
-        baseZ - (Number(eye[2]) || 0)
+      distance: Math.max(
+        1,
+        ((displayX - (Number(eye[0]) || 0)) * forward[0])
+          + ((displayY - (Number(eye[1]) || 0)) * forward[1])
+          + ((baseZ - (Number(eye[2]) || 0)) * forward[2])
       )
     };
   });
@@ -901,6 +929,10 @@ const buildDirectionArcAnchor = (
     id: String(source?.id || ''),
     x: finiteOr(source?.centerX, finiteOr(source?.x)),
     y: finiteOr(source?.centerY, finiteOr(source?.y)),
+    contactX: finiteOr(source?.contactX, finiteOr(source?.centerX, finiteOr(source?.x))),
+    contactY: finiteOr(source?.contactY, finiteOr(source?.centerY, finiteOr(source?.y))),
+    radius: Math.max(0, finiteOr(source?.radius)),
+    contactRadius: Math.max(0, finiteOr(source?.contactRadius, finiteOr(source?.radius))),
     yaw: arcLayout.directionYaw,
     teamIndex: resolveTrainingTeamIndex(team),
     team,
@@ -920,9 +952,25 @@ const buildDirectionArcAnchor = (
   };
 };
 
+export const areTrainingFlagAnchorsInMapContact = (left = null, right = null) => {
+  const leftId = String(left?.id || '');
+  const rightId = String(right?.id || '');
+  if (!leftId || !rightId || leftId === rightId) return false;
+  const leftRadius = Math.max(0, finiteOr(left?.contactRadius, finiteOr(left?.radius)));
+  const rightRadius = Math.max(0, finiteOr(right?.contactRadius, finiteOr(right?.radius)));
+  if (leftRadius <= 0 || rightRadius <= 0) return false;
+  return Math.hypot(
+    finiteOr(right?.contactX, finiteOr(right?.centerX, finiteOr(right?.x)))
+      - finiteOr(left?.contactX, finiteOr(left?.centerX, finiteOr(left?.x))),
+    finiteOr(right?.contactY, finiteOr(right?.centerY, finiteOr(right?.y)))
+      - finiteOr(left?.contactY, finiteOr(left?.centerY, finiteOr(left?.y)))
+  ) <= leftRadius + rightRadius;
+};
+
 export const resolveTrainingWorldFlagStackLayout = (anchors = [], project = () => null, {
   horizontalThreshold = 92,
-  verticalThreshold = 58
+  verticalThreshold = 58,
+  canMerge = areTrainingFlagAnchorsInMapContact
 } = {}) => {
   const entries = (Array.isArray(anchors) ? anchors : [])
     .map((anchor, index) => ({
@@ -936,9 +984,13 @@ export const resolveTrainingWorldFlagStackLayout = (anchors = [], project = () =
       && Number.isFinite(Number(entry.point?.y))
     ));
   const groups = [];
+  const canMergeEntries = typeof canMerge === 'function'
+    ? (left, right) => canMerge(left.anchor, right.anchor)
+    : () => false;
   entries.forEach((entry) => {
     const matches = groups.filter((group) => group.some((member) => (
-      Math.abs(Number(member.point.x) - Number(entry.point.x)) <= horizontalThreshold
+      canMergeEntries(member, entry)
+      && Math.abs(Number(member.point.x) - Number(entry.point.x)) <= horizontalThreshold
       && Math.abs(Number(member.point.y) - Number(entry.point.y)) <= verticalThreshold
     )));
     if (matches.length <= 0) {
@@ -1060,7 +1112,11 @@ export const resolveTrainingDirectionArcAnchors = (runtime = null, renderedSquad
               x: finiteOr(renderedAnchor.x, finiteOr(squad?.x)),
               y: finiteOr(renderedAnchor.y, finiteOr(squad?.y)),
               centerX: finiteOr(renderedAnchor.centerX, finiteOr(renderedAnchor.x, finiteOr(squad?.centerX, finiteOr(squad?.x)))),
-              centerY: finiteOr(renderedAnchor.centerY, finiteOr(renderedAnchor.y, finiteOr(squad?.centerY, finiteOr(squad?.y))))
+              centerY: finiteOr(renderedAnchor.centerY, finiteOr(renderedAnchor.y, finiteOr(squad?.centerY, finiteOr(squad?.y)))),
+              contactX: finiteOr(renderedAnchor.contactX, finiteOr(renderedAnchor.centerX, finiteOr(renderedAnchor.x, finiteOr(squad?.centerX, finiteOr(squad?.x))))),
+              contactY: finiteOr(renderedAnchor.contactY, finiteOr(renderedAnchor.centerY, finiteOr(renderedAnchor.y, finiteOr(squad?.centerY, finiteOr(squad?.y))))),
+              radius: Math.max(0, finiteOr(renderedAnchor.radius, finiteOr(squad?.displayRadius, finiteOr(squad?.radius)))),
+              contactRadius: Math.max(0, finiteOr(renderedAnchor.radius, finiteOr(squad?.contactRadius, finiteOr(squad?.displayRadius, finiteOr(squad?.radius)))))
             }
           : squad;
         return buildDirectionArcAnchor(
@@ -1118,6 +1174,12 @@ export const resolveTrainingDirectionArcAnchors = (runtime = null, renderedSquad
         hoveredFlagId
       ));
     });
+  return anchors;
+};
+
+export const publishTrainingRenderedSquadAnchors = (runtime = null, snapshot = null) => {
+  const anchors = resolveTrainingRenderedSquadAnchors(runtime, snapshot);
+  runtime?.setRenderedBattleSquadAnchors?.(anchors);
   return anchors;
 };
 
@@ -2040,6 +2102,10 @@ const resolveTrainingTowerHealthBarTheme = (team = '', defenseRole = '') => {
   return { frame: '#fecaca', accent: '#ef4444', dark: '#450a0a' };
 };
 
+export const formatTrainingStructureDurability = (hp = 0, maxHp = 1) => (
+  `${Math.ceil(finiteOr(hp))}/${Math.ceil(Math.max(1, finiteOr(maxHp, 1)))}`
+);
+
 export const drawTrainingTowerHealthBarCanvas = (canvas = null, state = {}) => {
   if (typeof CanvasRenderingContext2D === 'undefined') return false;
   const context = canvas?.getContext?.('2d');
@@ -2053,60 +2119,78 @@ export const drawTrainingTowerHealthBarCanvas = (canvas = null, state = {}) => {
   context.clearRect(0, 0, width, height);
   context.save();
   context.shadowColor = 'rgba(2, 6, 23, 0.9)';
-  context.shadowBlur = 14;
-  context.shadowOffsetY = 5;
+  context.shadowBlur = 9;
+  context.shadowOffsetY = 3;
   context.fillStyle = 'rgba(2, 6, 23, 0.94)';
-  context.fillRect(8, 10, width - 16, height - 20);
+  context.fillRect(6, 6, width - 12, height - 12);
   context.restore();
   context.strokeStyle = theme.frame;
-  context.lineWidth = 5;
-  context.strokeRect(10.5, 12.5, width - 21, height - 25);
-  context.fillStyle = theme.dark;
-  context.fillRect(22, 25, 88, height - 50);
-  context.strokeStyle = theme.accent;
   context.lineWidth = 3;
-  context.strokeRect(22.5, 25.5, 87, height - 51);
+  context.strokeRect(7.5, 7.5, width - 15, height - 15);
+  context.fillStyle = theme.dark;
+  context.fillRect(14, 14, 52, height - 28);
+  context.strokeStyle = theme.accent;
+  context.lineWidth = 2;
+  context.strokeRect(14.5, 14.5, 51, height - 29);
   context.fillStyle = theme.frame;
   context.beginPath();
-  context.moveTo(43, 70);
-  context.lineTo(43, 46);
-  context.lineTo(54, 35);
-  context.lineTo(78, 35);
-  context.lineTo(89, 46);
-  context.lineTo(89, 70);
-  context.lineTo(80, 70);
-  context.lineTo(80, 52);
-  context.lineTo(52, 52);
-  context.lineTo(52, 70);
+  context.moveTo(24, 76);
+  context.lineTo(24, 41);
+  context.lineTo(31, 31);
+  context.lineTo(49, 31);
+  context.lineTo(56, 41);
+  context.lineTo(56, 76);
+  context.lineTo(49, 76);
+  context.lineTo(49, 52);
+  context.lineTo(31, 52);
+  context.lineTo(31, 76);
   context.closePath();
   context.fill();
+  const labelX = 78;
+  const labelY = 13;
+  const labelWidth = width - labelX - 12;
+  const labelHeight = 40;
+  context.fillStyle = 'rgba(0, 0, 0, 0.76)';
+  context.fillRect(labelX, labelY, labelWidth, labelHeight);
+  const label = formatTrainingStructureDurability(hp, maxHp);
+  let labelFontSize = 34;
+  do {
+    context.font = `900 ${labelFontSize}px "Arial Black", "Microsoft YaHei", sans-serif`;
+    if (context.measureText(label).width <= labelWidth - 16) break;
+    labelFontSize -= 2;
+  } while (labelFontSize > 24);
+  context.textAlign = 'center';
+  context.textBaseline = 'middle';
+  context.lineWidth = 6;
+  context.lineJoin = 'round';
+  context.strokeStyle = 'rgba(0, 0, 0, 0.98)';
+  const labelCenterX = labelX + (labelWidth * 0.5);
+  const labelCenterY = labelY + (labelHeight * 0.5);
+  context.strokeText(label, labelCenterX, labelCenterY);
+  context.fillStyle = '#ffffff';
+  context.fillText(label, labelCenterX, labelCenterY);
+  const barX = labelX;
+  const barY = 62;
+  const barWidth = labelWidth;
+  const barHeight = 18;
   context.fillStyle = 'rgba(15, 23, 42, 0.96)';
-  context.fillRect(126, 30, width - 148, 48);
+  context.fillRect(barX, barY, barWidth, barHeight);
   const segmentCount = 10;
-  const segmentGap = 4;
-  const segmentWidth = (width - 154 - (segmentGap * (segmentCount - 1))) / segmentCount;
+  const segmentGap = 3;
+  const segmentWidth = ((barWidth - 6) - (segmentGap * (segmentCount - 1))) / segmentCount;
   const healthColor = ratio <= 0.22 ? '#fb7185' : (ratio <= 0.5 ? '#fbbf24' : '#f8fafc');
   for (let index = 0; index < segmentCount; index += 1) {
     const segmentStart = index / segmentCount;
     const segmentEnd = (index + 1) / segmentCount;
-    const x = 130 + (index * (segmentWidth + segmentGap));
+    const x = barX + 3 + (index * (segmentWidth + segmentGap));
     context.fillStyle = 'rgba(71, 85, 105, 0.48)';
-    context.fillRect(x, 34, segmentWidth, 40);
+    context.fillRect(x, barY + 3, segmentWidth, barHeight - 6);
     const filledRatio = clamp((ratio - segmentStart) / Math.max(0.001, segmentEnd - segmentStart), 0, 1);
     if (filledRatio > 0) {
       context.fillStyle = healthColor;
-      context.fillRect(x + 2, 36, Math.max(1, (segmentWidth - 4) * filledRatio), 36);
+      context.fillRect(x + 1, barY + 4, Math.max(1, (segmentWidth - 2) * filledRatio), barHeight - 8);
     }
   }
-  context.font = '900 24px "Microsoft YaHei", sans-serif';
-  context.textAlign = 'right';
-  context.textBaseline = 'middle';
-  context.lineWidth = 6;
-  context.strokeStyle = 'rgba(2, 6, 23, 0.92)';
-  const label = `防御塔耐久  ${Math.ceil(hp)} / ${Math.ceil(maxHp)}`;
-  context.strokeText(label, width - 22, 96);
-  context.fillStyle = theme.frame;
-  context.fillText(label, width - 22, 96);
   return true;
 };
 
@@ -2117,12 +2201,13 @@ const createTrainingTowerHealthBarSprite = ({
   hp = 1,
   maxHp = 1,
   width = 64,
-  height = 96
+  height = 96,
+  category = 'tower'
 } = {}) => {
   if (typeof document === 'undefined') return null;
   const canvas = document.createElement('canvas');
-  canvas.width = 512;
-  canvas.height = 128;
+  canvas.width = 384;
+  canvas.height = 96;
   const texture = new THREE.CanvasTexture(canvas);
   texture.colorSpace = THREE.SRGBColorSpace;
   texture.generateMipmaps = false;
@@ -2137,19 +2222,40 @@ const createTrainingTowerHealthBarSprite = ({
   }));
   sprite.name = name;
   sprite.position.z = height + Math.max(22, height * 0.18);
-  sprite.scale.set(Math.max(128, width * 2.45), Math.max(28, height * 0.34), 1);
+  const baseWorldWidth = Math.max(128, width * 2.45);
+  const baseWorldHeight = baseWorldWidth * (canvas.height / canvas.width);
+  sprite.scale.set(baseWorldWidth, baseWorldHeight, 1);
   sprite.renderOrder = 18;
   sprite.frustumCulled = false;
   sprite.userData.structureHealthBar = true;
-  sprite.userData.barKind = 'tower-durability';
+  sprite.userData.barKind = `${category}-durability`;
   sprite.userData.canvas = canvas;
   sprite.userData.texture = texture;
   sprite.userData.team = team;
   sprite.userData.defenseRole = defenseRole;
+  sprite.userData.screenStableSize = true;
+  sprite.userData.targetScreenHeight = TRAINING_STRUCTURE_HEALTH_BAR_TARGET_SCREEN_HEIGHT;
+  sprite.userData.baseWorldScale = { x: baseWorldWidth, y: baseWorldHeight };
   drawTrainingTowerHealthBarCanvas(canvas, { team, defenseRole, hp, maxHp });
   texture.needsUpdate = true;
   sprite.userData.signature = '';
   return sprite;
+};
+
+export const applyTrainingStructureHealthBarScreenScale = (sprite = null, state = {}) => {
+  if (!sprite?.userData?.structureHealthBar) return 0;
+  const baseWorldScale = sprite.userData.baseWorldScale || {};
+  const baseWorldWidth = Math.max(0.1, finiteOr(baseWorldScale?.x, finiteOr(sprite?.scale?.x, 1)));
+  const baseWorldHeight = Math.max(0.1, finiteOr(baseWorldScale?.y, finiteOr(sprite?.scale?.y, 1)));
+  const screenScale = resolveTrainingStructureHealthBarScreenScale({
+    baseWorldHeight,
+    cameraDepth: state?.cameraDepth,
+    viewportHeight: state?.viewportHeight,
+    targetScreenHeight: state?.targetScreenHeight || sprite.userData.targetScreenHeight
+  });
+  sprite.scale.set(baseWorldWidth * screenScale, baseWorldHeight * screenScale, 1);
+  sprite.userData.screenScale = screenScale;
+  return screenScale;
 };
 
 export const applyTrainingTowerHealthBarState = (sprite = null, state = {}) => {
@@ -2369,7 +2475,8 @@ export const createTrainingMapStaticPlaceholderMesh = (object = {}, terrainEleva
       hp: Math.max(0, finiteOr(object?.hp, group.userData.maxHp)),
       maxHp: group.userData.maxHp,
       width,
-      height
+      height,
+      category
     });
     if (healthBar) group.add(healthBar);
     return group;
@@ -2402,6 +2509,17 @@ export const createTrainingMapStaticPlaceholderMesh = (object = {}, terrainEleva
       fill: true
     });
     if (attackRangeMarker) group.add(attackRangeMarker);
+    const healthBar = createTrainingTowerHealthBarSprite({
+      name: `${group.name}-structure-health-bar`,
+      team,
+      defenseRole: group.userData.defenseRole,
+      hp: Math.max(0, finiteOr(object?.hp, group.userData.maxHp)),
+      maxHp: group.userData.maxHp,
+      width,
+      height,
+      category
+    });
+    if (healthBar) group.add(healthBar);
     return group;
   }
   return null;
@@ -2416,9 +2534,9 @@ export const applyTrainingMapStaticPlaceholderState = (placeholder = null, build
   placeholder.userData.hpRatio = clamp(hp / maxHp, 0, 1);
   placeholder.userData.hp = hp;
   placeholder.userData.maxHp = maxHp;
-  const towerHealthBar = placeholder.getObjectByName(`${placeholder.name}-structure-health-bar`);
-  if (towerHealthBar) {
-    applyTrainingTowerHealthBarState(towerHealthBar, {
+  const structureHealthBar = placeholder.getObjectByName(`${placeholder.name}-structure-health-bar`);
+  if (structureHealthBar) {
+    applyTrainingTowerHealthBarState(structureHealthBar, {
       hp,
       maxHp,
       team: placeholder?.userData?.team,
@@ -3095,6 +3213,29 @@ export default class TrainingThreeRenderPipeline {
     });
   }
 
+  updateTrainingStructureHealthBarScales(cameraState = {}) {
+    if (!this.mapStaticPlaceholderGroup) return;
+    const viewportHeight = Math.max(
+      1,
+      finiteOr(this.viewportCssHeight, finiteOr(this.canvas?.clientHeight, 1))
+    );
+    const { eye, forward } = resolveTrainingWorldFlagCameraPose(cameraState);
+    this.mapStaticPlaceholderGroup.traverse((sprite) => {
+      if (!sprite?.userData?.structureHealthBar) return;
+      sprite.getWorldPosition(tempStructureHealthBarWorldPosition);
+      const cameraDepth = Math.max(
+        1,
+        ((tempStructureHealthBarWorldPosition.x - (Number(eye[0]) || 0)) * forward[0])
+          + ((tempStructureHealthBarWorldPosition.y - (Number(eye[1]) || 0)) * forward[1])
+          + ((tempStructureHealthBarWorldPosition.z - (Number(eye[2]) || 0)) * forward[2])
+      );
+      applyTrainingStructureHealthBarScreenScale(sprite, {
+        cameraDepth,
+        viewportHeight
+      });
+    });
+  }
+
   updateDeployRegionHighlights(runtime = null) {
     const highlightGroup = this.deployRegionHighlightGroup;
     if (!highlightGroup) return;
@@ -3481,13 +3622,6 @@ export default class TrainingThreeRenderPipeline {
           const wallColor = wall?.geometryKind === 'highWall' ? 0xf87171 : 0xfbbf24;
           const visualPath = Array.isArray(wall?.visualPath) ? wall.visualPath : [];
           const debugWallElevation = Math.max(0.32, finiteOr(wall?.z) + Math.max(0, finiteOr(wall?.height)) + 0.45);
-          if (visualPath.length >= 2) {
-            addDebugLine(
-              visualPath.map((point) => ({ ...point, z: debugWallElevation })),
-              wallColor,
-              `debug-wall-path-${wall?.objectId || 'wall'}`
-            );
-          }
           const halfWidth = Math.max(1, Number(wall?.width) || 1) * 0.5;
           const halfDepth = Math.max(1, Number(wall?.depth) || 1) * 0.5;
           const centerX = Number(wall?.x) || 0;
@@ -3502,6 +3636,44 @@ export default class TrainingThreeRenderPipeline {
           }
           const colliderParts = Array.isArray(wall?.collider?.parts) ? wall.collider.parts : [];
           colliderParts.forEach((part, partIndex) => {
+            if (wall?.collider?.kind === 'compositeCapsule') {
+              const rotationRadians = (Number(wall?.rotation) || 0) * Math.PI / 180;
+              const cosine = Math.cos(rotationRadians);
+              const sine = Math.sin(rotationRadians);
+              const rotatePoint = (x, y) => ({
+                x: centerX + ((x * cosine) - (y * sine)),
+                y: centerY + ((x * sine) + (y * cosine))
+              });
+              const start = rotatePoint(Number(part?.ax) || 0, Number(part?.ay) || 0);
+              const end = rotatePoint(Number(part?.bx) || 0, Number(part?.by) || 0);
+              const radius = Math.max(0.5, Number(part?.r) || 0.5);
+              const angle = Math.atan2(end.y - start.y, end.x - start.x);
+              const outline = [];
+              const capSegments = 8;
+              for (let index = 0; index <= capSegments; index += 1) {
+                const capAngle = angle + (Math.PI * 0.5) + ((Math.PI * index) / capSegments);
+                outline.push({
+                  x: start.x + (Math.cos(capAngle) * radius),
+                  y: start.y + (Math.sin(capAngle) * radius),
+                  z: debugWallElevation
+                });
+              }
+              for (let index = 0; index <= capSegments; index += 1) {
+                const capAngle = angle - (Math.PI * 0.5) + ((Math.PI * index) / capSegments);
+                outline.push({
+                  x: end.x + (Math.cos(capAngle) * radius),
+                  y: end.y + (Math.sin(capAngle) * radius),
+                  z: debugWallElevation
+                });
+              }
+              addDebugLine(
+                outline,
+                0x38bdf8,
+                `debug-wall-collider-${wall?.objectId || 'wall'}-${partIndex}`,
+                true
+              );
+              return;
+            }
             const partCenterX = centerX + (Number(part?.cx) || 0);
             const partCenterY = centerY + (Number(part?.cy) || 0);
             const partHalfWidth = Math.max(1, Number(part?.w) || 1) * 0.5;
@@ -3522,6 +3694,22 @@ export default class TrainingThreeRenderPipeline {
             addDebugLine(corners, 0x38bdf8, `debug-wall-collider-${wall?.objectId || 'wall'}-${partIndex}`, true);
           });
         });
+        mapObjects.filter((entry) => entry?.category === 'tower' && entry?.collider?.kind === 'circle')
+          .forEach((tower) => {
+            const centerX = Number(tower?.x) || 0;
+            const centerY = Number(tower?.y) || 0;
+            const radius = Math.max(0.5, Number(tower?.collider?.r) || 0.5);
+            const elevation = Math.max(0.32, finiteOr(tower?.z) + Math.max(0, finiteOr(tower?.height)) + 0.45);
+            const points = Array.from({ length: 24 }, (_, index) => {
+              const angle = (index / 24) * Math.PI * 2;
+              return {
+                x: centerX + (Math.cos(angle) * radius),
+                y: centerY + (Math.sin(angle) * radius),
+                z: elevation
+              };
+            });
+            addDebugLine(points, 0x38bdf8, `debug-tower-collider-${tower?.objectId || 'tower'}`, true);
+          });
         const mapObjectsById = new Map(mapObjects.map((entry) => [String(entry?.objectId || ''), entry]));
         (Array.isArray(mapConfig?.objectives) ? mapConfig.objectives : []).forEach((objective) => {
           const source = mapObjectsById.get(String(objective?.sourceObjectId || ''));
@@ -3940,6 +4128,8 @@ export default class TrainingThreeRenderPipeline {
         side: THREE.DoubleSide,
         transparent: true,
         alphaTest: 0.04,
+        depthTest: true,
+        depthWrite: true,
         roughness: 0.76,
         metalness: 0.02
       });
@@ -4030,7 +4220,7 @@ export default class TrainingThreeRenderPipeline {
 
   updateDirectionMarkers(runtime, cameraState = {}, snapshot = null) {
     const mapConfig = runtime?.getTrainingMapConfig?.() || null;
-    const renderedSquadAnchors = resolveTrainingRenderedSquadAnchors(runtime, snapshot);
+    const renderedSquadAnchors = publishTrainingRenderedSquadAnchors(runtime, snapshot);
     const anchors = resolveTrainingDirectionArcAnchors(runtime, renderedSquadAnchors).map((anchor) => ({
       ...anchor,
       groundElevation: resolveTrainingMapTerrainElevation(mapConfig, anchor)
@@ -4301,6 +4491,7 @@ export default class TrainingThreeRenderPipeline {
       this.updateGround(runtime, { debugEnabled, refreshStaticStates: snapshotChanged });
       this.groundDebugEnabled = debugEnabled;
     }
+    this.updateTrainingStructureHealthBarScales(cameraState);
     this.updateDeployRegionHighlights(runtime);
     if (snapshotChanged) {
       this.updateBuildings(snapshot.buildings);

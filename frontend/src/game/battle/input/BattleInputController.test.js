@@ -5,6 +5,7 @@ import {
   CAMERA_DISTANCE_MIN,
   CAMERA_DISTANCE_MAX,
   TRAINING_CAMERA_ZOOM_STEP,
+  TRAINING_CAMERA_ZOOM_DEFAULT_SENSITIVITY,
   TRAINING_PITCH_DISTANCE_MAX,
   TRAINING_OVERVIEW_DISTANCE_MAX
 } from '../screens/battleSceneConstants';
@@ -128,9 +129,11 @@ test('uses a finer production wheel zoom increment', () => {
   expect(CAMERA_ZOOM_STEP).toBe(36);
 });
 
-test('uses a faster training wheel zoom increment', () => {
+test('uses a faster training wheel zoom increment with higher default sensitivity', () => {
   expect(TRAINING_CAMERA_ZOOM_STEP).toBe(88);
   expect(TRAINING_CAMERA_ZOOM_STEP).toBeGreaterThan(CAMERA_ZOOM_STEP);
+  expect(TRAINING_CAMERA_ZOOM_DEFAULT_SENSITIVITY).toBe(1.25);
+  expect(TRAINING_CAMERA_ZOOM_STEP * TRAINING_CAMERA_ZOOM_DEFAULT_SENSITIVITY).toBe(110);
 });
 
 test('starts the training pitch transition before both legacy and prior thresholds', () => {
@@ -451,7 +454,7 @@ describe('BattleInputController primary-button panning', () => {
     expect(portrait).toBeGreaterThan(landscape);
   });
 
-  test('fits the enlarged training battlefield within the overview band', () => {
+  test('caps the enlarged training overview at an adjacent-road span', () => {
     const distance = resolveTrainingOverviewDistance({
       field: { width: 12600, height: 8764 },
       viewport: { width: 1600, height: 900 },
@@ -461,9 +464,8 @@ describe('BattleInputController primary-button panning', () => {
       padding: 1.08
     });
 
-    expect(TRAINING_OVERVIEW_DISTANCE_MAX).toBe(12000);
-    expect(distance).toBeGreaterThanOrEqual(10600);
-    expect(distance).toBeLessThanOrEqual(TRAINING_OVERVIEW_DISTANCE_MAX);
+    expect(TRAINING_OVERVIEW_DISTANCE_MAX).toBe(4480);
+    expect(distance).toBe(TRAINING_OVERVIEW_DISTANCE_MAX);
   });
 
   test('passes the extended overview band to the training wheel zoom', () => {
@@ -488,7 +490,7 @@ describe('BattleInputController primary-button panning', () => {
     });
 
     expect(setDistanceWithDynamicPitch).toHaveBeenCalledWith(
-      1_068,
+      1_090,
       360,
       TRAINING_PITCH_DISTANCE_MAX,
       expect.any(Number),
@@ -1001,9 +1003,12 @@ describe('BattleInputController training control', () => {
     expect(syncBattleCards).toHaveBeenCalledTimes(1);
   });
 
-  test('turns a right-clicked hostile squad into an explicit attack order', () => {
+  test.each([
+    ['enemy', 'defender'],
+    ['neutral', 'neutral']
+  ])('turns a right-clicked %s squad into a targeted attack-move order', (_label, targetTeam) => {
     const selected = { id: 'attacker_squad_1', team: 'attacker', remain: 20 };
-    const target = { id: 'neutral_camp_squad', team: 'neutral', remain: 12 };
+    const target = { id: `${targetTeam}_target_squad`, team: targetTeam, remain: 12 };
     const commandAttackTarget = jest.fn(() => true);
     const commandMove = jest.fn();
     const { controller } = createFixture({
@@ -1024,6 +1029,39 @@ describe('BattleInputController training control', () => {
 
     expect(commandAttackTarget).toHaveBeenCalledWith(selected.id, { targetSquadId: target.id });
     expect(commandMove).not.toHaveBeenCalled();
+  });
+
+  test.each([
+    ['enemy', 'defender'],
+    ['neutral', 'neutral']
+  ])('turns a right-clicked %s world flag into a targeted attack order', (_label, targetTeam) => {
+    const selected = { id: 'attacker_squad_1', team: 'attacker', remain: 20 };
+    const target = { id: `${targetTeam}_flag_squad`, team: targetTeam, remain: 12 };
+    const pickTrainingWorldFlagIdAtScreen = jest.fn(() => target.id);
+    const pickSquadAtAgentPoint = jest.fn(() => 'overlapping-soldier');
+    const commandAttackTarget = jest.fn(() => true);
+    const { controller } = createFixture({
+      getters: {
+        getSelectedSquadId: () => selected.id,
+        isTrainingMode: () => true
+      },
+      pipeline: {
+        threePipeline: { pickTrainingWorldFlagIdAtScreen }
+      },
+      runtimeOverrides: {
+        getSquadById: jest.fn((id) => (id === selected.id ? selected : target)),
+        pickSquadAtAgentPoint,
+        canControlSquad: jest.fn(() => true),
+        commandAttackTarget,
+        commandMove: jest.fn()
+      }
+    });
+
+    controller.onMouseDown(sceneMouseDown({ button: 2, clientX: 420, clientY: 180 }));
+
+    expect(pickTrainingWorldFlagIdAtScreen).toHaveBeenCalledWith(420, 180);
+    expect(commandAttackTarget).toHaveBeenCalledWith(selected.id, { targetSquadId: target.id });
+    expect(pickSquadAtAgentPoint).not.toHaveBeenCalled();
   });
 
   test('turns a right-clicked hostile tower into a building attack order', () => {

@@ -38,6 +38,10 @@ const BattleSnapshotSchema = {
     ],
     notes: 'teamIndex: attacker=0, defender=1, neutral=2; compatible with ImpostorRenderer attribute layout locations 2..6'
   },
+  unitAgentIds: {
+    type: 'string[]',
+    notes: 'stable render-instance identity aligned with units; interpolation must match by this identity instead of array index'
+  },
   skillStates: {
     stride: UNIT_SKILL_STATE_STRIDE,
     typedArray: 'Float32Array',

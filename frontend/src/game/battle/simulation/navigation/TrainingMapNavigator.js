@@ -99,6 +99,9 @@ const resolveObstacleSourceSignature = (obstacles = []) => (
     finiteNumber(obstacle?.width),
     finiteNumber(obstacle?.depth),
     finiteNumber(obstacle?.rotation),
+    String(obstacle?.collider?.kind || ''),
+    finiteNumber(obstacle?.collider?.r),
+    Array.isArray(obstacle?.collider?.parts) ? obstacle.collider.parts.length : 0,
     obstacle?.blocksMovement !== false,
     obstacle?.destroyed === true
   ].join(':'))).join('|')
@@ -394,10 +397,13 @@ const resolveObstacleDetourPoints = ({
   const colliderThickness = colliderParts.reduce((maximum, part) => (
     Math.max(
       maximum,
-      Math.min(
-        Math.max(0, finiteNumber(part?.w)),
-        Math.max(0, finiteNumber(part?.d))
-      ) * 0.5
+      Math.max(
+        Math.max(0, finiteNumber(part?.r)),
+        Math.min(
+          Math.max(0, finiteNumber(part?.w)),
+          Math.max(0, finiteNumber(part?.d))
+        ) * 0.5
+      )
     )
   ), 0);
   const inset = Math.max(
@@ -411,7 +417,45 @@ const resolveObstacleDetourPoints = ({
     if (points.some((entry) => distance(entry, candidate) <= 0.01)) return;
     points.push(candidate);
   };
+  if (obstacle?.collider?.kind === 'circle') {
+    const rotation = finiteNumber(obstacle?.rotation) * Math.PI / 180;
+    const localX = finiteNumber(obstacle?.collider?.cx);
+    const localY = finiteNumber(obstacle?.collider?.cy);
+    const center = {
+      x: finiteNumber(obstacle?.x) + ((localX * Math.cos(rotation)) - (localY * Math.sin(rotation))),
+      y: finiteNumber(obstacle?.y) + ((localX * Math.sin(rotation)) + (localY * Math.cos(rotation)))
+    };
+    const radius = Math.max(
+      1,
+      finiteNumber(obstacle?.collider?.r),
+      Math.min(finiteNumber(obstacle?.width), finiteNumber(obstacle?.depth)) * 0.5
+    ) + Math.max(2, finiteNumber(clearance) + 2);
+    for (let index = 0; index < 16; index += 1) {
+      const angle = (index / 16) * Math.PI * 2;
+      appendPoint({
+        x: center.x + (Math.cos(angle) * radius),
+        y: center.y + (Math.sin(angle) * radius)
+      });
+    }
+    return points;
+  }
   if (path.length >= 2) {
+    const sampleStride = Math.max(1, Math.ceil(path.length / 12));
+    path.forEach((point, index) => {
+      if (index !== 0 && index !== path.length - 1 && index % sampleStride !== 0) return;
+      const previous = path[Math.max(0, index - 1)] || point;
+      const next = path[Math.min(path.length - 1, index + 1)] || point;
+      const tangent = normalizeDirection(previous, next);
+      const side = { x: -tangent.y, y: tangent.x };
+      [-1, 1].forEach((sideSign) => {
+        [1, 1.45].forEach((sideScale) => {
+          appendPoint({
+            x: finiteNumber(point?.x) + (side.x * inset * sideSign * sideScale),
+            y: finiteNumber(point?.y) + (side.y * inset * sideSign * sideScale)
+          });
+        });
+      });
+    });
     const endpointSpecs = [
       { endpoint: path[0], neighbour: path[1] },
       { endpoint: path[path.length - 1], neighbour: path[path.length - 2] }
@@ -587,7 +631,8 @@ export const planTrainingMapRoute = ({
   target,
   obstacles = [],
   radius = 0,
-  maxSearchNodes = 0
+  maxSearchNodes = 0,
+  preferLocalDetour = false
 } = {}) => {
   const safeField = resolveField(field);
   const requestedStart = {
@@ -622,6 +667,19 @@ export const planTrainingMapRoute = ({
     || hasDirectPath(safeStart, safeTarget, blockingObstacles, clearance, mapConfig, safeField)
   ) {
     return [safeTarget];
+  }
+  if (preferLocalDetour) {
+    const localRoute = resolveLocalDetourRoute({
+      start: safeStart,
+      target: safeTarget,
+      obstacles: blockingObstacles,
+      clearance,
+      mapConfig,
+      field: safeField
+    });
+    if (localRoute?.length > 0) {
+      return reduceRoute(safeStart, localRoute, blockingObstacles, clearance, mapConfig, safeField);
+    }
   }
   const laneRoute = resolveLaneGuidedRoute({
     mapConfig,
@@ -804,7 +862,8 @@ export const createTrainingMapNavigator = ({ field, mapConfig } = {}) => {
         target,
         obstacles: resolveNavigatorObstacles(options?.obstacles),
         radius: options?.radius,
-        maxSearchNodes: options?.maxSearchNodes
+        maxSearchNodes: options?.maxSearchNodes,
+        preferLocalDetour: options?.preferLocalDetour === true
       });
     }
   };
