@@ -1611,13 +1611,15 @@ const buildReferenceTrainingMapConfig = ({ itemCatalog = [] } = {}) => {
       wallClearance: Math.max(2, finiteNumber(navigation?.navigationRules?.wallClearanceNormalized, 0.012) * layout.fieldWidth),
       pathClearance: Math.max(0.5, Math.min(12, finiteNumber(navigation?.navigationRules?.pathClearance, 1.2))),
       agentRadius: Math.max(1, Math.min(8, finiteNumber(navigation?.navigationRules?.agentRadius, 2.25))),
+      aiNavigationSearchNodes: Math.max(32, Math.min(512, Math.floor(finiteNumber(navigation?.navigationRules?.aiNavigationSearchNodes, 128)))),
+      formationRecoveryPlansPerStep: Math.max(1, Math.min(12, Math.floor(finiteNumber(navigation?.navigationRules?.formationRecoveryPlansPerStep, 4)))),
       minionRecoveryPlansPerStep: 3,
       narrowPassage: {
         cellSize: Math.max(4, Math.min(32, finiteNumber(navigation?.navigationRules?.narrowPassage?.cellSize, 8))),
         probeDistance: Math.max(12, Math.min(120, finiteNumber(navigation?.navigationRules?.narrowPassage?.probeDistance, 48))),
         probeStep: Math.max(1, Math.min(8, finiteNumber(navigation?.navigationRules?.narrowPassage?.probeStep, 2))),
         entryDistance: Math.max(4, Math.min(96, finiteNumber(navigation?.navigationRules?.narrowPassage?.entryDistance, 38))),
-        releaseSeconds: Math.max(0.5, Math.min(12, finiteNumber(navigation?.navigationRules?.narrowPassage?.releaseSeconds, 3.2)))
+        releaseSeconds: Math.max(0.2, Math.min(4, finiteNumber(navigation?.navigationRules?.narrowPassage?.releaseSeconds, 0.65)))
       },
       maxSearchNodes: 1800,
       pathFailureReplanCooldownSeconds: Math.max(0.1, finiteNumber(navigation?.navigationRules?.pathFailureReplanCooldownSeconds, 0.35)),

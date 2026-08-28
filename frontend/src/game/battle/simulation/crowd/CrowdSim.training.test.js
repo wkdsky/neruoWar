@@ -11,6 +11,7 @@ import { buildSpatialHash, isInsideCollider, raycastObstacles } from './crowdPhy
 import { updateCrowdCombat } from './crowdCombat';
 import { createCombatEffectsPool } from '../effects/CombatEffects';
 import { createTrainingMapNavigator } from '../navigation/TrainingMapNavigator';
+import { TRAINING_MAP_AI_PLAN_KIND } from '../TrainingMapAi';
 import {
   initializeTrainingNeutralCamps,
   updateTrainingNeutralCamps
@@ -34,6 +35,148 @@ const createSquad = ({ id, team, x }) => ({
   stats: { atk: 1, speed: 1 },
   behavior: 'idle',
   waypoints: []
+});
+
+describe('training squad AI isolation', () => {
+  const createIsolationSquad = ({
+    id,
+    team,
+    x,
+    y = 0,
+    behavior = 'auto',
+    controlMode = 'AI',
+    isMinionWaveUnit = false
+  }) => ({
+    id,
+    team,
+    x,
+    y,
+    startCount: 4,
+    remain: 4,
+    maxHealth: 400,
+    health: 400,
+    radius: 8,
+    classTag: 'infantry',
+    roleTag: '近战',
+    unitCategory: 'melee',
+    units: { isolation_infantry: 4 },
+    stats: { atk: 12, def: 1, speed: 1, range: 1, attackRange: { min: 0, max: 1 } },
+    behavior,
+    controlMode,
+    stamina: 100,
+    waypoints: [],
+    spawnLaneId: 'mid',
+    isMinionWaveUnit,
+    minionLaneId: isMinionWaveUnit ? 'mid' : '',
+    minionPath: isMinionWaveUnit ? [{ x: -240, y }, { x: 240, y }] : [],
+    minionPathIndex: 1,
+    minionPathSpeed: 80,
+    order: {
+      type: behavior === 'auto' ? 'ATTACK_MOVE' : 'IDLE',
+      issuedAt: 0,
+      commitUntil: 0,
+      targetPoint: null,
+      targetSquadId: '',
+      targetBuildingId: ''
+    }
+  });
+
+  test('keeps neutral, minion and card AI runtime state mutually exclusive', () => {
+    const neutral = {
+      ...createIsolationSquad({ id: 'neutral', team: 'neutral', x: 0, y: 90, behavior: 'guard' }),
+      guard: { enabled: true, cx: 0, cy: 90, radius: 40, returnRadius: 16, chaseRadius: 80, activeTargetId: '' },
+      trainingAi: { state: 'stale-card' },
+      _minionAi: { state: 'stale-minion' }
+    };
+    const minion = {
+      ...createIsolationSquad({ id: 'minion', team: 'attacker', x: -120, isMinionWaveUnit: true }),
+      trainingAi: { state: 'stale-card' },
+      _neutralCampAi: { state: 'stale-neutral' }
+    };
+    const cardAi = {
+      ...createIsolationSquad({ id: 'card-ai', team: 'defender', x: 120 }),
+      _minionAi: { state: 'stale-minion' },
+      _neutralCampAi: { state: 'stale-neutral' }
+    };
+    const userCard = {
+      ...createIsolationSquad({ id: 'user-card', team: 'attacker', x: -60, controlMode: 'USER' }),
+      trainingAi: { state: 'stale-card' },
+      _trainingAiPlan: { id: 'stale-plan' },
+      _trainingAiTargetCache: { targetId: cardAi.id },
+      _trainingAiSelection: { targetId: cardAi.id },
+      _trainingNearestEnemyCache: { targetId: cardAi.id },
+      _trainingTargetNavigation: { targetId: cardAi.id },
+      autoNavigation: { goalId: 'stale-goal' },
+      _minionAi: { state: 'stale-minion' },
+      _neutralCampAi: { state: 'stale-neutral' }
+    };
+    userCard.order.targetSquadId = cardAi.id;
+    userCard.order.stopAfterTarget = true;
+    const sim = {
+      timeElapsed: 0,
+      field: { width: 600, height: 320 },
+      buildings: [],
+      trainingObjectives: [],
+      trainingMap: {
+        mapId: 'training-war-map-v1',
+        lanes: [{ id: 'mid', width: 100, centerline: [{ x: -280, y: 0 }, { x: 280, y: 0 }] }],
+        navigation: {}
+      },
+      squads: [neutral, minion, cardAi, userCard]
+    };
+    const crowd = createCrowdSim(sim, {
+      unitTypeMap: new Map([['isolation_infantry', { classTag: 'infantry', unitCategory: 'melee' }]]),
+      repConfig: { maxAgentWeight: 1, strictAgentMapping: true }
+    });
+    const [neutralAgent] = getCrowdAgentsForSquad(crowd, neutral.id);
+    const [minionAgent] = getCrowdAgentsForSquad(crowd, minion.id);
+    const [cardAgent] = getCrowdAgentsForSquad(crowd, cardAi.id);
+    const [userAgent] = getCrowdAgentsForSquad(crowd, userCard.id);
+    neutralAgent._trainingAi = { stale: true };
+    neutralAgent._minionAi = { stale: true };
+    minionAgent._trainingAi = { stale: true };
+    minionAgent._neutralCampAi = { stale: true };
+    cardAgent._minionAi = { stale: true };
+    cardAgent._neutralCampAi = { stale: true };
+    userAgent._trainingAi = { stale: true };
+    userAgent._minionAi = { stale: true };
+    userAgent._neutralCampAi = { stale: true };
+
+    updateCrowdSim(crowd, sim, 0.05);
+
+    expect(neutralAgent.isNeutralCampUnit).toBe(true);
+    expect(neutralAgent.isMinionWaveUnit).toBe(false);
+    expect(neutral._neutralCampAi).toBeDefined();
+    expect(neutral._minionAi).toBeUndefined();
+    expect(neutral.trainingAi).toBeUndefined();
+    expect(neutralAgent._minionAi).toBeUndefined();
+    expect(neutralAgent._trainingAi).toBeUndefined();
+
+    expect(minion._minionAi).toBeDefined();
+    expect(minion._neutralCampAi).toBeUndefined();
+    expect(minion.trainingAi).toBeUndefined();
+    expect(minionAgent._neutralCampAi).toBeUndefined();
+    expect(minionAgent._trainingAi).toBeUndefined();
+
+    expect(cardAi.trainingAi).toBeDefined();
+    expect(cardAi._minionAi).toBeUndefined();
+    expect(cardAi._neutralCampAi).toBeUndefined();
+    expect(cardAgent._minionAi).toBeUndefined();
+    expect(cardAgent._neutralCampAi).toBeUndefined();
+
+    expect(userCard.trainingAi).toBeUndefined();
+    expect(userCard._trainingAiPlan).toBeUndefined();
+    expect(userCard._trainingAiTargetCache).toBeUndefined();
+    expect(userCard._trainingAiSelection).toBeUndefined();
+    expect(userCard._trainingNearestEnemyCache).toBeUndefined();
+    expect(userCard._trainingTargetNavigation).toBeUndefined();
+    expect(userCard.autoNavigation).toBeUndefined();
+    expect(userCard._minionAi).toBeUndefined();
+    expect(userCard._neutralCampAi).toBeUndefined();
+    expect(userAgent._trainingAi).toBeUndefined();
+    expect(userAgent._minionAi).toBeUndefined();
+    expect(userAgent._neutralCampAi).toBeUndefined();
+  });
 });
 
 describe('individual soldier combat behavior', () => {
@@ -478,14 +621,244 @@ describe('individual soldier combat behavior', () => {
     expect(returningAgent._formationLocked).toBe(true);
   });
 
-  test('critically damps repeated formation recovery without wave-like overshoot', () => {
+  test('keeps marching when a wall blocks only the exact flank slot', () => {
     const squad = buildCombatSquad({
-      id: 'damped-recovery',
+      id: 'wall-edge-formation',
+      team: 'attacker',
+      x: -60,
+      units: { test_melee: 4 },
+      controlMode: 'USER',
+      behavior: 'move'
+    });
+    squad.formationRect = {
+      width: 104,
+      depth: 18,
+      spacing: 6,
+      facingRad: 0,
+      directionOffsetRad: 0,
+      slotCount: 4
+    };
+    squad.deploySlots = [
+      { side: 0, front: 0 },
+      { side: -12, front: 0 },
+      { side: 52, front: 0 },
+      { side: 0, front: -6 }
+    ];
+    squad.order = {
+      type: 'MOVE',
+      targetPoint: { x: 140, y: 0 },
+      pathPoints: [{ x: 140, y: 0 }],
+      pathIndex: 0
+    };
+    squad.waypoints = [{ x: 140, y: 0 }];
+    const wall = {
+      id: 'wall-edge-blocker',
+      x: 100,
+      y: 60,
+      width: 480,
+      depth: 112,
+      blocksMovement: true,
+      blocksVision: true,
+      destroyed: false
+    };
+    const sim = {
+      timeElapsed: 0,
+      field: { width: 520, height: 300 },
+      buildings: [wall],
+      trainingObjectives: [],
+      squads: [squad]
+    };
+    const crowd = buildCrowd(sim);
+    const blockedAgent = getCrowdAgentsForSquad(crowd, squad.id)
+      .find((agent) => Number(agent?.formationSlot?.side) > 50);
+    let waitedForExactSlot = false;
+    let minimumCohesionScale = 1;
+    let maximumSlotError = 0;
+
+    for (let index = 0; index < 280 && squad.x < 132; index += 1) {
+      squad.stamina = 100;
+      updateCrowdSim(crowd, sim, 0.05);
+      waitedForExactSlot = waitedForExactSlot || squad.formationCohesionState === 'WAITING';
+      minimumCohesionScale = Math.min(
+        minimumCohesionScale,
+        Number.isFinite(Number(squad?._formationCohesionSpeedScale))
+          ? Number(squad._formationCohesionSpeedScale)
+          : 1
+      );
+      const yaw = Number(squad?._formationPoseYaw) || 0;
+      const forward = { x: Math.cos(yaw), y: Math.sin(yaw) };
+      const side = { x: -forward.y, y: forward.x };
+      const slot = blockedAgent.formationSlot;
+      const expected = {
+        x: (Number(squad?._formationPoseX) || 0)
+          + (side.x * (Number(slot?.side) || 0))
+          + (forward.x * (Number(slot?.front) || 0)),
+        y: (Number(squad?._formationPoseY) || 0)
+          + (side.y * (Number(slot?.side) || 0))
+          + (forward.y * (Number(slot?.front) || 0))
+      };
+      maximumSlotError = Math.max(
+        maximumSlotError,
+        Math.hypot(blockedAgent.x - expected.x, blockedAgent.y - expected.y)
+      );
+      expect(isInsideCollider(blockedAgent, wall, Number(blockedAgent.radius) || 0)).toBe(false);
+    }
+
+    expect(maximumSlotError).toBeGreaterThan(45);
+    expect(waitedForExactSlot).toBe(false);
+    expect(minimumCohesionScale).toBeGreaterThanOrEqual(0.999);
+    expect(squad.x).toBeGreaterThan(132);
+  });
+
+  test('waits for a genuinely distant straggler and resumes after it rejoins', () => {
+    const squad = buildCombatSquad({
+      id: 'distant-straggler-formation',
+      team: 'attacker',
+      x: 0,
+      units: { test_melee: 4 },
+      controlMode: 'USER',
+      behavior: 'move'
+    });
+    squad.formationRect = {
+      width: 18,
+      depth: 18,
+      spacing: 6,
+      facingRad: 0,
+      directionOffsetRad: 0,
+      slotCount: 4
+    };
+    squad.deploySlots = [
+      { side: 0, front: 0 },
+      { side: -6, front: 0 },
+      { side: 6, front: 0 },
+      { side: 0, front: -6 }
+    ];
+    squad.order = {
+      type: 'MOVE',
+      targetPoint: { x: 260, y: 0 },
+      pathPoints: [{ x: 260, y: 0 }],
+      pathIndex: 0
+    };
+    squad.waypoints = [{ x: 260, y: 0 }];
+    const sim = {
+      timeElapsed: 0,
+      field: { width: 760, height: 220 },
+      buildings: [],
+      trainingObjectives: [],
+      squads: [squad]
+    };
+    const crowd = buildCrowd(sim);
+    const straggler = getCrowdAgentsForSquad(crowd, squad.id)
+      .find((agent) => Number(agent?.formationSlot?.side) > 0);
+    straggler.x = -150;
+    straggler.vx = 0;
+    straggler.vy = 0;
+    straggler._formationLocked = false;
+    let sawWaiting = false;
+    let waitingDistance = 0;
+    let anchorAtWait = null;
+    let resumedAfterWait = false;
+
+    for (let index = 0; index < 700; index += 1) {
+      squad.stamina = 100;
+      updateCrowdSim(crowd, sim, 0.05);
+      const distance = Math.hypot(straggler.x - squad.x, straggler.y - squad.y);
+      if (squad.formationCohesionState === 'WAITING') {
+        sawWaiting = true;
+        waitingDistance = Math.max(waitingDistance, distance);
+        if (anchorAtWait === null) anchorAtWait = squad.x;
+      } else if (sawWaiting && anchorAtWait !== null && squad.x > anchorAtWait + 12) {
+        resumedAfterWait = true;
+      }
+      if (resumedAfterWait && squad.x > 235 && distance < 30) break;
+    }
+
+    expect(sawWaiting).toBe(true);
+    expect(waitingDistance).toBeGreaterThan(90);
+    expect(resumedAfterWait).toBe(true);
+    expect(squad.x).toBeGreaterThan(235);
+    expect(Math.hypot(straggler.x - squad.x, straggler.y - squad.y)).toBeLessThan(30);
+  });
+
+  test('keeps a move order active at the destination until every lagging soldier reaches its slot', () => {
+    const squad = buildCombatSquad({
+      id: 'arrival-reassembly',
+      team: 'attacker',
+      x: 18,
+      units: { test_melee: 4 },
+      controlMode: 'USER',
+      behavior: 'move'
+    });
+    squad.stamina = 100;
+    squad.formationRect = {
+      width: 18,
+      depth: 18,
+      spacing: 6,
+      facingRad: 0,
+      directionOffsetRad: 0
+    };
+    squad.order = {
+      type: 'MOVE',
+      targetPoint: { x: 20, y: 0 },
+      pathPoints: [{ x: 20, y: 0 }],
+      pathIndex: 0
+    };
+    squad.waypoints = [{ x: 20, y: 0 }];
+    const sim = {
+      timeElapsed: 0,
+      field: { width: 320, height: 180 },
+      buildings: [],
+      trainingObjectives: [],
+      squads: [squad]
+    };
+    const crowd = buildCrowd(sim);
+    const lagging = getCrowdAgentsForSquad(crowd, squad.id)
+      .find((agent) => !agent.isFlagBearer);
+    lagging.x -= 72;
+    lagging.y += 24;
+    lagging.vx = 0;
+    lagging.vy = 0;
+    lagging._formationLocked = false;
+    const initialLaggingPosition = { x: lagging.x, y: lagging.y };
+
+    updateCrowdSim(crowd, sim, 0.05);
+
+    expect(squad.waypoints).toEqual([]);
+    expect(squad._formationArrival).toMatchObject({ active: true, orderType: 'MOVE' });
+    expect(squad.order.type).toBe('MOVE');
+    expect(squad.action).toBe('到达整队');
+
+    for (let index = 0; index < 20; index += 1) updateCrowdSim(crowd, sim, 0.05);
+
+    expect(Math.hypot(
+      lagging.x - initialLaggingPosition.x,
+      lagging.y - initialLaggingPosition.y
+    )).toBeGreaterThan(2);
+    expect(squad._formationArrival).toMatchObject({ active: true });
+    expect(squad.order.type).toBe('MOVE');
+
+    for (let index = 0; index < 500 && squad._formationArrival; index += 1) {
+      updateCrowdSim(crowd, sim, 0.05);
+    }
+
+    const expected = {
+      x: squad.x + (Number(lagging.formationSlot?.front) || 0),
+      y: squad.y + (Number(lagging.formationSlot?.side) || 0)
+    };
+    expect(squad._formationArrival).toBeNull();
+    expect(squad.order.type).toBe('IDLE');
+    expect(squad.action).toBe('待命');
+    expect(Math.hypot(lagging.x - expected.x, lagging.y - expected.y)).toBeLessThan(2.4);
+  });
+
+  test('returns a detached soldier straight to its slot without preserving lateral combat velocity', () => {
+    const squad = buildCombatSquad({
+      id: 'straight-recovery',
       team: 'attacker',
       x: 0,
       units: { test_melee: 3 },
       controlMode: 'USER',
-      behavior: 'move'
+      behavior: 'idle'
     });
     squad.formationRect = {
       width: 18,
@@ -499,11 +872,11 @@ describe('individual soldier combat behavior', () => {
       { side: -6, front: 0 },
       { side: 6, front: 0 }
     ];
-    squad.order = { type: 'MOVE', targetPoint: { x: 500, y: 0 } };
-    squad.waypoints = [{ x: 500, y: 0 }];
+    squad.order = { type: 'IDLE', targetPoint: null };
+    squad.waypoints = [];
     const sim = {
       timeElapsed: 0,
-      field: { width: 1200, height: 240 },
+      field: { width: 320, height: 240 },
       buildings: [],
       trainingObjectives: [],
       squads: [squad]
@@ -511,38 +884,150 @@ describe('individual soldier combat behavior', () => {
     const crowd = buildCrowd(sim);
     const recoveringAgent = getCrowdAgentsForSquad(crowd, squad.id)
       .find((agent) => !agent.isFlagBearer);
-
-    const runRecovery = ({ offsetY, velocityY }) => {
-      const targetY = squad.y + (Number(recoveringAgent.formationSlot?.side) || 0);
-      recoveringAgent.x = squad.x + (Number(recoveringAgent.formationSlot?.front) || 0);
-      recoveringAgent.y = targetY + offsetY;
-      recoveringAgent.vx = Number(squad.vx) || 0;
-      recoveringAgent.vy = velocityY;
-      recoveringAgent._formationLocked = false;
-      let previousSign = Math.sign(offsetY);
-      let signChanges = 0;
-      let maximumLateError = 0;
-      for (let index = 0; index < 160; index += 1) {
-        updateCrowdSim(crowd, sim, 0.05);
-        const currentTargetY = squad.y + (Number(recoveringAgent.formationSlot?.side) || 0);
-        const error = recoveringAgent.y - currentTargetY;
-        if (Math.abs(error) > 0.8) {
-          const sign = Math.sign(error);
-          if (sign !== previousSign) signChanges += 1;
-          previousSign = sign;
-        }
-        if (index >= 100) maximumLateError = Math.max(maximumLateError, Math.abs(error));
-      }
-      return { signChanges, maximumLateError };
+    const target = {
+      x: squad.x + (Number(recoveringAgent.formationSlot?.front) || 0),
+      y: squad.y + (Number(recoveringAgent.formationSlot?.side) || 0)
     };
+    recoveringAgent.x = target.x - 72;
+    recoveringAgent.y = target.y;
+    recoveringAgent.vx = 0;
+    recoveringAgent.vy = 64;
+    recoveringAgent._formationLocked = false;
+    let previousX = recoveringAgent.x;
+    let maximumCrossTrackError = 0;
 
-    const firstRecovery = runRecovery({ offsetY: 42, velocityY: -58 });
-    const secondRecovery = runRecovery({ offsetY: -36, velocityY: 52 });
+    for (let index = 0; index < 240 && !recoveringAgent._formationLocked; index += 1) {
+      updateCrowdSim(crowd, sim, 0.05);
+      maximumCrossTrackError = Math.max(
+        maximumCrossTrackError,
+        Math.abs(recoveringAgent.y - target.y)
+      );
+      expect(recoveringAgent.x).toBeGreaterThanOrEqual(previousX - 0.001);
+      previousX = recoveringAgent.x;
+    }
 
-    expect(firstRecovery.signChanges).toBeLessThanOrEqual(1);
-    expect(secondRecovery.signChanges).toBeLessThanOrEqual(1);
-    expect(firstRecovery.maximumLateError).toBeLessThan(1.5);
-    expect(secondRecovery.maximumLateError).toBeLessThan(1.5);
+    expect(maximumCrossTrackError).toBeLessThan(0.5);
+    expect(Math.hypot(recoveringAgent.x - target.x, recoveringAgent.y - target.y)).toBeLessThan(1.2);
+    expect(recoveringAgent._formationLocked).toBe(true);
+  });
+
+  test('does not push a recovered soldier past a moving slot when the formation slows down', () => {
+    const spacing = 5.55;
+    const columns = 4;
+    const deploySlots = Array.from({ length: 20 }, (_, index) => ({
+      side: ((index % columns) - ((columns - 1) * 0.5)) * spacing,
+      front: -Math.floor(index / columns) * spacing
+    }));
+    const squad = buildCombatSquad({
+      id: 'stable-moving-recovery',
+      team: 'attacker',
+      x: 0,
+      units: { test_melee: deploySlots.length },
+      controlMode: 'USER',
+      behavior: 'move'
+    });
+    squad.stats.speed = 3.5;
+    squad.formationRect = {
+      width: spacing * columns,
+      depth: spacing * 5,
+      spacing,
+      facingRad: 0,
+      directionOffsetRad: 0,
+      slotCount: deploySlots.length
+    };
+    squad.deploySlots = deploySlots;
+    squad.order = {
+      type: 'MOVE',
+      targetPoint: { x: 630, y: 0 },
+      pathPoints: [{ x: 630, y: 0 }],
+      pathIndex: 0
+    };
+    squad.waypoints = [{ x: 630, y: 0 }];
+    const sim = {
+      timeElapsed: 0,
+      field: { width: 1600, height: 320 },
+      buildings: [],
+      trainingObjectives: [],
+      squads: [squad]
+    };
+    const crowd = buildCrowd(sim);
+    const recoveringAgent = getCrowdAgentsForSquad(crowd, squad.id)
+      .find((agent) => !agent.isFlagBearer);
+    recoveringAgent.x -= 120;
+    recoveringAgent.y += 36;
+    recoveringAgent.vx = 0;
+    recoveringAgent.vy = 0;
+    recoveringAgent._formationLocked = false;
+    let previousVelocity = null;
+    let awayFrames = 0;
+    let reversals = 0;
+    let lateralCrossings = 0;
+    let previousLateralError = null;
+
+    for (let index = 0; index < 180; index += 1) {
+      const before = { x: recoveringAgent.x, y: recoveringAgent.y };
+      updateCrowdSim(crowd, sim, 0.1);
+      const yaw = Number(squad._formationPoseYaw) || 0;
+      const forward = { x: Math.cos(yaw), y: Math.sin(yaw) };
+      const side = { x: -forward.y, y: forward.x };
+      const slot = recoveringAgent.formationSlot;
+      const target = {
+        x: (Number(squad._formationPoseX) || 0)
+          + (side.x * (Number(slot?.side) || 0))
+          + (forward.x * (Number(slot?.front) || 0)),
+        y: (Number(squad._formationPoseY) || 0)
+          + (side.y * (Number(slot?.side) || 0))
+          + (forward.y * (Number(slot?.front) || 0))
+      };
+      const displacement = {
+        x: recoveringAgent.x - before.x,
+        y: recoveringAgent.y - before.y
+      };
+      const errorBefore = {
+        x: target.x - before.x,
+        y: target.y - before.y
+      };
+      if (
+        Math.hypot(errorBefore.x, errorBefore.y) > 1.2
+        && ((errorBefore.x * displacement.x) + (errorBefore.y * displacement.y)) < -0.001
+      ) awayFrames += 1;
+      const velocity = { x: Number(recoveringAgent.vx) || 0, y: Number(recoveringAgent.vy) || 0 };
+      if (previousVelocity) {
+        const previousSpeed = Math.hypot(previousVelocity.x, previousVelocity.y);
+        const speed = Math.hypot(velocity.x, velocity.y);
+        if (
+          previousSpeed > 2
+          && speed > 2
+          && ((previousVelocity.x * velocity.x) + (previousVelocity.y * velocity.y)) < -(previousSpeed * speed * 0.2)
+        ) reversals += 1;
+      }
+      previousVelocity = velocity;
+      const lateralError = ((recoveringAgent.x - target.x) * side.x)
+        + ((recoveringAgent.y - target.y) * side.y);
+      if (
+        previousLateralError !== null
+        && Math.abs(previousLateralError) > 0.5
+        && Math.abs(lateralError) > 0.5
+        && Math.sign(previousLateralError) !== Math.sign(lateralError)
+      ) lateralCrossings += 1;
+      previousLateralError = lateralError;
+    }
+
+    const finalYaw = Number(squad._formationPoseYaw) || 0;
+    const finalForward = { x: Math.cos(finalYaw), y: Math.sin(finalYaw) };
+    const finalSide = { x: -finalForward.y, y: finalForward.x };
+    const finalTarget = {
+      x: (Number(squad._formationPoseX) || 0)
+        + (finalSide.x * (Number(recoveringAgent.formationSlot?.side) || 0))
+        + (finalForward.x * (Number(recoveringAgent.formationSlot?.front) || 0)),
+      y: (Number(squad._formationPoseY) || 0)
+        + (finalSide.y * (Number(recoveringAgent.formationSlot?.side) || 0))
+        + (finalForward.y * (Number(recoveringAgent.formationSlot?.front) || 0))
+    };
+    expect(awayFrames).toBe(0);
+    expect(reversals).toBe(0);
+    expect(lateralCrossings).toBe(0);
+    expect(Math.hypot(recoveringAgent.x - finalTarget.x, recoveringAgent.y - finalTarget.y)).toBeLessThan(1.2);
     expect(recoveringAgent._formationLocked).toBe(true);
   });
 
@@ -1597,6 +2082,118 @@ describe('training-map narrow passage handling', () => {
     expect(columns).toMatchObject({ active: true, columns: 1 });
     expect(columns.width).toBeLessThan(5.55);
   });
+
+  test('restores a wide formation on open ground after the whole squad clears a narrow gate', () => {
+    const spacing = 8;
+    const deploySlots = [
+      { side: 0, front: 0 },
+      { side: -spacing, front: 0 },
+      { side: spacing, front: 0 },
+      { side: -spacing, front: -spacing },
+      { side: 0, front: -spacing },
+      { side: spacing, front: -spacing },
+      { side: -spacing, front: -spacing * 2 },
+      { side: 0, front: -spacing * 2 },
+      { side: spacing, front: -spacing * 2 }
+    ];
+    const squad = {
+      ...createSquad({ id: 'gate-reform', team: 'attacker', x: -70 }),
+      startCount: 9,
+      remain: 9,
+      units: { infantry_basic: 9 },
+      stats: { atk: 1, speed: 1.5 },
+      behavior: 'move',
+      controlMode: 'USER',
+      stamina: 100,
+      formationRect: {
+        width: spacing * 3,
+        depth: spacing * 3,
+        spacing,
+        slotCount: deploySlots.length,
+        facingRad: 0,
+        directionOffsetRad: 0
+      },
+      deploySlots,
+      order: {
+        type: 'MOVE',
+        targetPoint: { x: 90, y: 0 },
+        pathPoints: [{ x: 90, y: 0 }],
+        pathIndex: 0
+      },
+      waypoints: [{ x: 90, y: 0 }]
+    };
+    const gateWalls = [
+      { id: 'gate-top', x: 0, y: 36, width: 40, depth: 60, blocksMovement: true },
+      { id: 'gate-bottom', x: 0, y: -36, width: 40, depth: 60, blocksMovement: true }
+    ];
+    const sim = {
+      timeElapsed: 0,
+      field: { width: 320, height: 180 },
+      buildings: gateWalls,
+      squads: [squad],
+      trainingObjectives: [],
+      trainingMap: {
+        navigation: {
+          agentRadius: 2.25,
+          formationRecoveryPlansPerStep: 4,
+          narrowPassage: {
+            probeDistance: 36,
+            probeStep: 1,
+            entryDistance: 42,
+            releaseSeconds: 0.45
+          }
+        }
+      }
+    };
+    const crowd = createCrowdSim(sim, {
+      repConfig: { maxAgentWeight: 1, strictAgentMapping: true }
+    });
+    let narrowestColumns = Infinity;
+
+    for (let index = 0; index < 900 && squad.order.type !== 'IDLE'; index += 1) {
+      updateCrowdSim(crowd, sim, 0.05);
+      if (squad?._narrowPassage?.active) {
+        narrowestColumns = Math.min(
+          narrowestColumns,
+          Math.max(1, Number(squad._narrowPassage.columns) || 1)
+        );
+      }
+    }
+
+    const followers = getCrowdAgentsForSquad(crowd, squad.id)
+      .filter((agent) => !agent.dead && !agent.isFlagBearer);
+    const formationForward = {
+      x: Math.cos(squad.formationRect.facingRad),
+      y: Math.sin(squad.formationRect.facingRad)
+    };
+    const formationSide = { x: -formationForward.y, y: formationForward.x };
+    const slotErrors = followers.map((agent) => {
+      const expected = {
+        x: squad.x
+          + (formationSide.x * agent.formationSlot.side)
+          + (formationForward.x * agent.formationSlot.front),
+        y: squad.y
+          + (formationSide.y * agent.formationSlot.side)
+          + (formationForward.y * agent.formationSlot.front)
+      };
+      return Math.hypot(agent.x - expected.x, agent.y - expected.y);
+    });
+    const actualSides = followers.map((agent) => (
+      ((agent.x - squad.x) * formationSide.x) + ((agent.y - squad.y) * formationSide.y)
+    ));
+    const expectedSides = followers.map((agent) => Number(agent.formationSlot?.side) || 0);
+    const actualSpan = Math.max(...actualSides) - Math.min(...actualSides);
+    const expectedSpan = Math.max(...expectedSides) - Math.min(...expectedSides);
+
+    expect(narrowestColumns).toBeLessThan(3);
+    expect(squad.x).toBeGreaterThan(80);
+    expect(Math.min(...followers.map((agent) => agent.x))).toBeGreaterThan(55);
+    expect(squad._narrowPassage?.active).toBe(false);
+    expect(squad._formationArrival).toBeNull();
+    expect(squad.order.type).toBe('IDLE');
+    expect(Math.max(...slotErrors)).toBeLessThan(2.4);
+    expect(actualSpan).toBeGreaterThanOrEqual(expectedSpan - 2.4);
+  });
 });
 
 describe('attack-move engagement flow', () => {
@@ -1924,20 +2521,22 @@ describe('training-map AI simulation profile', () => {
     expect(manualSamples.every((sample) => Number.isFinite(sample))).toBe(true);
   });
 
-  test('moves real-map AI toward enemy targets from highland deployments', () => {
+  test('moves real-map lane AI off highland through legal ramp routes', () => {
     const mapConfig = buildReferenceTrainingMapConfig();
     const field = {
       width: mapConfig.layoutMeta.fieldWidth,
       height: mapConfig.layoutMeta.fieldHeight
     };
-    const slotsByTeam = (team) => mapConfig.deploySlots.filter((slot) => slot.team === team);
-    const squads = [...slotsByTeam('attacker'), ...slotsByTeam('defender')].map((slot, index) => ({
+    const representativeSlots = mapConfig.deploySlots.filter((slot) => (
+      String(slot?.id || '').endsWith('-top-1')
+    ));
+    const squads = representativeSlots.map((slot, index) => ({
       ...createSquad({ id: `reference-${index}`, team: slot.team, x: slot.x }),
       y: slot.y,
       spawnLaneId: slot.laneId,
-      startCount: 1000,
-      remain: 1000,
-      units: { infantry_basic: 1000 },
+      startCount: 50,
+      remain: 50,
+      units: { infantry_basic: 50 },
       behavior: 'auto',
       controlMode: 'AI',
       stamina: 100,
@@ -1945,6 +2544,11 @@ describe('training-map AI simulation profile', () => {
     }));
     const initialPositions = new Map(squads.map((squad) => [squad.id, { x: squad.x, y: squad.y }]));
     const trainingNavigator = createTrainingMapNavigator({ field, mapConfig });
+    const startingHighlandBySquad = new Map(squads.map((squad) => [
+      squad.id,
+      trainingNavigator.sampleTerrain(squad).regionIds
+        .find((regionId) => String(regionId).startsWith('terrain-highland-')) || ''
+    ]));
     let planCalls = 0;
     const originalPlanRoute = trainingNavigator.planRoute.bind(trainingNavigator);
     trainingNavigator.planRoute = (...args) => {
@@ -1967,18 +2571,91 @@ describe('training-map AI simulation profile', () => {
         strictAgentMapping: true
       }
     });
+    const traceBySquad = new Map([
+      ['reference-0', []],
+      ['reference-1', []]
+    ]);
+    const initialPlannedRoutes = new Map();
+    const blockingWalls = mapConfig.objects.filter((object) => object?.blocksMovement === true);
 
-    for (let index = 0; index < 240; index += 1) {
-      updateCrowdSim(crowd, sim, 1 / 20);
+    let simulatedFrames = 0;
+    for (; simulatedFrames < 250; simulatedFrames += 1) {
+      updateCrowdSim(crowd, sim, 0.1);
+      if (simulatedFrames === 0) {
+        squads.forEach((squad) => {
+          initialPlannedRoutes.set(squad.id, [
+            initialPositions.get(squad.id),
+            ...(Array.isArray(squad.waypoints) ? squad.waypoints : [])
+          ]);
+        });
+      }
+      if (simulatedFrames < 6 || simulatedFrames % 10 === 9) {
+        traceBySquad.forEach((trace, squadId) => {
+          const squad = squads.find((entry) => entry.id === squadId);
+          trace.push({
+            frame: simulatedFrames + 1,
+            x: Number(squad?.x) || 0,
+            y: Number(squad?.y) || 0,
+            speed: Number(squad?.speed) || 0,
+            action: String(squad?.action || ''),
+            waypointCount: Array.isArray(squad?.waypoints) ? squad.waypoints.length : 0,
+            firstWaypoint: squad?.waypoints?.[0] || null,
+            navigationFailureCount: Number(squad?._navigationFailureCount) || 0,
+            navigationReplanAttempts: Number(squad?._navigationReplanAttempts) || 0,
+            collisionAt: Number(squad?._navigationCollisionAt) || 0
+          });
+        });
+      }
+      if (squads.every((squad) => (
+        !trainingNavigator.sampleTerrain(squad).regionIds.includes(startingHighlandBySquad.get(squad.id))
+      ))) break;
     }
 
     expect(planCalls).toBeGreaterThan(0);
-    expect(planCalls).toBeLessThanOrEqual(60);
-    expect(squads.every((squad) => String(squad.targetSquadId || '').startsWith('reference-'))).toBe(true);
+    expect(planCalls).toBeLessThanOrEqual(80);
+    expect(squads.every((squad) => squad.debugAiPlan?.kind === TRAINING_MAP_AI_PLAN_KIND.PUSH_LANE)).toBe(true);
+    expect(squads.every((squad) => String(squad.targetSquadId || '') === '')).toBe(true);
     expect(squads.every((squad) => {
       const initial = initialPositions.get(squad.id);
       return Math.hypot(squad.x - initial.x, squad.y - initial.y) > 8;
     })).toBe(true);
+    expect([...startingHighlandBySquad.values()].every(Boolean)).toBe(true);
+    const routeCollisions = [];
+    initialPlannedRoutes.forEach((route, squadId) => {
+      for (let index = 1; index < route.length; index += 1) {
+        const hit = raycastObstacles(
+          route[index - 1],
+          route[index],
+          blockingWalls,
+          mapConfig.navigation.agentRadius
+        );
+        if (hit?.obstacle) {
+          routeCollisions.push({
+            squadId,
+            segmentIndex: index - 1,
+            from: route[index - 1],
+            to: route[index],
+            obstacleId: hit.obstacle.id || hit.obstacle.objectId
+          });
+        }
+      }
+    });
+    expect(routeCollisions).toEqual([]);
+    const squadsStillOnStartingHighland = squads
+      .map((squad) => ({
+        id: squad.id,
+        x: squad.x,
+        y: squad.y,
+        startHighlandId: startingHighlandBySquad.get(squad.id),
+        regionIds: trainingNavigator.sampleTerrain(squad).regionIds,
+        waypointCount: Array.isArray(squad.waypoints) ? squad.waypoints.length : 0,
+        firstWaypoint: squad.waypoints?.[0] || null,
+        action: squad.action,
+        simulatedSeconds: Number(sim.timeElapsed) || 0,
+        trace: traceBySquad.get(squad.id) || []
+      }))
+      .filter((entry) => entry.regionIds.includes(entry.startHighlandId));
+    expect(squadsStillOnStartingHighland).toEqual([]);
   });
 });
 
@@ -2068,9 +2745,15 @@ describe('training-map automatic navigation', () => {
       { x: 400, y: 0 }
     ]
   }];
-  const buildAutoSim = ({ squads = [], buildings = [], trainingNavigator = null } = {}) => ({
+  const buildAutoSim = ({
+    squads = [],
+    buildings = [],
+    trainingObjectives = [],
+    trainingNavigator = null
+  } = {}) => ({
     field,
     buildings,
+    trainingObjectives,
     squads,
     timeElapsed: 0,
     trainingMap: {
@@ -2085,8 +2768,9 @@ describe('training-map automatic navigation', () => {
     }
   });
 
-  const createAutoSquad = ({ id, team, x }) => ({
+  const createAutoSquad = ({ id, team, x, y = 0 }) => ({
     ...createSquad({ id, team, x }),
+    y,
     behavior: 'auto',
     controlMode: 'AI',
     spawnLaneId: 'mid',
@@ -2094,65 +2778,162 @@ describe('training-map automatic navigation', () => {
     order: { type: 'ATTACK_MOVE', pathPoints: [], pathIndex: 0 }
   });
 
-  test('rejects a direct jungle shortcut and follows the assigned road', () => {
+  const createAutoWave = ({
+    id = 'mid-wave',
+    team = 'attacker',
+    x = 120,
+    y = 150,
+    targetBuildingId = ''
+  } = {}) => ({
+    ...createAutoSquad({ id, team, x, y }),
+    isMinionWaveUnit: true,
+    minionLaneId: 'mid',
+    minionPath: curvedLane[0].centerline.map((point) => ({ ...point })),
+    minionPathIndex: x >= 120 ? 3 : (x >= -120 ? 2 : 1),
+    minionPathSpeed: 120,
+    targetBuildingId
+  });
+
+  const addAutoTower = (sim, {
+    id = 'mid-tower',
+    team = 'defender',
+    x = 320,
+    y = 43,
+    currentTargetId = '',
+    lockedSquadId = ''
+  } = {}) => {
+    const building = {
+      id: `building:${id}`,
+      x,
+      y,
+      width: 30,
+      depth: 30,
+      blocksMovement: true,
+      destroyed: false
+    };
+    const objective = {
+      id,
+      sourceObjectId: building.id,
+      type: 'tower',
+      team,
+      laneId: 'mid',
+      hp: 100,
+      maxHp: 100,
+      attackRange: 80,
+      attackDamage: 20,
+      attackEnabled: true,
+      targetable: true,
+      currentTargetId,
+      lockedSquadId,
+      destroyed: false
+    };
+    sim.buildings.push(building);
+    sim.trainingObjectives.push(objective);
+    return { building, objective };
+  };
+
+  test('escorts its lane wave instead of taking a direct jungle shortcut', () => {
     const attacker = createAutoSquad({ id: 'attacker', team: 'attacker', x: -430 });
-    const sim = buildAutoSim({ squads: [attacker] });
+    const wave = createAutoWave();
+    const sim = buildAutoSim({ squads: [attacker, wave] });
     const crowd = createCrowdSim(sim);
 
     updateCrowdSim(crowd, sim, 0.1);
 
     expect(sim.trainingNavigator.planRoute).toHaveBeenCalledTimes(1);
-    expect(attacker.autoNavigation).toMatchObject({ goalId: 'field-edge:attacker' });
+    expect(attacker.debugAiPlan).toMatchObject({
+      kind: TRAINING_MAP_AI_PLAN_KIND.ESCORT_WAVE,
+      laneId: 'mid',
+      waveId: wave.id
+    });
+    expect(attacker.autoNavigation).toMatchObject({
+      goalId: `ESCORT_WAVE:mid:${wave.id}`,
+      planKind: TRAINING_MAP_AI_PLAN_KIND.ESCORT_WAVE
+    });
     expect(attacker.waypoints.length).toBeGreaterThan(2);
     expect(attacker.waypoints.some((point) => Number(point?.y) > 100)).toBe(true);
-    expect(attacker.waypoints[attacker.waypoints.length - 1].x).toBeLessThanOrEqual(450);
+    expect(attacker.waypoints[attacker.waypoints.length - 1].x).toBeLessThan(wave.x);
     expect(attacker.x).toBeGreaterThan(-430);
   });
 
-  test('uses a detour only when an obstacle blocks the automatic goal', () => {
-    const wall = { id: 'wall', x: 0, y: 0, width: 80, depth: 160, blocksMovement: true };
-    const navigator = createTrainingMapNavigator({
-      field,
-      mapConfig: { navigation: { cellSize: 40, wallClearance: 8, maxSearchNodes: 1200 }, lanes: curvedLane }
+  test('waits outside tower range while minions have not taken tower aggro', () => {
+    const attacker = createAutoSquad({ id: 'attacker', team: 'attacker', x: 40, y: 170 });
+    const wave = createAutoWave();
+    const sim = buildAutoSim({ squads: [attacker, wave] });
+    const { building, objective } = addAutoTower(sim);
+    const crowd = createCrowdSim(sim);
+
+    updateCrowdSim(crowd, sim, 0.1);
+
+    expect(attacker.debugAiPlan).toMatchObject({
+      kind: TRAINING_MAP_AI_PLAN_KIND.ESCORT_WAVE,
+      targetObjectiveId: objective.id,
+      targetBuildingId: building.id
     });
-    const attacker = createAutoSquad({ id: 'attacker', team: 'attacker', x: -430 });
-    const sim = buildAutoSim({ squads: [attacker], buildings: [wall], trainingNavigator: navigator });
+    expect(attacker.targetBuildingId).toBe('');
+    expect(Math.hypot(
+      attacker.autoNavigation.destination.x - building.x,
+      attacker.autoNavigation.destination.y - building.y
+    )).toBeGreaterThan(125);
+  });
+
+  test('joins the tower attack after the tower locks friendly minions', () => {
+    const attacker = createAutoSquad({ id: 'attacker', team: 'attacker', x: 40, y: 170 });
+    const wave = createAutoWave();
+    const sim = buildAutoSim({ squads: [attacker, wave] });
+    const { building, objective } = addAutoTower(sim, {
+      currentTargetId: wave.id,
+      lockedSquadId: wave.id
+    });
     const crowd = createCrowdSim(sim);
 
     updateCrowdSim(crowd, sim, 0.1);
 
-    expect(attacker.waypoints.length).toBeGreaterThan(1);
-    expect(attacker.waypoints[attacker.waypoints.length - 1].x).toBeGreaterThan(400);
-    expect(attacker.waypoints[attacker.waypoints.length - 1].x).toBeLessThanOrEqual(450);
-    expect(attacker.waypoints[attacker.waypoints.length - 1].y).toBe(0);
-    expect(attacker.waypoints.some((point) => Math.abs(point.y) > 100)).toBe(true);
+    expect(attacker.debugAiPlan).toMatchObject({
+      kind: TRAINING_MAP_AI_PLAN_KIND.SIEGE_TOWER,
+      targetObjectiveId: objective.id,
+      targetBuildingId: building.id,
+      waveId: wave.id
+    });
+    expect(attacker.targetBuildingId).toBe(building.id);
+    expect(attacker.autoNavigation.planKind).toBe(TRAINING_MAP_AI_PLAN_KIND.SIEGE_TOWER);
   });
 
-  test('approaches an enemy through the assigned road corridor', () => {
-    const attacker = createAutoSquad({ id: 'attacker', team: 'attacker', x: -430 });
-    const defender = createSquad({ id: 'defender', team: 'defender', x: 80 });
-    const sim = buildAutoSim({ squads: [attacker, defender] });
+  test('retreats immediately and drops the tower target when the tower locks the main force', () => {
+    const attacker = createAutoSquad({ id: 'attacker', team: 'attacker', x: 250, y: 80 });
+    const wave = createAutoWave({ x: 220, y: 96 });
+    const sim = buildAutoSim({ squads: [attacker, wave] });
+    const { building, objective } = addAutoTower(sim, {
+      currentTargetId: attacker.id,
+      lockedSquadId: attacker.id
+    });
+    const initialTowerDistance = Math.hypot(attacker.x - building.x, attacker.y - building.y);
     const crowd = createCrowdSim(sim);
 
     updateCrowdSim(crowd, sim, 0.1);
 
-    expect(attacker.waypoints.length).toBeGreaterThan(2);
-    expect(attacker.waypoints[0].x).toBeGreaterThan(-430);
-    expect(attacker.waypoints.some((point) => Number(point?.y) > 100)).toBe(true);
-    expect(attacker.waypoints[attacker.waypoints.length - 1].x).toBeLessThan(120);
+    expect(attacker.debugAiPlan).toMatchObject({
+      kind: TRAINING_MAP_AI_PLAN_KIND.RETREAT_FROM_TOWER,
+      targetObjectiveId: objective.id
+    });
+    expect(attacker.targetBuildingId).toBe('');
+    expect(attacker.targetSquadId).toBe('');
+    expect(attacker.autoNavigation.planKind).toBe(TRAINING_MAP_AI_PLAN_KIND.RETREAT_FROM_TOWER);
+    expect(Math.hypot(
+      attacker.autoNavigation.destination.x - building.x,
+      attacker.autoNavigation.destination.y - building.y
+    )).toBeGreaterThan(initialTowerDistance);
   });
 
-  test('uses the map score to favor a same-lane enemy over a closer off-lane enemy', () => {
+  test('defends the fighting lane wave instead of turning toward a closer off-lane enemy', () => {
     const attacker = createAutoSquad({ id: 'attacker', team: 'attacker', x: -430 });
-    const offLane = { ...createSquad({ id: 'off-lane', team: 'defender', x: -350 }), y: 140 };
-    const sameLane = createSquad({ id: 'same-lane', team: 'defender', x: 20 });
-    const sim = buildAutoSim({ squads: [attacker, offLane, sameLane] });
+    const wave = createAutoWave({ x: -120, y: 150 });
+    const offLane = { ...createSquad({ id: 'off-lane', team: 'defender', x: -390 }), y: 140, spawnLaneId: 'top' };
+    const sameLane = { ...createSquad({ id: 'same-lane', team: 'defender', x: -90 }), y: 150, spawnLaneId: 'mid' };
+    sameLane.targetSquadId = wave.id;
+    const sim = buildAutoSim({ squads: [attacker, wave, offLane, sameLane] });
     sim.trainingMap.lanes = [
-      {
-        id: 'mid',
-        width: 100,
-        centerline: [{ x: -450, y: 0 }, { x: 450, y: 0 }]
-      },
+      curvedLane[0],
       {
         id: 'top',
         width: 100,
@@ -2163,67 +2944,72 @@ describe('training-map automatic navigation', () => {
 
     updateCrowdSim(crowd, sim, 0.1);
 
-    expect(attacker._trainingAiSelection?.targetId).toBe(sameLane.id);
+    expect(attacker.debugAiPlan).toMatchObject({
+      kind: TRAINING_MAP_AI_PLAN_KIND.DEFEND_WAVE,
+      targetSquadId: sameLane.id,
+      waveId: wave.id
+    });
     expect(attacker.targetSquadId).toBe(sameLane.id);
-    expect(attacker.debugTargetScore?.sameLane).toBe(true);
+    expect(attacker.targetSquadId).not.toBe(offLane.id);
   });
 
-  test('routes a ranged squad to a visible attack position around a blocking building', () => {
-    const wall = { id: 'wall', x: 0, y: 0, width: 80, depth: 240, blocksMovement: true };
-    const navigator = createTrainingMapNavigator({
-      field,
-      mapConfig: { navigation: { cellSize: 40, wallClearance: 8, maxSearchNodes: 1800 }, lanes: curvedLane }
-    });
-    const attacker = {
-      ...createAutoSquad({ id: 'attacker', team: 'attacker', x: -430 }),
-      classTag: 'archer',
-      roleTag: '远程',
-      stats: { atk: 8, speed: 1, range: 10, attackRange: { min: 2, max: 10 } }
-    };
-    const defender = {
-      ...createSquad({ id: 'defender', team: 'defender', x: 80 }),
-      radius: 12
-    };
-    const sim = buildAutoSim({ squads: [attacker, defender], buildings: [wall], trainingNavigator: navigator });
+  test('keeps the same route while the escorted wave only drifts slightly', () => {
+    const attacker = createAutoSquad({ id: 'attacker', team: 'attacker', x: -430 });
+    const wave = createAutoWave();
+    const sim = buildAutoSim({ squads: [attacker, wave] });
     const crowd = createCrowdSim(sim);
 
     updateCrowdSim(crowd, sim, 0.1);
+    const firstGoalId = attacker.autoNavigation.goalId;
+    const firstDestination = { ...attacker.autoNavigation.destination };
+    const firstPlanCallCount = sim.trainingNavigator.planRoute.mock.calls.length;
 
-    const endpoint = attacker.waypoints[attacker.waypoints.length - 1];
-    expect(attacker.waypoints.length).toBeGreaterThan(1);
-    expect(endpoint).toBeTruthy();
-    expect(Math.abs(endpoint.y)).toBeGreaterThan(60);
-    expect(Math.abs(endpoint.y)).toBeLessThanOrEqual(150);
-    expect(raycastObstacles(endpoint, defender, [wall], 1)).toBeNull();
+    wave.x += 4;
+    wave.y -= 2;
+    updateCrowdSim(crowd, sim, 0.05);
+
+    expect(attacker.autoNavigation.goalId).toBe(firstGoalId);
+    expect(attacker.autoNavigation.destination).toEqual(firstDestination);
+    expect(sim.trainingNavigator.planRoute).toHaveBeenCalledTimes(firstPlanCallCount);
+    expect(attacker.waypoints.length).toBeGreaterThan(0);
   });
 
-  test('defers an unreachable enemy before resuming its automatic fallback', () => {
+  test('defers an unreachable lane enemy and resumes escorting the wave', () => {
     const attacker = createAutoSquad({ id: 'attacker', team: 'attacker', x: -430 });
-    const defender = createSquad({ id: 'defender', team: 'defender', x: 80 });
+    const wave = createAutoWave({ x: -120, y: 150 });
+    const defender = { ...createSquad({ id: 'defender', team: 'defender', x: -90 }), y: 150, spawnLaneId: 'mid' };
+    defender.targetSquadId = wave.id;
+    let routeCallCount = 0;
     const navigator = {
-      planRoute: jest.fn((start, target) => (
-        target.x < 200 ? [{ x: start.x, y: start.y }] : [{ x: target.x, y: target.y }]
-      )),
+      planRoute: jest.fn((start, target) => {
+        routeCallCount += 1;
+        return routeCallCount === 1
+          ? [{ x: start.x, y: start.y }]
+          : [{ x: target.x, y: target.y }];
+      }),
       getPathFailureReplanCooldownSeconds: () => 0.2,
       findNearestWalkablePoint: (point) => point
     };
-    const sim = buildAutoSim({ squads: [attacker, defender], trainingNavigator: navigator });
+    const sim = buildAutoSim({ squads: [attacker, wave, defender], trainingNavigator: navigator });
     const crowd = createCrowdSim(sim);
 
     updateCrowdSim(crowd, sim, 0.1);
     updateCrowdSim(crowd, sim, 0.05);
-    updateCrowdSim(crowd, sim, 0.05);
 
-    const pursuitCalls = navigator.planRoute.mock.calls.filter(([, target]) => target.x < 200);
-    expect(pursuitCalls).toHaveLength(1);
+    expect(navigator.planRoute).toHaveBeenCalledTimes(2);
     expect(attacker._trainingTargetNavigation).toMatchObject({
       targetId: defender.id,
       failureCount: 1
     });
-    expect(attacker.autoNavigation).toMatchObject({ goalId: 'field-edge:attacker' });
-    expect(attacker.waypoints.length).toBeGreaterThan(2);
+    expect(attacker.debugAiPlan).toMatchObject({
+      kind: TRAINING_MAP_AI_PLAN_KIND.ESCORT_WAVE,
+      waveId: wave.id,
+      targetSquadId: ''
+    });
+    expect(attacker.targetSquadId).toBe('');
+    expect(attacker.autoNavigation.planKind).toBe(TRAINING_MAP_AI_PLAN_KIND.ESCORT_WAVE);
+    expect(attacker.waypoints.length).toBeGreaterThan(0);
     expect(attacker.waypoints.some((point) => Number(point?.y) > 100)).toBe(true);
-    expect(attacker.waypoints[attacker.waypoints.length - 1].x).toBeLessThanOrEqual(450);
   });
 });
 
@@ -2277,17 +3063,38 @@ describe('training-map AI skill preflight', () => {
       classTag: 'archer',
       roleTag: '远程',
       behavior: 'auto',
+      controlMode: 'AI',
+      spawnLaneId: 'mid',
       stamina: 100,
       stats: { atk: 8, speed: 1, range: 10, attackRange: { min: 2, max: 10 } },
       skillCooldowns: { infantry: 0, cavalry: 0, archer: 0, artillery: 0, support: 0 }
     };
-    const attacker = createSquad({ id: 'attacker', team: 'attacker', x: 70 });
+    const defenderWave = {
+      ...createSquad({ id: 'defender-wave', team: 'defender', x: -20 }),
+      behavior: 'auto',
+      controlMode: 'AI',
+      isMinionWaveUnit: true,
+      minionLaneId: 'mid',
+      spawnLaneId: 'mid',
+      minionPath: [{ x: 450, y: 0 }, { x: -450, y: 0 }],
+      minionPathIndex: 1,
+      minionPathSpeed: 120
+    };
+    const attacker = {
+      ...createSquad({ id: 'attacker', team: 'attacker', x: 70 }),
+      spawnLaneId: 'mid',
+      targetSquadId: defenderWave.id
+    };
     const sim = {
       field: skillField,
-      squads: [defender, attacker],
+      squads: [defender, defenderWave, attacker],
       buildings: [wall],
       timeElapsed: 0,
-      trainingMap: { mapId: 'training-war-map-v1', lanes: [], navigation: { wallClearance: 8 } },
+      trainingMap: {
+        mapId: 'training-war-map-v1',
+        lanes: [{ id: 'mid', width: 100, centerline: [{ x: -450, y: 0 }, { x: 450, y: 0 }] }],
+        navigation: { wallClearance: 8 }
+      },
       trainingNavigator: {
         planRoute: jest.fn((start, target) => [{ x: target.x, y: target.y }]),
         getPathFailureReplanCooldownSeconds: () => 0.2,
@@ -2307,6 +3114,76 @@ describe('training-map AI skill preflight', () => {
     updateCrowdSim(crowd, sim, 0.1);
 
     expect(defender.activeSkill?.targetSquadId).toBe(attacker.id);
+  });
+
+  test('does not cast at a nearby enemy that the lane plan refuses to chase under a tower', () => {
+    const defender = {
+      ...createSquad({ id: 'defender', team: 'defender', x: -70 }),
+      classTag: 'archer',
+      roleTag: '远程',
+      behavior: 'auto',
+      controlMode: 'AI',
+      spawnLaneId: 'mid',
+      stamina: 100,
+      stats: { atk: 8, speed: 1, range: 10, attackRange: { min: 2, max: 10 } },
+      skillCooldowns: { infantry: 0, cavalry: 0, archer: 0, artillery: 0, support: 0 }
+    };
+    const attacker = {
+      ...createSquad({ id: 'attacker', team: 'attacker', x: 70 }),
+      spawnLaneId: 'mid'
+    };
+    const tower = {
+      id: 'building:attacker-mid-tower',
+      x: 90,
+      y: 0,
+      width: 30,
+      depth: 30,
+      blocksMovement: true,
+      destroyed: false
+    };
+    const sim = {
+      field: skillField,
+      squads: [defender, attacker],
+      buildings: [tower],
+      trainingObjectives: [{
+        id: 'attacker-mid-tower',
+        sourceObjectId: tower.id,
+        type: 'tower',
+        team: 'attacker',
+        laneId: 'mid',
+        hp: 100,
+        maxHp: 100,
+        attackRange: 80,
+        attackDamage: 20,
+        attackEnabled: true,
+        targetable: true,
+        currentTargetId: '',
+        lockedSquadId: '',
+        destroyed: false
+      }],
+      timeElapsed: 0,
+      trainingMap: {
+        mapId: 'training-war-map-v1',
+        lanes: [{ id: 'mid', width: 100, centerline: [{ x: -450, y: 0 }, { x: 450, y: 0 }] }],
+        navigation: { wallClearance: 8 }
+      },
+      trainingNavigator: {
+        planRoute: jest.fn((start, target) => [{ x: target.x, y: target.y }]),
+        getPathFailureReplanCooldownSeconds: () => 0.2,
+        findNearestWalkablePoint: (point) => point,
+        isWalkable: () => true
+      }
+    };
+    const crowd = createCrowdSim(sim);
+
+    updateCrowdSim(crowd, sim, 0.1);
+
+    expect(defender.debugAiPlan).toMatchObject({
+      kind: TRAINING_MAP_AI_PLAN_KIND.PUSH_LANE,
+      targetSquadId: ''
+    });
+    expect(defender.targetSquadId).toBe('');
+    expect(defender.activeSkill).toBeFalsy();
   });
 });
 

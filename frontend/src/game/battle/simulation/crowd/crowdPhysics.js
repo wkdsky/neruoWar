@@ -16,7 +16,8 @@ export const rotate2D = (x, y, deg) => {
 };
 
 export const normalizeVec = (x, y) => {
-  const len = Math.hypot(x, y) || 1;
+  const len = Math.hypot(x, y);
+  if (len <= 1e-9) return { x: 0, y: 0, len: 0 };
   return { x: x / len, y: y / len, len };
 };
 

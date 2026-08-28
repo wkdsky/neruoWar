@@ -67,12 +67,14 @@
     "wallClearanceNormalized": 0.012,
     "pathClearance": 1.2,
     "agentRadius": 2.25,
+    "aiNavigationSearchNodes": 128,
+    "formationRecoveryPlansPerStep": 4,
     "narrowPassage": {
       "cellSize": 8,
       "probeDistance": 48,
       "probeStep": 2,
       "entryDistance": 38,
-      "releaseSeconds": 3.2
+      "releaseSeconds": 0.65
     },
     "pathFailureReplanCooldownSeconds": 0.35,
     "aiTargetUnreachableFailureLimit": 3,

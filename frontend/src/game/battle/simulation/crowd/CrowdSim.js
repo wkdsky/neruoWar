@@ -45,17 +45,31 @@ import {
   isTargetOnlyAttackOrder
 } from './combatPolicy';
 import {
+  clearForeignTrainingNonCardSquadAiState,
   MINION_WAVE_AI_STATE,
-  resolveMinionWaveAgentAttackRange,
-  updateMinionWaveAiFrame
-} from './MinionWaveAi';
+  projectPointToMinionPath,
+  restoreMinionSquadHoldAnchor,
+  resolveMinionPathPointAtProgress as resolveMinionSquadPathPointAtProgress,
+  resolveMinionSquadAgentCombatDirective,
+  resolveNeutralCampCombatDirective,
+  prepareTrainingNonCardSquadAiFrame,
+  resetTrainingNonCardSquadAiRuntime,
+  updateTrainingMinionSquadAiFrame
+} from './TrainingNonCardSquadAi';
 import {
+  clearTrainingCardAiState,
+  completeTrainingCardSquadAiFrame,
   isTrainingMapAiTargetDeferred,
+  prepareTrainingCardSquadAiFrame,
   recordTrainingMapAiEvent,
-  selectTrainingMapAiObjective,
+  resolveTrainingCardAgentTacticalIntent,
+  resolveTrainingCardAnchorSteering,
+  resetTrainingCardSquadAiRuntime,
+  selectTrainingMapAiPlan,
   selectTrainingMapAiTarget,
-  syncTrainingMapAiState
-} from '../TrainingMapAi';
+  syncTrainingMapAiState,
+  TRAINING_MAP_AI_PLAN_KIND
+} from './TrainingCardSquadAi';
 import {
   TEAM_ATTACKER,
   TEAM_DEFENDER,
@@ -64,6 +78,14 @@ import {
   isHostileTeam,
   resolveDefaultHostileTeam
 } from './teamRelations';
+import {
+  isTrainingCardAiSquad,
+  isTrainingCardSquad,
+  isTrainingMinionSquad,
+  isTrainingNeutralSquad,
+  resolveTrainingSquadKind,
+  TRAINING_SQUAD_KIND
+} from './TrainingSquadKind';
 
 const SKILL_CATEGORY_MELEE = 'melee';
 const SKILL_CATEGORY_RANGED = 'ranged';
@@ -82,6 +104,7 @@ const FORMATION_SPACING_STANDARD = 'standard';
 const FORMATION_SPACING_COMPACT = 'compact';
 const STAMINA_MAX = 100;
 const STAMINA_MOVE_THRESHOLD = 20;
+const STAMINA_RESUME_THRESHOLD = 44;
 const STAMINA_MOVE_COST = 8;
 const STAMINA_RECOVER = 28;
 const AGENT_RADIUS = 2.25;
@@ -173,16 +196,15 @@ const NAVIGATION_MIN_PROGRESS = 0.18;
 const NAVIGATION_MIN_MOVEMENT = 0.2;
 const NAVIGATION_MAX_FAILURES_BEFORE_WAIT = 3;
 const DEFAULT_AI_NAVIGATION_PLANS_PER_STEP = 1;
-const DEFAULT_MINION_RECOVERY_PLANS_PER_STEP = 3;
+const DEFAULT_FORMATION_RECOVERY_PLANS_PER_STEP = 4;
 const DEFAULT_AI_DECISIONS_PER_STEP = 1;
 const AVOID_SIDE_LOCK_SEC = 0.32;
 const NARROW_PASSAGE_SCAN_INTERVAL_SEC = 0.24;
+const NARROW_PASSAGE_RELEASE_OPEN_SEC = 0.65;
 const AVOID_KEY_GRID = 6;
 const AGENT_SETTLE_RADIUS = 2.4;
 const AGENT_SETTLE_DEADZONE = 1.08;
 const AGENT_SETTLE_SPEED = 16;
-const AGENT_FORMATION_REJOIN_OMEGA_MOVING = 6.4;
-const AGENT_FORMATION_REJOIN_OMEGA_SETTLING = 8.2;
 const AGENT_FORMATION_LOCK_RELATIVE_SPEED = 2.4;
 const SQUAD_COMBAT_LOCK_RELEASE_SEC = 1.35;
 const SQUAD_COMBAT_EXIT_GAP = 32;
@@ -203,9 +225,19 @@ const MINION_COHESION_MIN_SPEED_SCALE = 0.24;
 const MINION_COHESION_RELEASE_RATIO = 1.04;
 const MINION_RECOVERY_STUCK_DELAY_SEC = 0.28;
 const MINION_RECOVERY_REPLAN_INTERVAL_SEC = 0.42;
-const MINION_RECOVERY_TARGET_DRIFT = 12;
+const MINION_RECOVERY_TARGET_DRIFT = 36;
 const MINION_RECOVERY_WAYPOINT_RADIUS = 4.2;
 const MINION_RECOVERY_MAX_SPEED_MUL = 1.32;
+const FORMATION_COHESION_STOP_DELAY_SEC = 0.85;
+const FORMATION_COHESION_RECOVERY_STOP_DELAY_SEC = 1.35;
+const FORMATION_COHESION_CATASTROPHIC_RATIO = 1.72;
+const FORMATION_COHESION_MIN_SPEED_SCALE = 0.3;
+const FORMATION_ARRIVAL_STABLE_SEC = 0.28;
+const FORMATION_RECOVERY_STUCK_DELAY_SEC = 0.48;
+const FORMATION_RECOVERY_REPLAN_INTERVAL_SEC = 0.55;
+const FORMATION_RECOVERY_TARGET_DRIFT = 36;
+const FORMATION_RECOVERY_WAYPOINT_RADIUS = 4.2;
+const FORMATION_RECOVERY_MAX_SPEED_MUL = 1.42;
 const GROUND_SKILL_CONFIG = {
   archer: {
     radius: 72,
@@ -271,7 +303,7 @@ const resolveTrainingNavigationAgentRadius = (squad = {}, sim = {}) => {
   const configuredRadius = Number(sim?.trainingMap?.navigation?.agentRadius);
   const requestedRadius = Number(squad?.navigationAgentRadius);
   if (Number.isFinite(requestedRadius) && requestedRadius > 0) return clamp(requestedRadius, 1, 8);
-  if (squad?.isMinionWaveUnit === true) {
+  if (isTrainingMinionSquad(squad)) {
     const slotSideExtent = (Array.isArray(squad?.deploySlots) ? squad.deploySlots : []).reduce((maximum, slot) => (
       Math.max(maximum, Math.abs(Number(slot?.side) || 0))
     ), 0);
@@ -299,10 +331,11 @@ const resolveTrainingNavigationPlanBudget = (sim = {}) => clamp(
   8
 );
 
-const resolveMinionRecoveryPlanBudget = (sim = {}) => clamp(
+const resolveFormationRecoveryPlanBudget = (sim = {}) => clamp(
   Math.floor(
-    Number(sim?.trainingMap?.navigation?.minionRecoveryPlansPerStep)
-      || DEFAULT_MINION_RECOVERY_PLANS_PER_STEP
+    Number(sim?.trainingMap?.navigation?.formationRecoveryPlansPerStep)
+      || Number(sim?.trainingMap?.navigation?.minionRecoveryPlansPerStep)
+      || DEFAULT_FORMATION_RECOVERY_PLANS_PER_STEP
   ),
   1,
   12
@@ -314,7 +347,7 @@ const resolveTrainingAiNavigationSearchNodes = (squad = {}, sim = {}) => {
   if (Number.isFinite(configured) && configured > 0) return clamp(configured, 1, 256);
   const fieldWidth = Number(sim?.field?.width) || 0;
   const fieldHeight = Number(sim?.field?.height) || 0;
-  return fieldWidth >= 4000 && fieldHeight >= 3000 ? 4 : 0;
+  return fieldWidth >= 4000 && fieldHeight >= 3000 ? 128 : 0;
 };
 
 const consumeTrainingNavigationPlanBudget = (sim = {}) => {
@@ -325,8 +358,8 @@ const consumeTrainingNavigationPlanBudget = (sim = {}) => {
   return true;
 };
 
-const consumeMinionRecoveryPlanBudget = (sim = {}) => {
-  const budget = sim?._minionRecoveryNavigationBudget;
+const consumeFormationRecoveryPlanBudget = (sim = {}) => {
+  const budget = sim?._formationRecoveryNavigationBudget || sim?._minionRecoveryNavigationBudget;
   if (!budget || !Number.isFinite(Number(budget.remaining))) return true;
   if (budget.remaining <= 0) return false;
   budget.remaining -= 1;
@@ -340,6 +373,7 @@ const resolveTrainingAiDecisionBudget = (sim = {}) => clamp(
 );
 
 const canRefreshTrainingAiDecision = (squad = null, sim = null, nowSec = 0) => {
+  if (!squad || !isTrainingCardAiSquad(squad)) return true;
   const cache = squad?._trainingAiTargetCache;
   if (cache && (Number(cache?.nextAt) || 0) > nowSec) return true;
   const budget = sim?._trainingAiDecisionBudget;
@@ -352,6 +386,14 @@ const canRefreshTrainingAiDecision = (squad = null, sim = null, nowSec = 0) => {
   return true;
 };
 
+const clearForeignTrainingAiState = (squad = null, agents = []) => {
+  if (!squad) return;
+  clearForeignTrainingNonCardSquadAiState(squad, agents);
+  if (!isTrainingCardAiSquad(squad)) {
+    clearTrainingCardAiState(squad, agents);
+  }
+};
+
 export const resolveTrainingNarrowPassageColumns = ({
   position = {},
   forward = {},
@@ -359,7 +401,8 @@ export const resolveTrainingNarrowPassageColumns = ({
   baseColumns = 1,
   spacing = (AGENT_RADIUS * 2) + AGENT_GAP,
   agentRadius = AGENT_RADIUS,
-  navigation = {}
+  navigation = {},
+  rearProbeDistance = 0
 } = {}) => {
   const safeBaseColumns = Math.max(1, Math.floor(Number(baseColumns) || 1));
   const direction = normalizeVec(Number(forward?.x) || 0, Number(forward?.y) || 0);
@@ -372,13 +415,14 @@ export const resolveTrainingNarrowPassageColumns = ({
   const probeDistance = clamp(Number(config?.probeDistance) || 48, 12, 120);
   const probeStep = clamp(Number(config?.probeStep) || 2, 1, 8);
   const entryDistance = clamp(Number(config?.entryDistance) || 38, 0, 96);
+  const rearDistance = clamp(Number(rearProbeDistance) || 0, 0, 120);
   const scanStep = Math.max(14, probeStep * 6);
   const passageSpacing = Math.max(AGENT_RADIUS * 2, Number(spacing) || (AGENT_RADIUS * 2) + AGENT_GAP);
   const inflate = Math.max(0.5, Number(agentRadius) || AGENT_RADIUS) + 0.4;
   let narrowestWidth = Infinity;
   let narrowestDistance = 0;
 
-  for (let distanceAhead = 0; distanceAhead <= entryDistance; distanceAhead += scanStep) {
+  for (let distanceAhead = -rearDistance; distanceAhead <= entryDistance; distanceAhead += scanStep) {
     const probeOrigin = {
       x: (Number(position?.x) || 0) + (direction.x * distanceAhead),
       y: (Number(position?.y) || 0) + (direction.y * distanceAhead)
@@ -415,6 +459,7 @@ const resolveTrainingNarrowPassageState = ({
   forward = {},
   baseColumns = 1,
   spacing = (AGENT_RADIUS * 2) + AGENT_GAP,
+  rearProbeDistance = 0,
   nowSec = 0
 } = {}) => {
   if (!squad) return { active: false, columns: Math.max(1, baseColumns), width: Infinity, distance: 0 };
@@ -443,7 +488,13 @@ const resolveTrainingNarrowPassageState = ({
     8,
     (Number(navigation?.narrowPassage?.probeDistance) || 48)
       + (Number(navigation?.narrowPassage?.entryDistance) || 38)
+      + Math.max(0, Number(rearProbeDistance) || 0)
       + resolveTrainingNavigationAgentRadius(squad, sim)
+  );
+  const releaseSeconds = clamp(
+    Number(navigation?.narrowPassage?.releaseSeconds) || NARROW_PASSAGE_RELEASE_OPEN_SEC,
+    0.2,
+    4
   );
   const nearbyWalls = queryObstacleCandidates(
     walls,
@@ -452,8 +503,13 @@ const resolveTrainingNarrowPassageState = ({
     probeRadius
   );
   if (nearbyWalls.length <= 0) {
-    if (previous?.active && (Number(previous?.until) || 0) > nowSec) {
-      return { ...previous, active: true, sampledAt: nowSec };
+    if (previous?.active) {
+      const clearSince = Number(previous?.clearSince) || nowSec;
+      if (nowSec - clearSince < releaseSeconds) {
+        const state = { ...previous, active: true, clearSince, sampledAt: nowSec };
+        squad._narrowPassage = state;
+        return state;
+      }
     }
     squad._narrowPassage = {
       active: false,
@@ -461,6 +517,7 @@ const resolveTrainingNarrowPassageState = ({
       width: Infinity,
       distance: 0,
       until: 0,
+      clearSince: 0,
       sampledAt: nowSec
     };
     return squad._narrowPassage;
@@ -472,23 +529,46 @@ const resolveTrainingNarrowPassageState = ({
     baseColumns,
     spacing,
     agentRadius: resolveTrainingNavigationAgentRadius(squad, sim),
-    navigation
+    navigation,
+    rearProbeDistance
   });
-  const releaseSeconds = clamp(Number(navigation?.narrowPassage?.releaseSeconds) || 3.2, 0.5, 12);
   if (passage.active) {
     const state = {
       ...passage,
       active: true,
       until: nowSec + releaseSeconds,
+      clearSince: 0,
       sampledAt: nowSec
     };
     squad._narrowPassage = state;
     return state;
   }
-  if (previous?.active && (Number(previous?.until) || 0) > nowSec) {
-    return { ...previous, active: true, sampledAt: nowSec };
+  if (previous?.active) {
+    const clearSince = Number(previous?.clearSince) || nowSec;
+    if (nowSec - clearSince < releaseSeconds) {
+      const state = {
+        ...previous,
+        columns: Math.max(
+          Math.max(1, Math.floor(Number(previous?.columns) || 1)),
+          Math.max(1, Math.floor(Number(passage?.columns) || 1))
+        ),
+        width: passage.width,
+        distance: passage.distance,
+        active: true,
+        clearSince,
+        sampledAt: nowSec
+      };
+      squad._narrowPassage = state;
+      return state;
+    }
   }
-  squad._narrowPassage = { ...passage, active: false, until: 0, sampledAt: nowSec };
+  squad._narrowPassage = {
+    ...passage,
+    active: false,
+    until: 0,
+    clearSince: 0,
+    sampledAt: nowSec
+  };
   return squad._narrowPassage;
 };
 
@@ -696,7 +776,7 @@ const buildNeutralRepresentativeFormation = (agentCount = 1, spacing = NEUTRAL_R
 };
 
 const applyNeutralRepresentativeFormation = (squad = null, agents = [], formationForward = null) => {
-  if (squad?.isNeutralCampUnit !== true || !Array.isArray(agents) || agents.length <= 0) return null;
+  if (!isTrainingNeutralSquad(squad) || !Array.isArray(agents) || agents.length <= 0) return null;
   const formation = buildNeutralRepresentativeFormation(agents.length);
   const forward = normalizeVec(formationForward?.x, formationForward?.y);
   const forwardX = forward.len > 1e-4 ? forward.x : 1;
@@ -836,7 +916,10 @@ export const applyCrowdSquadFormation = (crowd, squad, deploySlots = [], formati
     agent.formationSlot = nextSlot;
     agent._formationHold = false;
     agent._formationHoldSpacing = '';
-    if (slotChanged) agent._formationLocked = false;
+    agent._formationLocked = false;
+    if (slotChanged || agent?._formationRecovery?.active || agent?._minionRecovery?.active) {
+      clearAgentFormationRecovery(agent, Number(squad?._formationPoseAt) || 0, Infinity);
+    }
   });
   assignFormationSpacingSlots(activeAgents, spacing);
   squad._crowdBaseColumns = columns;
@@ -921,7 +1004,7 @@ const advanceSquadFormationPose = (
     y: Number(squad?.y) || 0,
     yaw: previous.yaw
   };
-  const isNeutralCamp = squad?.isNeutralCampUnit === true;
+  const isNeutralCamp = isTrainingNeutralSquad(squad);
   if (!squad?.formationRect || movement.len <= 1e-4) {
     squad._formationPoseX = current.x;
     squad._formationPoseY = current.y;
@@ -981,108 +1064,281 @@ const formationLocalToWorld = (pose = null, slot = null) => {
   };
 };
 
-const resolveMinionFormationCohesion = ({ squad = null, agents = [], nowSec = 0 } = {}) => {
-  if (
-    !squad
-    || squad?.isMinionWaveUnit !== true
-    || (
-      squad?._minionAi?.state !== MINION_WAVE_AI_STATE.MARCH
-      && squad?._minionAi?.state !== MINION_WAVE_AI_STATE.RESUME
-    )
-  ) {
-    if (squad) {
-      squad._minionCohesionSpeedScale = 1;
-      squad._minionCohesion = null;
-    }
-    return { speedScale: 1, waiting: false, maximumError: 0, readyRatio: 1 };
-  }
-  const alive = (Array.isArray(agents) ? agents : []).filter((agent) => (
-    agent && !agent.dead && (Number(agent.weight) || 0) > 0.001
-  ));
-  if (alive.length <= 0) {
-    squad._minionCohesionSpeedScale = 1;
-    squad._minionCohesion = null;
-    return { speedScale: 1, waiting: false, maximumError: 0, readyRatio: 1 };
-  }
-  const pose = resolveSquadFormationPose(squad);
-  const columns = Math.max(1, Number(squad._crowdBaseColumns) || Math.ceil(Math.sqrt(alive.length)));
-  const baseSpacing = (AGENT_RADIUS * 2) + AGENT_GAP;
-  const formationSpacing = normalizeFormationSpacing(squad?.formationSpacing);
-  const configuredSpacing = Math.max(
-    baseSpacing,
+const resolveFormationFollowers = (agents = []) => (
+  (Array.isArray(agents) ? agents : [])
+    .filter((agent) => (
+      agent
+      && !agent.dead
+      && !agent.isFlagBearer
+      && (Number(agent.weight) || 0) > 0.001
+    ))
+    .sort((left, right) => (Number(left.slotOrder) || 0) - (Number(right.slotOrder) || 0))
+);
+
+const resolveFormationRearProbeDistance = ({ squad = null, agents = [], passage = null } = {}) => {
+  const followers = resolveFormationFollowers(agents);
+  if (followers.length <= 0) return 0;
+  const spacing = Math.max(
+    (AGENT_RADIUS * 2) + AGENT_GAP,
     Number(squad?.formationRect?.spacing) || 0
   );
-  const softError = Math.max(16, configuredSpacing * 1.18);
-  const hardError = Math.max(30, configuredSpacing * 1.7);
-  const releaseError = softError * MINION_COHESION_RELEASE_RATIO;
-  const errorRows = alive.map((agent, index) => {
-    const slot = resolveAgentFormationSlot(agent, index, columns, baseSpacing, formationSpacing);
-    const destination = formationLocalToWorld(pose, slot);
+  if (passage?.active) {
+    const columns = Math.max(1, Math.floor(Number(passage?.columns) || 1));
+    const rows = Math.max(1, Math.ceil(followers.length / columns));
+    return clamp(((rows - 1) * spacing * 0.92) + (spacing * 1.4), spacing, 120);
+  }
+  const rearExtent = followers.reduce((maximum, agent, index) => {
+    const slot = resolveAgentFormationSlot(
+      agent,
+      index,
+      Math.max(1, Number(squad?._crowdBaseColumns) || Math.ceil(Math.sqrt(followers.length))),
+      (AGENT_RADIUS * 2) + AGENT_GAP,
+      squad?.formationSpacing
+    );
+    return Math.max(maximum, Math.max(0, -Number(slot?.front) || 0));
+  }, 0);
+  return clamp(rearExtent + (spacing * 1.4), spacing, 120);
+};
+
+const resolveSquadFormationMetrics = ({
+  squad = null,
+  agents = [],
+  passage = null,
+  pose = null
+} = {}) => {
+  const followers = resolveFormationFollowers(agents);
+  const baseSpacing = (AGENT_RADIUS * 2) + AGENT_GAP;
+  const configuredSpacing = Math.max(baseSpacing, Number(squad?.formationRect?.spacing) || 0);
+  if (!squad || followers.length <= 0) {
+    return {
+      rows: [],
+      errors: [],
+      maximumError: 0,
+      upperError: 0,
+      readyRatio: 1,
+      settled: true,
+      recoveringCount: 0,
+      configuredSpacing
+    };
+  }
+  const formationPose = pose || resolveSquadFormationPose(squad);
+  const columns = Math.max(1, Number(squad._crowdBaseColumns) || Math.ceil(Math.sqrt(followers.length)));
+  const formationSpacing = normalizeFormationSpacing(squad?.formationSpacing);
+  const formationSpacingScale = FORMATION_SPACING_SCALE[formationSpacing]
+    || FORMATION_SPACING_SCALE[FORMATION_SPACING_STANDARD];
+  const rows = followers.map((agent, index) => {
+    const standardSlot = resolveAgentFormationSlot(agent, index, columns, baseSpacing, formationSpacing);
+    const slot = resolveNarrowPassageFormationSlot({
+      index,
+      standardSlot,
+      passage,
+      spacing: baseSpacing,
+      spacingScale: formationSpacingScale
+    });
+    const destination = formationLocalToWorld(formationPose, slot);
     return {
       agent,
+      slot,
+      destination,
       error: Math.hypot(
         destination.x - (Number(agent.x) || 0),
         destination.y - (Number(agent.y) || 0)
       )
     };
   });
-  const errors = errorRows.map((row) => row.error).sort((left, right) => left - right);
+  const errors = rows.map((row) => row.error).sort((left, right) => left - right);
   const maximumError = errors[errors.length - 1] || 0;
-  const upperIndex = Math.min(errors.length - 1, Math.max(0, Math.ceil(errors.length * 0.8) - 1));
+  const upperIndex = Math.min(errors.length - 1, Math.max(0, Math.ceil(errors.length * 0.9) - 1));
   const upperError = errors[upperIndex] || 0;
-  const readyCount = errors.filter((error) => error <= softError).length;
+  const readyError = Math.max(1.4, configuredSpacing * 0.34);
+  const maximumReadyError = Math.max(2.4, configuredSpacing * 0.52);
+  const readyCount = errors.filter((error) => error <= readyError).length;
   const readyRatio = readyCount / Math.max(1, errors.length);
-  const recoveringCount = errorRows.filter((row) => row.agent?._minionRecovery?.active === true).length;
-  const previous = squad?._minionCohesion && typeof squad._minionCohesion === 'object'
-    ? squad._minionCohesion
+  const recoveringCount = rows.filter((row) => (
+    row.agent?._formationRecovery?.active === true
+    || row.agent?._minionRecovery?.active === true
+  )).length;
+  return {
+    rows,
+    errors,
+    maximumError,
+    upperError,
+    readyRatio,
+    readyError,
+    maximumReadyError,
+    settled: maximumError <= maximumReadyError && readyRatio >= 0.98 && recoveringCount <= 0,
+    recoveringCount,
+    configuredSpacing
+  };
+};
+
+const resolveSquadMarchCohesionMetrics = ({ squad = null, agents = [] } = {}) => {
+  const followers = resolveFormationFollowers(agents);
+  const baseSpacing = (AGENT_RADIUS * 2) + AGENT_GAP;
+  const configuredSpacing = Math.max(baseSpacing, Number(squad?.formationRect?.spacing) || 0);
+  if (!squad || followers.length <= 0) {
+    return {
+      rows: [],
+      errors: [],
+      maximumError: 0,
+      upperError: 0,
+      maximumDistance: 0,
+      upperDistance: 0,
+      formationSpan: 0,
+      readyRatio: 1,
+      settled: true,
+      recoveringCount: 0,
+      configuredSpacing
+    };
+  }
+  const formation = squad?.formationRect && typeof squad.formationRect === 'object'
+    ? squad.formationRect
+    : {};
+  const slotSpan = followers.reduce((maximum, agent) => {
+    const slot = normalizeFormationSlot(agent?.formationSlot);
+    return Math.max(maximum, Math.hypot(slot.side, slot.front));
+  }, 0);
+  const width = Math.max(0, Number(formation?.width) || 0);
+  const depth = Math.max(0, Number(formation?.depth) || 0);
+  const dimensionSpan = width > 0 || depth > 0 ? Math.hypot(width, depth) * 0.5 : 0;
+  const columns = Math.max(1, Number(squad?._crowdBaseColumns) || Math.ceil(Math.sqrt(followers.length)));
+  const rows = Math.max(1, Math.ceil(followers.length / columns));
+  const inferredSpan = Math.hypot(
+    Math.max(0, columns - 1) * configuredSpacing * 0.5,
+    Math.max(0, rows - 1) * configuredSpacing
+  );
+  const formationSpan = Math.max(8, slotSpan, dimensionSpan, inferredSpan);
+  const distanceRows = followers.map((agent) => {
+    const distance = Math.hypot(
+      (Number(agent?.x) || 0) - (Number(squad?.x) || 0),
+      (Number(agent?.y) || 0) - (Number(squad?.y) || 0)
+    );
+    return {
+      agent,
+      distance,
+      error: Math.max(0, distance - formationSpan)
+    };
+  });
+  const distances = distanceRows.map((row) => row.distance).sort((left, right) => left - right);
+  const errors = distanceRows.map((row) => row.error).sort((left, right) => left - right);
+  const upperIndex = Math.min(errors.length - 1, Math.max(0, Math.ceil(errors.length * 0.9) - 1));
+  const nearbyError = Math.max(20, configuredSpacing * 2.4);
+  const readyCount = errors.filter((error) => error <= nearbyError).length;
+  const recoveringCount = distanceRows.filter((row) => (
+    row.agent?._formationRecovery?.active === true
+    || row.agent?._minionRecovery?.active === true
+  )).length;
+  return {
+    rows: distanceRows,
+    errors,
+    maximumError: errors[errors.length - 1] || 0,
+    upperError: errors[upperIndex] || 0,
+    maximumDistance: distances[distances.length - 1] || 0,
+    upperDistance: distances[upperIndex] || 0,
+    formationSpan,
+    nearbyRadius: formationSpan + nearbyError,
+    readyRatio: readyCount / Math.max(1, errors.length),
+    settled: readyCount === errors.length && recoveringCount <= 0,
+    recoveringCount,
+    configuredSpacing
+  };
+};
+
+const resolveSquadFormationCohesion = ({
+  squad = null,
+  agents = [],
+  passage = null,
+  moving = false,
+  nowSec = 0
+} = {}) => {
+  const minionMarching = !isTrainingMinionSquad(squad) || (
+    squad?._minionAi?.state === MINION_WAVE_AI_STATE.MARCH
+    || squad?._minionAi?.state === MINION_WAVE_AI_STATE.RESUME
+  );
+  if (!squad || !moving || !minionMarching || isTrainingNeutralSquad(squad)) {
+    if (squad) {
+      squad._formationCohesionSpeedScale = 1;
+      squad._formationCohesion = null;
+      squad._minionCohesionSpeedScale = 1;
+      if (isTrainingMinionSquad(squad)) squad._minionCohesion = null;
+    }
+    return { speedScale: 1, waiting: false, maximumError: 0, readyRatio: 1 };
+  }
+  const isMinion = isTrainingMinionSquad(squad);
+  const metrics = isMinion
+    ? resolveSquadFormationMetrics({ squad, agents, passage })
+    : resolveSquadMarchCohesionMetrics({ squad, agents });
+  const softError = isMinion
+    ? Math.max(14, metrics.configuredSpacing * 1.08)
+    : Math.max(20, metrics.configuredSpacing * 2.4);
+  const hardError = isMinion
+    ? Math.max(28, metrics.configuredSpacing * 1.78)
+    : Math.max(48, metrics.configuredSpacing * 5.2);
+  const releaseError = softError * MINION_COHESION_RELEASE_RATIO;
+  const previous = squad?._formationCohesion && typeof squad._formationCohesion === 'object'
+    ? squad._formationCohesion
     : {};
   let severeSince = Number(previous?.severeSince) || 0;
-  if (maximumError > hardError) {
+  if (metrics.maximumError > hardError) {
     if (severeSince <= 0) severeSince = nowSec;
-  } else if (maximumError <= releaseError) {
+  } else if (metrics.maximumError <= releaseError) {
     severeSince = 0;
   }
-  const catastrophicError = hardError * MINION_COHESION_CATASTROPHIC_RATIO;
-  const stopDelay = recoveringCount > 0
-    ? MINION_COHESION_RECOVERY_STOP_DELAY_SEC
-    : MINION_COHESION_STOP_DELAY_SEC;
-  const waiting = maximumError > catastrophicError
+  const catastrophicRatio = isMinion
+    ? MINION_COHESION_CATASTROPHIC_RATIO
+    : FORMATION_COHESION_CATASTROPHIC_RATIO;
+  const catastrophicError = isMinion
+    ? hardError * catastrophicRatio
+    : Math.max(
+      hardError * catastrophicRatio,
+      metrics.configuredSpacing * 8.8
+    );
+  const stopDelay = metrics.recoveringCount > 0
+    ? (isMinion ? MINION_COHESION_RECOVERY_STOP_DELAY_SEC : FORMATION_COHESION_RECOVERY_STOP_DELAY_SEC)
+    : (isMinion ? MINION_COHESION_STOP_DELAY_SEC : FORMATION_COHESION_STOP_DELAY_SEC);
+  const canWait = squad?.speedPolicy !== SPEED_POLICY_RETREAT && !(Number(squad?.skillRush?.ttl) > 0);
+  const waiting = canWait
+    && metrics.maximumError > catastrophicError
     && severeSince > 0
     && nowSec - severeSince >= stopDelay;
-  const maximumPenalty = recoveringCount > 0 ? 0.72 : 0.82;
-  const maximumScale = maximumError <= softError
+  const minimumScale = isMinion ? MINION_COHESION_MIN_SPEED_SCALE : FORMATION_COHESION_MIN_SPEED_SCALE;
+  const maximumPenalty = metrics.recoveringCount > 0 ? 0.72 : 0.82;
+  const maximumScale = metrics.maximumError <= softError
     ? 1
     : clamp(
-      1 - (((maximumError - softError) / Math.max(1, hardError - softError)) * maximumPenalty),
-      MINION_COHESION_MIN_SPEED_SCALE,
+      1 - (((metrics.maximumError - softError) / Math.max(1, hardError - softError)) * maximumPenalty),
+      minimumScale,
       1
     );
-  const upperScale = upperError <= softError
+  const upperScale = metrics.upperError <= softError
     ? 1
     : clamp(
-      1 - (((upperError - softError) / Math.max(1, hardError - softError)) * 0.68),
-      MINION_COHESION_MIN_SPEED_SCALE,
+      1 - (((metrics.upperError - softError) / Math.max(1, hardError - softError)) * 0.68),
+      minimumScale,
       1
     );
   const speedScale = waiting ? 0 : Math.min(maximumScale, upperScale);
   const state = {
+    ...metrics,
     speedScale,
     waiting,
-    maximumError,
-    upperError,
-    readyRatio,
     softError,
     hardError,
     catastrophicError,
-    severeSince,
-    recoveringCount
+    severeSince
   };
-  squad._minionCohesion = state;
-  squad._minionCohesionSpeedScale = speedScale;
-  squad.minionCohesionState = waiting
+  squad._formationCohesion = state;
+  squad._formationCohesionSpeedScale = speedScale;
+  squad.formationCohesionState = waiting
     ? 'WAITING'
-    : (recoveringCount > 0 ? 'RECOVERING' : (speedScale < 0.98 ? 'SLOWING' : 'COHESIVE'));
-  squad.minionCohesionError = maximumError;
+    : (metrics.recoveringCount > 0 ? 'RECOVERING' : (speedScale < 0.98 ? 'SLOWING' : 'COHESIVE'));
+  squad.formationCohesionError = metrics.maximumError;
+  if (isMinion) {
+    squad._minionCohesion = state;
+    squad._minionCohesionSpeedScale = speedScale;
+    squad.minionCohesionState = squad.formationCohesionState;
+    squad.minionCohesionError = metrics.maximumError;
+  }
   return state;
 };
 
@@ -1140,49 +1396,31 @@ const advanceAgentFormationPosition = (
   };
 };
 
-const resolveCriticallyDampedFormationVelocity = ({
+const resolveDirectFormationVelocity = ({
   agent = {},
   targetX = 0,
   targetY = 0,
-  targetVx = 0,
-  targetVy = 0,
   maxRelativeSpeed = 0,
-  settling = false,
+  deadzone = 0,
   dt = 0
 } = {}) => {
   const safeDt = Math.max(0.001, Number(dt) || 0.016);
   const errorX = (Number(targetX) || 0) - (Number(agent?.x) || 0);
   const errorY = (Number(targetY) || 0) - (Number(agent?.y) || 0);
   const distance = Math.hypot(errorX, errorY);
-  const relativeVx = (Number(agent?.vx) || 0) - (Number(targetVx) || 0);
-  const relativeVy = (Number(agent?.vy) || 0) - (Number(targetVy) || 0);
-  const omega = settling
-    ? AGENT_FORMATION_REJOIN_OMEGA_SETTLING
-    : AGENT_FORMATION_REJOIN_OMEGA_MOVING;
-  const accelerationX = (omega * omega * errorX) - (2 * omega * relativeVx);
-  const accelerationY = (omega * omega * errorY) - (2 * omega * relativeVy);
-  let nextRelativeVx = relativeVx + (accelerationX * safeDt);
-  let nextRelativeVy = relativeVy + (accelerationY * safeDt);
-  const relativeCap = Math.max(4, Number(maxRelativeSpeed) || 0);
-  const clampedRelative = clampVecLength(nextRelativeVx, nextRelativeVy, relativeCap);
-  nextRelativeVx = clampedRelative.x;
-  nextRelativeVy = clampedRelative.y;
-  if (distance > 0.0001) {
-    const directionX = errorX / distance;
-    const directionY = errorY / distance;
-    const towardSpeed = (nextRelativeVx * directionX) + (nextRelativeVy * directionY);
-    const maximumTowardSpeed = distance / safeDt;
-    if (towardSpeed > maximumTowardSpeed) {
-      const excess = towardSpeed - maximumTowardSpeed;
-      nextRelativeVx -= directionX * excess;
-      nextRelativeVy -= directionY * excess;
-    }
-  }
+  const arrivalDistance = Math.max(0, Number(deadzone) || 0);
+  const remainingDistance = Math.max(0, distance - arrivalDistance);
+  const relativeSpeed = Math.min(
+    Math.max(0, Number(maxRelativeSpeed) || 0),
+    remainingDistance / safeDt
+  );
+  const directionX = distance > 0.0001 ? errorX / distance : 0;
+  const directionY = distance > 0.0001 ? errorY / distance : 0;
   return {
-    vx: (Number(targetVx) || 0) + nextRelativeVx,
-    vy: (Number(targetVy) || 0) + nextRelativeVy,
+    vx: directionX * relativeSpeed,
+    vy: directionY * relativeSpeed,
     distance,
-    relativeSpeed: Math.hypot(nextRelativeVx, nextRelativeVy)
+    relativeSpeed
   };
 };
 
@@ -1768,7 +2006,7 @@ const resolveAgentCombatTargetMemory = ({
       || ''
   ).trim();
   if (committedSquadId && committedSquadId !== String(targetSquad.id || '')) return null;
-  if (squad?.isMinionWaveUnit === true && !isPointWithinTrainingRoadSearchBand(target, squad, sim)) {
+  if (isTrainingMinionSquad(squad) && !isPointWithinTrainingRoadSearchBand(target, squad, sim)) {
     return null;
   }
   const formationEnvelope = resolveSquadFormationEnvelope(squad);
@@ -1822,7 +2060,7 @@ const resolveAllyEngagementCandidate = ({
       (Number(target.y) || 0) - (Number(agent.y) || 0)
     );
     if (distance > acquisitionRadius * 1.45) return;
-    if (squad?.isMinionWaveUnit === true && !isPointWithinTrainingRoadSearchBand(target, squad, sim)) return;
+    if (isTrainingMinionSquad(squad) && !isPointWithinTrainingRoadSearchBand(target, squad, sim)) return;
     const key = String(target.id || '');
     const current = targetCounts.get(key) || { target, targetSquad, count: 0, distance };
     current.count += 1;
@@ -1945,7 +2183,7 @@ const resolveSquadAgentCombatReadiness = ({
       minimumCenterDistance = Math.min(minimumCenterDistance, centerDistance);
       const sourceCanFight = sourceAgent?.unitCategory !== SKILL_CATEGORY_SUPPORT
         && sourceAgent?._formationDetached !== true;
-      const sourceRoadEligible = squad?.isMinionWaveUnit !== true
+      const sourceRoadEligible = !isTrainingMinionSquad(squad)
         || isPointWithinTrainingRoadSearchBand(targetAgent, squad, sim);
       if (
         sourceCanFight
@@ -2088,10 +2326,8 @@ const resolveAgentObjectiveCandidates = (squad = {}, sim = {}) => {
     String(squad?.targetBuildingId || '')
   ].filter(Boolean));
   const targetOnlyAttack = isTargetOnlyAttackOrder(squad);
-  const laneId = String(squad?.minionLaneId || squad?.spawnLaneId || '').trim();
   return objectives.reduce((rows, objective) => {
     if (!objective || objective.destroyed || objective.targetable === false) return rows;
-    if (squad?.team === TEAM_NEUTRAL && objective?.type === 'tower') return rows;
     if (!isHostileTeam(squad?.team, objective?.team)) return rows;
     const building = buildingById.get(String(objective?.sourceObjectId || '')) || null;
     if (!building || building.destroyed) return rows;
@@ -2099,10 +2335,6 @@ const resolveAgentObjectiveCandidates = (squad = {}, sim = {}) => {
     const explicitlyTargeted = explicitBuildingIds.has(buildingId);
     if (targetOnlyAttack && !explicitlyTargeted) return rows;
     if (objective?.team === TEAM_NEUTRAL && !explicitlyTargeted) return rows;
-    if (squad?.isMinionWaveUnit === true) {
-      if (objective.type === 'tower' && String(objective?.laneId || '') !== laneId) return rows;
-      if (objective.type !== 'tower' && !explicitlyTargeted) return rows;
-    }
     rows.push({ objective, building, explicitlyTargeted });
     return rows;
   }, []);
@@ -2117,17 +2349,42 @@ const resolveHostileAgentCandidates = ({
   squadMap = new Map(),
   agentMap = new Map(),
   nowSec = 0,
-  attackRange = {}
+  attackRange = {},
+  cardTacticalIntent = null
 } = {}) => {
   const formationEnvelope = resolveSquadFormationEnvelope(squad);
+  const tacticalIntent = cardTacticalIntent || resolveTrainingCardAgentTacticalIntent({
+    agent,
+    squad,
+    crowd,
+    agentMap,
+    squadMap,
+    nowSec
+  });
+  const controllerLeash = tacticalIntent?.combatLeash || null;
   const agentAnchorDistance = Math.hypot(
     (Number(agent?.x) || 0) - (Number(squad?.x) || 0),
     (Number(agent?.y) || 0) - (Number(squad?.y) || 0)
   );
-  if (agentAnchorDistance > formationEnvelope.hardRadius) return null;
+  if (agentAnchorDistance > (controllerLeash?.hard || formationEnvelope.hardRadius)) return null;
+  const controllerTarget = tacticalIntent?.combatTarget || null;
+  if (controllerTarget) {
+    return {
+      target: controllerTarget,
+      centerDistance: Math.hypot(
+        (Number(controllerTarget?.x) || 0) - (Number(agent?.x) || 0),
+        (Number(controllerTarget?.y) || 0) - (Number(agent?.y) || 0)
+      ),
+      edgeDistance: resolveAgentEdgeDistanceToAgent(agent, controllerTarget),
+      acquisitionRadius: Math.max(
+        AGENT_MELEE_ACQUISITION_RADIUS,
+        (Number(attackRange?.max) || 0) + (isRangedAgent(agent) ? 34 : 22)
+      ),
+      controllerAssigned: true
+    };
+  }
   const preferredTargetSquadId = resolveSquadCombatTargetId(squad);
-  const usesLocalMinionPriority = squad?.isMinionWaveUnit === true;
-  if (!preferredTargetSquadId && !usesLocalMinionPriority) return null;
+  if (!preferredTargetSquadId) return null;
   const retainedTarget = resolveAgentCombatTargetMemory({
     agent,
     squad,
@@ -2146,12 +2403,6 @@ const resolveHostileAgentCandidates = ({
     18,
     Math.min(acquisitionRadius * 0.72, (Number(attackRange?.max) || 0) + 40)
   );
-  const laneId = squad?.isMinionWaveUnit === true
-    ? String(squad?.minionLaneId || '').trim()
-    : '';
-  const expectedMinionEnemyTeam = usesLocalMinionPriority
-    ? resolveDefaultHostileTeam(squad?.team)
-    : '';
   const candidates = querySpatialNearby(spatial, agent.x, agent.y, acquisitionRadius)
     .filter((target) => {
       if (!target || target.dead || !isHostileTeam(agent?.team, target?.team)) return false;
@@ -2163,8 +2414,6 @@ const resolveHostileAgentCandidates = ({
       if (!targetSquad || !canAcquireSquadTarget(squad, targetSquad) || isEnemyHiddenForViewer(targetSquad, squad?.team)) return false;
       if (preferredTargetSquadId) {
         if (String(target?.squadId || '') !== preferredTargetSquadId) return false;
-      } else if (usesLocalMinionPriority) {
-        if (String(targetSquad?.team || '') !== expectedMinionEnemyTeam) return false;
       } else {
         return false;
       }
@@ -2172,18 +2421,6 @@ const resolveHostileAgentCandidates = ({
         (Number(target?.x) || 0) - (Number(squad?.x) || 0),
         (Number(target?.y) || 0) - (Number(squad?.y) || 0)
       ) > targetAnchorRadius) return false;
-      if (usesLocalMinionPriority && !isPointWithinTrainingRoadSearchBand(target, squad, sim)) return false;
-      const neutralRoadAggressor = String(targetSquad?.team || '') === TEAM_NEUTRAL
-        && String(preferredTargetSquadId || '') === String(targetSquad?.id || '')
-        && isPointWithinTrainingRoadSearchBand(target, squad, sim);
-      if (
-        laneId
-        && !neutralRoadAggressor
-        && (
-          !targetSquad
-          || String(targetSquad?.minionLaneId || targetSquad?.spawnLaneId || '').trim() !== laneId
-        )
-      ) return false;
       return true;
     });
   const assistedTarget = resolveAllyEngagementCandidate({
@@ -2237,7 +2474,29 @@ const resolveBuildingAgentCandidate = (agent = {}, objectiveCandidates = [], acq
     ))[0] || null
 );
 
-const resolveSupportAllyCandidate = ({ agent = {}, squad = {}, crowd = {} } = {}) => {
+const resolveSupportAllyCandidate = ({
+  agent = {},
+  squad = {},
+  crowd = {},
+  nowSec = 0,
+  cardTacticalIntent = null
+} = {}) => {
+  const tacticalIntent = cardTacticalIntent || resolveTrainingCardAgentTacticalIntent({
+    agent,
+    squad,
+    crowd,
+    nowSec
+  });
+  const controllerTarget = tacticalIntent?.supportTarget || null;
+  if (controllerTarget) {
+    const distance = Math.hypot(
+      (Number(controllerTarget?.x) || 0) - (Number(agent?.x) || 0),
+      (Number(controllerTarget?.y) || 0) - (Number(agent?.y) || 0)
+    );
+    if (distance <= SUPPORT_ACQUISITION_RADIUS) {
+      return { squad, target: controllerTarget, distance, controllerAssigned: true };
+    }
+  }
   const allyAgents = (crowd?.agentsBySquad?.get(squad.id) || [])
     .filter((target) => target && !target.dead && target.unitCategory !== SKILL_CATEGORY_SUPPORT);
   if (allyAgents.length <= 0) return null;
@@ -2355,11 +2614,23 @@ const resolveSupportCombatDirective = ({
   squadMap = new Map(),
   agentMap = new Map(),
   nowSec = 0,
-  attackRange = {}
+  attackRange = {},
+  cardTacticalIntent = null
 } = {}) => {
   const castRange = clamp(Math.max(36, Number(attackRange?.max) || 0), 36, 88);
   if (String(agent?.unitSubtype || '') === 'intervention') {
-    const enemy = resolveHostileAgentCandidates({ agent, squad, sim, crowd, spatial, squadMap, agentMap, nowSec, attackRange });
+    const enemy = resolveHostileAgentCandidates({
+      agent,
+      squad,
+      sim,
+      crowd,
+      spatial,
+      squadMap,
+      agentMap,
+      nowSec,
+      attackRange,
+      cardTacticalIntent
+    });
     if (!enemy?.target) return null;
     const targetSquad = squadMap.get(enemy.target.squadId) || null;
     agent.supportTargetAgentId = enemy.target.id;
@@ -2381,7 +2652,7 @@ const resolveSupportCombatDirective = ({
       formationBound: true
     };
   }
-  const ally = resolveSupportAllyCandidate({ agent, squad, crowd });
+  const ally = resolveSupportAllyCandidate({ agent, squad, crowd, nowSec, cardTacticalIntent });
   if (!ally?.target) return null;
   agent.supportTargetAgentId = ally.target.id;
   agent.supportTargetSquadId = ally.squad.id;
@@ -2403,103 +2674,6 @@ const resolveSupportCombatDirective = ({
   };
 };
 
-const resolveAssignedMinionCombatDirective = ({
-  agent = {},
-  squad = {},
-  sim = {},
-  crowd = {},
-  squadMap = new Map(),
-  agentMap = new Map()
-} = {}) => {
-  const minionAi = squad?._minionAi;
-  agent._formationDetached = false;
-  if (
-    !minionAi?.targetId
-    || minionAi.state === MINION_WAVE_AI_STATE.MARCH
-    || minionAi.state === MINION_WAVE_AI_STATE.RESUME
-  ) {
-    agent._combatDirective = null;
-    return null;
-  }
-  const attackRange = resolveMinionWaveAgentAttackRange(agent, squad);
-  if (agent.unitCategory === SKILL_CATEGORY_SUPPORT) {
-    const targetAgent = agentMap.get(String(agent?.supportTargetAgentId || '')) || null;
-    const targetSquad = targetAgent ? (squadMap.get(String(targetAgent.squadId || '')) || null) : null;
-    if (!targetAgent || targetAgent.dead || !targetSquad || (Number(targetSquad?.remain) || 0) <= 0) {
-      agent._combatDirective = null;
-      return null;
-    }
-    const hostile = String(agent?.unitSubtype || '') === 'intervention';
-    const castRange = clamp(Math.max(36, Number(attackRange?.max) || 0), 36, 88);
-    castAgentSupportEffect({
-      agent,
-      squad,
-      targetSquad,
-      targetAgent,
-      crowd,
-      hostile,
-      castRange
-    });
-    const directive = {
-      kind: hostile ? 'support-enemy' : 'support-ally',
-      target: targetAgent,
-      distance: Math.hypot(
-        (Number(targetAgent.x) || 0) - (Number(agent.x) || 0),
-        (Number(targetAgent.y) || 0) - (Number(agent.y) || 0)
-      ),
-      attackRange: { min: 0, max: castRange },
-      formationBound: true,
-      minionAssigned: true
-    };
-    agent._combatDirective = directive;
-    return directive;
-  }
-  const targetAgent = agentMap.get(String(agent?.targetAgentId || '')) || null;
-  const targetSquad = targetAgent ? (squadMap.get(String(targetAgent.squadId || '')) || null) : null;
-  if (
-    targetAgent
-    && !targetAgent.dead
-    && targetSquad
-    && (Number(targetSquad?.remain) || 0) > 0
-    && String(targetSquad.id || '') === String(minionAi?.targetKind === 'squad' ? minionAi.targetId : '')
-  ) {
-    const directive = {
-      kind: 'enemy-agent',
-      target: targetAgent,
-      distance: Math.hypot(
-        (Number(targetAgent.x) || 0) - (Number(agent.x) || 0),
-        (Number(targetAgent.y) || 0) - (Number(agent.y) || 0)
-      ),
-      edgeDistance: resolveAgentEdgeDistanceToAgent(agent, targetAgent),
-      attackRange,
-      minionAssigned: true
-    };
-    agent._combatDirective = directive;
-    return directive;
-  }
-  const targetBuildingId = String(agent?.targetBuildingId || '');
-  const building = targetBuildingId
-    ? (Array.isArray(sim?.buildings) ? sim.buildings : []).find((candidate) => (
-      String(candidate?.id || '') === targetBuildingId && !candidate?.destroyed
-    )) || null
-    : null;
-  if (building && minionAi?.targetKind === 'building' && String(minionAi.targetId || '') === targetBuildingId) {
-    const directive = {
-      kind: 'enemy-building',
-      target: building,
-      distance: resolveAgentEdgeDistanceToBuilding(agent, building),
-      edgeDistance: resolveAgentEdgeDistanceToBuilding(agent, building),
-      targetRadius: resolveBuildingTargetRadius(building),
-      attackRange,
-      minionAssigned: true
-    };
-    agent._combatDirective = directive;
-    return directive;
-  }
-  agent._combatDirective = null;
-  return null;
-};
-
 const resolveAgentCombatDirective = ({
   agent = {},
   squad = {},
@@ -2509,15 +2683,27 @@ const resolveAgentCombatDirective = ({
   squadMap = new Map(),
   agentMap = new Map(),
   nowSec = 0,
-  objectiveCandidates = []
+  objectiveCandidates = [],
+  cardTacticalIntent = null
 } = {}) => {
   agent.supportCastCd = Math.max(0, Number(agent.supportCastCd) || 0);
   if (!isSquadCombatEnabled(squad)) {
     clearAgentCombatTargets(agent);
     return null;
   }
-  if (squad?.isMinionWaveUnit === true) {
-    return resolveAssignedMinionCombatDirective({
+  if (isTrainingMinionSquad(squad)) {
+    return resolveMinionSquadAgentCombatDirective({
+      agent,
+      squad,
+      sim,
+      crowd,
+      squadMap,
+      agentMap,
+      castSupportEffect: castAgentSupportEffect
+    });
+  }
+  if (isTrainingNeutralSquad(squad)) {
+    return resolveNeutralCampCombatDirective({
       agent,
       squad,
       sim,
@@ -2527,10 +2713,19 @@ const resolveAgentCombatDirective = ({
     });
   }
   const formationEnvelope = resolveSquadFormationEnvelope(squad);
+  const tacticalIntent = cardTacticalIntent || resolveTrainingCardAgentTacticalIntent({
+    agent,
+    squad,
+    crowd,
+    agentMap,
+    squadMap,
+    nowSec
+  });
+  const controllerLeash = tacticalIntent?.combatLeash || null;
   agent._formationDetached = Math.hypot(
     (Number(agent?.x) || 0) - (Number(squad?.x) || 0),
     (Number(agent?.y) || 0) - (Number(squad?.y) || 0)
-  ) > formationEnvelope.hardRadius;
+  ) > (controllerLeash?.hard || formationEnvelope.hardRadius);
   if (agent._formationDetached) {
     clearAgentCombatTargets(agent);
     return null;
@@ -2548,7 +2743,8 @@ const resolveAgentCombatDirective = ({
       squadMap,
       agentMap,
       nowSec,
-      attackRange
+      attackRange,
+      cardTacticalIntent: tacticalIntent
     });
     if (!directive) {
       agent.supportTargetAgentId = '';
@@ -2559,7 +2755,18 @@ const resolveAgentCombatDirective = ({
   }
   agent.supportTargetAgentId = '';
   agent.supportTargetSquadId = '';
-  const enemy = resolveHostileAgentCandidates({ agent, squad, sim, crowd, spatial, squadMap, agentMap, nowSec, attackRange });
+  const enemy = resolveHostileAgentCandidates({
+    agent,
+    squad,
+    sim,
+    crowd,
+    spatial,
+    squadMap,
+    agentMap,
+    nowSec,
+    attackRange,
+    cardTacticalIntent: tacticalIntent
+  });
   const acquisitionRadius = resolveAgentCombatAcquisitionRadius(agent, squad, attackRange);
   const building = resolveBuildingAgentCandidate(agent, objectiveCandidates, acquisitionRadius);
   const committedEnemyId = resolveSquadCombatTargetId(squad);
@@ -2620,27 +2827,47 @@ const resolveAgentCombatSteering = (agent = {}, directive = null) => {
     return { x: 0, y: 0, moving: false, holding: false, distance: Number(directive?.distance) || 0 };
   }
   const target = directive.target;
-  const direction = normalizeVec(
+  const targetDirection = normalizeVec(
     (Number(target.x) || 0) - (Number(agent.x) || 0),
     (Number(target.y) || 0) - (Number(agent.y) || 0)
   );
+  const engagement = directive.kind === 'enemy-agent'
+    && String(agent?._squadController?.engagement?.targetId || '') === String(target?.id || '')
+    ? agent._squadController.engagement
+    : null;
+  const engagementDirection = engagement
+    ? normalizeVec(
+      (Number(engagement?.x) || 0) - (Number(agent?.x) || 0),
+      (Number(engagement?.y) || 0) - (Number(agent?.y) || 0)
+    )
+    : targetDirection;
   const attackRange = directive.attackRange || {};
   const minRange = Math.max(0, Number(attackRange.min) || 0);
   const maxRange = Math.max(minRange, Number(attackRange.max) || 0);
   const distance = directive.kind === 'enemy-building'
     ? resolveAgentEdgeDistanceToBuilding(agent, target)
-    : direction.len;
+    : targetDirection.len;
+  const engagementDistance = engagement ? engagementDirection.len : distance;
   const holdsPositionWhileAttacking = agent?.typeCategory !== 'cavalry';
   const shouldRetreat = minRange > 0 && distance < Math.max(2, minRange * 0.88);
-  const shouldApproach = distance > Math.max(
-    2,
-    holdsPositionWhileAttacking ? maxRange : maxRange * 0.94
-  );
+  const shouldApproach = engagement
+    ? engagementDistance > Math.max(1.2, Number(agent?.radius) || AGENT_RADIUS)
+    : distance > Math.max(
+      2,
+      holdsPositionWhileAttacking ? maxRange : maxRange * 0.94
+    );
   if (shouldRetreat) {
-    return { x: -direction.x, y: -direction.y, moving: true, holding: false, distance };
+    return { x: -targetDirection.x, y: -targetDirection.y, moving: true, holding: false, distance };
   }
   if (shouldApproach) {
-    return { x: direction.x, y: direction.y, moving: true, holding: false, distance };
+    return {
+      x: engagementDirection.x,
+      y: engagementDirection.y,
+      moving: true,
+      holding: false,
+      distance,
+      engagement: !!engagement
+    };
   }
   return {
     x: 0,
@@ -2652,7 +2879,12 @@ const resolveAgentCombatSteering = (agent = {}, directive = null) => {
   };
 };
 
-const computeTeamAwareSeparation = (agent, neighbors = [], sameTeamGap = 5.2) => {
+const computeTeamAwareSeparation = (
+  agent,
+  neighbors = [],
+  sameTeamGap = 5.2,
+  { allowOwnSquadSoftSeparation = true } = {}
+) => {
   if (agent?.isFlagBearer && agent?.isMinionWaveUnit !== true) return { x: 0, y: 0 };
   let sx = 0;
   let sy = 0;
@@ -2668,9 +2900,14 @@ const computeTeamAwareSeparation = (agent, neighbors = [], sameTeamGap = 5.2) =>
     const dist = Math.hypot(dx, dy);
     if (dist <= 0.0001) return;
     const sameTeam = other.team === agent.team;
+    const sameSquad = sameTeam && other.squadId === agent.squadId;
     const bothMelee = isMeleeAgent(agent) && isMeleeAgent(other);
     let targetGap = sameTeam ? sameTeamGap : CROWD_ENEMY_TARGET_GAP;
     let strength = sameTeam ? CROWD_SAME_TEAM_SEP_STRENGTH : CROWD_ENEMY_SEP_STRENGTH;
+    if (sameSquad && !allowOwnSquadSoftSeparation) {
+      targetGap = CROWD_HARD_CONTACT_GAP;
+      strength = CROWD_HARD_CONTACT_STRENGTH;
+    }
     if (!sameTeam && bothMelee) {
       strength = CROWD_ENEMY_MELEE_SEP_STRENGTH;
       targetGap = Math.min(targetGap, AGENT_RADIUS * 1.05);
@@ -3083,6 +3320,7 @@ const pickNearestEnemySquad = (squad, squads = []) => {
 };
 
 const selectTrainingMapEnemyTarget = (squad = null, sim = null, nowSec = 0) => {
+  const usesTrainingCardAi = isTrainingCardAiSquad(squad);
   const targetOnlyAttack = isTargetOnlyAttackOrder(squad);
   const explicitTargetId = resolveSquadOrderType(squad) === ORDER_ATTACK_MOVE
     ? String(squad?.order?.targetSquadId || '')
@@ -3095,8 +3333,10 @@ const selectTrainingMapEnemyTarget = (squad = null, sim = null, nowSec = 0) => {
       && !isEnemyHiddenForViewer(candidate, squad?.team)
     )) || null;
     if (explicitTarget) {
-      squad._trainingAiDecisionDeferred = false;
-      squad._trainingAiSelection = null;
+      if (usesTrainingCardAi) {
+        squad._trainingAiDecisionDeferred = false;
+        squad._trainingAiSelection = null;
+      }
       return explicitTarget;
     }
     if (targetOnlyAttack) {
@@ -3108,6 +3348,26 @@ const selectTrainingMapEnemyTarget = (squad = null, sim = null, nowSec = 0) => {
   }
   if (targetOnlyAttack) {
     completeTargetOnlyAttackOrder(squad, nowSec);
+    return null;
+  }
+  if (!usesTrainingCardAi) {
+    return pickNearestEnemySquad(squad, Array.isArray(sim?.squads) ? sim.squads : []);
+  }
+  const strategicTargetId = String(squad?._trainingAiPlan?.targetSquadId || '');
+  if (squad?._trainingAiPlan) {
+    const strategicTarget = (Array.isArray(sim?.squads) ? sim.squads : []).find((candidate) => (
+      String(candidate?.id || '') === strategicTargetId
+      && (Number(candidate?.remain) || 0) > 0
+      && canAcquireSquadTarget(squad, candidate)
+      && !isEnemyHiddenForViewer(candidate, squad?.team)
+      && !isTrainingMapAiTargetDeferred(squad, candidate?.id, nowSec)
+    )) || null;
+    if (strategicTarget) {
+      squad._trainingAiDecisionDeferred = false;
+      return strategicTarget;
+    }
+    squad._trainingAiDecisionDeferred = false;
+    squad._trainingAiSelection = null;
     return null;
   }
   if (!canRefreshTrainingAiDecision(squad, sim, nowSec)) {
@@ -3237,47 +3497,6 @@ const recordTrainingTargetNavigationPlan = ({
   return state;
 };
 
-const resolveTrainingAutoAdvanceGoal = (squad = null, sim = null) => {
-  if (!squad || !sim) return null;
-  if (squad.team === TEAM_NEUTRAL) return null;
-  const objectiveSelection = selectTrainingMapAiObjective(squad, sim);
-  if (objectiveSelection) {
-    squad.debugTargetScore = {
-      targetId: objectiveSelection.targetId,
-      score: objectiveSelection.score,
-      distance: objectiveSelection.distance,
-      sameLane: objectiveSelection.sameLane,
-      targetLaneId: objectiveSelection.targetLaneId,
-      threat: objectiveSelection.threat,
-      healthRatio: objectiveSelection.healthRatio,
-      inAttackRange: objectiveSelection.inAttackRange,
-      protectedArea: objectiveSelection.protectedArea,
-      directLineBlocked: objectiveSelection.directLineBlocked,
-      terms: objectiveSelection.terms
-    };
-    return {
-      id: objectiveSelection.targetId,
-      objectiveId: String(objectiveSelection?.objective?.id || ''),
-      buildingId: String(objectiveSelection?.building?.id || ''),
-      x: objectiveSelection.x,
-      y: objectiveSelection.y
-    };
-  }
-  const halfWidth = Math.max(1, Number(sim?.field?.width) || 2700) * 0.5;
-  const configuredAgentRadius = Number(sim?.trainingMap?.navigation?.agentRadius);
-  const clearance = Number.isFinite(configuredAgentRadius) && configuredAgentRadius > 0
-    ? Math.max(6, resolveTrainingNavigationAgentRadius(squad, sim) + resolveTrainingNavigationPathClearance(sim))
-    : Math.max(6, Number(squad?.radius) || 10);
-  const targetX = squad.team === TEAM_DEFENDER
-    ? (-halfWidth + clearance)
-    : (halfWidth - clearance);
-  return {
-    id: `field-edge:${squad.team}`,
-    x: targetX,
-    y: Number(squad.y) || 0
-  };
-};
-
 const planTrainingNavigationTarget = (squad = null, sim = null, target = {}, walls = []) => {
   if (!squad) return { ok: false, destination: null };
   const source = { x: Number(squad.x) || 0, y: Number(squad.y) || 0 };
@@ -3313,9 +3532,12 @@ const planTrainingNavigationTarget = (squad = null, sim = null, target = {}, wal
   const route = navigator.planRoute(source, destination, {
     obstacles: walls,
     radius,
-    maxSearchNodes: resolveTrainingAiNavigationSearchNodes(squad, sim)
+    maxSearchNodes: resolveTrainingAiNavigationSearchNodes(squad, sim),
+    preferLocalDetour: true,
+    preferredLaneId: roadCorridor?.laneId
   });
   const routeReachesDestination = doesTrainingRouteReachTarget(route, destination);
+  const highlandEgressPrefix = resolveTrainingHighlandEgressPrefix(sim, source, route);
   if (
     routeReachesDestination
     && isTrainingRouteInsideRoadCorridor(squad, sim, source, route)
@@ -3323,8 +3545,11 @@ const planTrainingNavigationTarget = (squad = null, sim = null, target = {}, wal
     applyTrainingNavigationRoute(squad, route);
     return { ok: true, destination };
   }
-  if (roadCorridor && routeReachesDestination) {
-    const fallbackRoute = buildTrainingRoadFallbackRoute(squad, sim, destination);
+  if (roadCorridor && (routeReachesDestination || highlandEgressPrefix.length > 0)) {
+    const fallbackRoute = buildTrainingRoadFallbackRoute(squad, sim, destination, {
+      source,
+      routePrefix: highlandEgressPrefix
+    });
     if (fallbackRoute.length > 0) {
       applyTrainingNavigationRoute(squad, fallbackRoute);
       return { ok: true, destination };
@@ -3400,7 +3625,9 @@ const resolveTrainingRangedApproachPlan = ({
           ? navigator.planRoute(source, destination, {
             obstacles: walls,
             radius,
-            maxSearchNodes: resolveTrainingAiNavigationSearchNodes(squad, sim)
+            maxSearchNodes: resolveTrainingAiNavigationSearchNodes(squad, sim),
+            preferLocalDetour: true,
+            preferredLaneId: roadCorridor?.laneId
           })
           : null)
         : [destination];
@@ -3408,9 +3635,17 @@ const resolveTrainingRangedApproachPlan = ({
         best = best || { deferred: true, destination: null, route: [], score: Infinity };
         return;
       }
-      if (!doesTrainingRouteReachTarget(route, destination)) return;
-      if (roadCorridor && !isTrainingRouteInsideRoadCorridor(squad, sim, source, route)) {
-        route = buildTrainingRoadFallbackRoute(squad, sim, destination);
+      const routeReachesDestination = doesTrainingRouteReachTarget(route, destination);
+      const highlandEgressPrefix = resolveTrainingHighlandEgressPrefix(sim, source, route);
+      if (!routeReachesDestination && !(roadCorridor && highlandEgressPrefix.length > 0)) return;
+      if (roadCorridor && (
+        !routeReachesDestination
+        || !isTrainingRouteInsideRoadCorridor(squad, sim, source, route)
+      )) {
+        route = buildTrainingRoadFallbackRoute(squad, sim, destination, {
+          source,
+          routePrefix: highlandEgressPrefix
+        });
       }
       if (route.length <= 0) return;
       const distanceError = Math.abs(Math.hypot(destination.x - targetPoint.x, destination.y - targetPoint.y) - preferredDistance);
@@ -3455,35 +3690,69 @@ const planTrainingAttackNavigationTarget = ({
 };
 
 const updateTrainingAutoAdvancePlan = (squad = null, sim = null, walls = [], nowSec = 0) => {
-  if (!squad || squad.behavior !== 'auto') return false;
-  const lockedCombatTarget = resolveSquadCombatLockedTarget(squad, sim, nowSec);
-  const enemyTarget = lockedCombatTarget || selectTrainingMapEnemyTarget(squad, sim, nowSec);
-  if (lockedCombatTarget) squad._trainingAiDecisionDeferred = false;
-  if (squad._trainingAiDecisionDeferred) {
-    squad.action = 'AI思考';
-    return true;
-  }
-  if (enemyTarget) {
-    const hadAutomaticGoal = !!squad.autoNavigation;
-    squad.autoNavigation = null;
-    squad.targetBuildingId = '';
-    if (hadAutomaticGoal) {
+  if (!isTrainingCardAiSquad(squad)) return false;
+  if (isTargetOnlyAttackOrder(squad)) return false;
+  const rejoiningLane = String(squad?.trainingAi?.state || '') === 'RejoinLane';
+  const plan = selectTrainingMapAiPlan(squad, sim, { nowSec });
+  if (!plan) return false;
+  const planIdChanged = String(squad?._appliedTrainingAiPlanId || '') !== String(plan.id || '');
+  squad._appliedTrainingAiPlanId = String(plan.id || '');
+  squad._trainingAiDecisionDeferred = false;
+  squad.debugAiPlan = {
+    kind: plan.kind,
+    laneId: plan.laneId,
+    waveId: plan.waveId,
+    targetSquadId: plan.targetSquadId,
+    targetObjectiveId: plan.targetObjectiveId,
+    targetBuildingId: plan.targetBuildingId,
+    reason: plan.reason,
+    lockUntil: plan.lockUntil
+  };
+
+  const attacksSquad = plan.kind === TRAINING_MAP_AI_PLAN_KIND.DEFEND_WAVE
+    || plan.kind === TRAINING_MAP_AI_PLAN_KIND.CLEAR_NEUTRAL;
+  if (attacksSquad) {
+    const target = (Array.isArray(sim?.squads) ? sim.squads : []).find((candidate) => (
+      String(candidate?.id || '') === String(plan.targetSquadId || '')
+      && (Number(candidate?.remain) || 0) > 0
+    )) || null;
+    if (!target) return true;
+    if (planIdChanged) {
       squad.waypoints = [];
       syncTrainingNavigationOrderPath(squad);
+      squad._trainingAiSelection = null;
     }
+    squad.autoNavigation = null;
+    squad.targetBuildingId = '';
+    squad.targetSquadId = String(target.id || '');
+    squad._combatEngagementTargetId = String(target.id || '');
+    squad._combatEngagementUntil = nowSec + SQUAD_COMBAT_LOCK_RELEASE_SEC;
     return false;
   }
+
   if (squad.targetSquadId) {
     squad.targetSquadId = '';
-    squad.waypoints = [];
-    syncTrainingNavigationOrderPath(squad);
   }
-  const goal = resolveTrainingAutoAdvanceGoal(squad, sim);
-  if (!goal) return false;
-  squad.targetBuildingId = String(goal?.buildingId || '');
+  squad._combatEngagementTargetId = '';
+  squad._combatEngagementUntil = 0;
+  const attacksBuilding = plan.kind === TRAINING_MAP_AI_PLAN_KIND.SIEGE_TOWER
+    || plan.kind === TRAINING_MAP_AI_PLAN_KIND.SIEGE_BARRACKS;
+  squad.targetBuildingId = attacksBuilding ? String(plan?.targetBuildingId || '') : '';
+  const goal = {
+    id: String(plan.id || ''),
+    x: Number(plan?.x) || 0,
+    y: Number(plan?.y) || 0
+  };
   const state = squad?.autoNavigation && typeof squad.autoNavigation === 'object'
     ? squad.autoNavigation
     : null;
+  const destinationDrift = state?.destination
+    ? Math.hypot(
+      (Number(state.destination.x) || 0) - goal.x,
+      (Number(state.destination.y) || 0) - goal.y
+    )
+    : Infinity;
+  const refreshDistance = Math.max(48, (Number(squad?.radius) || 10) * 1.8);
   if (
     state?.goalId === goal.id
     && state?.destination
@@ -3493,12 +3762,25 @@ const updateTrainingAutoAdvancePlan = (squad = null, sim = null, walls = [], now
       (Number(state.destination.x) || 0) - (Number(squad.x) || 0),
       (Number(state.destination.y) || 0) - (Number(squad.y) || 0)
     ) <= LEADER_ARRIVAL_RADIUS
+    && destinationDrift <= refreshDistance
   ) {
-    squad.action = '自动待命';
+    squad.action = attacksBuilding
+      ? (plan.kind === TRAINING_MAP_AI_PLAN_KIND.SIEGE_BARRACKS ? '随兵攻打兵营' : '随兵拆塔')
+      : (plan.kind === TRAINING_MAP_AI_PLAN_KIND.RETREAT_FROM_TOWER ? '撤出塔区' : '塔外护线');
     return true;
   }
-  if (Array.isArray(squad.waypoints) && squad.waypoints.length > 0) {
-    squad.action = '自动推进';
+  if (
+    state?.goalId === goal.id
+    && Array.isArray(squad.waypoints)
+    && squad.waypoints.length > 0
+    && (
+      destinationDrift <= refreshDistance
+      || (Number(state?.refreshAt) || 0) > nowSec
+    )
+  ) {
+    squad.action = plan.kind === TRAINING_MAP_AI_PLAN_KIND.RETREAT_FROM_TOWER
+      ? '撤出塔区'
+      : (attacksBuilding ? '随兵推进' : '护送兵线');
     return true;
   }
   if (state?.goalId === goal.id && (Number(state.retryAt) || 0) > nowSec) {
@@ -3508,74 +3790,66 @@ const updateTrainingAutoAdvancePlan = (squad = null, sim = null, walls = [], now
   const planned = planTrainingNavigationTarget(squad, sim, goal, walls);
   squad.autoNavigation = {
     goalId: goal.id,
+    planKind: plan.kind,
     destination: planned.destination,
     retryAt: planned.ok ? 0 : nowSec + (planned.deferred ? 0.08 : resolveTrainingNavigationReplanCooldown(sim)),
+    refreshAt: nowSec + 0.8,
     deferred: !!planned.deferred
   };
-  squad.action = planned.ok ? '自动推进' : (planned.deferred ? '路径排队' : '路径等待');
+  squad.action = planned.ok
+    && rejoiningLane
+    ? '回归兵线'
+    : planned.ok
+    ? (plan.kind === TRAINING_MAP_AI_PLAN_KIND.RETREAT_FROM_TOWER
+      ? '撤出塔区'
+      : (attacksBuilding ? '随兵推进' : '护送兵线'))
+    : (planned.deferred ? '路径排队' : '路径等待');
   return true;
 };
 
-const resolveMinionPathProjection = (point = {}, path = []) => {
-  const rows = Array.isArray(path) ? path : [];
-  let best = {
-    distance: Infinity,
-    progress: 0,
-    segmentIndex: 0,
-    point: rows[0] ? { ...rows[0] } : { x: 0, y: 0 }
-  };
-  let travelled = 0;
-  for (let index = 1; index < rows.length; index += 1) {
-    const start = rows[index - 1] || {};
-    const end = rows[index] || {};
-    const dx = (Number(end.x) || 0) - (Number(start.x) || 0);
-    const dy = (Number(end.y) || 0) - (Number(start.y) || 0);
-    const length = Math.hypot(dx, dy);
-    if (length <= 0.001) continue;
-    const t = clamp(
-      ((((Number(point.x) || 0) - (Number(start.x) || 0)) * dx)
-        + (((Number(point.y) || 0) - (Number(start.y) || 0)) * dy)) / (length * length),
-      0,
-      1
-    );
-    const projected = {
-      x: (Number(start.x) || 0) + (dx * t),
-      y: (Number(start.y) || 0) + (dy * t)
-    };
-    const distance = Math.hypot(
-      (Number(point.x) || 0) - projected.x,
-      (Number(point.y) || 0) - projected.y
-    );
-    if (distance < best.distance) {
-      best = {
-        distance,
-        progress: travelled + (length * t),
-        segmentIndex: index - 1,
-        point: projected
-      };
-    }
-    travelled += length;
-  }
-  return best;
-};
+// Shared by lane-wave planning and the minion-only road constraints below.
+const resolveMinionPathProjection = projectPointToMinionPath;
 
 const isTrainingRoadBoundSquad = (squad = {}) => (
-  squad?.isMinionWaveUnit === true
+  isTrainingMinionSquad(squad)
   || (
-    squad?.controlMode !== 'USER'
+    isTrainingCardAiSquad(squad)
     && String(squad?.spawnLaneId || '').trim().length > 0
-    && squad?.team !== TEAM_NEUTRAL
   )
 );
 
 const resolveTrainingRoadCorridor = (squad = {}, sim = {}) => {
   if (!isTrainingRoadBoundSquad(squad)) return null;
-  const laneId = String(squad?.minionLaneId || squad?.spawnLaneId || '').trim();
+  if (
+    !isTrainingMinionSquad(squad)
+    && (
+      squad?._trainingAiPlan?.kind === TRAINING_MAP_AI_PLAN_KIND.CLEAR_NEUTRAL
+      || squad?._trainingAiPlan?.kind === TRAINING_MAP_AI_PLAN_KIND.ROTATE_LANE
+    )
+  ) return null;
+  const laneId = String(
+    squad?.minionLaneId
+      || squad?.trainingAiLaneId
+      || squad?.spawnLaneId
+      || ''
+  ).trim();
   const lane = (Array.isArray(sim?.trainingMap?.lanes) ? sim.trainingMap.lanes : [])
     .find((entry) => String(entry?.id || '') === laneId) || null;
-  let path = squad?.isMinionWaveUnit === true && Array.isArray(squad?.minionPath)
+  const strategicWaveId = isTrainingMinionSquad(squad)
+    ? ''
+    : String(squad?._trainingAiPlan?.waveId || '');
+  const strategicWave = strategicWaveId
+    ? (Array.isArray(sim?.squads) ? sim.squads : []).find((candidate) => (
+      String(candidate?.id || '') === strategicWaveId
+      && isTrainingMinionSquad(candidate)
+      && (Number(candidate?.remain) || 0) > 0
+    )) || null
+    : null;
+  let path = isTrainingMinionSquad(squad) && Array.isArray(squad?.minionPath)
     ? squad.minionPath.filter(Boolean)
-    : (Array.isArray(lane?.centerline) ? lane.centerline.filter(Boolean) : []);
+    : (Array.isArray(strategicWave?.minionPath) && strategicWave.minionPath.length >= 2
+      ? strategicWave.minionPath.filter(Boolean)
+      : (Array.isArray(lane?.centerline) ? lane.centerline.filter(Boolean) : []));
   if (path.length < 2 && lane) {
     const halfWidth = Math.max(50, Number(sim?.field?.width) || 2700) * 0.5;
     const centerY = Number(lane?.centerY) || 0;
@@ -3585,6 +3859,7 @@ const resolveTrainingRoadCorridor = (squad = {}, sim = {}) => {
   const width = Math.max(
     24,
     Number(squad?.minionPathCorridorWidth)
+      || Number(strategicWave?.minionPathCorridorWidth)
       || Number(lane?.width)
       || Number(sim?.trainingMap?.navigation?.fixedLaneCorridorWidth)
       || 96
@@ -3623,9 +3898,14 @@ const constrainPointToTrainingRoadCorridor = (point = {}, corridor = null, inset
   };
 };
 
+const isPointInsideTrainingHighland = (point = {}, sim = {}) => (
+  (sim?.trainingNavigator?.sampleTerrain?.(point)?.regionIds || [])
+    .some((regionId) => String(regionId || '').startsWith('terrain-highland-'))
+);
+
 const constrainMinionAgentsToTrainingRoadCorridor = (squad = {}, sim = {}, agents = []) => {
   if (
-    squad?.isMinionWaveUnit !== true
+    !isTrainingMinionSquad(squad)
     || !(Number(squad?.minionPathCorridorWidth) > 0)
   ) return;
   const corridor = resolveTrainingRoadCorridor(squad, sim);
@@ -3672,7 +3952,10 @@ const isTrainingRouteInsideRoadCorridor = (
     : resolveTrainingNavigationAgentRadius(squad, sim);
   const allowedDistance = Math.max(4, corridor.halfWidth - inset);
   let previousPoint = { x: Number(source?.x) || 0, y: Number(source?.y) || 0 };
-  let enteredCorridor = resolveMinionPathProjection(previousPoint, corridor.path).distance <= allowedDistance;
+  let enteredCorridor = squad?._trainingRoadCorridorEntered === true || (
+    !isPointInsideTrainingHighland(previousPoint, sim)
+    && resolveMinionPathProjection(previousPoint, corridor.path).distance <= allowedDistance
+  );
   const points = Array.isArray(route) ? route : [];
   for (let index = 0; index < points.length; index += 1) {
     const nextPoint = { x: Number(points[index]?.x) || 0, y: Number(points[index]?.y) || 0 };
@@ -3685,6 +3968,7 @@ const isTrainingRouteInsideRoadCorridor = (
         y: previousPoint.y + ((nextPoint.y - previousPoint.y) * progress)
       };
       const distance = resolveMinionPathProjection(sample, corridor.path).distance;
+      if (isPointInsideTrainingHighland(sample, sim)) continue;
       if (enteredCorridor) {
         if (distance > allowedDistance + 0.5) return false;
       } else if (distance <= allowedDistance) {
@@ -3696,62 +3980,129 @@ const isTrainingRouteInsideRoadCorridor = (
   return enteredCorridor;
 };
 
-const buildTrainingRoadFallbackRoute = (squad = {}, sim = {}, target = {}) => {
+const resolveTrainingHighlandEgressPrefix = (sim = {}, source = {}, route = []) => {
+  const sampleTerrain = sim?.trainingNavigator?.sampleTerrain;
+  if (typeof sampleTerrain !== 'function') return [];
+  const startingHighlands = (sampleTerrain(source)?.regionIds || [])
+    .filter((regionId) => String(regionId || '').startsWith('terrain-highland-'));
+  if (startingHighlands.length <= 0) return [];
+  const prefix = [];
+  const points = Array.isArray(route) ? route : [];
+  for (let index = 0; index < points.length; index += 1) {
+    const point = { x: Number(points[index]?.x) || 0, y: Number(points[index]?.y) || 0 };
+    prefix.push(point);
+    const regionIds = sampleTerrain(point)?.regionIds || [];
+    if (startingHighlands.every((regionId) => !regionIds.includes(regionId))) return prefix;
+  }
+  return [];
+};
+
+const buildTrainingRoadFallbackRoute = (
+  squad = {},
+  sim = {},
+  target = {},
+  { source = null, routePrefix = [] } = {}
+) => {
   const corridor = resolveTrainingRoadCorridor(squad, sim);
   if (!corridor) return [{ x: Number(target?.x) || 0, y: Number(target?.y) || 0 }];
-  const source = { x: Number(squad?.x) || 0, y: Number(squad?.y) || 0 };
-  const sourceProjection = resolveMinionPathProjection(source, corridor.path);
+  const requestedSource = source && typeof source === 'object' ? source : squad;
+  const safePrefix = (Array.isArray(routePrefix) ? routePrefix : [])
+    .map((point) => ({ x: Number(point?.x) || 0, y: Number(point?.y) || 0 }));
+  const routeSource = safePrefix[safePrefix.length - 1] || {
+    x: Number(requestedSource?.x) || 0,
+    y: Number(requestedSource?.y) || 0
+  };
+  const sourceProjection = resolveMinionPathProjection(routeSource, corridor.path);
   const targetProjection = resolveMinionPathProjection(target, corridor.path);
   const direction = targetProjection.progress >= sourceProjection.progress ? 1 : -1;
   const step = Math.max(18, corridor.halfWidth * 0.55);
-  const route = [];
-  const appendPoint = (point = null) => {
+  const rawRoute = safePrefix.slice();
+  const blockingWalls = filterBlockingObstacles(sim?.buildings || []);
+  const navigationRadius = resolveTrainingNavigationAgentRadius(squad, sim);
+  const appendRawPoint = (point = null) => {
     if (!point) return;
     const next = { x: Number(point?.x) || 0, y: Number(point?.y) || 0 };
-    const previous = route[route.length - 1] || source;
-    if (Math.hypot(next.x - previous.x, next.y - previous.y) > 1) route.push(next);
+    const previous = rawRoute[rawRoute.length - 1] || requestedSource;
+    if (Math.hypot(next.x - previous.x, next.y - previous.y) > 1) rawRoute.push(next);
   };
-  appendPoint(sourceProjection.point);
+  appendRawPoint(sourceProjection.point);
   for (
     let progress = sourceProjection.progress + (direction * step);
     direction > 0 ? progress < targetProjection.progress : progress > targetProjection.progress;
     progress += direction * step
   ) {
-    appendPoint(resolveMinionPathPointAtProgress(corridor.path, progress));
+    appendRawPoint(resolveMinionPathPointAtProgress(corridor.path, progress));
   }
-  appendPoint(targetProjection.point);
+  appendRawPoint(targetProjection.point);
   const constrainedTarget = constrainPointToTrainingRoadCorridor(
     target,
     corridor,
     resolveTrainingNavigationAgentRadius(squad, sim)
   );
-  appendPoint(constrainedTarget);
+  appendRawPoint(constrainedTarget);
+
+  const route = [];
+  const appendRoutePoint = (point = null) => {
+    if (!point) return;
+    const next = { x: Number(point?.x) || 0, y: Number(point?.y) || 0 };
+    const previous = route[route.length - 1] || requestedSource;
+    if (Math.hypot(next.x - previous.x, next.y - previous.y) > 1) route.push(next);
+  };
+  const segmentBlocked = (from = {}, to = {}) => (
+    !!raycastObstacles(from, to, blockingWalls, navigationRadius)?.obstacle
+  );
+  let previous = { x: Number(requestedSource?.x) || 0, y: Number(requestedSource?.y) || 0 };
+  let pointIndex = 0;
+  while (pointIndex < rawRoute.length) {
+    const next = rawRoute[pointIndex];
+    if (!segmentBlocked(previous, next)) {
+      appendRoutePoint(next);
+      previous = next;
+      pointIndex += 1;
+      continue;
+    }
+
+    let blockedTargetIndex = pointIndex;
+    while (
+      blockedTargetIndex + 1 < rawRoute.length
+      && segmentBlocked(rawRoute[blockedTargetIndex], rawRoute[blockedTargetIndex + 1])
+    ) {
+      blockedTargetIndex += 1;
+    }
+    const detourTargetIndex = Math.min(rawRoute.length - 1, blockedTargetIndex + 1);
+    const detourTarget = rawRoute[detourTargetIndex];
+    const detour = sim?.trainingNavigator?.planRoute?.(previous, detourTarget, {
+      obstacles: blockingWalls,
+      radius: navigationRadius,
+      maxSearchNodes: Math.max(256, resolveTrainingAiNavigationSearchNodes(squad, sim)),
+      preferLocalDetour: true,
+      preferredLaneId: corridor.laneId
+    });
+    if (
+      !doesTrainingRouteReachTarget(detour, detourTarget)
+      || !isTrainingRouteInsideRoadCorridor(squad, sim, previous, detour)
+    ) return [];
+    let detourPrevious = previous;
+    for (let detourIndex = 0; detourIndex < detour.length; detourIndex += 1) {
+      const detourPoint = detour[detourIndex];
+      if (segmentBlocked(detourPrevious, detourPoint)) return [];
+      appendRoutePoint(detourPoint);
+      detourPrevious = detourPoint;
+    }
+    if (Math.hypot(
+      (Number(detourPrevious?.x) || 0) - (Number(detourTarget?.x) || 0),
+      (Number(detourPrevious?.y) || 0) - (Number(detourTarget?.y) || 0)
+    ) > 1) {
+      if (segmentBlocked(detourPrevious, detourTarget)) return [];
+      appendRoutePoint(detourTarget);
+    }
+    previous = detourTarget;
+    pointIndex = detourTargetIndex + 1;
+  }
   return route;
 };
 
-const resolveMinionPathPointAtProgress = (path = [], progress = 0) => {
-  const rows = Array.isArray(path) ? path : [];
-  if (rows.length <= 0) return { x: 0, y: 0 };
-  let remaining = Math.max(0, Number(progress) || 0);
-  for (let index = 1; index < rows.length; index += 1) {
-    const start = rows[index - 1] || {};
-    const end = rows[index] || {};
-    const dx = (Number(end.x) || 0) - (Number(start.x) || 0);
-    const dy = (Number(end.y) || 0) - (Number(start.y) || 0);
-    const length = Math.hypot(dx, dy);
-    if (length <= 0.001) continue;
-    if (remaining <= length) {
-      const t = clamp(remaining / length, 0, 1);
-      return {
-        x: (Number(start.x) || 0) + (dx * t),
-        y: (Number(start.y) || 0) + (dy * t)
-      };
-    }
-    remaining -= length;
-  }
-  const last = rows[rows.length - 1] || {};
-  return { x: Number(last.x) || 0, y: Number(last.y) || 0 };
-};
+const resolveMinionPathPointAtProgress = resolveMinionSquadPathPointAtProgress;
 
 const resolveMinionNavigationWaypoints = ({
   squad = {},
@@ -3798,7 +4149,8 @@ const resolveMinionNavigationWaypoints = ({
     obstacles: walls,
     radius: navigationRadius,
     maxSearchNodes: 0,
-    preferLocalDetour: true
+    preferLocalDetour: true,
+    preferredLaneId: resolveTrainingRoadCorridor(squad, sim)?.laneId
   });
   if (
     !doesTrainingRouteReachTarget(route, firstTarget)
@@ -3830,11 +4182,17 @@ const updateSquadBehaviorPlan = (squad, sim, nowSec = 0, walls = [], crowd = nul
     squad.action = '调整队形';
     return;
   }
-  if ((Number(squad?.formationChange?.remainingSec) || 0) > 0) {
+  if (squad?.formationChange && typeof squad.formationChange === 'object') {
     squad.action = '换阵中';
     return;
   }
-  if (updateTrainingAutoAdvancePlan(squad, sim, walls, nowSec)) return;
+  if (squad?._formationArrival?.active === true) {
+    squad.waypoints = [];
+    squad.action = squad?._narrowPassage?.active ? '通过窄地后整队' : '到达整队';
+    return;
+  }
+  const debugAutoPlan = updateTrainingAutoAdvancePlan(squad, sim, walls, nowSec);
+  if (debugAutoPlan) return;
   const orderType = resolveSquadOrderType(squad);
   const targetOnlyAttack = isTargetOnlyAttackOrder(squad);
   if (targetOnlyAttack) {
@@ -3849,8 +4207,10 @@ const updateSquadBehaviorPlan = (squad, sim, nowSec = 0, walls = [], crowd = nul
         completeTargetOnlyAttackOrder(squad, nowSec);
       } else {
         squad.targetSquadId = '';
-        squad._trainingAiDecisionDeferred = false;
-        squad._trainingAiSelection = null;
+        if (isTrainingCardAiSquad(squad)) {
+          squad._trainingAiDecisionDeferred = false;
+          squad._trainingAiSelection = null;
+        }
         squad.action = Array.isArray(squad?.waypoints) && squad.waypoints.length > 0
           ? '追击目标'
           : '攻击目标';
@@ -3908,9 +4268,6 @@ const updateSquadBehaviorPlan = (squad, sim, nowSec = 0, walls = [], crowd = nul
     const returnRadius = Math.max(8, Number(guard.returnRadius) || (guardRadius * 0.36));
     const chaseRadius = Math.max(guardRadius + 10, Number(guard.chaseRadius) || (guardRadius * 1.45));
     let guardEnemy = null;
-    const neutralRetaliationId = squad?.team === TEAM_NEUTRAL
-      ? resolveSquadCombatTargetId(squad)
-      : '';
     if (squad.targetSquadId) {
       const squads = Array.isArray(sim?.squads) ? sim.squads : [];
       for (let i = 0; i < squads.length; i += 1) {
@@ -3920,17 +4277,7 @@ const updateSquadBehaviorPlan = (squad, sim, nowSec = 0, walls = [], crowd = nul
         break;
       }
     }
-    if (!guardEnemy && neutralRetaliationId) {
-      const squads = Array.isArray(sim?.squads) ? sim.squads : [];
-      guardEnemy = squads.find((row) => (
-        row
-        && String(row?.id || '') === neutralRetaliationId
-        && (Number(row?.remain) || 0) > 0
-        && isHostileTeam(squad?.team, row?.team)
-        && !isEnemyHiddenForViewer(row, squad?.team)
-      )) || null;
-    }
-    if (!guardEnemy && squad?.team !== TEAM_NEUTRAL) {
+    if (!guardEnemy) {
       guardEnemy = pickNearestEnemySquad({ x: gcx, y: gcy, team: squad.team }, sim?.squads || []);
     }
     const enemyDist = guardEnemy
@@ -4053,8 +4400,10 @@ const updateSquadBehaviorPlan = (squad, sim, nowSec = 0, walls = [], crowd = nul
     ? selectTrainingMapEnemyTarget(squad, sim, nowSec)
     : (lockedCombatTarget || selectTrainingMapEnemyTarget(squad, sim, nowSec));
   if (targetOnlyAttack && !isTargetOnlyAttackOrder(squad)) return;
-  if (!targetOnlyAttack && lockedCombatTarget) squad._trainingAiDecisionDeferred = false;
-  if (squad._trainingAiDecisionDeferred) {
+  if (!targetOnlyAttack && lockedCombatTarget && isTrainingCardAiSquad(squad)) {
+    squad._trainingAiDecisionDeferred = false;
+  }
+  if (isTrainingCardAiSquad(squad) && squad._trainingAiDecisionDeferred) {
     squad.action = 'AI思考';
     return;
   }
@@ -4116,7 +4465,9 @@ const updateSquadBehaviorPlan = (squad, sim, nowSec = 0, walls = [], crowd = nul
     }
     squad.waypoints = [];
     squad.targetSquadId = nearestEnemy.id;
-    squad.action = isRanged ? '远程交战' : '近战接敌';
+    squad.action = isRanged
+      ? '远程交战'
+      : (String(squad?.trainingAi?.state || '') === 'Chase' ? '追击接敌' : '近战接敌');
     return;
   }
 
@@ -4134,17 +4485,22 @@ const updateSquadBehaviorPlan = (squad, sim, nowSec = 0, walls = [], crowd = nul
       squad.action = '路径排队';
       return;
     }
-    const navigationState = recordTrainingTargetNavigationPlan({
-      squad,
-      targetId: nearestEnemy.id,
-      planned,
-      sim,
-      nowSec
-    });
+    const navigationState = isTrainingCardAiSquad(squad)
+      ? recordTrainingTargetNavigationPlan({
+          squad,
+          targetId: nearestEnemy.id,
+          planned,
+          sim,
+          nowSec
+        })
+      : null;
+    const targetBlocked = navigationState?.blockedUntil > nowSec || (!navigationState && !planned.ok);
     if (navigationState?.blockedUntil > nowSec) squad._trainingAiSelection = null;
-    squad.targetSquadId = navigationState?.blockedUntil > nowSec ? '' : nearestEnemy.id;
+    squad.targetSquadId = targetBlocked ? '' : nearestEnemy.id;
     squad.action = planned.ok
-      ? (orderType === ORDER_ATTACK_MOVE ? '攻击前进' : '移动')
+      ? (String(squad?.trainingAi?.state || '') === 'Chase'
+        ? '追击目标'
+        : (orderType === ORDER_ATTACK_MOVE ? '攻击前进' : '移动'))
       : '路径等待';
   } else if (isRanged && dist < Math.max(attackRange.min + 6, desired * 0.72) && !hasWaypoint) {
     const planned = planTrainingAttackNavigationTarget({
@@ -4160,17 +4516,22 @@ const updateSquadBehaviorPlan = (squad, sim, nowSec = 0, walls = [], crowd = nul
       squad.action = '路径排队';
       return;
     }
-    const navigationState = recordTrainingTargetNavigationPlan({
-      squad,
-      targetId: nearestEnemy.id,
-      planned,
-      sim,
-      nowSec
-    });
+    const navigationState = isTrainingCardAiSquad(squad)
+      ? recordTrainingTargetNavigationPlan({
+          squad,
+          targetId: nearestEnemy.id,
+          planned,
+          sim,
+          nowSec
+        })
+      : null;
+    const targetBlocked = navigationState?.blockedUntil > nowSec || (!navigationState && !planned.ok);
     if (navigationState?.blockedUntil > nowSec) squad._trainingAiSelection = null;
-    squad.targetSquadId = navigationState?.blockedUntil > nowSec ? '' : nearestEnemy.id;
+    squad.targetSquadId = targetBlocked ? '' : nearestEnemy.id;
     squad.action = planned.ok
-      ? (orderType === ORDER_ATTACK_MOVE ? '攻击前进' : '移动')
+      ? (String(squad?.trainingAi?.state || '') === 'Chase'
+        ? '追击目标'
+        : (orderType === ORDER_ATTACK_MOVE ? '攻击前进' : '移动'))
       : '路径等待';
   } else if (!hasWaypoint) {
     squad.action = squad.behavior === 'defend' ? '防御' : (orderType === ORDER_ATTACK_MOVE ? '攻击前进' : '普通攻击');
@@ -4380,6 +4741,9 @@ const stepMinionWaveCombatAgent = ({
 
 const createAgentsForSquad = (squad, crowd) => {
   const unitMap = crowd.unitTypeMap || new Map();
+  const squadKind = resolveTrainingSquadKind(squad);
+  const isMinionWaveUnit = squadKind === TRAINING_SQUAD_KIND.MINION;
+  const isNeutralCampUnit = squadKind === TRAINING_SQUAD_KIND.NEUTRAL;
   const countsByType = normalizeUnitsMap(squad?.units || {});
   const remain = Math.max(1, Math.floor(Number(squad?.remain) || sumUnitsMap(countsByType) || 1));
   const repConfig = resolveSquadRepConfig(squad, crowd);
@@ -4478,9 +4842,9 @@ const createAgentsForSquad = (squad, crowd) => {
         moveSpeedMul,
         attackRangeMin: attackRange.min,
         attackRangeMax: attackRange.max,
-        isMinionWaveUnit: squad?.isMinionWaveUnit === true,
-        isNeutralCampUnit: squad?.isNeutralCampUnit === true,
-        yaw: squad?.isNeutralCampUnit === true
+        isMinionWaveUnit,
+        isNeutralCampUnit,
+        yaw: isNeutralCampUnit
           ? Math.atan2(formationForward.y, formationForward.x)
           : 0
       }));
@@ -4504,9 +4868,9 @@ const createAgentsForSquad = (squad, crowd) => {
       moveSpeedMul: resolveAgentSpeedMul({}, squad?.classTag || 'infantry'),
       attackRangeMin: resolveSquadAttackRange(squad).min,
       attackRangeMax: resolveSquadAttackRange(squad).max,
-      isMinionWaveUnit: squad?.isMinionWaveUnit === true,
-      isNeutralCampUnit: squad?.isNeutralCampUnit === true,
-      yaw: squad?.isNeutralCampUnit === true
+      isMinionWaveUnit,
+      isNeutralCampUnit,
+      yaw: isNeutralCampUnit
         ? Math.atan2(formationForward.y, formationForward.x)
         : 0
     }));
@@ -4556,7 +4920,98 @@ const doesTrainingRouteReachTarget = (route = [], target = {}, radius = LEADER_A
   ) <= Math.max(1, Number(radius) || LEADER_ARRIVAL_RADIUS);
 };
 
-const clearMinionAgentRecovery = (
+const advanceSquadWaypoint = (squad = null) => {
+  if (!squad || !Array.isArray(squad.waypoints) || squad.waypoints.length <= 0) return null;
+  const reached = squad.waypoints.shift() || null;
+  if (squad.order && typeof squad.order === 'object') {
+    const pathLength = Array.isArray(squad.order.pathPoints) ? squad.order.pathPoints.length : 0;
+    squad.order.pathIndex = Math.min(
+      pathLength,
+      Math.max(0, Math.floor(Number(squad.order.pathIndex) || 0)) + 1
+    );
+  }
+  squad._plannedMoveWaypointIndex = Math.max(
+    0,
+    Math.floor(Number(squad?._plannedMoveWaypointIndex) || 0) + 1
+  );
+  return reached;
+};
+
+const beginSquadFormationArrival = (squad = null, target = null, nowSec = 0) => {
+  if (!squad || !target) return;
+  const previous = squad?._formationArrival && typeof squad._formationArrival === 'object'
+    ? squad._formationArrival
+    : null;
+  squad._formationArrival = {
+    active: true,
+    orderType: previous?.active ? previous.orderType : resolveSquadOrderType(squad),
+    targetX: Number(target?.x) || 0,
+    targetY: Number(target?.y) || 0,
+    startedAt: previous?.active ? (Number(previous.startedAt) || nowSec) : nowSec,
+    stableSince: 0,
+    maximumError: Infinity,
+    readyRatio: 0
+  };
+  squad.vx = 0;
+  squad.vy = 0;
+  squad.speed = 0;
+  squad.action = '到达整队';
+};
+
+const updateSquadFormationArrival = ({
+  squad = null,
+  agents = [],
+  passage = null,
+  nowSec = 0
+} = {}) => {
+  const state = squad?._formationArrival;
+  if (!squad || !state?.active) return false;
+  if (Array.isArray(squad.waypoints) && squad.waypoints.length > 0) {
+    squad._formationArrival = null;
+    return false;
+  }
+  const metrics = resolveSquadFormationMetrics({ squad, agents, passage: null });
+  const settled = !passage?.active && metrics.settled;
+  const stableSince = settled
+    ? (Number(state.stableSince) || nowSec)
+    : 0;
+  squad._formationArrival = {
+    ...state,
+    stableSince,
+    maximumError: metrics.maximumError,
+    readyRatio: metrics.readyRatio,
+    recoveringCount: metrics.recoveringCount
+  };
+  squad.formationArrivalState = settled ? 'STABLE' : (passage?.active ? 'REFORMING' : 'ASSEMBLING');
+  squad.formationArrivalError = metrics.maximumError;
+  squad.action = passage?.active ? '通过窄地后整队' : '到达整队';
+  if (!settled || nowSec - stableSince < FORMATION_ARRIVAL_STABLE_SEC) return false;
+
+  const completedOrderType = String(state.orderType || resolveSquadOrderType(squad));
+  squad._formationArrival = null;
+  squad.formationArrivalState = 'COMPLETE';
+  squad.formationArrivalError = 0;
+  if (completedOrderType === ORDER_MOVE || completedOrderType === ORDER_CHARGE) {
+    squad.behavior = 'idle';
+    squad.targetSquadId = '';
+    squad.action = '待命';
+    squad.order = {
+      type: ORDER_IDLE,
+      issuedAt: nowSec,
+      commitUntil: 0,
+      targetPoint: null,
+      targetSquadId: '',
+      targetBuildingId: '',
+      pathPoints: [],
+      pathIndex: 0
+    };
+    return true;
+  }
+  squad.action = squad.controlMode === 'AI' ? '自动待命' : '攻击前进';
+  return true;
+};
+
+const clearAgentFormationRecovery = (
   agent = null,
   nowSec = 0,
   error = 0,
@@ -4564,7 +5019,7 @@ const clearMinionAgentRecovery = (
 ) => {
   if (!agent) return;
   const monitoredProgressAt = Number(monitor?.lastProgressAt);
-  agent._minionRecovery = {
+  const state = {
     active: false,
     route: [],
     routeIndex: 0,
@@ -4578,24 +5033,27 @@ const clearMinionAgentRecovery = (
     failedSince: 0,
     obstacleId: ''
   };
-  agent.minionRecoveryState = 'NONE';
+  agent._formationRecovery = state;
+  agent.formationRecoveryState = 'NONE';
+  if (agent?.isMinionWaveUnit === true) {
+    agent._minionRecovery = state;
+    agent.minionRecoveryState = 'NONE';
+  }
 };
 
-const resolveMinionAgentRecoveryGuidance = ({
+const resolveAgentFormationRecoveryGuidance = ({
   agent = null,
   squad = null,
   sim = null,
   walls = [],
   target = null,
+  enabled = true,
   nowSec = 0
 } = {}) => {
-  const marching = squad?.isMinionWaveUnit === true
-    && (
-      squad?._minionAi?.state === MINION_WAVE_AI_STATE.MARCH
-      || squad?._minionAi?.state === MINION_WAVE_AI_STATE.RESUME
-    );
-  if (!agent || !marching || !target) {
-    if (agent?._minionRecovery?.active) clearMinionAgentRecovery(agent, nowSec, 0);
+  if (!agent || !squad || !enabled || !target) {
+    if (agent?._formationRecovery?.active || agent?._minionRecovery?.active) {
+      clearAgentFormationRecovery(agent, nowSec, 0);
+    }
     return null;
   }
   const point = { x: Number(agent?.x) || 0, y: Number(agent?.y) || 0 };
@@ -4610,9 +5068,17 @@ const resolveMinionAgentRecoveryGuidance = ({
   );
   const triggerDistance = Math.max(18, configuredSpacing * 1.15);
   const releaseDistance = Math.max(8, triggerDistance * 0.52);
-  const previous = agent?._minionRecovery && typeof agent._minionRecovery === 'object'
-    ? agent._minionRecovery
-    : {};
+  const previous = agent?._formationRecovery && typeof agent._formationRecovery === 'object'
+    ? agent._formationRecovery
+    : (agent?._minionRecovery && typeof agent._minionRecovery === 'object'
+      ? agent._minionRecovery
+      : {});
+  const isMinion = isTrainingMinionSquad(squad);
+  const stuckDelay = isMinion ? MINION_RECOVERY_STUCK_DELAY_SEC : FORMATION_RECOVERY_STUCK_DELAY_SEC;
+  const replanInterval = isMinion ? MINION_RECOVERY_REPLAN_INTERVAL_SEC : FORMATION_RECOVERY_REPLAN_INTERVAL_SEC;
+  const targetDriftThreshold = isMinion ? MINION_RECOVERY_TARGET_DRIFT : FORMATION_RECOVERY_TARGET_DRIFT;
+  const waypointRadius = isMinion ? MINION_RECOVERY_WAYPOINT_RADIUS : FORMATION_RECOVERY_WAYPOINT_RADIUS;
+  const maximumSpeedMul = isMinion ? MINION_RECOVERY_MAX_SPEED_MUL : FORMATION_RECOVERY_MAX_SPEED_MUL;
   const previousLastX = Number(previous?.lastX);
   const previousLastY = Number(previous?.lastY);
   const movedDistance = Math.hypot(
@@ -4624,15 +5090,26 @@ const resolveMinionAgentRecoveryGuidance = ({
     : error;
   const previousProgressAt = Number(previous?.lastProgressAt);
   let lastProgressAt = Number.isFinite(previousProgressAt) ? previousProgressAt : nowSec;
-  if (error <= previousError - 0.22 || movedDistance >= 0.18) lastProgressAt = nowSec;
+  const targetDirection = normalizeVec(
+    (Number(target?.x) || 0) - point.x,
+    (Number(target?.y) || 0) - point.y
+  );
+  const movedTowardTarget = movedDistance > 0.001
+    ? (((point.x - (Number.isFinite(previousLastX) ? previousLastX : point.x)) * targetDirection.x)
+      + ((point.y - (Number.isFinite(previousLastY) ? previousLastY : point.y)) * targetDirection.y))
+    : 0;
+  if (movedDistance >= 0.08 || error <= previousError - 0.18 || movedTowardTarget >= 0.12) {
+    lastProgressAt = nowSec;
+  }
   const directHit = error > releaseDistance
     ? raycastObstacles(point, target, walls, radius)
     : null;
-  const stalled = error > triggerDistance
-    && nowSec - lastProgressAt >= MINION_RECOVERY_STUCK_DELAY_SEC;
-  const needsRecovery = error > releaseDistance && (!!directHit?.obstacle || stalled || previous?.active === true);
+  const stalled = previous?.active === true
+    && error > triggerDistance
+    && nowSec - lastProgressAt >= stuckDelay;
+  const needsRecovery = error > releaseDistance && !!directHit?.obstacle;
   if (!needsRecovery) {
-    clearMinionAgentRecovery(agent, nowSec, error, { lastProgressAt });
+    clearAgentFormationRecovery(agent, nowSec, error, { lastProgressAt });
     return null;
   }
 
@@ -4657,16 +5134,21 @@ const resolveMinionAgentRecoveryGuidance = ({
   );
   const obstacleId = String(directHit?.obstacle?.id || directHit?.obstacle?.objectId || '');
   const obstacleChanged = obstacleId && obstacleId !== String(previous?.obstacleId || '');
-  const routeExpired = nowSec - (Number(previous?.plannedAt) || 0) >= MINION_RECOVERY_REPLAN_INTERVAL_SEC;
-  const routeMissing = previousRoute.length <= 0;
+  const previousRouteIndex = Math.max(0, Math.floor(Number(previous?.routeIndex) || 0));
+  const routeMissing = previousRoute.length <= 0 || previousRouteIndex >= previousRoute.length;
   const shouldReplan = !!navigator?.planRoute
-    && (routeMissing || routeExpired || targetDrift >= MINION_RECOVERY_TARGET_DRIFT || obstacleChanged);
+    && (
+      routeMissing
+      || targetDrift >= targetDriftThreshold
+      || obstacleChanged
+      || (stalled && nowSec - (Number(previous?.plannedAt) || 0) >= replanInterval)
+    );
   let route = previousRoute.map((entry) => ({ x: Number(entry?.x) || 0, y: Number(entry?.y) || 0 }));
-  let routeIndex = Math.max(0, Math.floor(Number(previous?.routeIndex) || 0));
+  let routeIndex = previousRouteIndex;
   let plannedAt = Number(previous?.plannedAt) || 0;
   let failedSince = Number(previous?.failedSince) || 0;
 
-  if (shouldReplan && consumeMinionRecoveryPlanBudget(sim)) {
+  if (shouldReplan && consumeFormationRecoveryPlanBudget(sim)) {
     const safeStart = navigator.findNearestWalkablePoint?.(point, {
       obstacles: walls,
       radius,
@@ -4676,7 +5158,8 @@ const resolveMinionAgentRecoveryGuidance = ({
       obstacles: walls,
       radius,
       maxSearchNodes: 220,
-      preferLocalDetour: true
+      preferLocalDetour: true,
+      preferredLaneId: roadCorridor?.laneId
     });
     const startEscape = Math.hypot(safeStart.x - point.x, safeStart.y - point.y) > 0.2
       ? [safeStart]
@@ -4714,7 +5197,7 @@ const resolveMinionAgentRecoveryGuidance = ({
 
   while (routeIndex < route.length) {
     const waypoint = route[routeIndex];
-    if (Math.hypot(waypoint.x - point.x, waypoint.y - point.y) > MINION_RECOVERY_WAYPOINT_RADIUS) break;
+    if (Math.hypot(waypoint.x - point.x, waypoint.y - point.y) > waypointRadius) break;
     routeIndex += 1;
   }
   const waypoint = route[routeIndex] || null;
@@ -4749,8 +5232,12 @@ const resolveMinionAgentRecoveryGuidance = ({
     failedSince,
     obstacleId
   };
-  agent._minionRecovery = state;
-  agent.minionRecoveryState = waypoint ? 'ROUTING' : 'ESCAPING';
+  agent._formationRecovery = state;
+  agent.formationRecoveryState = waypoint ? 'ROUTING' : 'ESCAPING';
+  if (isMinion) {
+    agent._minionRecovery = state;
+    agent.minionRecoveryState = agent.formationRecoveryState;
+  }
   return {
     active: true,
     x: guidanceTarget.x,
@@ -4758,7 +5245,7 @@ const resolveMinionAgentRecoveryGuidance = ({
     speedMul: clamp(
       1.08 + ((error - releaseDistance) / Math.max(1, triggerDistance * 2)),
       1.08,
-      MINION_RECOVERY_MAX_SPEED_MUL
+      maximumSpeedMul
     )
   };
 };
@@ -4795,6 +5282,7 @@ const attemptTrainingNavigationReplan = ({
 
   const currentWaypoints = Array.isArray(squad?.waypoints) ? squad.waypoints.slice() : [];
   const source = { x: Number(squad?.x) || 0, y: Number(squad?.y) || 0 };
+  const roadCorridor = resolveTrainingRoadCorridor(squad, sim);
   if (!consumeTrainingNavigationPlanBudget(sim)) {
     squad._navigationReplanAt = nowSec + Math.min(0.12, resolveTrainingNavigationReplanCooldown(sim));
     return false;
@@ -4802,13 +5290,16 @@ const attemptTrainingNavigationReplan = ({
   const route = navigator.planRoute(source, target, {
     obstacles: walls,
     radius: resolveTrainingNavigationAgentRadius(squad, sim),
-    maxSearchNodes: resolveTrainingAiNavigationSearchNodes(squad, sim)
+    maxSearchNodes: resolveTrainingAiNavigationSearchNodes(squad, sim),
+    preferLocalDetour: true,
+    preferredLaneId: roadCorridor?.laneId
   });
   const cooldown = resolveTrainingNavigationReplanCooldown(sim);
   squad._navigationReplanAt = nowSec + cooldown;
   squad._navigationReplanAttempts = Math.max(0, Number(squad?._navigationReplanAttempts) || 0) + 1;
 
   const routeReachesTarget = doesTrainingRouteReachTarget(route, target);
+  const highlandEgressPrefix = resolveTrainingHighlandEgressPrefix(sim, source, route);
   if (
     routeReachesTarget
     && isTrainingRouteInsideRoadCorridor(squad, sim, source, route)
@@ -4819,9 +5310,11 @@ const attemptTrainingNavigationReplan = ({
     return true;
   }
 
-  const roadCorridor = resolveTrainingRoadCorridor(squad, sim);
-  if (roadCorridor && routeReachesTarget) {
-    const fallbackRoute = buildTrainingRoadFallbackRoute(squad, sim, target);
+  if (roadCorridor && (routeReachesTarget || highlandEgressPrefix.length > 0)) {
+    const fallbackRoute = buildTrainingRoadFallbackRoute(squad, sim, target, {
+      source,
+      routePrefix: highlandEgressPrefix
+    });
     if (fallbackRoute.length > 0) {
       applyTrainingNavigationRoute(squad, fallbackRoute, currentWaypoints.slice(1));
       squad._navigationFailureCount = 0;
@@ -4906,7 +5399,7 @@ const updateTrainingNavigationRecovery = ({
 };
 
 const leaderMoveStep = (squad, sim, crowd, dt, forwardVec, steeringWeights = DEFAULT_STEERING_WEIGHTS, blockingWalls = null) => {
-  const isFixedLaneMinion = squad?.isMinionWaveUnit === true;
+  const isFixedLaneMinion = isTrainingMinionSquad(squad);
   const actionState = ensureSquadActionState(squad);
   const actionKind = typeof actionState.kind === 'string' ? actionState.kind : 'none';
   const fatiguePenalty = squad.fatigueTimer > 0 ? 0.72 : 1;
@@ -4969,12 +5462,15 @@ const leaderMoveStep = (squad, sim, crowd, dt, forwardVec, steeringWeights = DEF
     ? 1.08
     : (speedPolicy === SPEED_POLICY_REFORM ? 0.82 : 1);
   const initialWeightedSpeed = Math.max(0.2, Number(squad?.stats?.speed) || baseGroupSpeed);
-  const speedTargetBase = squad?.isMinionWaveUnit === true && Number(squad?.minionPathSpeed) > 0
+  const speedTargetBase = isTrainingMinionSquad(squad) && Number(squad?.minionPathSpeed) > 0
     ? Number(squad.minionPathSpeed) * (baseGroupSpeed / initialWeightedSpeed)
     : Math.max(9, baseGroupSpeed * REFERENCE_LEADER_SPEED_MULTIPLIER * resolveTrainingMapMovementScale(sim));
   squad._marchWorldSpeedBase = Math.max(0, speedTargetBase);
-  const cohesionSpeedScale = isFixedLaneMinion
-    ? clamp(Number(squad?._minionCohesionSpeedScale), 0, 1)
+  const configuredCohesionScale = Number(
+    squad?._formationCohesionSpeedScale ?? squad?._minionCohesionSpeedScale
+  );
+  const cohesionSpeedScale = Number.isFinite(configuredCohesionScale)
+    ? clamp(configuredCohesionScale, 0, 1)
     : 1;
   const speedTargetMax = speedTargetBase
     * fatiguePenalty
@@ -4987,6 +5483,7 @@ const leaderMoveStep = (squad, sim, crowd, dt, forwardVec, steeringWeights = DEF
     ? blockingWalls
     : filterBlockingObstacles(sim?.buildings || []);
   let target = null;
+  let targetFromWaypoint = false;
   const lockRangedSkill = !!squad?.activeSkill?.lockMovement;
 
   if (squad.skillRush?.ttl > 0) {
@@ -5009,6 +5506,7 @@ const leaderMoveStep = (squad, sim, crowd, dt, forwardVec, steeringWeights = DEF
     target = null;
   } else if (Array.isArray(squad.waypoints) && squad.waypoints.length > 0) {
     target = squad.waypoints[0];
+    targetFromWaypoint = true;
   }
 
   if (
@@ -5021,6 +5519,21 @@ const leaderMoveStep = (squad, sim, crowd, dt, forwardVec, steeringWeights = DEF
     squad.vy = 0;
     squad.speed = 0;
     squad.action = '路径等待';
+  }
+
+  const ignoresMarchStamina = isFixedLaneMinion
+    || isTrainingNeutralSquad(squad);
+  let staminaResting = false;
+  if (!ignoresMarchStamina && !(Number(squad?.skillRush?.ttl) > 0)) {
+    const stamina = Math.max(0, Number(squad?.stamina) || 0);
+    if (squad?._staminaResting === true && stamina >= STAMINA_RESUME_THRESHOLD) {
+      squad._staminaResting = false;
+    } else if (target && squad?._staminaResting !== true && stamina < STAMINA_MOVE_THRESHOLD) {
+      squad._staminaResting = true;
+    }
+    staminaResting = squad?._staminaResting === true;
+  } else if (squad?._staminaResting === true) {
+    squad._staminaResting = false;
   }
 
   let currentSpeed = Math.max(0, Number(squad.speed) || 0);
@@ -5039,15 +5552,14 @@ const leaderMoveStep = (squad, sim, crowd, dt, forwardVec, steeringWeights = DEF
   } else if (lockRangedSkill) {
     desiredSpeed = 0;
     squad.stamina = clamp((Number(squad.stamina) || 0) + (STAMINA_RECOVER * dt * 0.5), 0, STAMINA_MAX);
-  } else if (target && (isFixedLaneMinion || (Number(squad.stamina) || 0) >= STAMINA_MOVE_THRESHOLD)) {
+  } else if (target && (isFixedLaneMinion || !staminaResting)) {
     const toTarget = normalizeVec((Number(target.x) || 0) - (Number(squad.x) || 0), (Number(target.y) || 0) - (Number(squad.y) || 0));
     if (toTarget.len <= LEADER_ARRIVAL_RADIUS) {
-      if (Array.isArray(squad.waypoints) && squad.waypoints.length > 0) squad.waypoints.shift();
-      if ((resolveSquadOrderType(squad) === ORDER_MOVE || resolveSquadOrderType(squad) === ORDER_CHARGE) && (!squad.waypoints || squad.waypoints.length <= 0)) {
-        squad.behavior = 'idle';
-        squad.targetSquadId = '';
-        squad.action = '待命';
-        squad.order = { type: ORDER_IDLE, issuedAt: nowSec, commitUntil: 0, targetPoint: null, targetSquadId: '' };
+      if (targetFromWaypoint) advanceSquadWaypoint(squad);
+      if (targetFromWaypoint && (!squad.waypoints || squad.waypoints.length <= 0)) {
+        beginSquadFormationArrival(squad, target, nowSec);
+        currentSpeed = 0;
+        desiredSpeed = 0;
       }
     } else {
       const avoidanceProbe = Math.max(
@@ -5085,11 +5597,18 @@ const leaderMoveStep = (squad, sim, crowd, dt, forwardVec, steeringWeights = DEF
         toTarget.x + (avoid.x * 1.05 * avoidWeight) + centerPull.x,
         toTarget.y + (avoid.y * 1.05 * avoidWeight) + centerPull.y
       );
+      // Card squads steer their shared virtual anchor along a wall/boundary
+      // before the old swept collision fallback has to push it back.  Agents
+      // still retain the existing local collision and avoidance pass below.
+      const boundaryAwareDesired = resolveTrainingCardAnchorSteering({
+        squad,
+        desiredDirection: rawDesired
+      });
       const prevSmooth = normalizeVec(Number(squad.smoothedDirX) || dir.x, Number(squad.smoothedDirY) || dir.y);
       const blendK = 1 - Math.exp(-Math.max(0, dt) * Math.max(0.2, Number(steeringWeights?.turnHz) || DEFAULT_STEERING_WEIGHTS.turnHz));
       const smooth = normalizeVec(
-        prevSmooth.x + ((rawDesired.x - prevSmooth.x) * blendK),
-        prevSmooth.y + ((rawDesired.y - prevSmooth.y) * blendK)
+        prevSmooth.x + ((boundaryAwareDesired.x - prevSmooth.x) * blendK),
+        prevSmooth.y + ((boundaryAwareDesired.y - prevSmooth.y) * blendK)
       );
       desiredDir = smooth;
       squad.smoothedDirX = desiredDir.x;
@@ -5102,7 +5621,7 @@ const leaderMoveStep = (squad, sim, crowd, dt, forwardVec, steeringWeights = DEF
       const arrivalRate = minSpeedRatio + ((1 - minSpeedRatio) * easedArrival);
       desiredSpeed = Math.min(speedTargetMax, speedTargetMax * arrivalRate);
     }
-    squad.stamina = isFixedLaneMinion
+    squad.stamina = ignoresMarchStamina
       ? STAMINA_MAX
       : clamp((Number(squad.stamina) || 0) - (STAMINA_MOVE_COST * dt), 0, STAMINA_MAX);
   } else {
@@ -5175,17 +5694,19 @@ const leaderMoveStep = (squad, sim, crowd, dt, forwardVec, steeringWeights = DEF
     }
   });
   const roadCorridor = resolveTrainingRoadCorridor(squad, sim);
-  const hardRoadBound = squad?.isMinionWaveUnit === true
+  const hardRoadBound = isTrainingMinionSquad(squad)
     && Number(squad?.minionPathCorridorWidth) > 0;
   if (roadCorridor && (hardRoadBound || !(Number(squad?.skillRush?.ttl) > 0))) {
     const allowedDistance = Math.max(4, roadCorridor.halfWidth - LEADER_COLLISION_RADIUS);
     const previousRoadDistance = resolveMinionPathProjection({ x: prevX, y: prevY }, roadCorridor.path).distance;
     const nextRoadDistance = resolveMinionPathProjection({ x: nx, y: ny }, roadCorridor.path).distance;
+    const previousInsideHighland = isPointInsideTrainingHighland({ x: prevX, y: prevY }, sim);
+    const nextInsideHighland = isPointInsideTrainingHighland({ x: nx, y: ny }, sim);
     const corridorEntered = hardRoadBound
       || squad?._trainingRoadCorridorEntered === true
-      || previousRoadDistance <= allowedDistance;
+      || (!previousInsideHighland && previousRoadDistance <= allowedDistance);
     if (hardRoadBound) squad._trainingRoadCorridorEntered = true;
-    if (!corridorEntered && nextRoadDistance <= allowedDistance) {
+    if (!corridorEntered && !nextInsideHighland && nextRoadDistance <= allowedDistance) {
       squad._trainingRoadCorridorEntered = true;
     } else if (corridorEntered) {
       squad._trainingRoadCorridorEntered = true;
@@ -5249,20 +5770,14 @@ const leaderMoveStep = (squad, sim, crowd, dt, forwardVec, steeringWeights = DEF
     }
   } else if (chargingCommitted) {
     squad.action = '冲锋';
-  } else if (isFixedLaneMinion && squad?._minionCohesion?.waiting) {
-    squad.action = '兵线等待整队';
-  } else if (isFixedLaneMinion && (Number(squad?._minionCohesion?.recoveringCount) || 0) > 0) {
-    squad.action = '兵线减速接应';
+  } else if (staminaResting && target) {
+    squad.action = '休整恢复';
+  } else if (squad?._formationCohesion?.waiting) {
+    squad.action = isFixedLaneMinion ? '兵线等待整队' : '等待掉队士兵';
+  } else if ((Number(squad?._formationCohesion?.speedScale) || 1) < 0.98) {
+    squad.action = isFixedLaneMinion ? '兵线减速接应' : '减速接应';
   }
 
-  if (!isFixedLaneMinion && (Number(squad.stamina) || 0) < STAMINA_MOVE_THRESHOLD && !(squad.skillRush?.ttl > 0)) {
-    squad.waypoints = [];
-    squad.targetSquadId = '';
-    if (squad.behavior === 'move' && resolveSquadOrderType(squad) !== ORDER_ATTACK_MOVE) {
-      squad.behavior = 'idle';
-      squad.action = '待命';
-    }
-  }
   return { x: dir.x, y: dir.y };
 };
 
@@ -5351,7 +5866,7 @@ const aggregateSquadFromAgents = (squad, agents = []) => {
   }
 
   ensureFlagBearer(squad, alive);
-  const center = squad?.isMinionWaveUnit === true
+  const center = isTrainingMinionSquad(squad)
     ? resolveSquadSpatialAnchor(spatialPoints, {
         fallbackX: anchorX,
         fallbackY: anchorY,
@@ -5411,20 +5926,8 @@ const aggregateSquadFromAgents = (squad, agents = []) => {
   squad.skillCategoryCounts = skillCategoryCounts;
 };
 
-const restoreMinionAuthoritativeAnchor = (squad = {}) => {
-  if (
-    squad?.isMinionWaveUnit !== true
-    || squad?._minionAi?.state !== MINION_WAVE_AI_STATE.ATTACK_HOLD
-    || !squad?._minionAi?.holdAnchor
-  ) return;
-  squad.x = Number(squad._minionAi.holdAnchor.x) || 0;
-  squad.y = Number(squad._minionAi.holdAnchor.y) || 0;
-  squad.vx = 0;
-  squad.vy = 0;
-  squad.speed = 0;
-};
-
 const trimOrGrowAgents = (squad, agents = [], crowd, dt) => {
+  const squadKind = resolveTrainingSquadKind(squad);
   const repConfig = resolveRepConfig(null, crowd);
   if (repConfig.strictAgentMapping) {
     ensureFlagBearer(squad, agents);
@@ -5475,7 +5978,8 @@ const trimOrGrowAgents = (squad, agents = [], crowd, dt) => {
         combatScale: source.combatScale || 1,
         attackRangeMin: source.attackRangeMin,
         attackRangeMax: source.attackRangeMax,
-        isMinionWaveUnit: source.isMinionWaveUnit
+        isMinionWaveUnit: squadKind === TRAINING_SQUAD_KIND.MINION,
+        isNeutralCampUnit: squadKind === TRAINING_SQUAD_KIND.NEUTRAL
       }));
     }
   }
@@ -5486,15 +5990,9 @@ const updateSquadSpeedPolicyState = (squad, agents = [], dt = 0) => {
   if (!squad) return;
   if (squad.formationChange && typeof squad.formationChange === 'object') {
     const remainingSec = Math.max(0, (Number(squad.formationChange.remainingSec) || 0) - dt);
-    if (remainingSec > 0) {
-      squad.formationChange.remainingSec = remainingSec;
-      squad.speedPolicy = SPEED_POLICY_REFORM;
-      squad.reformUntil = remainingSec;
-      return;
-    }
-    squad.formationChange = null;
-    squad.speedPolicy = SPEED_POLICY_MARCH;
-    squad.reformUntil = 0;
+    squad.formationChange.remainingSec = remainingSec;
+    squad.speedPolicy = SPEED_POLICY_REFORM;
+    squad.reformUntil = remainingSec;
     return;
   }
   const speedMode = squad.speedMode === SPEED_MODE_C ? SPEED_MODE_C : SPEED_MODE_B;
@@ -5530,6 +6028,45 @@ const updateSquadSpeedPolicyState = (squad, agents = [], dt = 0) => {
     squad.speedPolicy = SPEED_POLICY_MARCH;
     squad.reformUntil = 0;
   }
+};
+
+const updateSquadFormationChangeCompletion = ({
+  squad = null,
+  agents = [],
+  passage = null,
+  nowSec = 0
+} = {}) => {
+  const change = squad?.formationChange;
+  if (!squad || !change || typeof change !== 'object') return false;
+  const metrics = resolveSquadFormationMetrics({ squad, agents, passage: null });
+  const settled = !passage?.active && metrics.settled;
+  const stableSince = settled
+    ? (Number(change.stableSince) || nowSec)
+    : 0;
+  squad.formationChange = {
+    ...change,
+    stableSince,
+    maximumError: metrics.maximumError,
+    readyRatio: metrics.readyRatio,
+    recoveringCount: metrics.recoveringCount
+  };
+  squad.action = passage?.active ? '窄地通行后换阵' : '换阵中';
+  if (
+    Number(change.remainingSec) > 0
+    || !settled
+    || nowSec - stableSince < FORMATION_ARRIVAL_STABLE_SEC
+  ) return false;
+  squad.formationChange = null;
+  if (squad.speedMode === SPEED_MODE_C) {
+    squad.speedPolicy = SPEED_POLICY_RETREAT;
+  } else {
+    squad.speedPolicy = SPEED_POLICY_MARCH;
+  }
+  squad.reformUntil = 0;
+  if (!squad?._formationArrival?.active) {
+    squad.action = Array.isArray(squad.waypoints) && squad.waypoints.length > 0 ? '移动' : '待命';
+  }
+  return true;
 };
 
 const resolveAgentModeSpeedMul = (agent, squad, crowd) => {
@@ -5656,6 +6193,14 @@ export const addCrowdSquad = (crowd, squad, { replace = false } = {}) => {
   if (!crowd || !squad?.id) return [];
   if (!replace && crowd.agentsBySquad?.has(squad.id)) {
     return crowd.agentsBySquad.get(squad.id) || [];
+  }
+  if (replace) {
+    const previousAgents = crowd.agentsBySquad?.get?.(squad.id) || [];
+    if (isTrainingCardSquad(squad)) {
+      resetTrainingCardSquadAiRuntime(squad, previousAgents, { preserveSlots: true });
+    } else {
+      resetTrainingNonCardSquadAiRuntime(squad, previousAgents);
+    }
   }
   const agents = createAgentsForSquad(squad, crowd);
   crowd.nextAgentId += agents.length;
@@ -6372,12 +6917,13 @@ export const updateCrowdSim = (crowd, sim, dt) => {
     remaining: resolveTrainingNavigationPlanBudget(sim),
     at: nowSec
   };
-  sim._minionRecoveryNavigationBudget = {
-    remaining: resolveMinionRecoveryPlanBudget(sim),
+  sim._formationRecoveryNavigationBudget = {
+    remaining: resolveFormationRecoveryPlanBudget(sim),
     at: nowSec
   };
+  sim._minionRecoveryNavigationBudget = sim._formationRecoveryNavigationBudget;
   const decisionSquadIds = squads
-    .filter((squad) => squad && squad.team !== TEAM_NEUTRAL && (Number(squad.remain) || 0) > 0)
+    .filter((squad) => isTrainingCardAiSquad(squad) && (Number(squad.remain) || 0) > 0)
     .map((squad) => String(squad.id || ''))
     .filter(Boolean);
   const decisionLimit = Math.min(resolveTrainingAiDecisionBudget(sim), decisionSquadIds.length);
@@ -6419,6 +6965,10 @@ export const updateCrowdSim = (crowd, sim, dt) => {
     crowd.agentsBySquad.set(squadId, filtered);
     crowd.allAgents.push(...filtered);
   });
+  squads.forEach((squad) => {
+    clearForeignTrainingAiState(squad, crowd.agentsBySquad.get(squad?.id) || []);
+  });
+  prepareTrainingNonCardSquadAiFrame({ sim, crowd, nowSec });
   updateTrainingSquadRespawns({
     sim,
     crowd,
@@ -6430,6 +6980,9 @@ export const updateCrowdSim = (crowd, sim, dt) => {
     const filtered = (Array.isArray(agents) ? agents : []).filter((agent) => agent && !agent.dead && (agent.weight || 0) > 0.001);
     crowd.agentsBySquad.set(squadId, filtered);
     crowd.allAgents.push(...filtered);
+  });
+  squads.forEach((squad) => {
+    clearForeignTrainingAiState(squad, crowd.agentsBySquad.get(squad?.id) || []);
   });
   squads.forEach((squad) => {
     if (!squad || (Number(squad.remain) || 0) <= 0) return;
@@ -6447,7 +7000,7 @@ export const updateCrowdSim = (crowd, sim, dt) => {
   );
   syncMeleeEngagement(crowd, sim, walls, safeDt, Number(sim?.timeElapsed) || 0);
   itemInteractionSystem.step(sim, crowd, safeDt);
-  updateMinionWaveAiFrame({
+  updateTrainingMinionSquadAiFrame({
     sim,
     crowd,
     nowSec,
@@ -6463,8 +7016,15 @@ export const updateCrowdSim = (crowd, sim, dt) => {
   });
 
   squads.forEach((squad) => {
-    if (!squad || squad.remain <= 0) return;
+    if (!squad) return;
+    const squadKind = resolveTrainingSquadKind(squad);
     const agents = crowd.agentsBySquad.get(squad.id) || [];
+    if (squad.remain <= 0) {
+      if (squadKind === TRAINING_SQUAD_KIND.CARD) {
+        resetTrainingCardSquadAiRuntime(squad, agents, { preserveSlots: true });
+      }
+      return;
+    }
     const movementWalls = walls;
     if (!squad.meleeAttackOrder) {
       agents.forEach((agent) => {
@@ -6478,6 +7038,9 @@ export const updateCrowdSim = (crowd, sim, dt) => {
       squad.behavior = 'idle';
       squad.waypoints = [];
       squad.flagBearerAgentId = '';
+      if (squadKind === TRAINING_SQUAD_KIND.CARD) {
+        resetTrainingCardSquadAiRuntime(squad, agents, { preserveSlots: true });
+      }
       return;
     }
     const actionState = ensureSquadActionState(squad);
@@ -6590,7 +7153,7 @@ export const updateCrowdSim = (crowd, sim, dt) => {
     skillCooldowns.support = Math.max(0, (Number(skillCooldowns.support) || 0) - safeDt);
     updateAttackCooldownFromSkills(squad);
     squad.underAttackTimer = Math.max(0, (Number(squad.underAttackTimer) || 0) - safeDt);
-    if (squad?.isMinionWaveUnit !== true) {
+    if (squadKind === TRAINING_SQUAD_KIND.CARD) {
       syncSquadAgentCombatLock({
         squad,
         agents,
@@ -6602,14 +7165,18 @@ export const updateCrowdSim = (crowd, sim, dt) => {
     }
     squad._aiSkillCd = Math.max(0, Number(squad._aiSkillCd) || 0);
 
-    if (squad.team === TEAM_DEFENDER && squad.controlMode !== 'USER' && squad.isMinionWaveUnit !== true) {
+    if (isTrainingCardAiSquad(squad) && squad.team === TEAM_DEFENDER) {
       squad._aiSkillCd = Math.max(0, squad._aiSkillCd - safeDt);
       if (squad._aiSkillCd <= 0) {
         const selectedEnemy = selectTrainingMapEnemyTarget(squad, sim, Number(sim?.timeElapsed) || 0);
         if (squad._trainingAiDecisionDeferred) {
           squad._aiSkillCd = 0.08;
         } else {
-          const nearestEnemy = selectedEnemy || pickNearestEnemySquad(squad, sim?.squads || []);
+          const nearestEnemy = selectedEnemy || (
+            squad?.behavior === 'auto' && squad?._trainingAiPlan
+              ? null
+              : pickNearestEnemySquad(squad, sim?.squads || [])
+          );
           if (nearestEnemy) {
             const classTag = squad.classTag === 'cavalry' || squad.classTag === 'archer' || squad.classTag === 'artillery'
               ? squad.classTag
@@ -6650,21 +7217,79 @@ export const updateCrowdSim = (crowd, sim, dt) => {
     }
 
     const navigationStart = { x: Number(squad.x) || 0, y: Number(squad.y) || 0 };
-    const navigationTarget = (Number(squad?.skillRush?.ttl) || 0) > 0
-      ? null
-      : resolveTrainingNavigationTarget(squad);
+    const navigationTarget = isTrainingCardSquad(squad)
+      && (Number(squad?.skillRush?.ttl) || 0) <= 0
+      ? resolveTrainingNavigationTarget(squad)
+      : null;
     const previousFormationPose = resolveSquadFormationPose(squad);
-    resolveMinionFormationCohesion({
-      squad,
-      agents,
-      nowSec
-    });
     let forward = squad._crowdForward || teamForward(squad.team);
     const rushFromPoint = { x: Number(squad.x) || 0, y: Number(squad.y) || 0 };
     const enemy = (sim.squads || []).find((row) => row.id === squad.targetSquadId && row.remain > 0) || null;
-    if (enemy && squad?.isMinionWaveUnit !== true && !(Array.isArray(squad.waypoints) && squad.waypoints.length > 0)) {
+    if (enemy && squadKind !== TRAINING_SQUAD_KIND.MINION && !(Array.isArray(squad.waypoints) && squad.waypoints.length > 0)) {
       const toEnemy = normalizeVec((enemy.x || 0) - (squad.x || 0), (enemy.y || 0) - (squad.y || 0));
       if (toEnemy.len > 0.0001) forward = { x: toEnemy.x, y: toEnemy.y };
+    }
+    const baseCols = Math.max(1, Number(squad._crowdBaseColumns) || Math.ceil(Math.sqrt(agents.length)));
+    const spacing = (AGENT_RADIUS * 2) + AGENT_GAP;
+    const formationSpacing = normalizeFormationSpacing(squad?.formationSpacing);
+    let formationSpacingScale = FORMATION_SPACING_SCALE[formationSpacing]
+      || FORMATION_SPACING_SCALE[FORMATION_SPACING_STANDARD];
+    const hasMovementWaypoints = Array.isArray(squad.waypoints) && squad.waypoints.length > 0;
+    const passageIntent = (Number(squad.skillRush?.ttl) || 0) > 0
+      || hasMovementWaypoints
+      || squad?._formationArrival?.active === true
+      || squad?._narrowPassage?.active === true;
+    const rearProbeDistance = resolveFormationRearProbeDistance({
+      squad,
+      agents,
+      passage: squad?._narrowPassage
+    });
+    const narrowPassage = passageIntent
+      ? resolveTrainingNarrowPassageState({
+        squad,
+        sim,
+        walls: movementWalls,
+        forward,
+        baseColumns: baseCols,
+        spacing,
+        rearProbeDistance,
+        nowSec
+      })
+      : { active: false, columns: baseCols, width: Infinity, distance: 0 };
+    resolveSquadFormationCohesion({
+      squad,
+      agents,
+      passage: narrowPassage,
+      moving: (Number(squad.skillRush?.ttl) || 0) > 0 || hasMovementWaypoints,
+      nowSec
+    });
+    const cardAiFrame = squadKind === TRAINING_SQUAD_KIND.CARD
+      ? prepareTrainingCardSquadAiFrame({
+        squad,
+        agents,
+        crowd,
+        spatial,
+        squadMap,
+        agentMap,
+        sim,
+        walls: movementWalls,
+        forward,
+        nowSec,
+        moving: (Number(squad.skillRush?.ttl) || 0) > 0 || hasMovementWaypoints
+      })
+      : null;
+    const squadController = cardAiFrame?.formation || null;
+    const controllerPassage = squadController?.terrain?.state === 'PASSAGE'
+      ? {
+        active: true,
+        columns: Math.max(1, Number(squadController?.terrain?.columns) || 1),
+        width: Number(squadController?.terrain?.corridorWidth) || Infinity,
+        distance: Number(squadController?.terrain?.frontClearance) || 0
+      }
+      : null;
+    const activePassage = controllerPassage || narrowPassage;
+    if (squadController) {
+      formationSpacingScale *= clamp(Number(squadController?.terrain?.compression) || 1, 0.76, 1);
     }
     forward = leaderMoveStep(squad, sim, crowd, safeDt, forward, steeringWeights, movementWalls);
     squad._crowdForward = forward;
@@ -6677,23 +7302,8 @@ export const updateCrowdSim = (crowd, sim, dt) => {
       : computeWeightedGroupSpeed(squad, crowd);
     squad._groupSpeedScalar = Math.max(0.2, modeGroupSpeed);
 
-    const baseCols = Math.max(1, Number(squad._crowdBaseColumns) || Math.ceil(Math.sqrt(agents.length)));
     const leaderMoving = ((Number(squad.skillRush?.ttl) || 0) > 0)
       || (Array.isArray(squad.waypoints) && squad.waypoints.length > 0);
-    const spacing = (AGENT_RADIUS * 2) + AGENT_GAP;
-    const formationSpacing = normalizeFormationSpacing(squad?.formationSpacing);
-    const formationSpacingScale = FORMATION_SPACING_SCALE[formationSpacing] || FORMATION_SPACING_SCALE[FORMATION_SPACING_STANDARD];
-    const narrowPassage = leaderMoving
-      ? resolveTrainingNarrowPassageState({
-        squad,
-        sim,
-        walls: movementWalls,
-        forward: formationForward,
-        baseColumns: baseCols,
-        spacing,
-        nowSec
-      })
-      : { active: false, columns: baseCols, width: Infinity, distance: 0 };
     const speedPolicy = typeof squad.speedPolicy === 'string' ? squad.speedPolicy : SPEED_POLICY_MARCH;
     const retreatMode = speedPolicy === SPEED_POLICY_RETREAT;
     const reformMode = speedPolicy === SPEED_POLICY_REFORM;
@@ -6707,9 +7317,12 @@ export const updateCrowdSim = (crowd, sim, dt) => {
     const nearbyWalls = [];
     const statusMultipliers = resolveSquadStatusMultipliers(squad);
     ensureFlagBearer(squad, sorted);
-    const objectiveCandidates = resolveAgentObjectiveCandidates(squad, sim);
+    const objectiveCandidates = isTrainingCardSquad(squad)
+      ? resolveAgentObjectiveCandidates(squad, sim)
+      : [];
 
-    const aiPlanPending = squad._trainingAiDecisionDeferred === true
+    const aiPlanPending = isTrainingCardAiSquad(squad)
+      && squad._trainingAiDecisionDeferred === true
       && !leaderMoving
       && !squad.activeSkill
       && !squad.meleeAttackOrder;
@@ -6732,11 +7345,7 @@ export const updateCrowdSim = (crowd, sim, dt) => {
         );
         if (handled) return;
       }
-      if (
-        agent.isFlagBearer
-        && squad.isNeutralCampUnit !== true
-        && squad.isMinionWaveUnit !== true
-      ) {
+      if (agent.isFlagBearer && squadKind === TRAINING_SQUAD_KIND.CARD) {
         clearAgentCombatTargets(agent);
         const flagOffsetX = -formationForward.x * flagBack;
         const flagOffsetY = -formationForward.y * flagBack;
@@ -6745,18 +7354,24 @@ export const updateCrowdSim = (crowd, sim, dt) => {
         agent.vx = Number(squad.vx) || 0;
         agent.vy = Number(squad.vy) || 0;
         if (Math.abs(agent.vx) + Math.abs(agent.vy) > 0.08) {
-          if (squad.isNeutralCampUnit === true) {
-            updateAgentYawFromVelocity(agent, agent.vx, agent.vy, safeDt);
-          } else {
-            agent.yaw = formationPose.current.yaw;
-          }
+          agent.yaw = formationPose.current.yaw;
         } else {
-          if (squad.isNeutralCampUnit !== true) agent.yaw = Math.atan2(formationForward.y, formationForward.x);
+          agent.yaw = Math.atan2(formationForward.y, formationForward.x);
         }
         agent.state = agent.attackCd > 0 ? 'attack' : 'idle';
         agent.hitTimer = Math.max(0, (Number(agent.hitTimer) || 0) - safeDt);
         return;
       }
+      const standardSlot = resolveAgentFormationSlot(agent, index, baseCols, spacing, formationSpacing);
+      const cardTacticalIntent = resolveTrainingCardAgentTacticalIntent({
+        agent,
+        squad,
+        crowd,
+        agentMap,
+        squadMap,
+        nowSec,
+        fallbackSlot: standardSlot
+      });
       const combatDirective = resolveAgentCombatDirective({
         agent,
         squad,
@@ -6766,13 +7381,14 @@ export const updateCrowdSim = (crowd, sim, dt) => {
         squadMap,
         agentMap,
         nowSec,
-        objectiveCandidates
+        objectiveCandidates,
+        cardTacticalIntent
       });
-      const standardSlot = resolveAgentFormationSlot(agent, index, baseCols, spacing, formationSpacing);
-      const slot = resolveNarrowPassageFormationSlot({
+      const controllerSlot = cardTacticalIntent?.formationSlot || null;
+      const slot = controllerSlot || resolveNarrowPassageFormationSlot({
         index,
         standardSlot,
-        passage: narrowPassage,
+        passage: activePassage,
         spacing,
         spacingScale: formationSpacingScale
       });
@@ -6801,6 +7417,7 @@ export const updateCrowdSim = (crowd, sim, dt) => {
         * ((squad.skillRush?.ttl || 0) > 0 ? 1.45 : 1)
         * castSpeedMul;
       const modeSpeedMul = resolveAgentModeSpeedMul(agent, squad, crowd);
+      const controllerSpeedMul = cardTacticalIntent?.catchUpMultiplier || 1;
       const marchWorldSpeed = Math.max(
         6,
         Number(squad._marchWorldSpeedBase)
@@ -6816,17 +7433,10 @@ export const updateCrowdSim = (crowd, sim, dt) => {
           * weightSlow
           * speedMul
           * modeSpeedMul
+          * controllerSpeedMul
       );
-      const minionRecoveryGuidance = resolveMinionAgentRecoveryGuidance({
-        agent,
-        squad,
-        sim,
-        walls: movementWalls,
-        target: { x: desiredX, y: desiredY },
-        nowSec
-      });
       if (
-        squad?.isMinionWaveUnit === true
+        isTrainingMinionSquad(squad)
         && stepMinionWaveCombatAgent({
           agent,
           squad,
@@ -6842,6 +7452,18 @@ export const updateCrowdSim = (crowd, sim, dt) => {
       const isMelee = isMeleeAgent(agent);
       const hasAnchor = engagementEnabled && isMelee && !!agent.engagePairKey
         && Number.isFinite(Number(agent.engageAx)) && Number.isFinite(Number(agent.engageAy));
+      const formationRecoveryGuidance = resolveAgentFormationRecoveryGuidance({
+        agent,
+        squad,
+        sim,
+        walls: movementWalls,
+        target: { x: desiredX, y: desiredY },
+        enabled: !combatDirective
+          && !hasAnchor
+          && !castOffset.active
+          && !isTrainingNeutralSquad(squad),
+        nowSec
+      });
       const neighbors = querySpatialNearby(spatial, agent.x, agent.y, 12, nearbyAgents);
       const separationDistance = Math.max(AGENT_MIN_FORMATION_SEPARATION_GAP, spacing * formationSpacingScale * 0.94);
       const slotWalls = queryObstacleCandidates(
@@ -6891,7 +7513,7 @@ export const updateCrowdSim = (crowd, sim, dt) => {
           agent.y = formationStep.y;
           agent.vx = (agent.x - previousX) / Math.max(1e-4, safeDt);
           agent.vy = (agent.y - previousY) / Math.max(1e-4, safeDt);
-          if (squad.isNeutralCampUnit === true) {
+          if (squadKind === TRAINING_SQUAD_KIND.NEUTRAL) {
             updateAgentYawFromVelocity(agent, agent.vx, agent.vy, safeDt);
           } else {
             agent.yaw = formationPose.current.yaw;
@@ -6902,6 +7524,8 @@ export const updateCrowdSim = (crowd, sim, dt) => {
         }
         agent._formationLocked = false;
       }
+      const wasFormationHold = agent._formationHold
+        && agent._formationHoldSpacing === formationSpacing;
       agent._formationLocked = false;
       agent._formationHold = false;
       agent._formationHoldSpacing = '';
@@ -6909,8 +7533,7 @@ export const updateCrowdSim = (crowd, sim, dt) => {
         && !leaderMoving
         && (squad.behavior === 'idle' || squad.behavior === 'move' || squad.behavior === 'standby');
       const leaderSettling = !leaderMoving || (Math.hypot(Number(squad.vx) || 0, Number(squad.vy) || 0) <= AGENT_SETTLE_SPEED);
-      const shouldKeepFormationHold = agent._formationHold
-        && agent._formationHoldSpacing === formationSpacing
+      const shouldKeepFormationHold = wasFormationHold
         && toDesired.len <= AGENT_IDLE_RELEASE_RADIUS;
       const shouldHoldFormation = !combatDirective && !hasAnchor && stationaryHold && (
         toDesired.len <= AGENT_IDLE_DEADZONE || shouldKeepFormationHold
@@ -6930,7 +7553,9 @@ export const updateCrowdSim = (crowd, sim, dt) => {
       agent._formationHold = false;
       agent._formationHoldSpacing = '';
 
-      const sep = computeTeamAwareSeparation(agent, neighbors, separationDistance);
+      const sep = computeTeamAwareSeparation(agent, neighbors, separationDistance, {
+        allowOwnSquadSoftSeparation: !!combatDirective || hasAnchor
+      });
       const sepScale = combatDirective
         ? 1
         : stationaryHold
@@ -6954,10 +7579,10 @@ export const updateCrowdSim = (crowd, sim, dt) => {
         && !leaderMoving
         && toDesired.len <= AGENT_SETTLE_RADIUS
       );
-      const recoveryDirection = minionRecoveryGuidance?.active
+      const recoveryDirection = formationRecoveryGuidance?.active
         ? normalizeVec(
-          (Number(minionRecoveryGuidance?.x) || 0) - (Number(agent?.x) || 0),
-          (Number(minionRecoveryGuidance?.y) || 0) - (Number(agent?.y) || 0)
+          (Number(formationRecoveryGuidance?.x) || 0) - (Number(agent?.x) || 0),
+          (Number(formationRecoveryGuidance?.y) || 0) - (Number(agent?.y) || 0)
         )
         : null;
       const steeringDirection = combatSteering?.moving
@@ -6972,14 +7597,12 @@ export const updateCrowdSim = (crowd, sim, dt) => {
       const sepGainLocal = sepGain * settleBlend;
       const avoidGainLocal = avoidGain * settleBlend;
       const slotSpeed = speed * slotGain * slotArrivalRate;
-      const formationRecovery = resolveCriticallyDampedFormationVelocity({
+      const directFormationVelocity = resolveDirectFormationVelocity({
         agent,
         targetX: desiredX,
         targetY: desiredY,
-        targetVx: targetSlotVx,
-        targetVy: targetSlotVy,
-        maxRelativeSpeed: speed * slotGain * (toDesired.len > formationEnvelope.softRadius ? 1.15 : 0.9),
-        settling: leaderSettling,
+        maxRelativeSpeed: speed * slotGain * 1.15,
+        deadzone: leaderSettling ? AGENT_SETTLE_DEADZONE : 0,
         dt: safeDt
       });
       let desiredVx;
@@ -7004,12 +7627,12 @@ export const updateCrowdSim = (crowd, sim, dt) => {
         const separationSteer = combatSteering.holding ? 0.3 : AGENT_COMBAT_SEPARATION_STEER;
         const avoidanceSteer = combatSteering.moving && !combatDirective.formationBound ? 0.46 : 0;
         desiredVx = (combatSteering.x * combatSpeed * targetSteer)
-          + (formationRecovery.vx * formationRecoveryScale)
+          + (directFormationVelocity.vx * formationRecoveryScale)
           + (toDesired.x * slotSpeed * slotW * formationSteer)
           + (sep.x * 40 * separationSteer * sepW)
           + (avoid.x * combatSpeed * avoidanceSteer * avoidW);
         desiredVy = (combatSteering.y * combatSpeed * targetSteer)
-          + (formationRecovery.vy * formationRecoveryScale)
+          + (directFormationVelocity.vy * formationRecoveryScale)
           + (toDesired.y * slotSpeed * slotW * formationSteer)
           + (sep.y * 40 * separationSteer * sepW)
           + (avoid.y * combatSpeed * avoidanceSteer * avoidW);
@@ -7017,21 +7640,20 @@ export const updateCrowdSim = (crowd, sim, dt) => {
           desiredVx = 0;
           desiredVy = 0;
         }
-      } else if (minionRecoveryGuidance?.active && recoveryDirection) {
-        const recoverySpeed = speed * Math.max(1, Number(minionRecoveryGuidance?.speedMul) || 1);
-        desiredVx = (recoveryDirection.x * recoverySpeed)
-          + (targetSlotVx * 0.16)
+      } else if (formationRecoveryGuidance?.active && recoveryDirection) {
+        const recoverySpeed = speed * Math.max(1, Number(formationRecoveryGuidance?.speedMul) || 1);
+        const recoveryStepSpeed = Math.min(recoverySpeed, recoveryDirection.len / Math.max(0.001, safeDt));
+        desiredVx = (recoveryDirection.x * recoveryStepSpeed)
           + (sep.x * 40 * sepScale * sepGainLocal * sepW)
           + (avoid.x * recoverySpeed * avoidGainLocal * 0.42 * avoidW);
-        desiredVy = (recoveryDirection.y * recoverySpeed)
-          + (targetSlotVy * 0.16)
+        desiredVy = (recoveryDirection.y * recoveryStepSpeed)
           + (sep.y * 40 * sepScale * sepGainLocal * sepW)
           + (avoid.y * recoverySpeed * avoidGainLocal * 0.42 * avoidW);
       } else {
-        desiredVx = formationRecovery.vx
+        desiredVx = directFormationVelocity.vx
           + (sep.x * 40 * sepScale * sepGainLocal * sepW)
           + (avoid.x * speed * avoidGainLocal * 0.5 * avoidW);
-        desiredVy = formationRecovery.vy
+        desiredVy = directFormationVelocity.vy
           + (sep.y * 40 * sepScale * sepGainLocal * sepW)
           + (avoid.y * speed * avoidGainLocal * 0.5 * avoidW);
       }
@@ -7064,20 +7686,27 @@ export const updateCrowdSim = (crowd, sim, dt) => {
         desiredVx = 0;
         desiredVy = 0;
       }
-      const accelStep = clampVecLength(
-        desiredVx - (Number(agent.vx) || 0),
-        desiredVy - (Number(agent.vy) || 0),
-        accelCap * safeDt
-      );
-      let vx = (Number(agent.vx) || 0) + accelStep.x;
-      let vy = (Number(agent.vy) || 0) + accelStep.y;
+      const usesDirectFormationMotion = !combatDirective && !hasAnchor;
+      const accelStep = usesDirectFormationMotion
+        ? null
+        : clampVecLength(
+            desiredVx - (Number(agent.vx) || 0),
+            desiredVy - (Number(agent.vy) || 0),
+            accelCap * safeDt
+          );
+      let vx = usesDirectFormationMotion
+        ? desiredVx
+        : (Number(agent.vx) || 0) + accelStep.x;
+      let vy = usesDirectFormationMotion
+        ? desiredVy
+        : (Number(agent.vy) || 0) + accelStep.y;
       if (lockCombatPosition) {
         vx = 0;
         vy = 0;
       }
       const vLen = Math.hypot(vx, vy);
-      const maxV = speed * (minionRecoveryGuidance?.active
-        ? Math.max(1.15, (Number(minionRecoveryGuidance?.speedMul) || 1) + 0.04)
+      const maxV = speed * (formationRecoveryGuidance?.active
+        ? Math.max(1.15, (Number(formationRecoveryGuidance?.speedMul) || 1) + 0.04)
         : 1.15);
       if (vLen > maxV) {
         vx = (vx / vLen) * maxV;
@@ -7165,7 +7794,7 @@ export const updateCrowdSim = (crowd, sim, dt) => {
       }
       agent.hitTimer = Math.max(0, (Number(agent.hitTimer) || 0) - safeDt);
       if (Math.abs(vx) + Math.abs(vy) > 0.08) {
-        if (squad.isNeutralCampUnit === true) {
+        if (squadKind === TRAINING_SQUAD_KIND.NEUTRAL) {
           updateAgentYawFromVelocity(agent, vx, vy, safeDt);
         } else {
           agent.yaw = Math.atan2(vy, vx);
@@ -7188,9 +7817,28 @@ export const updateCrowdSim = (crowd, sim, dt) => {
     }
 
     trimOrGrowAgents(squad, agents, crowd, safeDt);
-    aggregateSquadFromAgents(squad, crowd.agentsBySquad.get(squad.id) || []);
-    restoreMinionAuthoritativeAnchor(squad);
-    if (squad?.isMinionWaveUnit !== true) {
+    const liveSquadAgents = crowd.agentsBySquad.get(squad.id) || [];
+    aggregateSquadFromAgents(squad, liveSquadAgents);
+    restoreMinionSquadHoldAnchor(squad);
+    completeTrainingCardSquadAiFrame({
+      squad,
+      agents: liveSquadAgents,
+      nowSec,
+      forward: squad._crowdForward || forward
+    });
+    updateSquadFormationChangeCompletion({
+      squad,
+      agents: liveSquadAgents,
+      passage: activePassage,
+      nowSec
+    });
+    updateSquadFormationArrival({
+      squad,
+      agents: liveSquadAgents,
+      passage: activePassage,
+      nowSec
+    });
+    if (isTrainingCardSquad(squad)) {
       updateTrainingNavigationRecovery({
         squad,
         sim,
@@ -7201,15 +7849,19 @@ export const updateCrowdSim = (crowd, sim, dt) => {
         dt: safeDt
       });
     }
-    syncTrainingMapAiState({
-      squad,
-      sim,
-      nowSec,
-      selection: squad._trainingAiSelection,
-      reason: (Number(squad?._trainingTargetNavigation?.blockedUntil) || 0) > nowSec
-        ? 'target-path-deferred'
-        : ''
-    });
+    if (isTrainingCardAiSquad(squad)) {
+      syncTrainingMapAiState({
+        squad,
+        sim,
+        nowSec,
+        selection: squad._trainingAiSelection,
+        reason: (Number(squad?._trainingTargetNavigation?.blockedUntil) || 0) > nowSec
+          ? 'target-path-deferred'
+          : ''
+      });
+    } else {
+      clearTrainingCardAiState(squad, liveSquadAgents);
+    }
   });
 
   crowd.allAgents = [];

@@ -31,13 +31,25 @@ import {
   canAcquireSquadTarget,
   isHostileTeam
 } from './teamRelations';
-import { selectTrainingMapAiTarget } from '../TrainingMapAi';
 import {
   completeTargetOnlyAttackOrder,
   isSquadCombatEnabled,
   isTargetOnlyAttackOrder
 } from './combatPolicy';
-import { resolveMinionWaveAgentAttackRange } from './MinionWaveAi';
+import {
+  clearTrainingCardAiState,
+  selectTrainingMapAiTarget
+} from './TrainingCardSquadAi';
+import {
+  resolveMinionWaveAgentAttackRange,
+  resolveNeutralCampCombatDirective,
+  resolveNeutralCampTarget
+} from './TrainingNonCardSquadAi';
+import {
+  isTrainingCardAiSquad,
+  resolveTrainingSquadKind,
+  TRAINING_SQUAD_KIND
+} from './TrainingSquadKind';
 
 const ORDER_ATTACK_MOVE = 'ATTACK_MOVE';
 const ORDER_CHARGE = 'CHARGE';
@@ -311,6 +323,13 @@ const pickNearestEnemyAgent = (agent, enemyAgents = []) => {
 };
 
 export const pickRangedEnemyAgent = (agent, enemyAgents = [], attackRange = {}) => {
+  const controllerTargetId = String(agent?._squadController?.combatTargetId || '');
+  if (controllerTargetId) {
+    const controllerTarget = (Array.isArray(enemyAgents) ? enemyAgents : []).find((target) => (
+      target && !target.dead && String(target?.id || '') === controllerTargetId
+    ));
+    if (controllerTarget) return controllerTarget;
+  }
   const ranked = (Array.isArray(enemyAgents) ? enemyAgents : [])
     .filter((target) => target && !target.dead)
     .map((target) => {
@@ -903,6 +922,100 @@ const updateAssignedMinionCombat = ({
   });
 };
 
+const updateNeutralCampCombat = ({
+  sim = {},
+  crowd = {},
+  squad = {},
+  squadMap = new Map(),
+  agentMap = new Map(),
+  safeDt = 0,
+  damageExponent = 0.75
+} = {}) => {
+  const agents = crowd?.agentsBySquad?.get?.(squad.id) || [];
+  agents.forEach((agent) => {
+    if (!agent || agent.dead) return;
+    agent.attackCd = Math.max(0, (Number(agent.attackCd) || 0) - safeDt);
+  });
+  if (!isSquadCombatEnabled(squad)) {
+    squad.targetSquadId = '';
+    clearCrowdCombatAgentTargets(agents);
+    return;
+  }
+  const targetSquad = resolveNeutralCampTarget(squad, sim);
+  if (!targetSquad || (Number(targetSquad?.remain) || 0) <= 0) {
+    squad.targetSquadId = '';
+    clearCrowdCombatAgentTargets(agents);
+    return;
+  }
+  agents.forEach((agent) => {
+    if (!agent || agent.dead || agent.unitCategory === 'support') return;
+    const directive = resolveNeutralCampCombatDirective({
+      agent,
+      squad,
+      sim,
+      crowd,
+      squadMap,
+      agentMap
+    });
+    const target = directive?.target;
+    if (!target || target.dead) {
+      agent.targetAgentId = '';
+      agent._combatDirective = null;
+      return;
+    }
+    const attackRange = directive.attackRange || resolveAgentAttackRange(agent, squad);
+    const distance = Math.hypot(
+      (Number(target.x) || 0) - (Number(agent.x) || 0),
+      (Number(target.y) || 0) - (Number(agent.y) || 0)
+    );
+    if (!isDistanceWithinSquadAttackRange(distance, attackRange)) return;
+    if ((Number(agent.attackCd) || 0) > 0) return;
+    const weightScale = damageScaleFromWeight(agent.weight, damageExponent);
+    const baseDamage = Math.max(
+      0.18,
+      ((Number(squad.stats?.atk) || 10) * 0.035) * damageScaleFromAgent(agent, damageExponent)
+    );
+    const targetAgentSquad = squadMap.get(String(target.squadId || '')) || targetSquad;
+    const rpsMul = resolveRpsMul(squad, targetAgentSquad);
+    if (isRangedAgent(agent)) {
+      spawnRangedProjectiles(
+        sim,
+        crowd,
+        squad,
+        agent,
+        target,
+        agent.typeCategory === 'artillery' ? 'artillery' : 'archer',
+        baseDamage,
+        {
+          movingPenalty: false,
+          speedRatio: 0,
+          forceAccurate: true,
+          rpsHitMul: 1,
+          targetAgentId: target.id,
+          guaranteedHit: true
+        }
+      );
+    } else {
+      applyDamageToAgent(sim, crowd, agent, target, baseDamage, 'slash', {
+        poiseDamageMul: rpsMul.poiseDamageMul || 1
+      });
+      acquireHitEffect(crowd.effectsPool, {
+        type: 'slash',
+        x: ((Number(agent.x) || 0) + (Number(target.x) || 0)) * 0.5,
+        y: ((Number(agent.y) || 0) + (Number(target.y) || 0)) * 0.5,
+        z: 1.8,
+        radius: Math.max(2, Math.min(5.5, weightScale * 1.2)),
+        ttl: 0.12,
+        team: squad.team
+      });
+    }
+    agent.state = 'attack';
+    const cadenceOffset = (Math.max(0, Math.floor(Number(agent.slotOrder) || 0)) % 5) * 0.02;
+    agent.attackCd = cooldownByCategory(agent.typeCategory || squad.classTag) * (0.96 + cadenceOffset);
+    squad.action = '中立交战';
+  });
+};
+
 export const updateCrowdCombat = (sim, crowd, dt) => {
   const safeDt = Math.max(0, Number(dt) || 0);
   const damageExponent = Math.max(0.2, Math.min(1.25, Number(sim?.repConfig?.damageExponent) || 0.75));
@@ -939,6 +1052,36 @@ export const updateCrowdCombat = (sim, crowd, dt) => {
     const orderType = typeof squad?.order?.type === 'string' ? squad.order.type : '';
     const nowSec = Number(sim?.timeElapsed) || 0;
     const squadAgents = crowd.agentsBySquad.get(squad.id) || [];
+    const squadKind = resolveTrainingSquadKind(squad);
+    if (squadKind === TRAINING_SQUAD_KIND.NEUTRAL) {
+      clearTrainingCardAiState(squad, squadAgents);
+      updateNeutralCampCombat({
+        sim,
+        crowd,
+        squad,
+        squadMap,
+        agentMap,
+        safeDt,
+        damageExponent
+      });
+      return;
+    }
+    if (squadKind === TRAINING_SQUAD_KIND.MINION) {
+      clearTrainingCardAiState(squad, squadAgents);
+      updateAssignedMinionCombat({
+        sim,
+        crowd,
+        squad,
+        squadMap,
+        agentMap,
+        safeDt,
+        damageExponent
+      });
+      return;
+    }
+    if (!isTrainingCardAiSquad(squad)) {
+      clearTrainingCardAiState(squad, squadAgents);
+    }
     if (isTargetOnlyAttackOrder(squad)) {
       const targetBuildingId = String(squad?.order?.targetBuildingId || '');
       if (targetBuildingId) {
@@ -985,17 +1128,27 @@ export const updateCrowdCombat = (sim, crowd, dt) => {
       return;
     }
     if (squad.activeSkill && (squad.classTag === 'archer' || squad.classTag === 'artillery')) return;
-    if (squad?.isMinionWaveUnit === true) {
-      updateAssignedMinionCombat({
-        sim,
-        crowd,
-        squad,
-        squadMap,
-        agentMap,
-        safeDt,
-        damageExponent
-      });
-      return;
+    const strategicPlan = (
+      isTrainingCardAiSquad(squad)
+      && sim?.trainingMap
+      && squad?._trainingAiPlan
+      && !isTargetOnlyAttackOrder(squad)
+    ) ? squad._trainingAiPlan : null;
+    if (strategicPlan) {
+      const strategicTargetId = String(strategicPlan?.targetSquadId || '');
+      const strategicTarget = strategicTargetId
+        ? activeSquads.find((candidate) => (
+          String(candidate?.id || '') === strategicTargetId
+          && canAcquireSquadTarget(squad, candidate)
+          && !isSquadHiddenForViewerTeam(candidate, squad.team)
+        )) || null
+        : null;
+      if (!strategicTarget) {
+        squad.targetSquadId = '';
+        clearCrowdCombatAgentTargets(squadAgents, !!squad.targetBuildingId);
+        return;
+      }
+      squad.targetSquadId = strategicTarget.id;
     }
     const enemySquads = activeSquads.filter((candidate) => canAcquireSquadTarget(squad, candidate));
     if (enemySquads.length <= 0) {
@@ -1034,17 +1187,8 @@ export const updateCrowdCombat = (sim, crowd, dt) => {
     let targetSquad = explicitTargetSquadId
       ? visibleEnemySquads.find((enemy) => String(enemy?.id || '') === explicitTargetSquadId) || null
       : (assignedTargetSquad || lockedTargetSquad);
-    const usesLocalMinionPriority = squad?.isMinionWaveUnit === true;
     const guard = squad?.guard?.enabled ? squad.guard : null;
-    const neutralRetaliationId = squad?.team === 'neutral'
-      ? String(squad?.lastDamagedBySquadId || squad?.targetSquadId || squad?._combatEngagementTargetId || '')
-      : '';
-    if (!targetSquad && neutralRetaliationId) {
-      targetSquad = visibleEnemySquads.find((enemy) => (
-        String(enemy?.id || '') === neutralRetaliationId
-      )) || null;
-    }
-    if (guard && squad?.team !== 'neutral' && nowSec >= (Number(squad._guardRetargetAt) || 0)) {
+    if (guard && nowSec >= (Number(squad._guardRetargetAt) || 0)) {
       let bestGuardTarget = null;
       let bestGuardScore = -Infinity;
       const gcx = Number(guard.cx) || (Number(squad.x) || 0);
@@ -1116,8 +1260,8 @@ export const updateCrowdCombat = (sim, crowd, dt) => {
           .sort((a, b) => Math.hypot((a.x || 0) - (squad.x || 0), (a.y || 0) - (squad.y || 0))
             - Math.hypot((b.x || 0) - (squad.x || 0), (b.y || 0) - (squad.y || 0)))[0]
         || null;
-    } else if (!usesLocalMinionPriority) {
-      const trainingSelection = !targetSquad && sim?.trainingMap
+    } else {
+      const trainingSelection = !targetSquad && sim?.trainingMap && isTrainingCardAiSquad(squad)
         ? selectTrainingMapAiTarget(squad, sim, { candidates: visibleEnemySquads, nowSec })
         : null;
       if (trainingSelection) {

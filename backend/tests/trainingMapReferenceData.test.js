@@ -301,8 +301,10 @@ test('three reference routes remain continuous across the central sand', () => {
     probeDistance: 48,
     probeStep: 2,
     entryDistance: 38,
-    releaseSeconds: 3.2
+    releaseSeconds: 0.65
   });
+  assert.equal(navigation.navigationRules.aiNavigationSearchNodes, 128);
+  assert.equal(navigation.navigationRules.formationRecoveryPlansPerStep, 4);
   assert.equal(navigation.navigationRules.aiTargetUnreachableFailureLimit, 3);
   assert.equal(navigation.navigationRules.aiTargetUnreachableCooldownSeconds, 2);
   assert.deepEqual(navigation.navigationRules.aiTargetScoring, {

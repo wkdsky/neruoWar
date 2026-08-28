@@ -1,3 +1,5 @@
+import { resetTrainingCardSquadAiRuntime } from '../crowd/TrainingCardSquadAi';
+
 const TEAM_ATTACKER = 'attacker';
 const TEAM_DEFENDER = 'defender';
 
@@ -21,6 +23,9 @@ const hasRespawnPoint = (squad = {}) => (
 );
 
 const resetSquadForRespawn = (squad = {}, point = {}, nowSec = 0) => {
+  // The replacement crowd agents receive new persistent slots on their first
+  // controller frame; no old target/engagement/reservation may cross respawn.
+  resetTrainingCardSquadAiRuntime(squad, [], { preserveSlots: false });
   const facingRad = finiteNumber(point?.facingRad, squad?.initialFacingRad);
   squad.x = finiteNumber(point?.x);
   squad.y = finiteNumber(point?.y);
@@ -92,6 +97,7 @@ const resetSquadForRespawn = (squad = {}, point = {}, nowSec = 0) => {
 };
 
 const queueSquadRespawn = (squad = {}, nowSec = 0, delaySec = 20) => {
+  resetTrainingCardSquadAiRuntime(squad, [], { preserveSlots: false });
   const safeNow = Math.max(0, finiteNumber(nowSec));
   const safeDelay = normalizeRespawnDelay(delaySec);
   squad.remain = 0;

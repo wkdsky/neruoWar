@@ -509,7 +509,7 @@ describe('BattleRuntime training control', () => {
     });
   });
 
-  test('starts an AI squad toward a direct goal instead of consuming the formal lane path', () => {
+  test('starts an AI squad inward along its strategic lane direction', () => {
     const init = buildThreeLaneMapInit();
     init.battlefield.map.mapId = 'training-war-map-v1';
     init.battlefield.map.lanes = [{
@@ -535,10 +535,19 @@ describe('BattleRuntime training control', () => {
     runtime.step(0.1);
 
     const squad = runtime.getSquadById('defender_squad_1');
-    expect(squad.autoNavigation).toMatchObject({ goalId: 'field-edge:defender' });
+    expect(squad.debugAiPlan).toMatchObject({
+      kind: 'PUSH_LANE',
+      laneId: 'mid',
+      targetSquadId: ''
+    });
+    expect(squad.autoNavigation).toMatchObject({
+      goalId: 'PUSH_LANE:mid:lane',
+      planKind: 'PUSH_LANE'
+    });
     expect(squad.waypoints).toHaveLength(1);
-    expect(squad.waypoints[0].x).toBeLessThan(-500);
-    expect(squad.waypoints[0].y).toBe(0);
+    expect(squad.waypoints[0].x).toBeLessThan(420);
+    expect(squad.waypoints[0].y).toBeGreaterThan(0);
+    expect(squad.targetSquadId).toBe('');
   });
 
   test('keeps the reference highland-to-mid-tower march near eight seconds', () => {
@@ -930,6 +939,11 @@ describe('BattleRuntime training control', () => {
 
     const squad = runtime.getSquadById('attacker_squad_1');
     const beforeSlots = runtime.crowd.agentsBySquad.get(squad.id).map((agent) => ({ ...agent.formationSlot }));
+    const beforePositions = new Map(runtime.crowd.agentsBySquad.get(squad.id).map((agent) => [
+      agent.id,
+      { x: agent.x, y: agent.y }
+    ]));
+    const anchorBefore = { x: squad.x, y: squad.y };
     const result = runtime.setDeployGroupFormation(squad.id, formations[1], 'attacker');
 
     expect(result).toMatchObject({ ok: true, reforming: true, reformDurationSec: 4.6 });
@@ -943,6 +957,12 @@ describe('BattleRuntime training control', () => {
     expect(runtime.crowd.agentsBySquad.get(squad.id).map((agent) => agent.formationSlot)).not.toEqual(beforeSlots);
 
     runtime.step(0.05);
+    expect(squad.x).toBeCloseTo(anchorBefore.x, 6);
+    expect(squad.y).toBeCloseTo(anchorBefore.y, 6);
+    expect(runtime.crowd.agentsBySquad.get(squad.id).some((agent) => {
+      const before = beforePositions.get(agent.id);
+      return before && Math.hypot(agent.x - before.x, agent.y - before.y) > 0.01;
+    })).toBe(true);
     expect(runtime.getCardRows().find((row) => row.id === squad.id)).toMatchObject({
       action: '换阵中',
       formationChange: expect.objectContaining({ toFormationId: 'column' })
@@ -1008,6 +1028,136 @@ describe('BattleRuntime training control', () => {
 
     expect(squad.formationChange).toBeNull();
     expect(squad.speedPolicy).toBe('MARCH');
+  });
+
+  test('reapplies the same formation at the same anchor and physically restores displaced soldiers', () => {
+    const runtime = new BattleRuntime(buildInit());
+    const formations = buildFormationTemplates();
+    const created = runtime.createDeployGroup('attacker', {
+      units: { infantry_basic: 100 },
+      x: -420,
+      y: 0,
+      placed: true,
+      controlMode: 'USER',
+      templateFormations: formations,
+      activeFormationId: 'line'
+    });
+
+    expect(created.ok).toBe(true);
+    expect(runtime.startBattle().ok).toBe(true);
+
+    const squad = runtime.getSquadById('attacker_squad_1');
+    const displaced = runtime.crowd.agentsBySquad.get(squad.id)
+      .find((agent) => !agent.dead && !agent.isFlagBearer);
+    const anchorBefore = { x: squad.x, y: squad.y };
+    displaced.x -= 70;
+    displaced.y += 34;
+    displaced.vx = 0;
+    displaced.vy = 0;
+    displaced._formationLocked = false;
+    const displacedBefore = { x: displaced.x, y: displaced.y };
+
+    const result = runtime.setDeployGroupFormation(squad.id, formations[0], 'attacker');
+
+    expect(result).toMatchObject({ ok: true, changed: true, reforming: true });
+    expect(squad.formationChange).toMatchObject({
+      fromFormationId: 'line',
+      toFormationId: 'line'
+    });
+    runtime.step(0.05);
+    expect(squad.x).toBeCloseTo(anchorBefore.x, 6);
+    expect(squad.y).toBeCloseTo(anchorBefore.y, 6);
+    expect(Math.hypot(displaced.x - displacedBefore.x, displaced.y - displacedBefore.y)).toBeGreaterThan(0);
+
+    for (let index = 0; index < 320 && squad.formationChange; index += 1) runtime.step(0.05);
+
+    const forward = {
+      x: Math.cos(squad.formationRect.facingRad),
+      y: Math.sin(squad.formationRect.facingRad)
+    };
+    const side = { x: -forward.y, y: forward.x };
+    const expected = {
+      x: squad.x + (side.x * displaced.formationSlot.side) + (forward.x * displaced.formationSlot.front),
+      y: squad.y + (side.y * displaced.formationSlot.side) + (forward.y * displaced.formationSlot.front)
+    };
+    expect(squad.formationChange).toBeNull();
+    expect(Math.hypot(displaced.x - expected.x, displaced.y - expected.y)).toBeLessThan(2.4);
+  });
+
+  test('keeps formation change active after its minimum time until every slot converges', () => {
+    const runtime = new BattleRuntime(buildInit());
+    const formations = buildFormationTemplates();
+    const created = runtime.createDeployGroup('attacker', {
+      units: { infantry_basic: 100 },
+      x: -420,
+      y: 0,
+      placed: true,
+      controlMode: 'USER',
+      templateFormations: formations,
+      activeFormationId: 'line'
+    });
+
+    expect(created.ok).toBe(true);
+    expect(runtime.startBattle().ok).toBe(true);
+
+    const squad = runtime.getSquadById('attacker_squad_1');
+    expect(runtime.setDeployGroupFormation(squad.id, formations[1], 'attacker')).toMatchObject({
+      ok: true,
+      reforming: true
+    });
+    const blocked = runtime.crowd.agentsBySquad.get(squad.id)
+      .find((agent) => !agent.dead && !agent.isFlagBearer);
+
+    for (let index = 0; index < 94; index += 1) {
+      blocked.x = squad.x - 90;
+      blocked.y = squad.y + 52;
+      blocked.vx = 0;
+      blocked.vy = 0;
+      blocked._formationLocked = false;
+      runtime.step(0.05);
+    }
+
+    expect(squad.formationChange).not.toBeNull();
+    expect(squad.formationChange.remainingSec).toBe(0);
+    expect(squad.formationChange.maximumError).toBeGreaterThan(20);
+    expect(squad.action).toBe('换阵中');
+  });
+
+  test('clears a stale arrival assembly when an explicit behavior or guard order replaces it', () => {
+    const runtime = new BattleRuntime(buildInit());
+    const created = runtime.createDeployGroup('attacker', {
+      units: { infantry_basic: 20 },
+      x: -420,
+      y: 0,
+      placed: true,
+      controlMode: 'USER'
+    });
+
+    expect(created.ok).toBe(true);
+    expect(runtime.startBattle().ok).toBe(true);
+    const squad = runtime.getSquadById('attacker_squad_1');
+    const markStaleArrival = () => {
+      squad._formationArrival = { active: true, orderType: 'MOVE', targetX: squad.x, targetY: squad.y };
+      squad.formationArrivalState = 'ASSEMBLING';
+      squad.formationArrivalError = 99;
+    };
+    const expectCleared = () => {
+      expect(squad._formationArrival).toBeNull();
+      expect(squad.formationArrivalState).toBe('');
+      expect(squad.formationArrivalError).toBe(0);
+    };
+
+    ['standby', 'idle', 'auto', 'defend', 'retreat'].forEach((behavior) => {
+      markStaleArrival();
+      expect(runtime.commandBehavior(squad.id, behavior)).toBe(true);
+      expectCleared();
+    });
+    markStaleArrival();
+    expect(runtime.commandGuard(squad.id, { centerX: squad.x, centerY: squad.y, radius: 50 })).toBe(true);
+    expectCleared();
+    markStaleArrival();
+    expect(runtime.commandSetWaypoints(squad.id, [])).toBe(true);
+    expectCleared();
   });
 
   test('rotates a template formation without rebuilding its custom slots', () => {

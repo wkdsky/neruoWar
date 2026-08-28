@@ -1,3 +1,9 @@
+import {
+  isTrainingCardAiSquad,
+  isTrainingMinionSquad,
+  isTrainingNeutralSquad
+} from './TrainingSquadKind';
+
 export const ORDER_IDLE = 'IDLE';
 export const ORDER_MOVE = 'MOVE';
 export const ORDER_ATTACK_MOVE = 'ATTACK_MOVE';
@@ -28,10 +34,12 @@ export const completeTargetOnlyAttackOrder = (squad = {}, nowSec = 0) => {
   squad._attackMoveResumeWaypoints = [];
   squad._plannedMoveWaypoints = [];
   squad._plannedMoveWaypointIndex = 0;
-  squad._trainingAiSelection = null;
-  squad._trainingAiDecisionDeferred = false;
-  squad._trainingAiTargetCache = null;
-  squad._trainingTargetNavigation = null;
+  if (isTrainingCardAiSquad(squad)) {
+    squad._trainingAiSelection = null;
+    squad._trainingAiDecisionDeferred = false;
+    squad._trainingAiTargetCache = null;
+    squad._trainingTargetNavigation = null;
+  }
   squad._navigationWaitUntil = 0;
   squad.waypoints = [];
   squad.vx = 0;
@@ -54,7 +62,7 @@ export const completeTargetOnlyAttackOrder = (squad = {}, nowSec = 0) => {
 
 export const isSquadCombatEnabled = (squad = {}) => {
   if (!squad || (Number(squad?.remain) || 0) <= 0) return false;
-  if (squad?.team === 'neutral') {
+  if (isTrainingNeutralSquad(squad)) {
     return (Number(squad?.underAttackTimer) || 0) > 0.05
       || !!String(squad?.targetSquadId || '').trim()
       || !!String(squad?._combatEngagementTargetId || '').trim();
@@ -64,7 +72,7 @@ export const isSquadCombatEnabled = (squad = {}) => {
   if (squad?.guard?.enabled) return true;
   const orderType = resolveSquadCombatOrderType(squad);
   if (orderType === ORDER_ATTACK_MOVE || orderType === ORDER_CHARGE) return true;
-  if (squad?.isMinionWaveUnit === true) return true;
+  if (isTrainingMinionSquad(squad)) return true;
   if (squad?.controlMode === 'USER') return false;
   return behavior === 'auto'
     || behavior === 'guard'

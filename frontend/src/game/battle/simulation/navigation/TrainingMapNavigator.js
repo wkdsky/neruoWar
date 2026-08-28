@@ -28,6 +28,26 @@ const distance = (left = {}, right = {}) => Math.hypot(
   finiteNumber(left?.y) - finiteNumber(right?.y)
 );
 
+const isPointInsidePolygon = (point = {}, polygon = []) => {
+  if (!Array.isArray(polygon) || polygon.length < 3) return false;
+  const targetX = finiteNumber(point?.x);
+  const targetY = finiteNumber(point?.y);
+  let inside = false;
+  for (let index = 0, previousIndex = polygon.length - 1; index < polygon.length; previousIndex = index, index += 1) {
+    const current = polygon[index] || {};
+    const previous = polygon[previousIndex] || {};
+    const currentY = finiteNumber(current?.y);
+    const previousY = finiteNumber(previous?.y);
+    const crosses = ((currentY > targetY) !== (previousY > targetY))
+      && targetX < (
+        ((finiteNumber(previous?.x) - finiteNumber(current?.x)) * (targetY - currentY))
+        / ((previousY - currentY) || 1e-9)
+      ) + finiteNumber(current?.x);
+    if (crosses) inside = !inside;
+  }
+  return inside;
+};
+
 const buildKey = (column, row) => `${column}:${row}`;
 
 const compareOpenNodes = (left = {}, right = {}) => (
@@ -374,6 +394,19 @@ const reduceRoute = (
   return reduced;
 };
 
+const joinRoutePoints = (...routes) => {
+  const joined = [];
+  routes.forEach((route) => {
+    (Array.isArray(route) ? route : []).forEach((point) => {
+      if (!point) return;
+      const candidate = { x: finiteNumber(point?.x), y: finiteNumber(point?.y) };
+      if (joined.length > 0 && distance(joined[joined.length - 1], candidate) <= 0.01) return;
+      joined.push(candidate);
+    });
+  });
+  return joined;
+};
+
 const normalizeDirection = (from = {}, to = {}) => {
   const deltaX = finiteNumber(to?.x) - finiteNumber(from?.x);
   const deltaY = finiteNumber(to?.y) - finiteNumber(from?.y);
@@ -540,7 +573,7 @@ const resolveLocalDetourRoute = ({
   return null;
 };
 
-const resolveLaneGuidedRoute = ({
+export const resolveTrainingHighlandExitPortal = ({
   mapConfig = null,
   start = {},
   target = {},
@@ -548,14 +581,113 @@ const resolveLaneGuidedRoute = ({
   clearance = 0,
   field = null
 } = {}) => {
+  const region = (Array.isArray(mapConfig?.terrainRegions) ? mapConfig.terrainRegions : [])
+    .find((entry) => (
+      String(entry?.type || '').startsWith('highland-')
+      && isPointInsidePolygon(start, entry?.points)
+    )) || null;
+  if (!region || isPointInsidePolygon(target, region?.points)) return null;
+  const offsetDistance = Math.max(2, finiteNumber(clearance) * 1.4);
+  const candidates = (Array.isArray(region?.ramps) ? region.ramps : [])
+    .map((ramp) => {
+      const points = Array.isArray(ramp?.points) ? ramp.points : [];
+      if (points.length !== 4) return null;
+      const lowCenter = {
+        x: (finiteNumber(points[0]?.x) + finiteNumber(points[3]?.x)) * 0.5,
+        y: (finiteNumber(points[0]?.y) + finiteNumber(points[3]?.y)) * 0.5
+      };
+      const highCenter = {
+        x: (finiteNumber(points[1]?.x) + finiteNumber(points[2]?.x)) * 0.5,
+        y: (finiteNumber(points[1]?.y) + finiteNumber(points[2]?.y)) * 0.5
+      };
+      const outward = normalizeDirection(highCenter, lowCenter);
+      if (Math.abs(outward.x) + Math.abs(outward.y) <= 0.0001) return null;
+      const startInsideRamp = isPointInsidePolygon(start, points);
+      const targetDirection = normalizeDirection(start, target);
+      const outwardAlignment = (targetDirection.x * outward.x) + (targetDirection.y * outward.y);
+      const outwardCross = Math.abs((targetDirection.x * outward.y) - (targetDirection.y * outward.x));
+      if (startInsideRamp && outwardAlignment > 0.94 && outwardCross < 0.34) {
+        return {
+          entry: { x: finiteNumber(start?.x), y: finiteNumber(start?.y) },
+          exit: { x: finiteNumber(start?.x), y: finiteNumber(start?.y) },
+          route: [],
+          priority: 0,
+          score: distance(start, target)
+        };
+      }
+      const entry = clampPointToField({
+        x: highCenter.x - (outward.x * offsetDistance),
+        y: highCenter.y - (outward.y * offsetDistance)
+      }, field, clearance);
+      const exit = clampPointToField({
+        x: lowCenter.x + (outward.x * offsetDistance),
+        y: lowCenter.y + (outward.y * offsetDistance)
+      }, field, clearance);
+      if (!isPointWalkable(entry, obstacles, clearance, mapConfig, field)) return null;
+      if (!isPointWalkable(exit, obstacles, clearance, mapConfig, field)) return null;
+      if (!hasDirectPath(entry, exit, obstacles, clearance, mapConfig, field)) return null;
+      const approachTarget = startInsideRamp ? exit : entry;
+      const approach = hasDirectPath(start, approachTarget, obstacles, clearance, mapConfig, field)
+        ? [approachTarget]
+        : resolveLocalDetourRoute({
+          start,
+          target: approachTarget,
+          obstacles,
+          clearance,
+          mapConfig,
+          field
+        });
+      if (!approach?.length) return null;
+      const reducedApproach = reduceRoute(
+        start,
+        approach,
+        obstacles,
+        clearance,
+        mapConfig,
+        field
+      );
+      if (distance(reducedApproach[reducedApproach.length - 1], approachTarget) > 0.01) return null;
+      const route = startInsideRamp
+        ? joinRoutePoints(reducedApproach, [exit])
+        : joinRoutePoints(reducedApproach, [entry, exit]);
+      const approachDistance = route.reduce((total, point, index) => (
+        total + distance(index === 0 ? start : route[index - 1], point)
+      ), 0);
+      return {
+        entry,
+        exit,
+        route,
+        priority: startInsideRamp ? 0 : 1,
+        score: approachDistance + distance(exit, target)
+      };
+    })
+    .filter(Boolean)
+    .sort((left, right) => left.priority - right.priority || left.score - right.score);
+  return candidates[0] || null;
+};
+
+const resolveLaneGuidedRoute = ({
+  mapConfig = null,
+  start = {},
+  target = {},
+  obstacles = [],
+  clearance = 0,
+  field = null,
+  preferredLaneId = ''
+} = {}) => {
   const lanes = Array.isArray(mapConfig?.lanes) ? mapConfig.lanes : [];
+  const normalizedPreferredLaneId = String(preferredLaneId || '').trim();
+  const preferredLanes = normalizedPreferredLaneId
+    ? lanes.filter((lane) => String(lane?.id || '') === normalizedPreferredLaneId)
+    : [];
+  const candidateLanes = preferredLanes.length > 0 ? preferredLanes : lanes;
   const findClosestIndex = (point = {}, points = []) => (
     points.reduce((closestIndex, candidate, index) => (
       distance(point, candidate) < distance(point, points[closestIndex]) ? index : closestIndex
     ), 0)
   );
   const plans = [];
-  lanes.forEach((lane) => {
+  candidateLanes.forEach((lane) => {
     const centerline = Array.isArray(lane?.centerline) ? lane.centerline.filter(Boolean) : [];
     if (centerline.length < 2) return;
     [centerline, [...centerline].reverse()].forEach((points) => {
@@ -632,7 +764,8 @@ export const planTrainingMapRoute = ({
   obstacles = [],
   radius = 0,
   maxSearchNodes = 0,
-  preferLocalDetour = false
+  preferLocalDetour = false,
+  preferredLaneId = ''
 } = {}) => {
   const safeField = resolveField(field);
   const requestedStart = {
@@ -662,26 +795,7 @@ export const planTrainingMapRoute = ({
     radius: clearance,
     mapConfig
   });
-  if (
-    distance(safeStart, safeTarget) <= 1
-    || hasDirectPath(safeStart, safeTarget, blockingObstacles, clearance, mapConfig, safeField)
-  ) {
-    return [safeTarget];
-  }
-  if (preferLocalDetour) {
-    const localRoute = resolveLocalDetourRoute({
-      start: safeStart,
-      target: safeTarget,
-      obstacles: blockingObstacles,
-      clearance,
-      mapConfig,
-      field: safeField
-    });
-    if (localRoute?.length > 0) {
-      return reduceRoute(safeStart, localRoute, blockingObstacles, clearance, mapConfig, safeField);
-    }
-  }
-  const laneRoute = resolveLaneGuidedRoute({
+  const highlandExitPortal = resolveTrainingHighlandExitPortal({
     mapConfig,
     start: safeStart,
     target: safeTarget,
@@ -689,7 +803,57 @@ export const planTrainingMapRoute = ({
     clearance,
     field: safeField
   });
-  if (laneRoute?.length > 0) return laneRoute;
+  if (
+    distance(safeStart, safeTarget) <= 1
+    || (
+      !highlandExitPortal
+      && hasDirectPath(safeStart, safeTarget, blockingObstacles, clearance, mapConfig, safeField)
+    )
+  ) {
+    return [safeTarget];
+  }
+  const routeStart = highlandExitPortal?.exit || safeStart;
+  const finalizeRoute = (route = []) => {
+    const reducedSuffix = reduceRoute(
+      routeStart,
+      route,
+      blockingObstacles,
+      clearance,
+      mapConfig,
+      safeField
+    );
+    if (!highlandExitPortal) return reducedSuffix;
+    return joinRoutePoints(highlandExitPortal.route, reducedSuffix);
+  };
+  if (
+    distance(routeStart, safeTarget) <= 1
+    || hasDirectPath(routeStart, safeTarget, blockingObstacles, clearance, mapConfig, safeField)
+  ) {
+    return finalizeRoute([safeTarget]);
+  }
+  if (preferLocalDetour) {
+    const localRoute = resolveLocalDetourRoute({
+      start: routeStart,
+      target: safeTarget,
+      obstacles: blockingObstacles,
+      clearance,
+      mapConfig,
+      field: safeField
+    });
+    if (localRoute?.length > 0) {
+      return finalizeRoute(localRoute);
+    }
+  }
+  const laneRoute = resolveLaneGuidedRoute({
+    mapConfig,
+    start: routeStart,
+    target: safeTarget,
+    obstacles: blockingObstacles,
+    clearance,
+    field: safeField,
+    preferredLaneId
+  });
+  if (laneRoute?.length > 0) return finalizeRoute(laneRoute);
 
   const cellSize = resolveRouteCellSize(navigation, safeField);
   const columnCount = Math.max(2, Math.ceil(safeField.width / cellSize));
@@ -741,7 +905,7 @@ export const planTrainingMapRoute = ({
     return candidate;
   };
 
-  const startCell = resolveWalkableCell(safeStart);
+  const startCell = resolveWalkableCell(routeStart);
   const targetCell = resolveWalkableCell(safeTarget);
   const startKey = buildKey(startCell.column, startCell.row);
   const targetKey = buildKey(targetCell.column, targetCell.row);
@@ -787,13 +951,13 @@ export const planTrainingMapRoute = ({
     });
   }
 
-  if (startKey !== targetKey && !cameFrom.has(targetKey)) return [safeStart];
+  if (startKey !== targetKey && !cameFrom.has(targetKey)) return finalizeRoute([routeStart]);
   const routeKeys = [];
   let cursor = targetKey;
   routeKeys.push(cursor);
   while (cursor !== startKey) {
     const parent = cameFrom.get(cursor);
-    if (!parent) return [safeStart];
+    if (!parent) return finalizeRoute([routeStart]);
     cursor = parent;
     routeKeys.push(cursor);
   }
@@ -803,7 +967,14 @@ export const planTrainingMapRoute = ({
     return pointForCell(cell.column, cell.row);
   });
   route.push(safeTarget);
-  return reduceRoute(safeStart, route, blockingObstacles, clearance * 0.72, mapConfig, safeField);
+  return finalizeRoute(reduceRoute(
+    routeStart,
+    route,
+    blockingObstacles,
+    clearance * 0.72,
+    mapConfig,
+    safeField
+  ));
 };
 
 export const createTrainingMapNavigator = ({ field, mapConfig } = {}) => {
@@ -863,7 +1034,8 @@ export const createTrainingMapNavigator = ({ field, mapConfig } = {}) => {
         obstacles: resolveNavigatorObstacles(options?.obstacles),
         radius: options?.radius,
         maxSearchNodes: options?.maxSearchNodes,
-        preferLocalDetour: options?.preferLocalDetour === true
+        preferLocalDetour: options?.preferLocalDetour === true,
+        preferredLaneId: options?.preferredLaneId
       });
     }
   };

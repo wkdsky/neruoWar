@@ -5,7 +5,8 @@ import {
 } from './crowdPhysics';
 import { resolveSquadAttackRange } from './attackRange';
 import { isSquadCombatEnabled } from './combatPolicy';
-import { isHostileTeam } from './teamRelations';
+import { isHostileTeam, isNeutralRetaliating } from './teamRelations';
+import { isTrainingCardSquad, isTrainingNeutralSquad } from './TrainingSquadKind';
 
 const ORDER_MOVE = 'MOVE';
 const ORDER_CHARGE = 'CHARGE';
@@ -143,7 +144,7 @@ const isChargeCommitted = (squad = {}, nowSec = 0) => (
 );
 
 const canInjectDetourWaypoint = (squad = {}, nowSec = 0) => {
-  if (squad?.isMinionWaveUnit === true) return false;
+  if (!isTrainingCardSquad(squad)) return false;
   const orderType = resolveOrderType(squad);
   const behavior = typeof squad?.behavior === 'string' ? squad.behavior : '';
   if (orderType === ORDER_MOVE) return false;
@@ -201,6 +202,30 @@ const clearSquadEngagementMeta = (squad) => {
   squad._engageBlockedTargetId = '';
 };
 
+const applyNeutralRetaliationMeta = (sim = {}, crowd = {}) => {
+  const squads = Array.isArray(sim?.squads) ? sim.squads : [];
+  const squadMap = new Map(squads.filter(Boolean).map((squad) => [String(squad?.id || ''), squad]));
+  squads.forEach((squad) => {
+    if (!isTrainingNeutralSquad(squad) || !isNeutralRetaliating(squad)) return;
+    const targetId = String(
+      squad?.targetSquadId
+        || squad?._combatEngagementTargetId
+        || squad?.lastDamagedBySquadId
+        || ''
+    ).trim();
+    const target = squadMap.get(targetId) || null;
+    if (!target || (Number(target?.remain) || 0) <= 0 || !isHostileTeam(squad?.team, target?.team)) return;
+    const agents = crowd?.agentsBySquad?.get?.(squad.id) || [];
+    agents.forEach((agent) => {
+      if (!agent || agent.dead) return;
+      agent.engagePairKey = '';
+      agent.engageEnemySquadId = target.id;
+      agent.engagePressure = 0;
+      agent.engageNeedsRetarget = false;
+    });
+  });
+};
+
 const scoreTargetSquad = ({
   squad,
   enemy,
@@ -241,23 +266,16 @@ const buildPairs = (sim, walls, cfg, nowSec) => {
     isSquadMelee(row)
     && isSquadCombatEnabled(row)
     && row.behavior !== 'retreat'
-    && row.isMinionWaveUnit !== true
+    && isTrainingCardSquad(row)
   ));
   const pairMap = new Map();
   const squadPairById = new Map();
   const byId = new Map(squads.map((row) => [row.id, row]));
 
   meleeSquads.forEach((squad) => {
-    const minionLaneId = squad?.isMinionWaveUnit === true
-      ? String(squad?.minionLaneId || '').trim()
-      : '';
     const enemyRows = squads.filter((row) => (
       isHostileTeam(squad?.team, row?.team)
       && row.remain > 0
-      && (
-        !minionLaneId
-        || String(row?.minionLaneId || row?.spawnLaneId || '').trim() === minionLaneId
-      )
       && Math.hypot(
         (Number(row?.x) || 0) - (Number(squad?.x) || 0),
         (Number(row?.y) || 0) - (Number(squad?.y) || 0)
@@ -646,5 +664,6 @@ export const syncMeleeEngagement = (crowd, sim, walls = [], dt = 0, nowSec = 0) 
       }
     }
   });
+  applyNeutralRetaliationMeta(sim, crowd);
   return state;
 };

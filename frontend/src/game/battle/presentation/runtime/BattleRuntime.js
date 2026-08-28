@@ -15,6 +15,7 @@ import {
   triggerCrowdSkill
 } from '../../simulation/crowd/CrowdSim';
 import { querySpatialNearby, rotate2D } from '../../simulation/crowd/crowdPhysics';
+import { resetTrainingCardSquadAiRuntime } from '../../simulation/crowd/TrainingCardSquadAi';
 import { degToRad, normalizeDeg } from '../../shared/angle';
 import { limitNameByDisplayWidth } from '../../shared/nameLimits';
 import { snapTrainingDirectionOffset } from '../../shared/trainingDirectionArc';
@@ -1263,6 +1264,23 @@ const hashWaypoints = (waypoints = []) => {
   return out;
 };
 
+const hashFormationGeometry = (formationRect = null, deploySlots = []) => {
+  const rect = formationRect && typeof formationRect === 'object' ? formationRect : {};
+  const values = [
+    Number(rect.width) || 0,
+    Number(rect.depth) || 0,
+    Number(rect.spacing) || 0,
+    Math.max(0, Math.floor(Number(rect.slotCount) || 0))
+  ].map((value) => Math.round(value * 1000) / 1000);
+  const slots = (Array.isArray(deploySlots) ? deploySlots : []).map((slot) => [
+    Math.round((Number(slot?.side) || 0) * 1000) / 1000,
+    Math.round((Number(slot?.front) || 0) * 1000) / 1000,
+    String(slot?.unitTypeId || ''),
+    Math.max(0, Math.floor(Number(slot?.templateIndex) || 0))
+  ].join(':'));
+  return `${values.join(':')}|${slots.join('|')}`;
+};
+
 const clearPlannedMoveRoute = (squad) => {
   if (!squad) return;
   squad._plannedMoveWaypoints = [];
@@ -1271,6 +1289,13 @@ const clearPlannedMoveRoute = (squad) => {
     squad.order.pathPoints = [];
     squad.order.pathIndex = 0;
   }
+};
+
+const clearSquadFormationArrival = (squad) => {
+  if (!squad) return;
+  squad._formationArrival = null;
+  squad.formationArrivalState = '';
+  squad.formationArrivalError = 0;
 };
 
 const getOrderPlannedMoveRoute = (squad) => (Array.isArray(squad?.order?.pathPoints) ? squad.order.pathPoints : []);
@@ -3275,15 +3300,9 @@ export default class BattleRuntime {
     if (!nextFormation) return { ok: false, reason: '阵型不可用' };
     const nextFormationId = String(formation?.formationId || formation?.id || '').trim();
     const currentFormationId = String(group?.formationRect?.formationId || group?.activeFormationId || '').trim();
-    if (isBattleFormationChange && currentFormationId === nextFormationId) {
-      return {
-        ok: true,
-        changed: false,
-        reforming: (Number(group?.formationChange?.remainingSec) || 0) > 0,
-        formationRect: { ...group.formationRect },
-        slotCount: Array.isArray(group.deploySlots) ? group.deploySlots.length : 0
-      };
-    }
+    const currentFormationSignature = hashFormationGeometry(group?.formationRect, group?.deploySlots);
+    const nextFormationSignature = hashFormationGeometry(nextFormation.formationRect, nextFormation.deploySlots);
+    const geometryChanged = currentFormationSignature !== nextFormationSignature;
     const previousFormationRect = group?.formationRect && typeof group.formationRect === 'object'
       ? { ...group.formationRect }
       : null;
@@ -3321,7 +3340,13 @@ export default class BattleRuntime {
         fromFormationId: currentFormationId,
         toFormationId: nextFormationId,
         remainingSec: FORMATION_CHANGE_DURATION_SEC,
-        durationSec: FORMATION_CHANGE_DURATION_SEC
+        durationSec: FORMATION_CHANGE_DURATION_SEC,
+        startedAt: Math.max(0, Number(this.sim?.timeElapsed) || 0),
+        stableSince: 0,
+        maximumError: Infinity,
+        readyRatio: 0,
+        reapply: currentFormationId === nextFormationId && !geometryChanged,
+        geometryChanged
       };
       group.speedPolicy = SPEED_POLICY_REFORM;
       group.reformUntil = FORMATION_CHANGE_DURATION_SEC;
@@ -3637,6 +3662,15 @@ export default class BattleRuntime {
       this.selectedBattleSquadId = squad.id;
       return { ok: true, squadId: squad.id, controlMode: nextMode };
     }
+
+    // Controller state is ownership-specific: a player command must not inherit
+    // AI reservations/engagement slots, and an AI takeover starts from a clean
+    // anchor while retaining the visible agent positions.
+    resetTrainingCardSquadAiRuntime(
+      squad,
+      this.crowd?.agentsBySquad?.get?.(squad.id) || [],
+      { preserveSlots: true }
+    );
 
     if (nextMode === CONTROL_MODE_AI) {
       // Discard the previous player's route so the AI takes ownership immediately.
@@ -4729,6 +4763,7 @@ export default class BattleRuntime {
     if (!squad) return;
     const prevOrder = typeof squad?.order?.type === 'string' ? squad.order.type : ORDER_IDLE;
     squad.autoNavigation = null;
+    clearSquadFormationArrival(squad);
     squad._attackMoveResumeWaypoints = [];
     squad._combatEngagementTargetId = '';
     squad._combatEngagementUntil = 0;
@@ -4959,9 +4994,11 @@ export default class BattleRuntime {
     if (this.phase !== 'battle' || !this.sim) return false;
     const squad = this.getSquadById(squadId);
     if (!this.canControlSquad(squad)) return false;
+    if (!['standby', 'idle', 'auto', 'defend', 'retreat'].includes(behavior)) return false;
     squad.meleeAttackOrder = null;
     squad.autoNavigation = null;
     squad.targetBuildingId = '';
+    clearSquadFormationArrival(squad);
     if (behavior === 'standby') {
       this.beginSquadTransition(squad, 'move', 'standby');
       squad.behavior = 'standby';
@@ -5032,6 +5069,7 @@ export default class BattleRuntime {
     if (this.phase !== 'battle' || !this.sim) return false;
     const squad = this.getSquadById(squadId);
     if (!this.canControlSquad(squad)) return false;
+    clearSquadFormationArrival(squad);
     const source = Array.isArray(points) ? points : [];
     const radius = Math.max(6, Number(squad.radius) || 10);
     const next = [];
@@ -5068,6 +5106,7 @@ export default class BattleRuntime {
     if (this.phase !== 'battle' || !this.sim) return false;
     const squad = this.getSquadById(squadId);
     if (!this.canControlSquad(squad)) return false;
+    clearSquadFormationArrival(squad);
     const cx = Number.isFinite(Number(guardSpec?.centerX)) ? Number(guardSpec.centerX) : (Number(squad.x) || 0);
     const cy = Number.isFinite(Number(guardSpec?.centerY)) ? Number(guardSpec.centerY) : (Number(squad.y) || 0);
     const radius = Math.max(12, Number(guardSpec?.radius) || Math.max(42, Number(squad.radius) || 24));
@@ -5553,6 +5592,12 @@ export default class BattleRuntime {
             ? squad.trainingAi.events.slice(-4).map((event) => ({ ...event }))
             : []
         }
+        : null,
+      formationRuntime: squad.formationRuntime && typeof squad.formationRuntime === 'object'
+        ? { ...squad.formationRuntime }
+        : null,
+      combatRuntime: squad.combatRuntime && typeof squad.combatRuntime === 'object'
+        ? { ...squad.combatRuntime }
         : null,
       orderType: squad.order?.type || ORDER_IDLE,
       actionState: squad.actionState || { kind: 'none', ttl: 0, dur: 0 },

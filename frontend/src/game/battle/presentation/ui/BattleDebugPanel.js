@@ -78,6 +78,15 @@ const BattleDebugPanel = ({
       const lastEvent = Array.isArray(ai.events) ? ai.events[ai.events.length - 1] : null;
       lines.push(`地图AI：${ai.state || '-'} ｜ 目标 ${ai.targetId || '-'} ｜ 重试 ${formatInt(ai.retries)} ｜ 上次切换 ${lastEvent?.reason || '-'}`);
     }
+    if (selectedSquad?.formationRuntime) {
+      const formation = selectedSquad.formationRuntime;
+      lines.push(`编队控制：${formation.state || '-'} ｜ 请求/实际 ${formation.requestedFormation || '-'}/${formation.activeFormation || '-'} ｜ 就绪 ${formatFixed((Number(formation.readyRatio) || 0) * 100, 0)}% ｜ cohesion ${formatFixed(formation.speedScale, 2)}`);
+      lines.push(`地形适配：压缩 ${formatFixed((Number(formation.compression) || 1) * 100, 0)}% ｜ 通道 ${formation.passage ? '是' : '否'} ｜ 宽度 ${formation.corridorWidth === null ? '-' : formatFixed(formation.corridorWidth, 1)}`);
+    }
+    if (selectedSquad?.combatRuntime) {
+      const combat = selectedSquad.combatRuntime;
+      lines.push(`战斗控制：${combat.state || '-'} ｜ 意图 ${combat.intent || '-'} ｜ 目标 ${combat.targetId || '-'} ｜ 分配 ${formatInt(combat.assignedCount)} ｜ 支援预约 ${formatInt(combat.supportReservations)}`);
+    }
   }
 
   return (

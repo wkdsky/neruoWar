@@ -5,6 +5,10 @@ import { acquireHitEffect, acquireProjectile } from '../effects/CombatEffects';
 import { filterVisionBlockingObstacles } from '../items/itemObstacleUtils';
 import { isSquadCombatEnabled } from '../crowd/combatPolicy';
 import { isHostileTeam } from '../crowd/teamRelations';
+import {
+  isTrainingMinionSquad,
+  isTrainingNeutralSquad
+} from '../crowd/TrainingSquadKind';
 
 const TEAM_ATTACKER = 'attacker';
 const TEAM_DEFENDER = 'defender';
@@ -168,7 +172,7 @@ const canObjectiveTargetSquad = (objective = {}, squad = {}) => {
 const canSquadAttackObjective = (squad = {}, objective = {}) => {
   if (!squad || finiteNumber(squad?.remain) <= 0 || objective?.destroyed || objective?.targetable === false) return false;
   if (!isSquadCombatEnabled(squad)) return false;
-  if (objective?.type === 'tower' && squad?.team === TEAM_NEUTRAL) return false;
+  if (isTrainingNeutralSquad(squad)) return false;
   return isHostileTeam(squad?.team, objective?.team);
 };
 
@@ -488,7 +492,7 @@ const applyObjectiveDamage = (sim = {}, crowd = {}, objective = {}, squad = {}) 
   const building = position.building;
   if (!building || building.destroyed || !canSquadAttackObjective(squad, objective)) return 0;
   if (
-    squad?.isMinionWaveUnit === true
+    isTrainingMinionSquad(squad)
     && objective?.type === 'tower'
     && String(objective?.laneId || '') !== String(squad?.minionLaneId || '')
   ) return 0;

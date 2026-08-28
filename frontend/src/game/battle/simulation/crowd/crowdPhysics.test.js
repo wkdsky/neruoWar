@@ -2,12 +2,17 @@ import {
   buildObstacleSpatialIndex,
   buildSpatialHash,
   isInsideCollider,
+  normalizeVec,
   pushOutOfCollider,
   queryObstacleCandidates,
   raycastCollider,
   raycastObstacles,
   querySpatialNearby
 } from './crowdPhysics';
+
+test('reports zero length for a zero vector', () => {
+  expect(normalizeVec(0, 0)).toEqual({ x: 0, y: 0, len: 0 });
+});
 
 test('reuses a caller-provided buffer for nearby-agent queries', () => {
   const attacker = { id: 'attacker', x: 0, y: 0 };
