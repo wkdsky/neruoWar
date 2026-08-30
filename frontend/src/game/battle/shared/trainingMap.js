@@ -113,11 +113,13 @@ const resolveTrainingMapRegionElevation = (region = {}, point = {}) => {
   return rampElevation === null ? baseElevation + elevation : rampElevation;
 };
 
-const isPointInsideTrainingMapTerrainRegion = (point = {}, region = {}) => {
+export const isPointInsideTrainingMapTerrainRegion = (point = {}, region = {}) => {
   const shape = String(region?.shape || 'rect');
   const targetX = finiteNumber(point?.x);
   const targetY = finiteNumber(point?.y);
-  if (shape === 'polygon') return isPointInsideTrainingMapPolygon(point, region?.points);
+  if (shape === 'polygon' || (Array.isArray(region?.points) && region.points.length >= 3)) {
+    return isPointInsideTrainingMapPolygon(point, region?.points);
+  }
   const centerX = finiteNumber(region?.x);
   const centerY = finiteNumber(region?.y);
   const halfWidth = Math.max(0, finiteNumber(region?.width) * 0.5);
@@ -128,6 +130,171 @@ const isPointInsideTrainingMapTerrainRegion = (point = {}, region = {}) => {
     return region?.arcDirection === 'down' ? targetY <= centerY : targetY >= centerY;
   }
   return Math.abs(targetX - centerX) <= halfWidth && Math.abs(targetY - centerY) <= halfHeight;
+};
+
+const isTrainingMapHighlandRegion = (region = {}) => (
+  String(region?.type || '').startsWith('highland-')
+  || String(region?.type || '') === 'highland'
+);
+
+const resolveTrainingMapTerrainRegionPolygon = (region = {}) => {
+  if (
+    String(region?.shape || 'rect') === 'polygon'
+    || (Array.isArray(region?.points) && region.points.length >= 3)
+  ) {
+    return Array.isArray(region?.points) ? region.points.filter(Boolean) : [];
+  }
+  const halfWidth = Math.max(0, finiteNumber(region?.width) * 0.5);
+  const halfHeight = Math.max(0, finiteNumber(region?.height) * 0.5);
+  if (halfWidth <= 0 || halfHeight <= 0) return [];
+  const centerX = finiteNumber(region?.x);
+  const centerY = finiteNumber(region?.y);
+  return [
+    { x: centerX - halfWidth, y: centerY - halfHeight },
+    { x: centerX + halfWidth, y: centerY - halfHeight },
+    { x: centerX + halfWidth, y: centerY + halfHeight },
+    { x: centerX - halfWidth, y: centerY + halfHeight }
+  ];
+};
+
+const resolveTrainingMapSegmentIntersectionProgress = (start = {}, end = {}, edgeStart = {}, edgeEnd = {}) => {
+  const startX = finiteNumber(start?.x);
+  const startY = finiteNumber(start?.y);
+  const deltaX = finiteNumber(end?.x) - startX;
+  const deltaY = finiteNumber(end?.y) - startY;
+  const edgeX = finiteNumber(edgeStart?.x);
+  const edgeY = finiteNumber(edgeStart?.y);
+  const edgeDeltaX = finiteNumber(edgeEnd?.x) - edgeX;
+  const edgeDeltaY = finiteNumber(edgeEnd?.y) - edgeY;
+  const denominator = (deltaX * edgeDeltaY) - (deltaY * edgeDeltaX);
+  if (Math.abs(denominator) <= 1e-9) return null;
+  const relativeX = edgeX - startX;
+  const relativeY = edgeY - startY;
+  const segmentProgress = ((relativeX * edgeDeltaY) - (relativeY * edgeDeltaX)) / denominator;
+  const edgeProgress = ((relativeX * deltaY) - (relativeY * deltaX)) / denominator;
+  if (
+    segmentProgress < -1e-7
+    || segmentProgress > 1.0000001
+    || edgeProgress < -1e-7
+    || edgeProgress > 1.0000001
+  ) return null;
+  return Math.min(1, Math.max(0, segmentProgress));
+};
+
+const resolveTrainingMapPointOnSegment = (start = {}, end = {}, progress = 0) => ({
+  x: finiteNumber(start?.x) + ((finiteNumber(end?.x) - finiteNumber(start?.x)) * progress),
+  y: finiteNumber(start?.y) + ((finiteNumber(end?.y) - finiteNumber(start?.y)) * progress)
+});
+
+const isPointInsideOrNearTrainingMapPolygon = (point = {}, polygon = [], tolerance = 0) => {
+  if (isPointInsideTrainingMapPolygon(point, polygon)) return true;
+  const padding = Math.max(0, finiteNumber(tolerance));
+  if (padding <= 0 || !Array.isArray(polygon) || polygon.length < 2) return false;
+  for (let index = 0; index < polygon.length; index += 1) {
+    const start = polygon[index];
+    const end = polygon[(index + 1) % polygon.length];
+    if (distanceToTrainingMapSegment(point, start, end) <= padding) return true;
+  }
+  return false;
+};
+
+const isTrainingMapHighlandBoundaryCrossing = ({
+  start = {},
+  end = {},
+  region = {},
+  progress = 0,
+  tolerance = 0.75
+} = {}) => {
+  const ramps = Array.isArray(region?.ramps) ? region.ramps : [];
+  if (ramps.length <= 0) return false;
+  const distance = Math.hypot(
+    finiteNumber(end?.x) - finiteNumber(start?.x),
+    finiteNumber(end?.y) - finiteNumber(start?.y)
+  );
+  const probe = Math.min(0.035, Math.max(0.0002, Math.max(0.5, tolerance) / Math.max(1, distance)));
+  const samples = [
+    resolveTrainingMapPointOnSegment(start, end, progress),
+    resolveTrainingMapPointOnSegment(start, end, Math.max(0, progress - probe)),
+    resolveTrainingMapPointOnSegment(start, end, Math.min(1, progress + probe))
+  ];
+  return ramps.some((ramp) => {
+    const points = Array.isArray(ramp?.points) ? ramp.points.filter(Boolean) : [];
+    return points.length >= 3 && samples.some((sample) => (
+      isPointInsideOrNearTrainingMapPolygon(sample, points, tolerance)
+    ));
+  });
+};
+
+/**
+ * A terrain point can be walkable while the straight segment to it is not.
+ * Highland plateaus are therefore treated as topology islands: every crossing
+ * of a plateau boundary must occur through one of that region's ramp polygons.
+ * Navigation and movement commits share this helper so a formation transform
+ * cannot bypass the A* terrain rules.
+ */
+export const isTrainingMapTerrainSegmentTraversable = (
+  mapConfig = null,
+  start = {},
+  end = {},
+  { field = null, rampTolerance = 0.75, maxSamples = 24 } = {}
+) => {
+  const startTerrain = sampleTrainingMapTerrain(mapConfig, start, { field });
+  const endTerrain = sampleTrainingMapTerrain(mapConfig, end, { field });
+  if (!startTerrain.walkable || !endTerrain.walkable) return false;
+
+  const distance = Math.hypot(
+    finiteNumber(end?.x) - finiteNumber(start?.x),
+    finiteNumber(end?.y) - finiteNumber(start?.y)
+  );
+  if (distance <= 0.0001) return true;
+
+  // Terrain annotations may opt out of walking in future map revisions.  Keep
+  // this bounded; plateau boundary checks below are geometric rather than
+  // relying on dense per-frame sampling.
+  const sampleCount = Math.min(
+    Math.max(1, Math.floor(finiteNumber(maxSamples, 24))),
+    Math.max(2, Math.ceil(distance / 32))
+  );
+  for (let index = 1; index < sampleCount; index += 1) {
+    const sample = resolveTrainingMapPointOnSegment(start, end, index / sampleCount);
+    if (!sampleTrainingMapTerrain(mapConfig, sample, { field }).walkable) return false;
+  }
+
+  const highlands = (Array.isArray(mapConfig?.terrainRegions) ? mapConfig.terrainRegions : [])
+    .filter(isTrainingMapHighlandRegion);
+  for (let regionIndex = 0; regionIndex < highlands.length; regionIndex += 1) {
+    const region = highlands[regionIndex];
+    const polygon = resolveTrainingMapTerrainRegionPolygon(region);
+    if (polygon.length < 3) continue;
+    const crossings = [];
+    for (let index = 0; index < polygon.length; index += 1) {
+      const crossing = resolveTrainingMapSegmentIntersectionProgress(
+        start,
+        end,
+        polygon[index],
+        polygon[(index + 1) % polygon.length]
+      );
+      if (crossing === null) continue;
+      if (!crossings.some((existing) => Math.abs(existing - crossing) <= 1e-6)) crossings.push(crossing);
+    }
+    for (let index = 0; index < crossings.length; index += 1) {
+      const progress = crossings[index];
+      const epsilon = Math.min(0.025, Math.max(0.0002, 1 / Math.max(1, distance)));
+      const before = resolveTrainingMapPointOnSegment(start, end, Math.max(0, progress - epsilon));
+      const after = resolveTrainingMapPointOnSegment(start, end, Math.min(1, progress + epsilon));
+      const crossesBoundary = isPointInsideTrainingMapTerrainRegion(before, region)
+        !== isPointInsideTrainingMapTerrainRegion(after, region);
+      if (!crossesBoundary) continue;
+      if (!isTrainingMapHighlandBoundaryCrossing({
+        start,
+        end,
+        region,
+        progress,
+        tolerance: rampTolerance
+      })) return false;
+    }
+  }
+  return true;
 };
 
 const resolveTrainingMapFieldBounds = (mapConfig = null, field = null) => {

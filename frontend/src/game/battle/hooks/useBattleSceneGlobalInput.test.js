@@ -35,8 +35,9 @@ describe('useBattleSceneGlobalInput', () => {
     expect(onEscape).not.toHaveBeenCalled();
   });
 
-  test('routes deployment number keys to formation shortcuts', () => {
-    const onFormationHotkey = jest.fn();
+  test('does not route deployment number keys to removed formation shortcuts', () => {
+    const onMapKeyCommand = jest.fn();
+    const onSkillHotkey = jest.fn();
     const runtimeRef = { current: { getPhase: () => 'deploy' } };
     const spacePressedRef = { current: false };
 
@@ -45,11 +46,13 @@ describe('useBattleSceneGlobalInput', () => {
         open
         runtimeRef={runtimeRef}
         spacePressedRef={spacePressedRef}
-        onFormationHotkey={onFormationHotkey}
+        onMapKeyCommand={onMapKeyCommand}
+        onSkillHotkey={onSkillHotkey}
       />
     );
 
     fireEvent.keyDown(window, { key: '7' });
-    expect(onFormationHotkey).toHaveBeenCalledWith(6);
+    expect(onMapKeyCommand).not.toHaveBeenCalled();
+    expect(onSkillHotkey).not.toHaveBeenCalled();
   });
 });

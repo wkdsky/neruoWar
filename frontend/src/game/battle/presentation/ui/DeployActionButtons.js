@@ -22,13 +22,6 @@ const ActionIcon = ({ type }) => {
       </svg>
     );
   }
-  if (type === 'formation') {
-    return (
-      <svg viewBox="0 0 24 24" aria-hidden="true">
-        <path d="M5 5h5v5H5V5zm9 0h5v5h-5V5zM5 14h5v5H5v-5zm9 0h5v5h-5v-5z" />
-      </svg>
-    );
-  }
   return (
     <svg viewBox="0 0 24 24" aria-hidden="true">
       <path d="M7 6h10l-1 14H8L7 6zm3-3h4l1 2h4v2H5V5h4l1-2z" />
@@ -41,7 +34,6 @@ const DeployActionButtons = ({
   onInfo,
   onMove,
   onEdit,
-  onFormation,
   onDelete,
   showDelete = true,
   deleteTitle = '删除',
@@ -68,22 +60,6 @@ const DeployActionButtons = ({
     >
       <ActionIcon type="info" />
     </button>
-    {typeof onFormation === 'function' ? (
-      <button
-        type="button"
-        className="pve2-icon-btn formation"
-        title="阵型"
-        aria-label="阵型"
-        onMouseDown={(event) => event.stopPropagation()}
-        onMouseUp={(event) => event.stopPropagation()}
-        onClick={(event) => {
-          event.stopPropagation();
-          onFormation(event);
-        }}
-      >
-        <ActionIcon type="formation" />
-      </button>
-    ) : null}
     <button
       type="button"
       className="pve2-icon-btn move"

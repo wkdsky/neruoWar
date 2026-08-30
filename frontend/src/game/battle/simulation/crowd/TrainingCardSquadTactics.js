@@ -17,6 +17,14 @@ import {
   isSquadCombatEnabled
 } from './combatPolicy';
 import { isTrainingCardSquad } from './TrainingSquadKind';
+import { DEFAULT_FORMATION_ID } from '../../../formation/defaultFormation';
+import {
+  CARD_LOCOMOTION_STATE,
+  isTrainingCardAgentInStream,
+  resolveTrainingCardPassageFlowIntent,
+  updateTrainingCardPassageAgents,
+  updateTrainingCardPassagePlan
+} from './TrainingCardPassage';
 
 export const SQUAD_FORMATION_RUNTIME_STATE = Object.freeze({
   ASSEMBLE: 'ASSEMBLE',
@@ -28,6 +36,8 @@ export const SQUAD_FORMATION_RUNTIME_STATE = Object.freeze({
   REFORM: 'REFORM',
   HOLD: 'HOLD'
 });
+
+export { CARD_LOCOMOTION_STATE };
 
 export const SQUAD_COMBAT_RUNTIME_STATE = Object.freeze({
   NONE: 'NONE',
@@ -48,7 +58,9 @@ const AGENT_RADIUS = 2.25;
 const AGENT_GAP = 1.05;
 const FORMATION_SCAN_INTERVAL = 0.22;
 const PASSAGE_MIN_DURATION = 0.72;
-const EXPAND_MIN_DURATION = 0.42;
+const EXPAND_MIN_DURATION = 1.2;
+const PASSAGE_LANE_WIDEN_HYSTERESIS = 0.58;
+const PASSAGE_EXIT_READY_RATIO = 0.82;
 const REFORM_STABLE_DURATION = 0.42;
 const MAX_CATCH_UP_MULTIPLIER = 1.34;
 const SUPPORT_MIN_HEALTH_DEFICIT = 0.035;
@@ -101,19 +113,19 @@ const formationSignature = (squad = {}) => {
   const rect = squad?.formationRect && typeof squad.formationRect === 'object' ? squad.formationRect : {};
   const slots = Array.isArray(squad?.deploySlots) ? squad.deploySlots : [];
   return [
-    String(squad?.activeFormationId || rect?.formationId || ''),
+    String(rect?.formationId || DEFAULT_FORMATION_ID),
     finiteNumber(rect?.width),
     finiteNumber(rect?.depth),
     finiteNumber(rect?.spacing),
     slots.map((slot) => (
-      finiteNumber(slot?.side).toFixed(3) + ':' + finiteNumber(slot?.front).toFixed(3)
+      String(slot?.unitTypeId || '')
+        + ':' + finiteNumber(slot?.side).toFixed(3)
+        + ':' + finiteNumber(slot?.front).toFixed(3)
     )).join(',')
   ].join('|');
 };
 
-const resolveRequestedFormationId = (squad = {}) => String(
-  squad?.activeFormationId || squad?.formationRect?.formationId || 'default'
-);
+const resolveRequestedFormationId = () => DEFAULT_FORMATION_ID;
 
 const localToWorld = (anchor = {}, slot = {}) => {
   const yaw = finiteNumber(anchor?.heading, finiteNumber(anchor?.yaw));
@@ -190,17 +202,26 @@ const applySlotMetadata = (agent = {}, slot = {}, index = 0, columns = 1, spacin
   agent.formationSlot = normalized;
 };
 
-const assignPersistentSlots = (squad = {}, agents = [], { compact = false } = {}) => {
-  const ordered = sortAgents(agents);
+const assignPersistentSlots = (
+  squad = {},
+  agents = [],
+  { compact = false, orderedAgents = null } = {}
+) => {
+  const ordered = Array.isArray(orderedAgents)
+    ? orderedAgents.filter(isLiveAgent)
+    : sortAgents(agents);
   const spacing = resolveBaseSpacing(squad);
   const columns = resolveFormationColumns(squad, ordered.length, spacing);
   const template = Array.isArray(squad?.deploySlots)
     ? squad.deploySlots.map((slot) => normalizeSlot(slot))
     : [];
   ordered.forEach((agent, index) => {
+    const existingSlot = agent?.formationSlot && typeof agent.formationSlot === 'object'
+      ? normalizeSlot(agent.formationSlot)
+      : null;
     const slot = compact
       ? fallbackSlotForIndex(index, columns, spacing)
-      : (template[index] || normalizeSlot(agent?.formationSlot, fallbackSlotForIndex(index, columns, spacing)));
+      : (existingSlot || template[index] || fallbackSlotForIndex(index, columns, spacing));
     applySlotMetadata(agent, slot, index, columns, spacing);
     // The controller owns card-unit slots.  Drop the legacy spacing cache when
     // a member is repacked so a later formation switch cannot revive stale rows.
@@ -210,21 +231,23 @@ const assignPersistentSlots = (squad = {}, agents = [], { compact = false } = {}
   return { ordered, columns, spacing };
 };
 
-const resolveMembershipSignature = (agents = []) => (
-  sortAgents(agents).map((agent) => String(agent?.id || '')).join('|')
+const resolveMembershipSignature = (agents = [], orderedAgents = null) => (
+  (Array.isArray(orderedAgents) ? orderedAgents : sortAgents(agents))
+    .map((agent) => String(agent?.id || '')).join('|')
 );
 
-const resolveRequiredWidth = (agents = [], spacing = 1) => {
-  const slots = sortAgents(agents).map((agent) => normalizeSlot(agent?.formationSlot));
+const resolveRequiredWidth = (agents = [], spacing = 1, orderedAgents = null) => {
+  const ordered = Array.isArray(orderedAgents) ? orderedAgents : sortAgents(agents);
+  const slots = ordered.map((agent) => normalizeSlot(agent?.formationSlot));
   if (slots.length <= 1) return Math.max(spacing, AGENT_RADIUS * 2);
   const sideExtent = slots.reduce((maximum, slot) => Math.max(maximum, Math.abs(slot.side)), 0);
   return Math.max(spacing, (sideExtent * 2) + spacing);
 };
 
-const resolveRearExtent = (agents = [], spacing = 1) => (
+const resolveRearExtent = (agents = [], spacing = 1, orderedAgents = null) => (
   Math.max(
     spacing,
-    sortAgents(agents).reduce((maximum, agent) => (
+    (Array.isArray(orderedAgents) ? orderedAgents : sortAgents(agents)).reduce((maximum, agent) => (
       Math.max(maximum, Math.max(0, -normalizeSlot(agent?.formationSlot).front))
     ), 0) + spacing
   )
@@ -266,9 +289,95 @@ const resolveWallNormal = (hit = null, forward = {}) => {
   return { x: -finiteNumber(forward?.x), y: -finiteNumber(forward?.y) };
 };
 
+const isPointInsidePassagePolygon = (point = {}, polygon = []) => {
+  if (!Array.isArray(polygon) || polygon.length < 3) return false;
+  const targetX = finiteNumber(point?.x);
+  const targetY = finiteNumber(point?.y);
+  let inside = false;
+  for (let index = 0, previousIndex = polygon.length - 1; index < polygon.length; previousIndex = index, index += 1) {
+    const current = polygon[index] || {};
+    const previous = polygon[previousIndex] || {};
+    const currentY = finiteNumber(current?.y);
+    const previousY = finiteNumber(previous?.y);
+    const crosses = ((currentY > targetY) !== (previousY > targetY))
+      && targetX < (
+        ((finiteNumber(previous?.x) - finiteNumber(current?.x)) * (targetY - currentY))
+        / ((previousY - currentY) || 1e-9)
+      ) + finiteNumber(current?.x);
+    if (crosses) inside = !inside;
+  }
+  return inside;
+};
+
+const resolveRampPassageWidthAtPoint = (mapConfig = null, point = {}) => {
+  const widths = [];
+  (Array.isArray(mapConfig?.terrainRegions) ? mapConfig.terrainRegions : []).forEach((region) => {
+    if (!String(region?.type || '').startsWith('highland-') && String(region?.type || '') !== 'highland') return;
+    (Array.isArray(region?.ramps) ? region.ramps : []).forEach((ramp) => {
+      const points = Array.isArray(ramp?.points) ? ramp.points.filter(Boolean) : [];
+      if (points.length < 3 || !isPointInsidePassagePolygon(point, points)) return;
+      const lowWidth = points.length >= 4
+        ? Math.hypot(finiteNumber(points[3]?.x) - finiteNumber(points[0]?.x), finiteNumber(points[3]?.y) - finiteNumber(points[0]?.y))
+        : Math.hypot(finiteNumber(points[2]?.x) - finiteNumber(points[0]?.x), finiteNumber(points[2]?.y) - finiteNumber(points[0]?.y));
+      const highWidth = points.length >= 4
+        ? Math.hypot(finiteNumber(points[2]?.x) - finiteNumber(points[1]?.x), finiteNumber(points[2]?.y) - finiteNumber(points[1]?.y))
+        : lowWidth;
+      widths.push(Math.max(AGENT_RADIUS * 2, Math.min(lowWidth || Infinity, highWidth || Infinity)));
+    });
+  });
+  return widths.length > 0 ? Math.min(...widths) : Infinity;
+};
+
+const resolvePassageWidthAtPoint = ({
+  point = {},
+  direction = {},
+  walls = [],
+  field = {},
+  mapConfig = null,
+  lateralProbe = 64,
+  probeStep = 0,
+  margin = AGENT_RADIUS + 2,
+  spacing = (AGENT_RADIUS * 2) + AGENT_GAP
+} = {}) => {
+  const forward = normalizeVec(finiteNumber(direction?.x, 1), finiteNumber(direction?.y));
+  const safeForward = forward.len > 0.0001 ? forward : { x: 1, y: 0 };
+  const side = { x: -safeForward.y, y: safeForward.x };
+  const safeProbe = Math.max(spacing * 2, finiteNumber(lateralProbe, 64));
+  const leftHit = raycastObstacles(point, {
+    x: finiteNumber(point?.x) + (side.x * safeProbe),
+    y: finiteNumber(point?.y) + (side.y * safeProbe)
+  }, walls, margin);
+  const rightHit = raycastObstacles(point, {
+    x: finiteNumber(point?.x) - (side.x * safeProbe),
+    y: finiteNumber(point?.y) - (side.y * safeProbe)
+  }, walls, margin);
+  const leftBoundary = distanceToFieldBoundary(point, side, field, margin);
+  const rightBoundary = distanceToFieldBoundary(point, { x: -side.x, y: -side.y }, field, margin);
+  const left = Math.max(0, Math.min(
+    leftHit ? safeProbe * clamp(finiteNumber(leftHit?.t), 0, 1) : safeProbe,
+    leftBoundary
+  ));
+  const right = Math.max(0, Math.min(
+    rightHit ? safeProbe * clamp(finiteNumber(rightHit?.t), 0, 1) : safeProbe,
+    rightBoundary
+  ));
+  const localWidth = estimateLocalFlowWidth(point, safeForward, walls, {
+    // Keep a large formation from turning a squad-level scan into hundreds of
+    // tiny probes.  The probe remains finer than one soldier spacing.
+    step: clamp(Math.max(2, spacing * 0.32, finiteNumber(probeStep), safeProbe / 96), 2, 8),
+    maxProbe: safeProbe,
+    inflate: margin
+  });
+  return Math.max(
+    AGENT_RADIUS * 2,
+    Math.min(left + right, localWidth, resolveRampPassageWidthAtPoint(mapConfig, point))
+  );
+};
+
 const resolveTerrainSample = ({
   squad = {},
   agents = [],
+  orderedAgents = null,
   sim = {},
   walls = [],
   forward = {},
@@ -280,15 +389,46 @@ const resolveTerrainSample = ({
     finiteNumber(forward?.x, finiteNumber(squad?.dirX, 1)),
     finiteNumber(forward?.y, finiteNumber(squad?.dirY))
   );
+  if (
+    isTrainingCardSquad(squad)
+    && (!Array.isArray(squad?._passageRoute) || squad._passageRoute.length <= 0)
+    && Array.isArray(squad?.waypoints)
+    && squad.waypoints.length > 0
+  ) {
+    squad._passageRoute = squad.waypoints.map((point) => ({
+      x: finiteNumber(point?.x),
+      y: finiteNumber(point?.y)
+    }));
+  }
   const safeDirection = direction.len > 0.0001 ? direction : { x: 1, y: 0 };
   const side = { x: -safeDirection.y, y: safeDirection.x };
   const spacing = resolveBaseSpacing(squad);
-  const requiredWidth = resolveRequiredWidth(agents, spacing);
-  const requestedColumns = resolveFormationColumns(squad, sortAgents(agents).length, spacing);
+  const ordered = Array.isArray(orderedAgents) ? orderedAgents : sortAgents(agents);
+  const requiredWidth = resolveRequiredWidth(agents, spacing, ordered);
+  const requestedColumns = resolveFormationColumns(squad, ordered.length, spacing);
   const radius = Math.max(AGENT_RADIUS, finiteNumber(squad?.navigationAgentRadius, AGENT_RADIUS));
-  const probeDistance = clamp(Math.max(44, requiredWidth * 1.1), 44, 108);
-  const lateralProbe = clamp(Math.max(requiredWidth, spacing * 4), 28, 104);
   const margin = radius + 2;
+  const fieldHalfSpan = Math.max(
+    64,
+    Math.min(
+      Math.max(1, finiteNumber(sim?.field?.width, 2700) * 0.5) - margin,
+      Math.max(1, finiteNumber(sim?.field?.height, 1488) * 0.5) - margin
+    )
+  );
+  // Detect a passage far enough ahead for a wide body to start queuing before
+  // the front reaches it.  The old 104-unit cap made large formations think a
+  // perfectly open battlefield was itself a bottleneck.
+  const probeDistance = clamp(
+    Math.max(44, requiredWidth * 1.08),
+    44,
+    Math.max(44, Math.min(260, fieldHalfSpan))
+  );
+  const lateralProbe = clamp(
+    Math.max(requiredWidth * 0.56, spacing * 4),
+    28,
+    Math.max(28, Math.min(512, fieldHalfSpan))
+  );
+  const flowProbeStep = clamp(Math.max(2, spacing * 0.32, lateralProbe / 96), 2, 8);
   const anchor = { x: finiteNumber(squad?.x), y: finiteNumber(squad?.y) };
   const sampleOffsets = [0, probeDistance * 0.42, probeDistance * 0.82];
   let leftSpace = Infinity;
@@ -334,48 +474,173 @@ const resolveTerrainSample = ({
   // fills the gap for an obstacle touching either flank.  Both helpers use the
   // existing obstacle spatial index, so this remains a squad-level cached cost.
   const localFlowWidth = estimateLocalFlowWidth(anchor, safeDirection, walls, {
-    step: Math.max(2, spacing * 0.32),
+    step: flowProbeStep,
     maxProbe: lateralProbe,
     inflate: margin
   });
+  const rampCorridorWidth = Math.min(...sampleOffsets.map((offset) => (
+    resolveRampPassageWidthAtPoint(sim?.trainingMap, {
+      x: anchor.x + (safeDirection.x * offset),
+      y: anchor.y + (safeDirection.y * offset)
+    })
+  )));
   const corridorWidth = Math.max(
     AGENT_RADIUS * 2,
-    Math.min(leftSpace + rightSpace, localFlowWidth)
+    Math.min(leftSpace + rightSpace, localFlowWidth, rampCorridorWidth)
   );
   const availableWidth = Math.max(AGENT_RADIUS * 2, corridorWidth - (spacing * 0.18));
   const compression = clamp(availableWidth / Math.max(spacing, requiredWidth), 0.56, 1);
   const minimumPassageSpacing = Math.max(AGENT_RADIUS * 2.06, spacing * 0.76);
-  const passageColumns = clamp(
-    Math.floor((availableWidth + (minimumPassageSpacing * 0.12)) / minimumPassageSpacing) + 1,
+  const measuredPassageColumns = clamp(
+    Math.floor((availableWidth + (minimumPassageSpacing * 0.16)) / minimumPassageSpacing),
     1,
     requestedColumns
   );
+  const previousColumns = clamp(
+    Math.floor(finiteNumber(terrain?.laneCount, finiteNumber(terrain?.columns, requestedColumns))),
+    1,
+    requestedColumns
+  );
+  let laneOpenSince = finiteNumber(terrain?.laneOpenSince);
+  let passageColumns = measuredPassageColumns;
+  if (String(terrain?.state || '') === SQUAD_FORMATION_RUNTIME_STATE.PASSAGE) {
+    if (measuredPassageColumns < previousColumns) {
+      // Shrinking is safety-critical, so it takes effect immediately.  An
+      // existing lane is remapped once by the controller, never every frame.
+      passageColumns = measuredPassageColumns;
+      laneOpenSince = 0;
+    } else if (measuredPassageColumns > previousColumns) {
+      const comfortablyWider = availableWidth >= (
+        (previousColumns + PASSAGE_LANE_WIDEN_HYSTERESIS) * minimumPassageSpacing
+      );
+      laneOpenSince = comfortablyWider ? (laneOpenSince || nowSec) : 0;
+      passageColumns = comfortablyWider && nowSec - laneOpenSince >= PASSAGE_MIN_DURATION
+        ? measuredPassageColumns
+        : previousColumns;
+    } else {
+      passageColumns = previousColumns;
+      laneOpenSince = 0;
+    }
+  }
+  // Light compression is still useful in open approaches.  Once a meaningful
+  // share of lanes no longer fits, switch before agents start fighting exact
+  // slots at the mouth of the corridor.
   const passageNeeded = passageColumns < requestedColumns
-    && (compression <= 0.7 || passageColumns <= Math.max(1, Math.floor(requestedColumns * 0.56)));
+    && (compression <= 0.84 || passageColumns <= Math.max(1, Math.floor(requestedColumns * 0.78)));
   const openEnough = corridorWidth >= requiredWidth * 0.9 && frontClearance >= spacing * 2.2;
   const previousState = String(terrain?.state || '');
   const wasPassage = previousState === SQUAD_FORMATION_RUNTIME_STATE.PASSAGE;
+  const wasPassageFlow = wasPassage || previousState === SQUAD_FORMATION_RUNTIME_STATE.EXPAND;
+  const allFlowCandidates = ordered.filter((agent) => !agent?.isFlagBearer);
+  const flowCandidates = allFlowCandidates
+    .filter((agent) => !agent?.isFlagBearer)
+    .filter((agent) => (
+      agent?._formationRecovery?.active !== true
+      && agent?._formationDetached !== true
+      && agent?._squadController?.rejoin?.active !== true
+    ));
+  const totalFlowWeight = allFlowCandidates.reduce((sum, agent) => (
+    sum + Math.max(0, finiteNumber(agent?.weight, 1))
+  ), 0);
+  const healthyFlowWeight = flowCandidates.reduce((sum, agent) => (
+    sum + Math.max(0, finiteNumber(agent?.weight, 1))
+  ), 0);
+  const detachedFlowRatio = (totalFlowWeight - healthyFlowWeight) / Math.max(0.001, totalFlowWeight);
+  // Ignore a true tail of outliers, but do not let a large stuck rear vanish
+  // from the exit test and cause the front half to expand across the gate.
+  const clearanceCandidates = flowCandidates.length > 0 && detachedFlowRatio <= 0.08
+    ? flowCandidates
+    : allFlowCandidates;
+  let frontProgress = -Infinity;
+  let rearProgress = Infinity;
+  clearanceCandidates.forEach((candidate) => {
+    const progress = (
+      (finiteNumber(candidate?.x) - anchor.x) * safeDirection.x
+      + (finiteNumber(candidate?.y) - anchor.y) * safeDirection.y
+    );
+    frontProgress = Math.max(frontProgress, progress);
+    rearProgress = Math.min(rearProgress, progress);
+  });
+  const resolveCandidateWidth = (ratio = 0.5) => {
+    if (clearanceCandidates.length <= 0) return corridorWidth;
+    const desiredProgress = frontProgress - ((frontProgress - rearProgress) * clamp(ratio, 0, 1));
+    const candidate = clearanceCandidates.reduce((closest, current) => {
+      if (!closest) return current;
+      const currentProgress = (
+        (finiteNumber(current?.x) - anchor.x) * safeDirection.x
+        + (finiteNumber(current?.y) - anchor.y) * safeDirection.y
+      );
+      const closestProgress = (
+        (finiteNumber(closest?.x) - anchor.x) * safeDirection.x
+        + (finiteNumber(closest?.y) - anchor.y) * safeDirection.y
+      );
+      return Math.abs(currentProgress - desiredProgress) < Math.abs(closestProgress - desiredProgress)
+        ? current
+        : closest;
+    }, null);
+    return resolvePassageWidthAtPoint({
+      point: candidate,
+      direction: safeDirection,
+      walls,
+      field: sim?.field,
+      mapConfig: sim?.trainingMap,
+      lateralProbe,
+      probeStep: flowProbeStep,
+      margin,
+      spacing
+    });
+  };
+  // The leader clearing a gate is not enough.  Sample the body and a high
+  // percentile of the rear instead of waiting for every detached outlier.
+  const bodyWidth = resolveCandidateWidth(0.58);
+  const rearWidth = resolveCandidateWidth(PASSAGE_EXIT_READY_RATIO);
+  const frontCleared = openEnough;
+  const bodyCleared = bodyWidth >= requiredWidth * 0.88;
+  const rearCleared = rearWidth >= requiredWidth * 0.84;
+  const flowClear = frontCleared && bodyCleared && rearCleared;
   let state = SQUAD_FORMATION_RUNTIME_STATE.MARCH;
   let passageUntil = Math.max(0, finiteNumber(terrain?.passageUntil));
   let openSince = finiteNumber(terrain?.openSince);
-  if (passageNeeded) {
+  let expandStartedAt = finiteNumber(terrain?.expandStartedAt);
+  let expandFromCompression = clamp(finiteNumber(terrain?.expandFromCompression, terrain?.compression), 0.4, 1);
+  if (passageNeeded || (wasPassageFlow && !flowClear)) {
     state = SQUAD_FORMATION_RUNTIME_STATE.PASSAGE;
-    passageUntil = nowSec + PASSAGE_MIN_DURATION;
+    passageUntil = passageNeeded ? nowSec + PASSAGE_MIN_DURATION : Math.max(passageUntil, nowSec + 0.18);
     openSince = 0;
-  } else if (wasPassage && (nowSec < passageUntil || !openEnough)) {
+    expandStartedAt = 0;
+    expandFromCompression = compression;
+  } else if (wasPassage && (nowSec < passageUntil || !flowClear)) {
     state = SQUAD_FORMATION_RUNTIME_STATE.PASSAGE;
-    if (openEnough && openSince <= 0) openSince = nowSec;
-    if (!openEnough) openSince = 0;
+    if (flowClear && openSince <= 0) openSince = nowSec;
+    if (!flowClear) openSince = 0;
+    expandStartedAt = 0;
   } else if (wasPassage || previousState === SQUAD_FORMATION_RUNTIME_STATE.EXPAND) {
     state = SQUAD_FORMATION_RUNTIME_STATE.EXPAND;
     if (openSince <= 0) openSince = nowSec;
-    if (nowSec - openSince >= EXPAND_MIN_DURATION && compression >= 0.98) {
+    if (expandStartedAt <= 0) expandStartedAt = nowSec;
+    if (wasPassage) expandFromCompression = clamp(finiteNumber(terrain?.compression, compression), 0.4, 1);
+    if (nowSec - expandStartedAt >= EXPAND_MIN_DURATION && compression >= 0.98) {
       state = SQUAD_FORMATION_RUNTIME_STATE.MARCH;
       openSince = 0;
+      expandStartedAt = 0;
     }
   } else if (compression < 0.985) {
     state = SQUAD_FORMATION_RUNTIME_STATE.COMPRESS;
   }
+  const expandProgress = state === SQUAD_FORMATION_RUNTIME_STATE.EXPAND
+    ? clamp((nowSec - Math.max(0, expandStartedAt || nowSec)) / EXPAND_MIN_DURATION, 0, 1)
+    : (state === SQUAD_FORMATION_RUNTIME_STATE.MARCH ? 1 : 0);
+  const effectiveCompression = state === SQUAD_FORMATION_RUNTIME_STATE.EXPAND
+    ? clamp(
+      expandFromCompression + ((compression - expandFromCompression) * (expandProgress * expandProgress * (3 - (2 * expandProgress)))),
+      0.4,
+      1
+    )
+    : compression;
+  const previousPassageId = Math.max(0, Math.floor(finiteNumber(terrain?.passageId)));
+  const passageId = state === SQUAD_FORMATION_RUNTIME_STATE.PASSAGE
+    ? (wasPassageFlow ? Math.max(1, previousPassageId) : previousPassageId + 1)
+    : previousPassageId;
   const boundary = resolveBoundaryNormal(anchor, sim?.field, margin);
   const wallNormal = resolveWallNormal(wallHit, safeDirection);
   return {
@@ -388,12 +653,27 @@ const resolveTerrainSample = ({
     corridorWidth,
     requiredWidth,
     frontClearance,
-    compression,
-    longitudinalScale: clamp(1 + ((1 - compression) * 0.56), 1, 1.36),
+    compression: effectiveCompression,
+    rawCompression: compression,
+    longitudinalScale: clamp(1 + ((1 - effectiveCompression) * 0.56), 1, 1.36),
     requestedColumns,
     columns: state === SQUAD_FORMATION_RUNTIME_STATE.PASSAGE ? passageColumns : requestedColumns,
+    laneCount: state === SQUAD_FORMATION_RUNTIME_STATE.PASSAGE ? passageColumns : requestedColumns,
+    laneOpenSince,
+    passageId,
     passageUntil,
     openSince,
+    frontCleared,
+    bodyCleared,
+    rearCleared,
+    bodyWidth,
+    rearWidth,
+    expandStartedAt,
+    expandFromCompression,
+    expandProgress,
+    formationWeight: state === SQUAD_FORMATION_RUNTIME_STATE.PASSAGE
+      ? 0.04
+      : (state === SQUAD_FORMATION_RUNTIME_STATE.EXPAND ? expandProgress : 1),
     boundaryNormalX: boundary.x,
     boundaryNormalY: boundary.y,
     boundaryDistance: boundary.distance,
@@ -412,7 +692,6 @@ const resolveFormationSlot = ({
   fallbackSlot = {},
   ignoreRejoin = false
 } = {}) => {
-  const terrain = runtime?.terrain || {};
   const state = agent?._squadController && typeof agent._squadController === 'object'
     ? agent._squadController
     : {};
@@ -420,21 +699,12 @@ const resolveFormationSlot = ({
     return normalizeSlot(state.rejoin.gateSlot, fallbackSlot);
   }
   const base = normalizeSlot(agent?.formationSlot, fallbackSlot);
-  const spacing = resolveBaseSpacing(squad);
-  if (terrain?.state === SQUAD_FORMATION_RUNTIME_STATE.PASSAGE) {
-    const columns = Math.max(1, Math.floor(finiteNumber(terrain?.columns, 1)));
-    const rank = Math.max(0, Math.floor(finiteNumber(state?.rank, finiteNumber(agent?.slotOrder))));
-    const column = rank % columns;
-    const row = Math.floor(rank / columns);
-    const passageSpacing = Math.max(AGENT_RADIUS * 2.04, spacing * 0.82);
-    return {
-      side: (column - ((columns - 1) * 0.5)) * passageSpacing,
-      front: -row * passageSpacing * Math.max(0.98, finiteNumber(terrain?.longitudinalScale, 1))
-    };
-  }
+  // Passage locomotion owns its lane target.  Keep the persistent AUTO_DEFAULT
+  // slot intact as the exit/reformation reference instead of manufacturing a
+  // temporary rigid narrow-column slot here.
   return {
-    side: base.side * clamp(finiteNumber(terrain?.compression, 1), 0.56, 1),
-    front: base.front * clamp(finiteNumber(terrain?.longitudinalScale, 1), 1, 1.36)
+    side: base.side,
+    front: base.front
   };
 };
 
@@ -464,6 +734,7 @@ const refreshRuntimeDebug = (squad = {}, runtime = null) => {
   const cohesion = runtime?.cohesion || {};
   const terrain = runtime?.terrain || {};
   const combat = runtime?.combat || {};
+  const passageDebug = runtime?.passageDebug || {};
   squad.formationRuntime = {
     state: String(runtime?.formation?.state || SQUAD_FORMATION_RUNTIME_STATE.HOLD),
     requestedFormation: String(runtime?.formation?.requestedId || ''),
@@ -472,10 +743,27 @@ const refreshRuntimeDebug = (squad = {}, runtime = null) => {
     averageError: Math.max(0, finiteNumber(cohesion?.averageError)),
     rmsError: Math.max(0, finiteNumber(cohesion?.rmsError)),
     maxLag: Math.max(0, finiteNumber(cohesion?.maxLag)),
+    detachedRatio: clamp(finiteNumber(cohesion?.detachedRatio), 0, 1),
+    detachedWeightRatio: clamp(finiteNumber(cohesion?.detachedWeightRatio), 0, 1),
+    detachedCount: Math.max(0, Math.floor(finiteNumber(cohesion?.detachedCount))),
     speedScale: clamp(finiteNumber(cohesion?.speedScale, 1), 0, 1),
     compression: clamp(finiteNumber(terrain?.compression, 1), 0, 1),
     passage: terrain?.state === SQUAD_FORMATION_RUNTIME_STATE.PASSAGE,
+    passageExit: {
+      frontCleared: terrain?.frontCleared === true,
+      bodyCleared: terrain?.bodyCleared === true,
+      rearCleared: terrain?.rearCleared === true
+    },
     corridorWidth: Number.isFinite(Number(terrain?.corridorWidth)) ? Number(terrain.corridorWidth) : null
+  };
+  squad.passagePlan = runtime?.passagePlan || null;
+  squad.passageDebug = {
+    passageActive: passageDebug?.passageActive === true,
+    passageId: Math.max(0, Math.floor(finiteNumber(passageDebug?.passageId))),
+    streamCount: Math.max(0, Math.floor(finiteNumber(passageDebug?.streamCount))),
+    agentsApproaching: Math.max(0, Math.floor(finiteNumber(passageDebug?.agentsApproaching))),
+    agentsStreaming: Math.max(0, Math.floor(finiteNumber(passageDebug?.agentsStreaming))),
+    agentsExiting: Math.max(0, Math.floor(finiteNumber(passageDebug?.agentsExiting)))
   };
   squad.combatRuntime = {
     state: String(combat?.state || SQUAD_COMBAT_RUNTIME_STATE.NONE),
@@ -502,10 +790,12 @@ const clearAgentControllerCombat = (agent = {}) => {
 export const ensureSquadControllerRuntime = ({
   squad = null,
   agents = [],
+  orderedAgents = null,
   nowSec = 0,
   forward = null
 } = {}) => {
   if (!isTrainingCardSquad(squad)) return null;
+  const ordered = Array.isArray(orderedAgents) ? orderedAgents : sortAgents(agents);
   const signature = formationSignature(squad);
   let runtime = squad?._squadController && typeof squad._squadController === 'object'
     ? squad._squadController
@@ -526,7 +816,20 @@ export const ensureSquadControllerRuntime = ({
         sampledAt: -Infinity,
         compression: 1,
         longitudinalScale: 1,
-        columns: 1
+        columns: 1,
+        laneCount: 0,
+        passageId: 0
+      },
+      passagePlan: null,
+      passageCompletedRouteSignature: '',
+      passageCompletedAt: 0,
+      passageDebug: {
+        passageActive: false,
+        passageId: 0,
+        streamCount: 0,
+        agentsApproaching: 0,
+        agentsStreaming: 0,
+        agentsExiting: 0
       },
       cohesion: {
         readyRatio: 1,
@@ -560,10 +863,10 @@ export const ensureSquadControllerRuntime = ({
     squad._squadController = runtime;
   }
   updateAnchor(runtime, squad, forward);
-  const membership = resolveMembershipSignature(agents);
+  const membership = resolveMembershipSignature(agents, ordered);
   const formationChanged = runtime?.formation?.requestedSignature !== signature;
   if (formationChanged || !runtime.membershipSignature) {
-    assignPersistentSlots(squad, agents);
+    assignPersistentSlots(squad, agents, { orderedAgents: ordered });
     runtime.formation.requestedId = resolveRequestedFormationId(squad);
     runtime.formation.requestedSignature = signature;
     runtime.reform.active = true;
@@ -571,14 +874,14 @@ export const ensureSquadControllerRuntime = ({
     runtime.reform.startedAt = Math.max(0, finiteNumber(nowSec));
   } else if (membership !== runtime.membershipSignature) {
     const known = new Set(
-      sortAgents(agents)
+      ordered
         .filter((agent) => agent?._squadController?.slotKey !== undefined)
         .map((agent) => String(agent.id || ''))
     );
-    if (known.size < sortAgents(agents).length) assignPersistentSlots(squad, agents);
+    if (known.size < ordered.length) assignPersistentSlots(squad, agents, { orderedAgents: ordered });
     runtime.reform.needsRepack = true;
   }
-  runtime.membershipSignature = resolveMembershipSignature(agents);
+  runtime.membershipSignature = resolveMembershipSignature(agents, ordered);
   return runtime;
 };
 
@@ -592,12 +895,23 @@ export const resetSquadControllerRuntime = (squad = null, agents = [], { preserv
   delete squad.formationCohesionState;
   delete squad.formationCohesionError;
   delete squad._narrowPassage;
+  delete squad.passagePlan;
+  delete squad._passageRoute;
+  delete squad._passagePlanRoute;
+  delete squad._trainingPassageFallbackPending;
+  delete squad._passagePlanSequence;
   delete squad._formationArrival;
   delete squad.formationArrivalState;
   (Array.isArray(agents) ? agents : []).forEach((agent) => {
     if (!agent) return;
     delete agent._squadController;
     delete agent._formationRecovery;
+    if (agent?._squadController) {
+      agent._squadController.locomotionState = CARD_LOCOMOTION_STATE.FORMATION;
+      agent._squadController.passageFlowActive = false;
+      agent._squadController.passageId = 0;
+      agent._squadController.streamId = null;
+    }
     if (!preserveSlots) {
       agent.formationSlot = null;
       agent.formationSpacingSlots = null;
@@ -611,6 +925,7 @@ const updateReformState = ({
   squad = {},
   runtime = null,
   agents = [],
+  orderedAgents = null,
   nowSec = 0
 } = {}) => {
   if (!runtime) return;
@@ -626,7 +941,7 @@ const updateReformState = ({
   // slots remain persistent until a real membership/formation event, so this
   // does not create the every-frame swapping that makes a unit look unruly.
   if (runtime.reform.needsRepack) {
-    assignPersistentSlots(squad, agents, { compact: true });
+    assignPersistentSlots(squad, agents, { orderedAgents });
     runtime.reform.needsRepack = false;
     runtime.reform.active = true;
     runtime.reform.startedAt = nowSec;
@@ -639,6 +954,82 @@ const updateReformState = ({
   }
 };
 
+const updatePassageFlowAssignments = ({ runtime = null, agents = [], orderedAgents = null } = {}) => {
+  const terrain = runtime?.terrain || {};
+  const state = String(terrain?.state || '');
+  const flowActive = state === SQUAD_FORMATION_RUNTIME_STATE.PASSAGE
+    || state === SQUAD_FORMATION_RUNTIME_STATE.EXPAND;
+  const passageId = Math.max(0, Math.floor(finiteNumber(terrain?.passageId)));
+  const measuredLaneCount = Math.max(1, Math.floor(finiteNumber(terrain?.laneCount, terrain?.columns || 1)));
+  const ordered = (Array.isArray(orderedAgents) ? orderedAgents : sortAgents(agents))
+    .filter((agent) => !agent?.isFlagBearer);
+  const maxSide = Math.max(
+    1,
+    ...ordered.map((agent) => Math.abs(finiteNumber(agent?.formationSlot?.side)))
+  );
+  ordered.forEach((agent, index) => {
+    const previous = agent?._squadController && typeof agent._squadController === 'object'
+      ? agent._squadController
+      : {};
+    if (!flowActive || passageId <= 0) {
+      agent._squadController = { ...previous, passageFlowActive: false };
+      return;
+    }
+    const samePassage = Math.floor(finiteNumber(previous?.passageId)) === passageId;
+    const previousLaneCount = Math.max(1, Math.floor(finiteNumber(previous?.passageLaneCount, measuredLaneCount)));
+    // A wider reading must not reinterpret lane 0 of a one-person queue as
+    // the far-left lane of a newly measured four-column corridor.  Existing
+    // members retain their lane scale until the gradual EXPAND formation takes
+    // over; only a safety-driven shrink remaps them immediately.
+    const laneCount = samePassage && measuredLaneCount > previousLaneCount
+      ? previousLaneCount
+      : measuredLaneCount;
+    let lane = Math.floor(finiteNumber(previous?.passageLane, -1));
+    if (!samePassage || lane < 0) {
+      // Preserve the broad left/right ordering at entry.  It gives a stable
+      // first lane without assigning a new lane from global rank every frame.
+      const sideRatio = clamp((finiteNumber(agent?.formationSlot?.side) / maxSide + 1) * 0.5, 0, 1);
+      lane = Math.round(sideRatio * Math.max(0, laneCount - 1));
+    } else if (laneCount < previousLaneCount) {
+      // A forced shrink maps each old lane once; widening deliberately keeps
+      // the current lane so members do not cut across a live queue.
+      const previousLanePosition = previousLaneCount <= 1
+        ? 0.5
+        : lane / Math.max(1, previousLaneCount - 1);
+      lane = Math.round(previousLanePosition * Math.max(0, laneCount - 1));
+    }
+    agent._squadController = {
+      ...previous,
+      passageFlowActive: true,
+      passageId,
+      passageLane: clamp(lane, 0, laneCount - 1),
+      passageLaneCount: laneCount,
+      passageOrder: samePassage
+        ? Math.max(0, Math.floor(finiteNumber(previous?.passageOrder, index)))
+        : index
+    };
+  });
+};
+
+const resolveLegalRejoinGateSlot = ({
+  anchor = {},
+  requestedSlot = {},
+  sim = {},
+  walls = [],
+  spacing = (AGENT_RADIUS * 2) + AGENT_GAP
+} = {}) => {
+  const requestedPoint = localToWorld(anchor, requestedSlot);
+  const navigator = sim?.trainingNavigator;
+  const legalPoint = navigator?.findNearestWalkablePoint
+    ? navigator.findNearestWalkablePoint(requestedPoint, {
+      obstacles: walls,
+      radius: AGENT_RADIUS + 0.5,
+      maxSearchDistance: Math.max(28, spacing * 5)
+    }) || requestedPoint
+    : requestedPoint;
+  return worldToLocal(anchor, legalPoint);
+};
+
 export const prepareSquadControllerFrame = ({
   squad = null,
   agents = [],
@@ -648,7 +1039,17 @@ export const prepareSquadControllerFrame = ({
   nowSec = 0,
   moving = false
 } = {}) => {
-  const runtime = ensureSquadControllerRuntime({ squad, agents, nowSec, forward });
+  // CARD groups can contain thousands of representatives.  Reuse one stable
+  // order across controller work in this frame instead of repeatedly sorting
+  // the same population for slots, lanes and cohesion.
+  const orderedAgents = sortAgents(agents);
+  const runtime = ensureSquadControllerRuntime({
+    squad,
+    agents,
+    orderedAgents,
+    nowSec,
+    forward
+  });
   if (!runtime) return null;
   const direction = normalizeVec(
     finiteNumber(forward?.x, finiteNumber(squad?.dirX, 1)),
@@ -662,21 +1063,76 @@ export const prepareSquadControllerFrame = ({
     nowSec - sampledAt >= terrainScanInterval
     || !Number.isFinite(sampledAt)
   ) {
-    runtime.terrain = resolveTerrainSample({
-      squad,
-      agents,
-      sim,
-      walls,
-      forward: direction,
-      nowSec,
-      runtime
-    });
+    if (isTrainingCardSquad(squad)) {
+      if (
+        (!Array.isArray(squad?._passagePlanRoute) || squad._passagePlanRoute.length <= 0)
+        && Array.isArray(squad?.waypoints)
+        && squad.waypoints.length > 0
+      ) {
+        const anchor = { x: finiteNumber(squad?.x), y: finiteNumber(squad?.y) };
+        squad._passagePlanRoute = [anchor, ...squad.waypoints.map((point) => ({
+          x: finiteNumber(point?.x),
+          y: finiteNumber(point?.y)
+        }))].filter((point, index, rows) => (
+          index === 0
+          || Math.hypot(point.x - rows[index - 1].x, point.y - rows[index - 1].y) > 0.05
+        ));
+      }
+      updateTrainingCardPassagePlan({
+        squad,
+        agents: orderedAgents,
+        runtime,
+        sim,
+        walls,
+        route: Array.isArray(squad?._passagePlanRoute) && squad._passagePlanRoute.length > 0
+          ? squad._passagePlanRoute
+          : (Array.isArray(squad?._passageRoute) && squad._passageRoute.length > 0
+            ? squad._passageRoute
+            : squad?.waypoints),
+        nowSec
+      });
+    } else {
+      runtime.terrain = resolveTerrainSample({
+        squad,
+        agents,
+        orderedAgents,
+        sim,
+        walls,
+        forward: direction,
+        nowSec,
+        runtime
+      });
+    }
   }
-  updateReformState({ squad, runtime, agents, nowSec });
+  updateReformState({ squad, runtime, agents, orderedAgents, nowSec });
+  if (isTrainingCardSquad(squad) && runtime?.passagePlan) {
+    updateTrainingCardPassageAgents({
+      squad,
+      agents: orderedAgents,
+      plan: runtime.passagePlan,
+      nowSec
+    });
+    const passageRows = orderedAgents
+      .filter((agent) => !agent?.isFlagBearer && agent?._squadController)
+      .map((agent) => String(agent?._squadController?.locomotionState || ''));
+    const approaching = passageRows.filter((state) => state === CARD_LOCOMOTION_STATE.STREAM_APPROACH).length;
+    const streaming = passageRows.filter((state) => state === CARD_LOCOMOTION_STATE.STREAM).length;
+    const exiting = passageRows.filter((state) => state === CARD_LOCOMOTION_STATE.STREAM_EXIT).length;
+    runtime.passageDebug = {
+      ...(runtime.passageDebug || {}),
+      agentsApproaching: approaching,
+      agentsStreaming: streaming,
+      agentsExiting: exiting,
+      passageActive: approaching + streaming + exiting > 0
+    };
+  }
+  if (!isTrainingCardSquad(squad)) updatePassageFlowAssignments({ runtime, agents, orderedAgents });
   const anchor = updateAnchor(runtime, squad, direction);
   const spacing = resolveBaseSpacing(squad);
-  const followers = sortAgents(agents).filter((agent) => !agent.isFlagBearer);
-  const rearExtent = resolveRearExtent(followers, spacing);
+  const followers = orderedAgents.filter((agent) => !agent.isFlagBearer);
+  const rearExtent = resolveRearExtent(followers, spacing, followers);
+  const passageFlowActive = runtime?.terrain?.state === SQUAD_FORMATION_RUNTIME_STATE.PASSAGE
+    || runtime?.terrain?.state === SQUAD_FORMATION_RUNTIME_STATE.EXPAND;
   const rows = [];
   followers.forEach((agent, index) => {
     const fallback = fallbackSlotForIndex(index, resolveFormationColumns(squad, followers.length, spacing), spacing);
@@ -701,17 +1157,41 @@ export const prepareSquadControllerFrame = ({
     let rejoin = agentState?.rejoin && typeof agentState.rejoin === 'object'
       ? agentState.rejoin
       : null;
-    if (!rejoin && normalError >= triggerDistance && lag >= spacing * 2.1) {
+    const passageLocomotion = isTrainingCardAgentInStream(agent)
+      && agent?._formationRecovery?.active !== true
+      && agentState?.rejoin?.active !== true;
+    if (passageLocomotion) agent._formationDetached = false;
+    const initiallyDetached = !passageLocomotion && (
+      agent?._formationDetached === true
+      || agent?._formationRecovery?.active === true
+    );
+    const needsGateForDetachedAgent = initiallyDetached && normalError >= spacing * 1.45;
+    const needsGateForNormalAgent = !passageFlowActive
+      && normalError >= triggerDistance
+      && lag >= spacing * 2.1;
+    if (!rejoin && (needsGateForDetachedAgent || needsGateForNormalAgent)) {
+      const requestedGateSlot = {
+        side: clamp(normalSlot.side, -spacing, spacing),
+        front: -rearExtent - (spacing * 1.15)
+      };
       rejoin = {
         active: true,
         phase: 'GATE',
         startedAt: nowSec,
-        gateSlot: {
-          side: clamp(normalSlot.side, -spacing, spacing),
-          front: -rearExtent - (spacing * 1.15)
-        }
+        gateSlot: resolveLegalRejoinGateSlot({
+          anchor,
+          requestedSlot: requestedGateSlot,
+          sim,
+          walls,
+          spacing
+        })
       };
+      // A rejoiner is a detached individual even when it did not originate
+      // from a terrain recovery.  Keep it out of core cohesion and flow until
+      // it has actually reached its persistent slot again.
+      agent._formationDetached = true;
     }
+    if (rejoin?.active) agent._formationDetached = true;
     if (rejoin?.active && rejoin.phase === 'GATE') {
       const gate = localToWorld(anchor, rejoin.gateSlot);
       if (Math.hypot(gate.x - finiteNumber(agent?.x), gate.y - finiteNumber(agent?.y)) <= spacing * 1.22) {
@@ -720,7 +1200,13 @@ export const prepareSquadControllerFrame = ({
     }
     if (rejoin?.active && rejoin.phase === 'SLOT' && normalError <= spacing * 1.28) {
       rejoin = null;
+      agent._formationDetached = false;
     }
+    const detached = passageLocomotion
+      ? false
+      : (agent?._formationDetached === true
+      || agent?._formationRecovery?.active === true
+      || rejoin?.active === true);
     agent._squadController = {
       ...agentState,
       activeSlot: resolveFormationSlot({
@@ -733,31 +1219,72 @@ export const prepareSquadControllerFrame = ({
       normalSlot,
       rejoin
     };
-    rows.push({ agent, normalError, lag, rejoining: !!rejoin?.active });
+    rows.push({
+      agent,
+      normalError,
+      lag,
+      rejoining: !!rejoin?.active,
+      detached
+    });
   });
-  const errors = rows.map((row) => row.normalError);
+  // Detached/rejoining agents recover through a gate and must not turn a few
+  // pathological positions into a global march brake.  Cohesion is measured
+  // from the healthy body with percentile statistics, while the detached
+  // ratio is separately allowed to matter only when it is genuinely large.
+  const coreRows = rows.filter((row) => !row.detached);
+  const cohesionRows = coreRows.length > 0 ? coreRows : [];
+  const errors = cohesionRows.map((row) => row.normalError);
+  const allErrors = rows.map((row) => row.normalError);
   const sumSquared = errors.reduce((sum, value) => sum + (value * value), 0);
-  const maximumError = errors.length > 0 ? Math.max(...errors) : 0;
+  const maximumError = allErrors.length > 0 ? Math.max(...allErrors) : 0;
   const upperError = percentile(errors, 0.9);
   const averageError = errors.reduce((sum, value) => sum + value, 0) / Math.max(1, errors.length);
   const rmsError = Math.sqrt(sumSquared / Math.max(1, errors.length));
   const readyThreshold = Math.max(2.4, spacing * 0.68);
-  const readyRatio = rows.filter((row) => row.normalError <= readyThreshold).length / Math.max(1, rows.length);
-  const maxLag = rows.reduce((maximum, row) => Math.max(maximum, row.lag), 0);
+  const readyRatio = cohesionRows.filter((row) => row.normalError <= readyThreshold).length
+    / Math.max(1, cohesionRows.length);
+  const maxLag = percentile(cohesionRows.map((row) => row.lag), 0.9);
   const rejoiningCount = rows.filter((row) => row.rejoining).length;
+  const detachedCount = rows.filter((row) => row.detached).length;
+  const detachedRatio = detachedCount / Math.max(1, rows.length);
+  const totalWeight = rows.reduce((sum, row) => (
+    sum + Math.max(0, finiteNumber(row?.agent?.weight, 1))
+  ), 0);
+  const detachedWeight = rows
+    .filter((row) => row.detached)
+    .reduce((sum, row) => sum + Math.max(0, finiteNumber(row?.agent?.weight, 1)), 0);
+  const detachedWeightRatio = detachedWeight / Math.max(0.001, totalWeight);
   const softError = Math.max(spacing * 1.35, 8);
   const hardError = Math.max(spacing * 4.1, 32);
   const unreadyPressure = clamp((upperError - softError) / Math.max(1, hardError - softError), 0, 1);
   const readyPressure = clamp((0.78 - readyRatio) / 0.78, 0, 1);
+  // A handful of representatives is intentionally an outlier allowance, not
+  // a miniature quorum.  This keeps a single blocked flank slot from braking
+  // the CARD anchor in small focused formations as well as in a large army.
+  // Once the count exceeds the allowance, troop weight decides how serious
+  // the detached body really is.
+  const detachedOutlierAllowance = Math.max(1, Math.floor(rows.length * 0.08));
+  const hasDetachedBody = detachedCount > detachedOutlierAllowance;
+  const detachedPressure = hasDetachedBody
+    ? clamp((detachedWeightRatio - 0.12) / 0.56, 0, 1)
+    : 0;
+  const bodyDisruption = hasDetachedBody && detachedWeightRatio >= 0.42
+    ? (unreadyPressure * 0.22) + (readyPressure * 0.1)
+    : 0;
   let speedScale = moving
-    ? clamp(1 - (unreadyPressure * 0.54) - (readyPressure * 0.2), 0.38, 1)
+    ? clamp(
+      1
+        - (passageFlowActive ? 0 : bodyDisruption)
+        - (detachedPressure * 0.34),
+      0.6,
+      1
+    )
     : 1;
-  if (rejoiningCount > 0 && moving) speedScale = Math.min(speedScale, 0.86);
-  const severe = upperError >= hardError && readyRatio < 0.28;
-  const previousSevereSince = finiteNumber(runtime?.cohesion?.severeSince);
-  const severeSince = severe ? (previousSevereSince || nowSec) : 0;
-  const waiting = severe && nowSec - severeSince >= 1.1;
-  if (waiting) speedScale = Math.max(0.2, speedScale * 0.68);
+  // Passage flow deliberately prioritizes continuous forward throughput.  A
+  // handful of rejoiners no longer caps this value; only a major detached
+  // ratio can make the formation itself slow down.
+  const waiting = false;
+  const severeSince = 0;
   rows.forEach((row) => {
     const gain = clamp(
       (row.normalError - (spacing * 1.3)) / Math.max(1, spacing * 5.2),
@@ -779,6 +1306,9 @@ export const prepareSquadControllerFrame = ({
     maxLag,
     readyRatio,
     rejoiningCount,
+    detachedCount,
+    detachedRatio,
+    detachedWeightRatio,
     speedScale,
     waiting,
     severeSince
@@ -801,9 +1331,7 @@ export const prepareSquadControllerFrame = ({
   } else {
     runtime.formation.state = SQUAD_FORMATION_RUNTIME_STATE.HOLD;
   }
-  runtime.formation.activeId = runtime.formation.state === SQUAD_FORMATION_RUNTIME_STATE.PASSAGE
-    ? 'NARROW_COLUMN'
-    : runtime.formation.requestedId;
+  runtime.formation.activeId = DEFAULT_FORMATION_ID;
   if (runtime?.reform?.active) {
     const settled = readyRatio >= 0.86 && upperError <= Math.max(spacing * 1.3, 6);
     runtime.reform.stableSince = settled
@@ -823,13 +1351,28 @@ export const prepareSquadControllerFrame = ({
     recoveringCount: rejoiningCount,
     averageError,
     rmsError,
-    maxLag
+    maxLag,
+    detachedCount,
+    detachedRatio,
+    detachedWeightRatio
   };
   squad._formationCohesionSpeedScale = speedScale;
   squad.formationCohesionState = waiting
     ? 'REGROUPING'
-    : (rejoiningCount > 0 ? 'REJOINING' : (speedScale < 0.98 ? 'SLOWING' : 'COHESIVE'));
-  squad.formationCohesionError = maximumError;
+    : (detachedCount > 0 ? 'REJOINING' : (speedScale < 0.98 ? 'SLOWING' : 'COHESIVE'));
+  squad.formationCohesionError = upperError;
+  // Compatibility/debug mirror only.  CrowdSim no longer consumes this for
+  // CARD steering; the controller's PASSAGE_FLOW intent is the source of
+  // truth, so retaining the field cannot revive rigid narrow slots.
+  squad._narrowPassage = {
+    active: runtime?.terrain?.state === SQUAD_FORMATION_RUNTIME_STATE.PASSAGE,
+    expanding: runtime?.terrain?.state === SQUAD_FORMATION_RUNTIME_STATE.EXPAND,
+    columns: Math.max(1, Math.floor(finiteNumber(runtime?.terrain?.laneCount, runtime?.terrain?.columns || 1))),
+    width: finiteNumber(runtime?.terrain?.corridorWidth, Infinity),
+    distance: finiteNumber(runtime?.terrain?.frontClearance),
+    passageId: Math.max(0, Math.floor(finiteNumber(runtime?.terrain?.passageId))),
+    sampledAt: nowSec
+  };
   refreshRuntimeDebug(squad, runtime);
   return runtime;
 };
@@ -863,6 +1406,21 @@ export const resolveSquadControllerFormationSlot = ({
     agent,
     fallbackSlot
   });
+};
+
+export const resolveSquadControllerPassageFlowIntent = ({
+  squad = null,
+  agent = null
+} = {}) => {
+  const runtime = squad?._squadController;
+  if (!runtime || !agent || !isTrainingCardSquad(squad)) return null;
+  if (agent?._formationRecovery?.active || agent?._squadController?.rejoin?.active) {
+    return null;
+  }
+  const locomotionState = String(agent?._squadController?.locomotionState || '');
+  if (agent?._formationDetached && !isTrainingCardAgentInStream(agent)) return null;
+  if (!isTrainingCardAgentInStream(agent) && locomotionState !== CARD_LOCOMOTION_STATE.STREAM_APPROACH) return null;
+  return resolveTrainingCardPassageFlowIntent({ squad, agent, runtime });
 };
 
 export const resolveSquadControllerAgentSpeedMultiplier = (agent = null, squad = null) => {

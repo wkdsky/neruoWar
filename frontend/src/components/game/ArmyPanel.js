@@ -19,12 +19,10 @@ import {
   MAX_NAME_DISPLAY_WIDTH,
   limitNameByDisplayWidth
 } from '../../game/battle/shared/nameLimits';
-import ArmyFormationThreeEditor, {
-  expandUnitsToFormationPlacements,
-  getFormationOccupancyMetrics,
-  normalizeFormationPlacements,
-  resolveFormationMovePreview
-} from './unit/ArmyFormationThreeEditor';
+import {
+  buildDefaultFormationLayout,
+  DEFAULT_FORMATION_NAME
+} from '../../game/formation/defaultFormation';
 import {
   ArmyBattlefieldItemCloseupPreview,
   ArmyBattlefieldItemBattlePreview
@@ -47,10 +45,9 @@ const getApiErrorMessage = (parsed, fallback) => {
   return fallback;
 };
 
-const ARMY_EDITOR_STEPS = ['units', 'formations', 'preview'];
+const ARMY_EDITOR_STEPS = ['units', 'preview'];
 const ARMY_MAX_UNIT_BASIS = 100;
 const MAX_COMBAT_ARMY_UNIT_COUNT = 1000000;
-const MAX_TEMPLATE_FORMATIONS = 9;
 
 const getUnitId = (unit) => {
   const id = typeof unit?.id === 'string' ? unit.id.trim() : '';
@@ -67,21 +64,12 @@ const normalizeTemplateUnits = (units = []) => (
     .filter((entry) => entry.unitTypeId && entry.count > 0)
 );
 
-const createFormationPlacementId = () => `formation_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
-const createFormationSlotId = () => `formation_slot_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
-
 const getTemplateId = (template) => (typeof template?.templateId === 'string' ? template.templateId.trim() : '');
 const getCombatArmyId = (army) => {
   const armyId = typeof army?.armyId === 'string' ? army.armyId.trim() : '';
   if (armyId) return armyId;
   return typeof army?.id === 'string' ? army.id.trim() : '';
 };
-const getFormationSlotId = (formation) => {
-  const id = typeof formation?.id === 'string' ? formation.id.trim() : '';
-  if (id) return id;
-  return typeof formation?.formationId === 'string' ? formation.formationId.trim() : '';
-};
-
 const getTroopDisplayName = (template) => {
   const name = typeof template?.name === 'string' ? template.name.trim() : '';
   return limitNameByDisplayWidth(name) || '未命名部队';
@@ -385,13 +373,6 @@ const basisEntriesToUnits = (entries = []) => (
   }))
 );
 
-const createFormationSlot = (index = 0, placements = []) => ({
-  id: createFormationSlotId(),
-  name: index <= 0 ? '默认阵型' : `新建阵型${index}`,
-  placements: normalizeFormationPlacements(placements),
-  history: []
-});
-
 const getNextTemplateDraftName = (templates = []) => {
   const usedNumbers = new Set(
     (Array.isArray(templates) ? templates : [])
@@ -408,8 +389,7 @@ const getNextTemplateDraftName = (templates = []) => {
 
 const createTemplateEditorDraft = (name = '') => ({
   name,
-  unitBasis: [],
-  formations: [createFormationSlot(0)]
+  unitBasis: []
 });
 
 const buildUnitBasisRows = (entries = [], unitTypeMap = {}, unitClassMetaById = {}) => {
@@ -427,148 +407,28 @@ const buildUnitBasisRows = (entries = [], unitTypeMap = {}, unitClassMetaById = 
   });
 };
 
-const trimPlacementsToBasis = (placements = [], basisEntries = []) => {
-  const allowed = new Map(normalizeUnitBasisEntries(basisEntries).map((entry) => [entry.unitTypeId, entry.basis]));
-  const used = new Map();
-  return normalizeFormationPlacements(placements).filter((placement) => {
-    const max = allowed.get(placement.unitTypeId) || 0;
-    if (max <= 0) return false;
-    const next = (used.get(placement.unitTypeId) || 0) + 1;
-    if (next > max) return false;
-    used.set(placement.unitTypeId, next);
-    return true;
-  });
-};
-
-const normalizeFormationSlots = (formations = [], basisEntries = []) => {
-  const source = Array.isArray(formations) && formations.length > 0
-    ? formations
-    : [createFormationSlot(0)];
-  return source.slice(0, MAX_TEMPLATE_FORMATIONS).map((formation, index) => ({
-    id: getFormationSlotId(formation) || createFormationSlotId(),
-    name: (typeof formation?.name === 'string' && formation.name.trim())
-      ? formation.name.trim().slice(0, 24)
-      : (index <= 0 ? '默认阵型' : `新建阵型${index}`),
-    placements: trimPlacementsToBasis(formation?.placements || [], basisEntries),
-    history: Array.isArray(formation?.history) ? formation.history.slice(-20) : []
-  }));
-};
-
-const buildPlacementCountsByUnitId = (placements = []) => (
-  normalizeFormationPlacements(placements).reduce((acc, placement) => {
-    acc[placement.unitTypeId] = (acc[placement.unitTypeId] || 0) + 1;
-    return acc;
-  }, {})
-);
-
-const isFormationLegal = (formation = {}, basisRows = []) => {
-  if (basisRows.length <= 0) return false;
-  const counts = buildPlacementCountsByUnitId(formation?.placements || []);
-  return basisRows.every((row) => (counts[row.unitTypeId] || 0) === row.basis)
-    && normalizeFormationPlacements(formation?.placements || []).length === basisRows.reduce((sum, row) => sum + row.basis, 0);
-};
-
-const createFormationFromUnits = (units = []) => (
-  createFormationSlot(0, expandUnitsToFormationPlacements(normalizeTemplateUnits(units).slice(0, ARMY_MAX_UNIT_BASIS)))
-);
-
-const buildFormationPayload = (formations = [], basisEntries = []) => (
-  normalizeFormationSlots(formations, basisEntries).map((formation) => ({
-    id: formation.id,
-    formationId: formation.id,
-    name: formation.name,
-    placements: normalizeFormationPlacements(formation.placements).map((placement) => ({
-      unitTypeId: placement.unitTypeId,
-      x: placement.x,
-      y: placement.y
-    }))
-  }))
-);
-
-const buildLegalFormationPayload = (formations = [], basisEntries = []) => {
-  const basisRows = normalizeUnitBasisEntries(basisEntries);
-  return buildFormationPayload(
-    normalizeFormationSlots(formations, basisRows).filter((formation) => isFormationLegal(formation, basisRows)),
-    basisRows
-  );
-};
-
-const pushFormationHistory = (formation, nextPlacements) => ({
-  ...formation,
-  placements: normalizeFormationPlacements(nextPlacements),
-  history: [...(Array.isArray(formation.history) ? formation.history : []), normalizeFormationPlacements(formation.placements)].slice(-30)
-});
-
-const areFormationPlacementsEqual = (left = [], right = []) => {
-  const normalizedLeft = normalizeFormationPlacements(left);
-  const normalizedRight = normalizeFormationPlacements(right);
-  if (normalizedLeft.length !== normalizedRight.length) return false;
-  return normalizedLeft.every((placement, index) => {
-    const next = normalizedRight[index];
-    return placement.id === next.id
-      && placement.unitTypeId === next.unitTypeId
-      && placement.x === next.x
-      && placement.y === next.y;
-  });
-};
-
-const normalizeFormationPlacementIds = (ids = []) => (
-  Array.from(new Set((Array.isArray(ids) ? ids : [ids])
-    .map((id) => (typeof id === 'string' ? id.trim() : ''))
-    .filter(Boolean)))
-);
-
-const FORMATION_MINI_PREVIEW_MIN_SPAN = 6;
-
-const buildFormationMiniPreviewGeometry = (metrics = {}) => {
-  const count = Math.max(0, Math.floor(Number(metrics?.count) || 0));
-  if (count <= 0) {
-    return {
-      span: FORMATION_MINI_PREVIEW_MIN_SPAN,
-      offsetX: 0,
-      offsetY: 0
-    };
-  }
-  const width = Math.max(1, Number(metrics.width) || 1);
-  const height = Math.max(1, Number(metrics.height) || 1);
-  const span = Math.max(FORMATION_MINI_PREVIEW_MIN_SPAN, width, height);
-  return {
-    span,
-    offsetX: (span - width) / 2 - (Number(metrics.minX) || 0),
-    offsetY: (span - height) / 2 - (Number(metrics.minY) || 0)
-  };
-};
-
-const buildFormationMiniPreviewTileStyle = (placement = {}, geometry = {}) => {
-  const span = Math.max(1, Number(geometry.span) || FORMATION_MINI_PREVIEW_MIN_SPAN);
-  return {
-    left: `${((Number(placement.x) + (Number(geometry.offsetX) || 0)) / span) * 100}%`,
-    top: `${((Number(placement.y) + (Number(geometry.offsetY) || 0)) / span) * 100}%`,
-    width: `${100 / span}%`,
-    height: `${100 / span}%`
-  };
-};
-
-const FormationMiniPreview = ({ formation = {}, unitTypeMap = {}, unitClassMetaById = {}, className = '' }) => {
-  const placements = normalizeFormationPlacements(formation.placements);
-  const geometry = buildFormationMiniPreviewGeometry(formation.occupancyMetrics);
-  const classes = ['army-formation-mini-preview', className].filter(Boolean).join(' ');
-
+const DefaultFormationPreview = ({ layout = null, unitTypeMap = {}, unitClassMetaById = {} }) => {
+  const slots = Array.isArray(layout?.deploySlots) ? layout.deploySlots : [];
+  const columns = Math.max(1, Math.floor(Number(layout?.formationRect?.columns) || 1));
+  const rows = Math.max(1, Math.floor(Number(layout?.formationRect?.rows) || 1));
   return (
-    <div className={classes} aria-hidden="true">
+    <div className="army-formation-mini-preview is-static army-default-formation-preview" aria-label={DEFAULT_FORMATION_NAME}>
       <div className="army-formation-mini-board">
-        {placements.length <= 0 ? (
+        {slots.length <= 0 ? (
           <span className="army-formation-mini-empty" />
-        ) : placements.map((placement) => {
-          const unit = unitTypeMap[placement.unitTypeId] || {};
-          const classMeta = unitClassMetaById[placement.unitTypeId] || resolveUnitClassMeta(unit);
+        ) : slots.map((slot) => {
+          const unit = unitTypeMap[slot.unitTypeId] || {};
+          const classMeta = unitClassMetaById[slot.unitTypeId] || resolveUnitClassMeta(unit);
           return (
             <span
-              key={`mini-${formation.id}-${placement.id}`}
+              key={`default-slot-${slot.templateIndex}`}
               className="army-formation-mini-tile"
               style={{
                 background: classMeta.color,
-                ...buildFormationMiniPreviewTileStyle(placement, geometry)
+                left: `${(Math.max(0, Number(slot.col) || 0) / columns) * 100}%`,
+                top: `${(Math.max(0, Number(slot.row) || 0) / rows) * 100}%`,
+                width: `${100 / columns}%`,
+                height: `${100 / rows}%`
               }}
             />
           );
@@ -726,13 +586,8 @@ const ArmyPanel = ({
   const [templateEditingId, setTemplateEditingId] = useState('');
   const [templateEditorStep, setTemplateEditorStep] = useState('units');
   const [templateEditorDraft, setTemplateEditorDraft] = useState(() => createTemplateEditorDraft());
-  const [templateEditorActiveFormationId, setTemplateEditorActiveFormationId] = useState('');
-  const [templateEditorSelectedUnitId, setTemplateEditorSelectedUnitId] = useState('');
   const [templateEditorHoverUnitId, setTemplateEditorHoverUnitId] = useState('');
   const [templateEditorHoverPoint, setTemplateEditorHoverPoint] = useState(null);
-  const [templateEditorSelectedPlacementId, setTemplateEditorSelectedPlacementId] = useState('');
-  const [templateEditorSelectedPlacementIds, setTemplateEditorSelectedPlacementIds] = useState([]);
-  const [templateEditorMoveSelectionIds, setTemplateEditorMoveSelectionIds] = useState([]);
   const [armyToasts, setArmyToasts] = useState([]);
   const templateEditorAutoOpenedRef = useRef(false);
   const combatArmyCreateInFlightRef = useRef(false);
@@ -852,92 +707,22 @@ const ArmyPanel = ({
     [templateEditorUnits, unitNameByTypeId]
   );
 
-  const templateEditorFormations = useMemo(
-    () => normalizeFormationSlots(templateEditorDraft.formations, templateEditorDraft.unitBasis),
-    [templateEditorDraft.formations, templateEditorDraft.unitBasis]
-  );
-
-  const templateEditorActiveFormation = useMemo(() => (
-    templateEditorFormations.find((formation) => formation.id === templateEditorActiveFormationId)
-      || templateEditorFormations[0]
-      || null
-  ), [templateEditorActiveFormationId, templateEditorFormations]);
-
-  const templateEditorPlacements = useMemo(
-    () => normalizeFormationPlacements(templateEditorActiveFormation?.placements || []),
-    [templateEditorActiveFormation]
-  );
-
-  const templateEditorOccupancyMetrics = useMemo(
-    () => getFormationOccupancyMetrics(templateEditorPlacements),
-    [templateEditorPlacements]
-  );
-
-  const templateEditorPlacementCounts = useMemo(
-    () => buildPlacementCountsByUnitId(templateEditorPlacements),
-    [templateEditorPlacements]
-  );
-
-  const templateEditorFormationSummaries = useMemo(
-    () => templateEditorFormations.map((formation) => {
-      const placements = normalizeFormationPlacements(formation.placements);
-      return {
-        ...formation,
-        placements,
-        occupancyMetrics: getFormationOccupancyMetrics(placements),
-        legal: isFormationLegal(formation, templateEditorBasisRows),
-        totalPlaced: placements.length
-      };
-    }),
-    [templateEditorBasisRows, templateEditorFormations]
-  );
-
-  const templateEditorLegalFormationCount = useMemo(
-    () => templateEditorFormationSummaries.filter((formation) => formation.legal).length,
-    [templateEditorFormationSummaries]
-  );
+  const templateEditorDefaultFormation = useMemo(() => buildDefaultFormationLayout({
+    units: templateEditorUnits,
+    unitTypes,
+    slotCount: templateEditorTotal,
+    spacing: 1
+  }), [templateEditorTotal, templateEditorUnits, unitTypes]);
 
   const templateEditorPreviewStats = useMemo(
     () => buildTroopAggregateStats(templateEditorUnits, unitTypeMap, unitClassMetaById),
     [templateEditorUnits, unitClassMetaById, unitTypeMap]
   );
 
-  const templateEditorActiveUnitRows = useMemo(
-    () => templateEditorBasisRows.map((row) => {
-      const placed = templateEditorPlacementCounts[row.unitTypeId] || 0;
-      return {
-        ...row,
-        placed,
-        remaining: Math.max(0, row.basis - placed)
-      };
-    }),
-    [templateEditorBasisRows, templateEditorPlacementCounts]
-  );
-
   const templateEditorDetailUnit = useMemo(() => {
     const unitId = templateEditorHoverUnitId || '';
     return unitTypeMap[unitId] || null;
   }, [templateEditorHoverUnitId, unitTypeMap]);
-
-  const templateEditorSelectedPlacements = useMemo(() => {
-    const ids = new Set(normalizeFormationPlacementIds(templateEditorSelectedPlacementIds));
-    return templateEditorPlacements.filter((placement) => ids.has(placement.id));
-  }, [templateEditorPlacements, templateEditorSelectedPlacementIds]);
-
-  useEffect(() => {
-    const liveIds = new Set(templateEditorPlacements.map((placement) => placement.id));
-    const nextSelectedIds = normalizeFormationPlacementIds(templateEditorSelectedPlacementIds)
-      .filter((id) => liveIds.has(id));
-    if (nextSelectedIds.length !== templateEditorSelectedPlacementIds.length) {
-      setTemplateEditorSelectedPlacementIds(nextSelectedIds);
-      setTemplateEditorSelectedPlacementId(nextSelectedIds[0] || '');
-    }
-    const nextMoveIds = normalizeFormationPlacementIds(templateEditorMoveSelectionIds)
-      .filter((id) => liveIds.has(id));
-    if (nextMoveIds.length !== templateEditorMoveSelectionIds.length) {
-      setTemplateEditorMoveSelectionIds(nextMoveIds);
-    }
-  }, [templateEditorMoveSelectionIds, templateEditorPlacements, templateEditorSelectedPlacementIds]);
 
   const templateEditorDetailClassMeta = useMemo(
     () => (templateEditorDetailUnit
@@ -1094,15 +879,6 @@ const ArmyPanel = ({
   }, [pushArmyToast, templateNotice]);
 
   useEffect(() => {
-    if (!templateEditorOpen) return;
-    if (templateEditorFormations.length <= 0) return;
-    if (templateEditorActiveFormationId && templateEditorFormations.some((formation) => formation.id === templateEditorActiveFormationId)) {
-      return;
-    }
-    setTemplateEditorActiveFormationId(templateEditorFormations[0].id);
-  }, [templateEditorActiveFormationId, templateEditorFormations, templateEditorOpen]);
-
-  useEffect(() => {
     if (!detailUnitId) {
       detailRotationDragRef.current = null;
       setDetailDragTarget('');
@@ -1219,12 +995,8 @@ const ArmyPanel = ({
     setTemplateEditingId('');
     setTemplateEditorStep('units');
     setTemplateEditorDraft(createTemplateEditorDraft());
-    setTemplateEditorActiveFormationId('');
-    setTemplateEditorSelectedUnitId('');
     setTemplateEditorHoverUnitId('');
-    setTemplateEditorSelectedPlacementId('');
-    setTemplateEditorSelectedPlacementIds([]);
-    setTemplateEditorMoveSelectionIds([]);
+    setTemplateEditorHoverPoint(null);
     if (isTemplateEditorMode) onClose?.();
   };
 
@@ -1239,12 +1011,8 @@ const ArmyPanel = ({
     setTemplateEditingId('');
     setTemplateEditorStep('units');
     setTemplateEditorDraft(nextDraft);
-    setTemplateEditorActiveFormationId(nextDraft.formations[0]?.id || '');
-    setTemplateEditorSelectedUnitId('');
     setTemplateEditorHoverUnitId('');
-    setTemplateEditorSelectedPlacementId('');
-    setTemplateEditorSelectedPlacementIds([]);
-    setTemplateEditorMoveSelectionIds([]);
+    setTemplateEditorHoverPoint(null);
   }, [templates]);
 
   const openTemplateEdit = useCallback((template) => {
@@ -1255,28 +1023,16 @@ const ArmyPanel = ({
       unitTypeId: entry.unitTypeId,
       basis: entry.count
     })));
-    const fallbackFormation = createFormationFromUnits(unitBasis.map((entry) => ({
-      unitTypeId: entry.unitTypeId,
-      count: entry.basis
-    })));
-    const formations = Array.isArray(template.formations) && template.formations.length > 0
-      ? normalizeFormationSlots(template.formations, unitBasis)
-      : [fallbackFormation];
     const nextDraft = {
       name: typeof template.name === 'string' ? template.name : '',
-      unitBasis,
-      formations
+      unitBasis
     };
     setTemplateEditorOpen(true);
     setTemplateEditingId(typeof template.templateId === 'string' ? template.templateId : '');
     setTemplateEditorStep('units');
     setTemplateEditorDraft(nextDraft);
-    setTemplateEditorActiveFormationId(formations[0]?.id || '');
-    setTemplateEditorSelectedUnitId('');
     setTemplateEditorHoverUnitId('');
-    setTemplateEditorSelectedPlacementId('');
-    setTemplateEditorSelectedPlacementIds([]);
-    setTemplateEditorMoveSelectionIds([]);
+    setTemplateEditorHoverPoint(null);
   }, []);
 
   useEffect(() => {
@@ -1293,10 +1049,6 @@ const ArmyPanel = ({
     }
   }, [isTemplateEditorMode, loading, openTemplateCreate, openTemplateEdit, templateToEdit]);
 
-  const sanitizeDraftFormations = useCallback((unitBasis, formations) => (
-    normalizeFormationSlots(formations, unitBasis)
-  ), []);
-
   const handleAddEditorUnit = useCallback((unitTypeId) => {
     const safeId = typeof unitTypeId === 'string' ? unitTypeId.trim() : '';
     if (!safeId || !unitTypeMap[safeId]) return;
@@ -1311,15 +1063,10 @@ const ArmyPanel = ({
       const nextBasis = normalizeUnitBasisEntries([...current, { unitTypeId: safeId, basis: 1 }]);
       return {
         ...prev,
-        unitBasis: nextBasis,
-        formations: sanitizeDraftFormations(nextBasis, prev.formations)
+        unitBasis: nextBasis
       };
     });
-    setTemplateEditorSelectedUnitId(safeId);
-    setTemplateEditorSelectedPlacementId('');
-    setTemplateEditorSelectedPlacementIds([]);
-    setTemplateEditorMoveSelectionIds([]);
-  }, [pushArmyToast, sanitizeDraftFormations, templateEditorDraft.unitBasis, unitTypeMap]);
+  }, [pushArmyToast, templateEditorDraft.unitBasis, unitTypeMap]);
 
   const handleRemoveEditorUnit = useCallback((unitTypeId) => {
     const safeId = typeof unitTypeId === 'string' ? unitTypeId.trim() : '';
@@ -1328,19 +1075,14 @@ const ArmyPanel = ({
       const nextBasis = normalizeUnitBasisEntries(prev.unitBasis.filter((entry) => entry.unitTypeId !== safeId));
       return {
         ...prev,
-        unitBasis: nextBasis,
-        formations: sanitizeDraftFormations(nextBasis, prev.formations)
+        unitBasis: nextBasis
       };
     });
-    if (templateEditorSelectedUnitId === safeId) setTemplateEditorSelectedUnitId('');
     if (templateEditorHoverUnitId === safeId) {
       setTemplateEditorHoverUnitId('');
       setTemplateEditorHoverPoint(null);
     }
-    setTemplateEditorSelectedPlacementId('');
-    setTemplateEditorSelectedPlacementIds([]);
-    setTemplateEditorMoveSelectionIds([]);
-  }, [sanitizeDraftFormations, templateEditorHoverUnitId, templateEditorSelectedUnitId]);
+  }, [templateEditorHoverUnitId]);
 
   const handleChangeEditorUnitBasis = useCallback((unitTypeId, nextBasisRaw) => {
     const safeId = typeof unitTypeId === 'string' ? unitTypeId.trim() : '';
@@ -1349,11 +1091,10 @@ const ArmyPanel = ({
       const nextBasis = rebalanceUnitBasisOnChange(prev.unitBasis, safeId, nextBasisRaw);
       return {
         ...prev,
-        unitBasis: nextBasis,
-        formations: sanitizeDraftFormations(nextBasis, prev.formations)
+        unitBasis: nextBasis
       };
     });
-  }, [sanitizeDraftFormations]);
+  }, []);
 
   const handleUnitStageDrop = useCallback((event) => {
     event.preventDefault();
@@ -1362,230 +1103,6 @@ const ArmyPanel = ({
       || '';
     handleAddEditorUnit(unitTypeId);
   }, [handleAddEditorUnit]);
-
-  const updateActiveFormation = useCallback((producer) => {
-    setTemplateEditorDraft((prev) => ({
-      ...prev,
-      formations: normalizeFormationSlots(prev.formations, prev.unitBasis).map((formation) => {
-        if (formation.id !== templateEditorActiveFormation?.id) return formation;
-        const nextPlacements = producer(normalizeFormationPlacements(formation.placements), formation);
-        if (!Array.isArray(nextPlacements)) return formation;
-        if (areFormationPlacementsEqual(formation.placements, nextPlacements)) return formation;
-        return pushFormationHistory(formation, nextPlacements);
-      })
-    }));
-  }, [templateEditorActiveFormation]);
-
-  const canPlaceFormationUnit = useCallback((unitTypeId, cell) => {
-    const safeId = typeof unitTypeId === 'string' ? unitTypeId.trim() : '';
-    if (!safeId || !cell) return false;
-    const row = templateEditorBasisRows.find((item) => item.unitTypeId === safeId);
-    if (!row) return false;
-    if (templateEditorPlacements.some((placement) => placement.x === cell.x && placement.y === cell.y)) return false;
-    return (templateEditorPlacementCounts[safeId] || 0) < row.basis;
-  }, [templateEditorBasisRows, templateEditorPlacementCounts, templateEditorPlacements]);
-
-  const handlePlaceFormationUnit = useCallback((unitTypeId, cell) => {
-    const safeId = typeof unitTypeId === 'string' ? unitTypeId.trim() : '';
-    if (!safeId || !cell || !unitTypeMap[safeId]) return;
-    updateActiveFormation((source) => {
-      const row = templateEditorBasisRows.find((item) => item.unitTypeId === safeId);
-      if (!row) return source;
-      const hitPlacement = source.find((placement) => placement.x === cell.x && placement.y === cell.y) || null;
-      if (hitPlacement?.unitTypeId === safeId) {
-        return source.filter((placement) => placement.id !== hitPlacement.id);
-      }
-      const currentCount = source.filter((placement) => placement.unitTypeId === safeId).length;
-      if (currentCount >= row.basis) return source;
-      if (hitPlacement) {
-        return source.map((placement) => (
-          placement.id === hitPlacement.id
-            ? { ...placement, unitTypeId: safeId }
-            : placement
-        ));
-      }
-      return [
-        ...source,
-        {
-          id: createFormationPlacementId(),
-          unitTypeId: safeId,
-          x: cell.x,
-          y: cell.y
-        }
-      ];
-    });
-    setTemplateEditorSelectedPlacementId('');
-    setTemplateEditorSelectedPlacementIds([]);
-    setTemplateEditorMoveSelectionIds([]);
-  }, [templateEditorBasisRows, unitTypeMap, updateActiveFormation]);
-
-  const handleChangeFormationPlacements = useCallback((placements = []) => {
-    const nextPlacements = normalizeFormationPlacements(placements);
-    updateActiveFormation(() => nextPlacements);
-    setTemplateEditorSelectedPlacementId('');
-    setTemplateEditorSelectedPlacementIds([]);
-    setTemplateEditorMoveSelectionIds([]);
-  }, [updateActiveFormation]);
-
-  const handleMoveFormationPlacement = useCallback((placementId, cell) => {
-    const safeId = typeof placementId === 'string' ? placementId.trim() : '';
-    if (!safeId || !cell) return;
-    updateActiveFormation((source) => {
-      if (source.some((placement) => placement.id !== safeId && placement.x === cell.x && placement.y === cell.y)) return source;
-      return source.map((placement) => (
-        placement.id === safeId
-          ? { ...placement, x: cell.x, y: cell.y }
-          : placement
-      ));
-    });
-  }, [updateActiveFormation]);
-
-  const handleSelectFormationPlacements = useCallback((placementIds = []) => {
-    const liveIds = new Set(templateEditorPlacements.map((placement) => placement.id));
-    const safeIds = normalizeFormationPlacementIds(placementIds).filter((id) => liveIds.has(id));
-    setTemplateEditorSelectedPlacementIds(safeIds);
-    setTemplateEditorSelectedPlacementId(safeIds[0] || '');
-    setTemplateEditorMoveSelectionIds([]);
-    if (safeIds.length > 0) {
-      setTemplateEditorSelectedUnitId('');
-    }
-  }, [templateEditorPlacements]);
-
-  const handleSelectFormationPlacement = useCallback((placementId) => {
-    handleSelectFormationPlacements(placementId ? [placementId] : []);
-  }, [handleSelectFormationPlacements]);
-
-  const handleCancelFormationCanvasAction = useCallback(() => {
-    if (templateEditorSelectedUnitId || templateEditorMoveSelectionIds.length > 0) {
-      setTemplateEditorSelectedUnitId('');
-      setTemplateEditorMoveSelectionIds([]);
-      return;
-    }
-    setTemplateEditorSelectedPlacementId('');
-    setTemplateEditorSelectedPlacementIds([]);
-  }, [templateEditorMoveSelectionIds.length, templateEditorSelectedUnitId]);
-
-  const handleDeleteFormationSelection = useCallback((placementIds = templateEditorSelectedPlacementIds) => {
-    const safeIds = new Set(normalizeFormationPlacementIds(placementIds));
-    if (safeIds.size <= 0) return;
-    updateActiveFormation((source) => source.filter((placement) => !safeIds.has(placement.id)));
-    setTemplateEditorSelectedPlacementId('');
-    setTemplateEditorSelectedPlacementIds([]);
-    setTemplateEditorMoveSelectionIds([]);
-  }, [templateEditorSelectedPlacementIds, updateActiveFormation]);
-
-  const handleBeginMoveFormationSelection = useCallback(() => {
-    const safeIds = normalizeFormationPlacementIds(templateEditorSelectedPlacementIds.length > 0
-      ? templateEditorSelectedPlacementIds
-      : templateEditorSelectedPlacementId);
-    if (safeIds.length <= 0) return;
-    setTemplateEditorSelectedUnitId('');
-    setTemplateEditorMoveSelectionIds(safeIds);
-  }, [templateEditorSelectedPlacementId, templateEditorSelectedPlacementIds]);
-
-  const handleMoveFormationSelectionToCell = useCallback((cell) => {
-    if (!cell) return;
-    const safeIds = normalizeFormationPlacementIds(templateEditorMoveSelectionIds.length > 0
-      ? templateEditorMoveSelectionIds
-      : templateEditorSelectedPlacementIds);
-    if (safeIds.length <= 0) return;
-    const preview = resolveFormationMovePreview(templateEditorPlacements, safeIds, cell);
-    if (preview.blocked) {
-      pushArmyToast('目标区域已被其他士兵占用', 'error');
-      return;
-    }
-    const movedById = new Map(preview.placements.map((placement) => [placement.id, placement]));
-    updateActiveFormation((source) => source.map((placement) => {
-      const next = movedById.get(placement.id);
-      return next ? { ...placement, x: next.x, y: next.y } : placement;
-    }));
-    setTemplateEditorMoveSelectionIds([]);
-  }, [
-    pushArmyToast,
-    templateEditorMoveSelectionIds,
-    templateEditorPlacements,
-    templateEditorSelectedPlacementIds,
-    updateActiveFormation
-  ]);
-
-  const handleUndoFormation = useCallback(() => {
-    if (!templateEditorActiveFormation) return;
-    setTemplateEditorDraft((prev) => ({
-      ...prev,
-      formations: normalizeFormationSlots(prev.formations, prev.unitBasis).map((formation) => {
-        if (formation.id !== templateEditorActiveFormation.id) return formation;
-        const history = Array.isArray(formation.history) ? formation.history : [];
-        if (history.length <= 0) return formation;
-        return {
-          ...formation,
-          placements: normalizeFormationPlacements(history[history.length - 1]),
-          history: history.slice(0, -1)
-        };
-      })
-    }));
-    setTemplateEditorSelectedPlacementId('');
-    setTemplateEditorSelectedPlacementIds([]);
-    setTemplateEditorMoveSelectionIds([]);
-  }, [templateEditorActiveFormation]);
-
-  const handleClearFormation = useCallback(() => {
-    updateActiveFormation(() => []);
-    setTemplateEditorSelectedPlacementId('');
-    setTemplateEditorSelectedPlacementIds([]);
-    setTemplateEditorMoveSelectionIds([]);
-  }, [updateActiveFormation]);
-
-  const handleAddFormationSlot = useCallback(() => {
-    if (templateEditorFormations.length >= MAX_TEMPLATE_FORMATIONS) {
-      pushArmyToast(`最多创建 ${MAX_TEMPLATE_FORMATIONS} 个阵型`, 'error');
-      return;
-    }
-    const nextFormation = createFormationSlot(templateEditorFormations.length);
-    setTemplateEditorDraft((prev) => {
-      const source = normalizeFormationSlots(prev.formations, prev.unitBasis);
-      return {
-        ...prev,
-        formations: [...source, nextFormation]
-      };
-    });
-    setTemplateEditorActiveFormationId(nextFormation.id);
-    setTemplateEditorSelectedPlacementId('');
-    setTemplateEditorSelectedPlacementIds([]);
-    setTemplateEditorMoveSelectionIds([]);
-  }, [pushArmyToast, templateEditorFormations.length]);
-
-  const handleDeleteFormationSlot = useCallback((formationId) => {
-    const safeId = typeof formationId === 'string' ? formationId.trim() : '';
-    if (!safeId) return;
-    if (templateEditorFormations.length <= 1) {
-      pushArmyToast('至少保留一个阵型栏', 'error');
-      return;
-    }
-    const nextActiveId = templateEditorActiveFormationId === safeId
-      ? templateEditorFormations.find((formation) => formation.id !== safeId)?.id || ''
-      : templateEditorActiveFormationId;
-    setTemplateEditorDraft((prev) => {
-      const source = normalizeFormationSlots(prev.formations, prev.unitBasis);
-      const next = source.filter((formation) => formation.id !== safeId);
-      return { ...prev, formations: next };
-    });
-    setTemplateEditorActiveFormationId(nextActiveId);
-    setTemplateEditorSelectedPlacementId('');
-    setTemplateEditorSelectedPlacementIds([]);
-    setTemplateEditorMoveSelectionIds([]);
-  }, [pushArmyToast, templateEditorActiveFormationId, templateEditorFormations]);
-
-  const handleRenameFormationSlot = useCallback((formationId, name) => {
-    const safeId = typeof formationId === 'string' ? formationId.trim() : '';
-    setTemplateEditorDraft((prev) => ({
-      ...prev,
-      formations: normalizeFormationSlots(prev.formations, prev.unitBasis).map((formation) => (
-        formation.id === safeId
-          ? { ...formation, name: String(name || '').slice(0, 24) }
-          : formation
-      ))
-    }));
-  }, []);
 
   const goTemplateEditorStep = useCallback((direction) => {
     const currentIndex = ARMY_EDITOR_STEPS.indexOf(templateEditorStep);
@@ -1596,14 +1113,10 @@ const ArmyPanel = ({
           return;
         }
       }
-      if (templateEditorStep === 'formations' && templateEditorLegalFormationCount <= 0) {
-        pushArmyToast('至少需要一个合法阵型才能预览', 'error');
-        return;
-      }
     }
     const nextIndex = Math.max(0, Math.min(ARMY_EDITOR_STEPS.length - 1, currentIndex + direction));
     setTemplateEditorStep(ARMY_EDITOR_STEPS[nextIndex] || 'units');
-  }, [pushArmyToast, templateEditorLegalFormationCount, templateEditorStep, templateEditorTotal]);
+  }, [pushArmyToast, templateEditorStep, templateEditorTotal]);
 
   const submitTemplateEditor = async () => {
     if (!token) {
@@ -1619,17 +1132,6 @@ const ArmyPanel = ({
       setTemplateNotice('兵种占比总和必须为100%');
       return;
     }
-    if (templateEditorLegalFormationCount <= 0) {
-      setTemplateNotice('至少需要一个合法阵型才能保存创建部队模板');
-      return;
-    }
-    const legalFormationPayload = buildLegalFormationPayload(templateEditorFormations, templateEditorDraft.unitBasis);
-    if (legalFormationPayload.length <= 0) {
-      setTemplateNotice('至少需要一个合法阵型才能保存创建部队模板');
-      return;
-    }
-    const ignoredFormationCount = Math.max(0, templateEditorFormations.length - legalFormationPayload.length);
-
     const isEditing = !!templateEditingId;
     const actionId = isEditing ? templateEditingId : '__create__';
     setTemplateActionId(actionId);
@@ -1648,8 +1150,7 @@ const ArmyPanel = ({
           },
           body: JSON.stringify({
             name: limitNameByDisplayWidth(templateEditorDraft.name || ''),
-            units,
-            formations: legalFormationPayload
+            units
           })
         }
       );
@@ -1681,8 +1182,7 @@ const ArmyPanel = ({
       setSelectedTemplateId(nextActiveId);
       onTemplateSaved?.(savedTemplate, { editing: isEditing });
       closeTemplateEditor();
-      const successMessage = `${isEditing ? '编辑' : '创建'}部队模板成功${ignoredFormationCount > 0 ? `，已忽略 ${ignoredFormationCount} 个未完成阵型` : ''}`;
-      pushArmyToast(successMessage, 'info');
+      pushArmyToast(`${isEditing ? '编辑' : '创建'}部队模板成功`, 'info');
     } catch (requestError) {
       setTemplateNotice(`${isEditing ? '更新创建部队模板' : '创建部队模板'}失败: ${requestError.message}`);
     } finally {
@@ -2503,7 +2003,7 @@ const ArmyPanel = ({
             <div className="army-template-editor-head">
               <div>
                 <h4>创建部队模板</h4>
-                <span>{`兵种占比 ${templateEditorTotal}% ｜ 合法阵型 ${templateEditorLegalFormationCount}/${templateEditorFormations.length}`}</span>
+                <span>{`兵种占比 ${templateEditorTotal}% ｜ ${DEFAULT_FORMATION_NAME}`}</span>
               </div>
               <button
                 type="button"
@@ -2516,7 +2016,7 @@ const ArmyPanel = ({
             </div>
             <div className="army-template-stepper" role="tablist" aria-label="创建部队模板步骤">
               {ARMY_EDITOR_STEPS.map((step, index) => {
-                const label = step === 'units' ? '兵种' : (step === 'formations' ? '阵型' : '预览');
+                const label = step === 'units' ? '兵种' : '预览';
                 const active = templateEditorStep === step;
                 return (
                   <button
@@ -2658,7 +2158,7 @@ const ArmyPanel = ({
                   <div className="army-template-troop-info-stats">
                     <div><span>占比合计</span><strong>{`${templateEditorTotal}%`}</strong></div>
                     <div><span>兵种</span><strong>{templateEditorBasisRows.length}</strong></div>
-                    <div><span>合法阵型</span><strong>{`${templateEditorLegalFormationCount}/${templateEditorFormations.length}`}</strong></div>
+                    <div><span>阵型</span><strong>{DEFAULT_FORMATION_NAME}</strong></div>
                     <div><span>平均速度</span><strong>{templateEditorPreviewStats.speed}</strong></div>
                     <div><span>生命</span><strong>{templateEditorPreviewStats.hp}</strong></div>
                     <div><span>攻击</span><strong>{templateEditorPreviewStats.atk}</strong></div>
@@ -2718,139 +2218,6 @@ const ArmyPanel = ({
               </div>
             ) : null}
 
-            {templateEditorStep === 'formations' ? (
-              <div className="army-formation-build-stage">
-                <div className="army-formation-selected-strip">
-                  {templateEditorActiveUnitRows.map((row) => (
-                    <button
-                      key={`active-unit-${row.unitTypeId}`}
-                      type="button"
-                      className={`army-formation-top-unit ${templateEditorSelectedUnitId === row.unitTypeId ? 'is-selected' : ''} ${row.remaining <= 0 ? 'is-depleted' : ''}`}
-                      draggable={row.remaining > 0}
-                      onDragStart={(event) => {
-                        event.dataTransfer?.setData('application/x-army-unit-type-id', row.unitTypeId);
-                        event.dataTransfer?.setData('text/plain', row.unitTypeId);
-                        setTemplateEditorSelectedUnitId(row.unitTypeId);
-                        setTemplateEditorSelectedPlacementId('');
-                        setTemplateEditorSelectedPlacementIds([]);
-                        setTemplateEditorMoveSelectionIds([]);
-                      }}
-                      onClick={() => {
-                        setTemplateEditorSelectedUnitId(row.unitTypeId);
-                        setTemplateEditorSelectedPlacementId('');
-                        setTemplateEditorSelectedPlacementIds([]);
-                        setTemplateEditorMoveSelectionIds([]);
-                      }}
-                    >
-                      <i style={{ background: row.classMeta.color }} />
-                      <strong>{row.unitName}</strong>
-                        <span>{formatPercentTenths(row.percentTenths)}</span>
-                        <em>{row.remaining}</em>
-                    </button>
-                  ))}
-                </div>
-                <div className="army-formation-build-layout">
-                  <aside className="army-formation-slot-panel">
-                    <div className="army-formation-slot-head">
-                      <span>阵型栏</span>
-                      <button
-                        type="button"
-                        className="btn btn-secondary btn-small"
-                        onClick={handleAddFormationSlot}
-                        disabled={templateEditorFormations.length >= MAX_TEMPLATE_FORMATIONS}
-                      >
-                        新增阵型
-                      </button>
-                    </div>
-                    <div className="army-formation-slot-list">
-                      {templateEditorFormationSummaries.map((formation) => (
-                        <article
-                          key={`formation-slot-${formation.id}`}
-                          className={`army-formation-slot-card ${formation.id === templateEditorActiveFormation?.id ? 'is-active' : ''} ${formation.legal ? 'is-legal' : ''}`}
-                          onClick={() => {
-                            setTemplateEditorActiveFormationId(formation.id);
-                            setTemplateEditorSelectedPlacementId('');
-                            setTemplateEditorSelectedPlacementIds([]);
-                            setTemplateEditorMoveSelectionIds([]);
-                          }}
-                        >
-                          <input
-                            type="text"
-                            value={formation.name}
-                            maxLength={24}
-                            onChange={(event) => handleRenameFormationSlot(formation.id, event.target.value)}
-                            onClick={(event) => event.stopPropagation()}
-                          />
-                          <span>{`${formation.totalPlaced}/${templateEditorTotal}`}</span>
-                        <FormationMiniPreview
-                          formation={formation}
-                          unitTypeMap={unitTypeMap}
-                          unitClassMetaById={unitClassMetaById}
-                        />
-                          <button
-                            type="button"
-                            className="btn btn-warning btn-small"
-                            onClick={(event) => {
-                              event.stopPropagation();
-                              handleDeleteFormationSlot(formation.id);
-                            }}
-                          >
-                            删除
-                          </button>
-                        </article>
-                      ))}
-                    </div>
-                  </aside>
-                  <section className="army-formation-stage-panel">
-                    <div className="army-formation-panel-title">{templateEditorActiveFormation?.name || '阵型画布'}</div>
-                    <div className="army-formation-canvas-shell is-adaptive">
-                      <ArmyFormationThreeEditor
-                        unitTypes={unitTypes}
-                        placements={templateEditorPlacements}
-                        selectedUnitTypeId={templateEditorSelectedUnitId}
-                        selectedPlacementId={templateEditorSelectedPlacementId}
-                        selectedPlacementIds={templateEditorSelectedPlacementIds}
-                        isMoveSelectionMode={templateEditorMoveSelectionIds.length > 0}
-                        onPlaceUnit={handlePlaceFormationUnit}
-                        onChangePlacements={handleChangeFormationPlacements}
-                        onMovePlacement={handleMoveFormationPlacement}
-                        onSelectPlacement={handleSelectFormationPlacement}
-                        onSelectPlacements={handleSelectFormationPlacements}
-                        onCancelAction={handleCancelFormationCanvasAction}
-                        onBeginMoveSelection={handleBeginMoveFormationSelection}
-                        onDeleteSelection={handleDeleteFormationSelection}
-                        onMoveSelectionToCell={handleMoveFormationSelectionToCell}
-                        unitBasis={templateEditorBasisRows}
-                        canPlaceUnit={canPlaceFormationUnit}
-                        className="army-formation-canvas"
-                      />
-                      <div className="army-formation-dimension-badge">
-                        {`${templateEditorOccupancyMetrics.width}×${templateEditorOccupancyMetrics.height}`}
-                      </div>
-                      <div className="army-formation-canvas-hint">
-                        {templateEditorSelectedUnitId
-                          ? `放置模式：${unitNameByTypeId.get(templateEditorSelectedUnitId) || templateEditorSelectedUnitId}`
-                          : (templateEditorMoveSelectionIds.length > 0
-                            ? `移动模式：${templateEditorMoveSelectionIds.length} 个`
-                            : (templateEditorSelectedPlacements.length > 0
-                              ? `已选中 ${templateEditorSelectedPlacements.length} 个`
-                              : '默认模式'))}
-                      </div>
-                    </div>
-                    <div className="army-formation-selected-actions">
-                      <button type="button" className="btn btn-secondary btn-small" onClick={handleUndoFormation}>
-                        撤销
-                      </button>
-                      <button type="button" className="btn btn-secondary btn-small" onClick={handleClearFormation}>
-                        清空
-                      </button>
-                      <span>{templateEditorSelectedPlacements.length > 0 ? `选区 ${templateEditorSelectedPlacements.length} 个` : '合法阵型需要把上方所有占比样本用光。'}</span>
-                    </div>
-                  </section>
-                </div>
-              </div>
-            ) : null}
-
             {templateEditorStep === 'preview' ? (
               <div className="army-template-preview-stage">
                 <section className="army-template-preview-section">
@@ -2877,22 +2244,13 @@ const ArmyPanel = ({
                   </div>
                 </section>
                 <section className="army-template-preview-section">
-                  <div className="army-formation-panel-title">阵型列表</div>
-                  <div className="army-template-preview-formations">
-                    {templateEditorFormationSummaries.map((formation) => (
-                      <div key={`preview-formation-${formation.id}`} className={`army-template-preview-formation ${formation.legal ? 'is-legal' : ''}`}>
-                        <strong>{formation.name}</strong>
-                        <span>{formation.legal ? '合法' : '未完成'}</span>
-                        <em>{`${formation.totalPlaced}/${templateEditorTotal}`}</em>
-                        <FormationMiniPreview
-                          formation={formation}
-                          unitTypeMap={unitTypeMap}
-                          unitClassMetaById={unitClassMetaById}
-                          className="is-static"
-                        />
-                      </div>
-                    ))}
-                  </div>
+                  <div className="army-formation-panel-title">{DEFAULT_FORMATION_NAME}</div>
+                  <p className="army-template-preview-note">系统根据兵种组成自动生成；战斗中将始终使用此阵型。</p>
+                  <DefaultFormationPreview
+                    layout={templateEditorDefaultFormation}
+                    unitTypeMap={unitTypeMap}
+                    unitClassMetaById={unitClassMetaById}
+                  />
                 </section>
               </div>
             ) : null}

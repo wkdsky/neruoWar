@@ -12,7 +12,6 @@ export default function useBattleSceneInputController({
   pointerWorldRef,
   panDragRef,
   deployYawDragRef,
-  deployRectDragRef,
   deployDirectionArcDragRef,
   skillPaintDragRef,
   spacePressedRef,
@@ -31,7 +30,6 @@ export default function useBattleSceneInputController({
   followBattleSquad,
   closeSkillConfirm,
   closeSkillPick,
-  closeSpacingPick,
   recallDeployDraggingGroup,
   setClockPaused,
   setCards,
@@ -65,7 +63,6 @@ export default function useBattleSceneInputController({
   DEPLOY_PITCH_DEG,
   BATTLE_UI_MODE_NONE,
   BATTLE_UI_MODE_PATH,
-  BATTLE_UI_MODE_SPACING_PICK,
   BATTLE_UI_MODE_SKILL_PICK,
   BATTLE_UI_MODE_SKILL_CONFIRM,
   skillRangeByClass,
@@ -82,7 +79,6 @@ export default function useBattleSceneInputController({
     pointerWorldRef,
     panDragRef,
     deployYawDragRef,
-    deployRectDragRef,
     deployDirectionArcDragRef,
     skillPaintDragRef,
     spacePressedRef,
@@ -104,7 +100,6 @@ export default function useBattleSceneInputController({
       DEPLOY_PITCH_DEG,
       BATTLE_UI_MODE_NONE,
       BATTLE_UI_MODE_PATH,
-      BATTLE_UI_MODE_SPACING_PICK,
       BATTLE_UI_MODE_SKILL_PICK,
       BATTLE_UI_MODE_SKILL_CONFIRM,
       skillRangeByClass,
@@ -143,7 +138,6 @@ export default function useBattleSceneInputController({
       followBattleSquad,
       closeSkillConfirm,
       closeSkillPick,
-      closeSpacingPick,
       recallDeployDraggingGroup
     }
   }), [
@@ -167,7 +161,6 @@ export default function useBattleSceneInputController({
     followBattleSquad,
     closeSkillConfirm,
     closeSkillPick,
-    closeSpacingPick,
     recallDeployDraggingGroup,
     setClockPaused,
     setCards,
@@ -177,7 +170,6 @@ export default function useBattleSceneInputController({
     pointerWorldRef,
     panDragRef,
     deployYawDragRef,
-    deployRectDragRef,
     deployDirectionArcDragRef,
     skillPaintDragRef,
     spacePressedRef,
@@ -210,7 +202,6 @@ export default function useBattleSceneInputController({
     DEPLOY_PITCH_DEG,
     BATTLE_UI_MODE_NONE,
     BATTLE_UI_MODE_PATH,
-    BATTLE_UI_MODE_SPACING_PICK,
     BATTLE_UI_MODE_SKILL_PICK,
     BATTLE_UI_MODE_SKILL_CONFIRM,
     skillRangeByClass,
@@ -226,7 +217,6 @@ export default function useBattleSceneInputController({
     if (!interactionLocked) return;
     battleInputController.clearPanDrag();
     battleInputController.clearDeployYawDrag();
-    battleInputController.clearDeployRectDrag();
     battleInputController.clearDeployDirectionArcDrag();
     battleInputController.clearSkillPaintDrag();
     runtimeRef.current?.setHoveredDeployGroup?.('');

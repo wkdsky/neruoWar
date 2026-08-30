@@ -5,16 +5,12 @@ const useBattleSceneGlobalInput = ({
   interactionLocked = false,
   runtimeRef,
   spacePressedRef,
-  spacingPickOpen = false,
   isSkillPickMode = false,
   onEscape,
   onTogglePause,
   onTogglePitch,
   onMapKeyCommand,
-  onFormationKey,
-  onFormationHotkey,
   onSkillHotkey,
-  onCloseSpacingPick,
   onCloseSkillPick
 } = {}) => {
   useEffect(() => {
@@ -55,29 +51,6 @@ const useBattleSceneGlobalInput = ({
           return;
         }
         if (
-          typeof onFormationKey === 'function'
-          && String(event.key || '').toLowerCase() === 'z'
-          && !event.ctrlKey
-          && !event.metaKey
-          && !event.altKey
-        ) {
-          event.preventDefault();
-          onFormationKey?.();
-          return;
-        }
-        if (
-          runtimeRef.current?.getPhase?.() === 'deploy'
-          && typeof onFormationHotkey === 'function'
-          && !event.ctrlKey
-          && !event.metaKey
-          && !event.altKey
-          && /^[1-9]$/.test(String(event.key || ''))
-        ) {
-          event.preventDefault();
-          onFormationHotkey?.(Math.max(0, Number(event.key) - 1));
-          return;
-        }
-        if (
           runtimeRef.current?.getPhase?.() === 'battle'
           && !event.ctrlKey
           && !event.metaKey
@@ -105,7 +78,7 @@ const useBattleSceneGlobalInput = ({
     };
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [interactionLocked, open, onEscape, onFormationHotkey, onFormationKey, onMapKeyCommand, onSkillHotkey, onTogglePause, onTogglePitch, runtimeRef, spacePressedRef]);
+  }, [interactionLocked, open, onEscape, onMapKeyCommand, onSkillHotkey, onTogglePause, onTogglePitch, runtimeRef, spacePressedRef]);
 
   useEffect(() => {
     if (!open) return undefined;
@@ -147,21 +120,6 @@ const useBattleSceneGlobalInput = ({
     spacePressedRef.current = false;
     onMapKeyCommand?.('', false, { clearAll: true });
   }, [interactionLocked, onMapKeyCommand, spacePressedRef]);
-
-  useEffect(() => {
-    if (!open || interactionLocked || !spacingPickOpen) return undefined;
-    const handleGlobalPointerDown = (event) => {
-      const target = event.target;
-      if (target && typeof target.closest === 'function' && target.closest('.pve2-formation-spacing-float')) {
-        return;
-      }
-      onCloseSpacingPick?.();
-    };
-    window.addEventListener('pointerdown', handleGlobalPointerDown, true);
-    return () => {
-      window.removeEventListener('pointerdown', handleGlobalPointerDown, true);
-    };
-  }, [interactionLocked, open, spacingPickOpen, onCloseSpacingPick]);
 
   useEffect(() => {
     if (!open || interactionLocked || !isSkillPickMode) return undefined;

@@ -11,7 +11,6 @@ import {
 } from '../screens/battleSceneUtils';
 import { limitNameByDisplayWidth } from '../shared/nameLimits';
 
-const MAX_TEMPLATE_FORMATIONS = 9;
 const TRAINING_MAX_GROUP_TOTAL = 10000;
 const EMPTY_TEMPLATE_FILL_STATS = Object.freeze({
   totalCount: 0,
@@ -22,21 +21,6 @@ const EMPTY_TEMPLATE_FILL_STATS = Object.freeze({
   attackRange: { min: 0, max: 0 },
   range: 0
 });
-
-const getTemplateFormationId = (formation = null, index = 0) => {
-  const explicitId = String(formation?.formationId || formation?.id || '').trim();
-  return explicitId || `formation_${index}`;
-};
-
-const normalizeLegalTemplateFormations = (formations = []) => (
-  Array.isArray(formations) ? formations : []
-)
-  .filter((formation) => formation && formation.legal !== false && Array.isArray(formation.placements) && formation.placements.length > 0)
-  .slice(0, MAX_TEMPLATE_FORMATIONS)
-  .map((formation, index) => ({
-    ...formation,
-    formationId: getTemplateFormationId(formation, index)
-  }));
 
 const getGroupTotal = (units = {}) => Object.values(units || {})
   .reduce((sum, count) => sum + Math.max(0, Math.floor(Number(count) || 0)), 0);
@@ -52,8 +36,7 @@ export default function useBattleDeployEditor({
   setDeployActionAnchorMode,
   setCards,
   setMinimapSnapshot,
-  setTemplateFillPreview,
-  onDeployGroupFormationsChange
+  setTemplateFillPreview
 } = {}) {
   const syncCardsAndMinimap = useCallback((runtime) => {
     if (!runtime) return;
@@ -159,7 +142,6 @@ export default function useBattleDeployEditor({
         : (safeTeam === TEAM_DEFENDER ? 'AI' : 'USER'),
       templateId: typeof template?.templateId === 'string' ? template.templateId.trim() : '',
       templateName: typeof template?.name === 'string' ? limitNameByDisplayWidth(template.name.trim()) : '',
-      templateFormations: normalizeLegalTemplateFormations(template?.formations),
       x: pointerWorldRef.current.x,
       y: pointerWorldRef.current.y,
       placed: false
@@ -169,22 +151,10 @@ export default function useBattleDeployEditor({
       return false;
     }
     const targetGroupId = result.groupId;
-    const legalFormations = normalizeLegalTemplateFormations(template?.formations);
-    const defaultFormation = legalFormations[0] || null;
-    let activeFormationId = '';
-    if (defaultFormation) {
-      const formationResult = runtime.setDeployGroupFormation(targetGroupId, defaultFormation, safeTeam);
-      if (formationResult?.ok) {
-        activeFormationId = getTemplateFormationId(defaultFormation, 0);
-      }
-    }
-    onDeployGroupFormationsChange?.(targetGroupId, legalFormations, activeFormationId);
     stageDeployGroupForPlacement(runtime, targetGroupId, safeTeam);
-    setDeployNotice(defaultFormation
-      ? `模板部队已创建，默认阵型为「${defaultFormation.name || '阵型1'}」，移动鼠标并点击地图放置`
-      : `模板部队已创建，移动鼠标并点击地图放置到${safeTeam === TEAM_DEFENDER ? '右侧红色' : '左侧蓝色'}部署区`);
+    setDeployNotice(`模板部队已创建，移动鼠标并点击地图放置到${safeTeam === TEAM_DEFENDER ? '右侧红色' : '左侧蓝色'}部署区`);
     return true;
-  }, [onDeployGroupFormationsChange, pointerWorldRef, runtimeRef, setDeployNotice, stageDeployGroupForPlacement]);
+  }, [pointerWorldRef, runtimeRef, setDeployNotice, stageDeployGroupForPlacement]);
 
   const handleOpenTemplateFillPreview = useCallback((template, team = TEAM_ATTACKER) => {
     const safeTeam = team === TEAM_DEFENDER ? TEAM_DEFENDER : TEAM_ATTACKER;
@@ -233,8 +203,7 @@ export default function useBattleDeployEditor({
     const template = {
       templateId: String(group.templateId || '').trim(),
       name: String(group.templateName || group.name || '').trim(),
-      units,
-      formations: Array.isArray(group.templateFormations) ? group.templateFormations : []
+      units
     };
     const snapshot = buildTemplateFillSnapshot(template, safeTeam, getGroupTotal(group.units), group.id);
     setTemplateFillPreview({

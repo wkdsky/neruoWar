@@ -9,6 +9,7 @@ import { filterBlockingObstacles } from '../items/itemObstacleUtils';
 import {
   TRAINING_MAP_WORLD_HEIGHT,
   TRAINING_MAP_WORLD_WIDTH,
+  isTrainingMapTerrainSegmentTraversable,
   isTrainingMapTerrainWalkable,
   sampleTrainingMapTerrain
 } from '../../shared/trainingMap';
@@ -127,7 +128,10 @@ const resolveObstacleSourceSignature = (obstacles = []) => (
   ].join(':'))).join('|')
 );
 
-const resolvePathClearance = (navigation = {}) => {
+const resolvePathClearance = (navigation = {}, override = null) => {
+  if (override !== null && override !== undefined && Number.isFinite(Number(override))) {
+    return clamp(Number(override), 0, 48);
+  }
   const configured = Number(navigation?.pathClearance);
   if (Number.isFinite(configured)) return clamp(configured, 0, 48);
   return clamp(finiteNumber(navigation?.wallClearance, 18), 0, 48);
@@ -211,6 +215,21 @@ const isPointWalkable = (point = {}, obstacles = [], clearance = 0, mapConfig = 
   ));
 };
 
+export const isTrainingMapSegmentTraversable = ({
+  start = {},
+  target = {},
+  obstacles = [],
+  clearance = 0,
+  mapConfig = null,
+  field = null
+} = {}) => {
+  if (raycastObstacles(start, target, obstacles, Math.max(0, finiteNumber(clearance)))) return false;
+  return isTrainingMapTerrainSegmentTraversable(mapConfig, start, target, {
+    field,
+    rampTolerance: clamp(Math.max(0.5, finiteNumber(clearance) * 0.2), 0.5, 2.4)
+  });
+};
+
 const hasDirectPath = (
   start = {},
   target = {},
@@ -218,11 +237,14 @@ const hasDirectPath = (
   clearance = 0,
   mapConfig = null,
   field = null
-) => {
-  if (raycastObstacles(start, target, obstacles, Math.max(0, finiteNumber(clearance)))) return false;
-  return isTrainingMapTerrainWalkable(mapConfig, start, { field })
-    && isTrainingMapTerrainWalkable(mapConfig, target, { field });
-};
+) => isTrainingMapSegmentTraversable({
+  start,
+  target,
+  obstacles,
+  clearance,
+  mapConfig,
+  field
+});
 
 const clampPointToField = (point = {}, field = {}, clearance = 0) => {
   const maxInset = Math.max(0, Math.min((field.width * 0.5) - 1, (field.height * 0.5) - 1));
@@ -545,6 +567,7 @@ const resolveLocalDetourRoute = ({
     const segmentStart = current;
     const hit = raycastObstacles(segmentStart, target, obstacles, clearance);
     if (!hit) {
+      if (!hasDirectPath(segmentStart, target, obstacles, clearance, mapConfig, field)) return null;
       route.push(target);
       segmentCache.set(cacheKey, route.map((point) => ({ ...point })));
       return route;
@@ -666,6 +689,87 @@ export const resolveTrainingHighlandExitPortal = ({
   return candidates[0] || null;
 };
 
+// This is deliberately smaller than the full A* planner.  It is used by an
+// already-detached unit as a bounded recovery fallback: first preserve a
+// legal highland exit, then walk around the few obstacles that actually block
+// the current segment.  It keeps individual recovery from turning into a
+// per-agent global route search when a shared navigator is unavailable or
+// temporarily cannot produce a route.
+export const planTrainingMapLocalDetour = ({
+  field,
+  mapConfig = null,
+  start = {},
+  target = {},
+  obstacles = [],
+  radius = 0
+} = {}) => {
+  const safeField = resolveField(field);
+  const clearance = Math.max(0.5, finiteNumber(radius));
+  const blockingObstacles = resolveBlockingObstacles(obstacles);
+  const requestedStart = clampPointToField(start, safeField, clearance);
+  const requestedTarget = clampPointToField(target, safeField, clearance);
+  const safeStart = findTrainingMapNearestWalkablePoint({
+    field: safeField,
+    point: requestedStart,
+    obstacles: blockingObstacles,
+    radius: clearance,
+    maxSearchDistance: Math.max(32, clearance * 6),
+    mapConfig
+  });
+  const safeTarget = findTrainingMapNearestWalkablePoint({
+    field: safeField,
+    point: requestedTarget,
+    obstacles: blockingObstacles,
+    radius: clearance,
+    maxSearchDistance: Math.max(32, clearance * 6),
+    mapConfig
+  });
+  if (!safeStart || !safeTarget) return [];
+
+  const startEscape = distance(requestedStart, safeStart) > 0.2 ? [safeStart] : [];
+  const highlandExitPortal = resolveTrainingHighlandExitPortal({
+    mapConfig,
+    start: safeStart,
+    target: safeTarget,
+    obstacles: blockingObstacles,
+    clearance,
+    field: safeField
+  });
+  const routeStart = highlandExitPortal?.exit || safeStart;
+  const portalPrefix = highlandExitPortal?.route || [];
+  const finalize = (suffix = []) => {
+    const reduced = reduceRoute(
+      safeStart,
+      joinRoutePoints(portalPrefix, suffix),
+      blockingObstacles,
+      clearance,
+      mapConfig,
+      safeField
+    );
+    return joinRoutePoints(startEscape, reduced);
+  };
+
+  if (distance(routeStart, safeTarget) <= 0.5 || hasDirectPath(
+    routeStart,
+    safeTarget,
+    blockingObstacles,
+    clearance,
+    mapConfig,
+    safeField
+  )) {
+    return finalize([safeTarget]);
+  }
+  const detour = resolveLocalDetourRoute({
+    start: routeStart,
+    target: safeTarget,
+    obstacles: blockingObstacles,
+    clearance,
+    mapConfig,
+    field: safeField
+  });
+  return detour?.length ? finalize(detour) : [];
+};
+
 const resolveLaneGuidedRoute = ({
   mapConfig = null,
   start = {},
@@ -763,6 +867,7 @@ export const planTrainingMapRoute = ({
   target,
   obstacles = [],
   radius = 0,
+  pathClearance = null,
   maxSearchNodes = 0,
   preferLocalDetour = false,
   preferredLaneId = ''
@@ -780,7 +885,7 @@ export const planTrainingMapRoute = ({
   const navigation = mapConfig?.navigation && typeof mapConfig.navigation === 'object'
     ? mapConfig.navigation
     : {};
-  const clearance = Math.max(0.5, finiteNumber(radius) + resolvePathClearance(navigation));
+  const clearance = Math.max(0.5, finiteNumber(radius) + resolvePathClearance(navigation, pathClearance));
   const safeStart = findTrainingMapNearestWalkablePoint({
     field: safeField,
     point: requestedStart,
@@ -1005,6 +1110,16 @@ export const createTrainingMapNavigator = ({ field, mapConfig } = {}) => {
         field
       );
     },
+    isSegmentTraversable(start, target, options = {}) {
+      return isTrainingMapSegmentTraversable({
+        start,
+        target,
+        obstacles: resolveNavigatorObstacles(options?.obstacles),
+        clearance: options?.radius,
+        mapConfig,
+        field
+      });
+    },
     findNearestWalkablePoint(point, options = {}) {
       return findTrainingMapNearestWalkablePoint({
         field,
@@ -1033,6 +1148,7 @@ export const createTrainingMapNavigator = ({ field, mapConfig } = {}) => {
         target,
         obstacles: resolveNavigatorObstacles(options?.obstacles),
         radius: options?.radius,
+        pathClearance: options?.pathClearance,
         maxSearchNodes: options?.maxSearchNodes,
         preferLocalDetour: options?.preferLocalDetour === true,
         preferredLaneId: options?.preferredLaneId

@@ -25,7 +25,11 @@ import {
 import { updateTrainingObjectives } from '../objectives/TrainingObjectiveSystem';
 import { updateTrainingNeutralCamps } from '../objectives/TrainingNeutralCampSystem';
 import { updateTrainingSquadRespawns } from '../respawn/TrainingSquadRespawnSystem';
-import { resolveTrainingMapLegalPosition } from '../navigation/TrainingMapNavigator';
+import {
+  planTrainingMapLocalDetour,
+  resolveTrainingMapLegalPosition
+} from '../navigation/TrainingMapNavigator';
+import { isTrainingMapTerrainSegmentTraversable } from '../../shared/trainingMap';
 import { snapTrainingDirectionOffset } from '../../shared/trainingDirectionArc';
 import {
   isPointInsideSkillPaintArea,
@@ -86,6 +90,11 @@ import {
   resolveTrainingSquadKind,
   TRAINING_SQUAD_KIND
 } from './TrainingSquadKind';
+import {
+  CARD_LOCOMOTION_STATE,
+  isTrainingCardPassageState,
+  resolveTrainingCardPassageFlowSteering
+} from './TrainingCardPassage';
 
 const SKILL_CATEGORY_MELEE = 'melee';
 const SKILL_CATEGORY_RANGED = 'ranged';
@@ -293,6 +302,10 @@ const DEFAULT_STEERING_WEIGHTS = {
   maxTurnRate: LEADER_MAX_TURN_RATE
 };
 
+const finiteNumber = (value, fallback = 0) => (
+  Number.isFinite(Number(value)) ? Number(value) : fallback
+);
+
 export const resolveTrainingMapMovementScale = (sim = {}) => {
   const configuredMultiplier = Number(sim?.trainingMap?.movementCalibration?.leaderSpeedMultiplier);
   if (!Number.isFinite(configuredMultiplier) || configuredMultiplier <= 0) return 1;
@@ -303,6 +316,14 @@ const resolveTrainingNavigationAgentRadius = (squad = {}, sim = {}) => {
   const configuredRadius = Number(sim?.trainingMap?.navigation?.agentRadius);
   const requestedRadius = Number(squad?.navigationAgentRadius);
   if (Number.isFinite(requestedRadius) && requestedRadius > 0) return clamp(requestedRadius, 1, 8);
+  // CARD routes are a route for one soldier, not a swept disk the size of the
+  // whole card.  The formation-scale route is attempted separately below and
+  // may deliberately fall back to this radius to enter a viable passage.
+  if (isTrainingCardSquad(squad)) {
+    return Number.isFinite(configuredRadius) && configuredRadius > 0
+      ? clamp(configuredRadius, 1, 8)
+      : AGENT_RADIUS;
+  }
   if (isTrainingMinionSquad(squad)) {
     const slotSideExtent = (Array.isArray(squad?.deploySlots) ? squad.deploySlots : []).reduce((maximum, slot) => (
       Math.max(maximum, Math.abs(Number(slot?.side) || 0))
@@ -318,11 +339,104 @@ const resolveTrainingNavigationAgentRadius = (squad = {}, sim = {}) => {
   return Math.max(4, Number(squad?.radius) || 10);
 };
 
-const resolveTrainingNavigationPathClearance = (sim = {}) => {
+const resolveTrainingFormationNavigationRadius = (squad = {}, sim = {}) => {
+  const agentRadius = resolveTrainingNavigationAgentRadius(squad, sim);
+  if (!isTrainingCardSquad(squad)) return agentRadius;
+  const requested = Number(squad?.formationNavigationRadius);
+  if (Number.isFinite(requested) && requested > 0) {
+    return clamp(Math.max(agentRadius, requested), agentRadius, 42);
+  }
+  const configured = Number(sim?.trainingMap?.navigation?.formationRouteRadius);
+  if (Number.isFinite(configured) && configured > 0) {
+    return clamp(Math.max(agentRadius, configured), agentRadius, 42);
+  }
+  const spacing = Math.max((AGENT_RADIUS * 2) + AGENT_GAP, Number(squad?.formationRect?.spacing) || 0);
+  const visualRadius = Math.max(0, Number(squad?.radius) || 0);
+  return clamp(
+    Math.max(agentRadius * 2.2, spacing * 1.45, Math.min(visualRadius * 0.22, spacing * 5.5)),
+    agentRadius,
+    36
+  );
+};
+
+const resolveTrainingNavigationPathClearance = (sim = {}, { passage = false } = {}) => {
   const navigation = sim?.trainingMap?.navigation || {};
+  if (passage) {
+    const passageNavigation = navigation?.passage && typeof navigation.passage === 'object'
+      ? navigation.passage
+      : {};
+    const configuredPassage = Number(
+      passageNavigation?.pathClearance
+      ?? navigation?.passagePathClearance
+    );
+    if (Number.isFinite(configuredPassage)) return clamp(configuredPassage, 0, 8);
+    const configuredPath = Number(navigation?.pathClearance);
+    if (Number.isFinite(configuredPath)) return clamp(Math.min(configuredPath, 2.5), 0, 8);
+    return 0.75;
+  }
   const configuredClearance = Number(navigation?.pathClearance);
   if (Number.isFinite(configuredClearance)) return clamp(configuredClearance, 0, 48);
   return clamp(Number(navigation?.wallClearance) || 18, 0, 48);
+};
+
+const isTrainingMovementSegmentTraversable = ({
+  sim = null,
+  start = {},
+  target = {},
+  walls = [],
+  radius = AGENT_RADIUS
+} = {}) => {
+  const navigator = sim?.trainingNavigator;
+  const clearance = Math.max(0.5, Number(radius) || AGENT_RADIUS);
+  if (navigator?.isSegmentTraversable) {
+    return navigator.isSegmentTraversable(start, target, {
+      obstacles: walls,
+      radius: clearance
+    });
+  }
+  // Some focused simulations intentionally omit the navigator.  Movement
+  // commits must still obey the same topology rather than silently restoring
+  // the old "formation may jump a cliff" fast path.
+  if (raycastObstacles(start, target, walls, clearance)) return false;
+  return isTrainingMapTerrainSegmentTraversable(sim?.trainingMap, start, target, {
+    field: sim?.field,
+    rampTolerance: clamp(clearance * 0.2, 0.5, 2.4)
+  });
+};
+
+const resolveTrainingLegalMovementStep = ({
+  sim = null,
+  start = {},
+  target = {},
+  walls = [],
+  radius = AGENT_RADIUS
+} = {}) => {
+  const source = { x: Number(start?.x) || 0, y: Number(start?.y) || 0 };
+  const requested = { x: Number(target?.x) || 0, y: Number(target?.y) || 0 };
+  if (isTrainingMovementSegmentTraversable({ sim, start: source, target: requested, walls, radius })) {
+    return { ...requested, legal: true };
+  }
+  const navigator = sim?.trainingNavigator;
+  const resolved = navigator?.resolveLegalPosition
+    ? navigator.resolveLegalPosition(source, requested, {
+      obstacles: walls,
+      radius: Math.max(0.5, Number(radius) || AGENT_RADIUS)
+    })
+    : resolveTrainingMapLegalPosition({
+      field: sim?.field,
+      mapConfig: sim?.trainingMap,
+      start: source,
+      target: requested,
+      obstacles: walls,
+      radius: Math.max(0.5, Number(radius) || AGENT_RADIUS)
+    });
+  const x = Number(resolved?.x) || source.x;
+  const y = Number(resolved?.y) || source.y;
+  return {
+    x,
+    y,
+    legal: Math.hypot(x - requested.x, y - requested.y) <= 0.05
+  };
 };
 
 const resolveTrainingNavigationPlanBudget = (sim = {}) => clamp(
@@ -900,12 +1014,25 @@ export const applyCrowdSquadFormation = (crowd, squad, deploySlots = [], formati
     1,
     Math.round(Math.max(1, Number(formationRect?.width) || spacing) / spacing)
   );
-  const normalizedSlots = (Array.isArray(deploySlots) ? deploySlots : [])
-    .map((slot) => normalizeFormationSlot(slot));
+  const slotsByType = new Map();
+  const untypedSlots = [];
+  (Array.isArray(deploySlots) ? deploySlots : []).forEach((slot) => {
+    const normalized = normalizeFormationSlot(slot);
+    const unitTypeId = typeof slot?.unitTypeId === 'string' ? slot.unitTypeId.trim() : '';
+    if (!unitTypeId) {
+      untypedSlots.push(normalized);
+      return;
+    }
+    const typedSlots = slotsByType.get(unitTypeId) || [];
+    typedSlots.push(normalized);
+    slotsByType.set(unitTypeId, typedSlots);
+  });
   activeAgents.forEach((agent, index) => {
     const fallback = slotOffsetForIndex(index, columns, spacing);
     const previousSlot = normalizeFormationSlot(agent.formationSlot);
-    const nextSlot = normalizedSlots[index] || {
+    const unitTypeId = typeof agent?.unitTypeId === 'string' ? agent.unitTypeId.trim() : '';
+    const typedSlots = slotsByType.get(unitTypeId) || [];
+    const nextSlot = typedSlots.shift() || untypedSlots.shift() || {
       side: fallback.side,
       front: -fallback.back
     };
@@ -1118,6 +1245,11 @@ const resolveSquadFormationMetrics = ({
       readyRatio: 1,
       settled: true,
       recoveringCount: 0,
+      detachedCount: 0,
+      detachedRatio: 0,
+      detachedWeightRatio: 0,
+      unreadyCount: 0,
+      unreadyWeightRatio: 0,
       configuredSpacing
     };
   }
@@ -1146,8 +1278,20 @@ const resolveSquadFormationMetrics = ({
       )
     };
   });
-  const errors = rows.map((row) => row.error).sort((left, right) => left - right);
-  const maximumError = errors[errors.length - 1] || 0;
+  const detachedRows = isTrainingCardSquad(squad)
+    ? rows.filter((row) => (
+      row.agent?._formationDetached === true
+      || row.agent?._formationRecovery?.active === true
+      || row.agent?._squadController?.rejoin?.active === true
+    ))
+    : [];
+  const detachedAgents = new Set(detachedRows.map((row) => row.agent));
+  const measurementRows = isTrainingCardSquad(squad)
+    ? rows.filter((row) => !detachedAgents.has(row.agent))
+    : rows;
+  const errors = measurementRows.map((row) => row.error).sort((left, right) => left - right);
+  const allErrors = rows.map((row) => row.error).sort((left, right) => left - right);
+  const maximumError = allErrors[allErrors.length - 1] || 0;
   const upperIndex = Math.min(errors.length - 1, Math.max(0, Math.ceil(errors.length * 0.9) - 1));
   const upperError = errors[upperIndex] || 0;
   const readyError = Math.max(1.4, configuredSpacing * 0.34);
@@ -1158,6 +1302,24 @@ const resolveSquadFormationMetrics = ({
     row.agent?._formationRecovery?.active === true
     || row.agent?._minionRecovery?.active === true
   )).length;
+  const detachedRatio = detachedRows.length / Math.max(1, rows.length);
+  // A representative can stand for very different numbers of soldiers.  Use
+  // surviving troop weight for completion decisions so five real stragglers
+  // do not hold a 5,000-person card, while a missing third of a small body
+  // still keeps its arrival/reform phase alive.
+  const totalWeight = rows.reduce((sum, row) => (
+    sum + Math.max(0, Number(row?.agent?.weight) || 0)
+  ), 0);
+  const detachedWeight = detachedRows.reduce((sum, row) => (
+    sum + Math.max(0, Number(row?.agent?.weight) || 0)
+  ), 0);
+  const detachedWeightRatio = detachedWeight / Math.max(0.001, totalWeight);
+  const unreadyRows = rows.filter((row) => row.error > maximumReadyError);
+  const unreadyWeight = unreadyRows.reduce((sum, row) => (
+    sum + Math.max(0, Number(row?.agent?.weight) || 0)
+  ), 0);
+  const unreadyWeightRatio = unreadyWeight / Math.max(0.001, totalWeight);
+  const coreSettled = upperError <= maximumReadyError && readyRatio >= (isTrainingCardSquad(squad) ? 0.94 : 0.98);
   return {
     rows,
     errors,
@@ -1166,8 +1328,15 @@ const resolveSquadFormationMetrics = ({
     readyRatio,
     readyError,
     maximumReadyError,
-    settled: maximumError <= maximumReadyError && readyRatio >= 0.98 && recoveringCount <= 0,
+    settled: isTrainingCardSquad(squad)
+      ? coreSettled && detachedWeightRatio <= 0.08 && unreadyWeightRatio <= 0.08
+      : maximumError <= maximumReadyError && readyRatio >= 0.98 && recoveringCount <= 0,
     recoveringCount,
+    detachedCount: detachedRows.length,
+    detachedRatio,
+    detachedWeightRatio,
+    unreadyCount: unreadyRows.length,
+    unreadyWeightRatio,
     configuredSpacing
   };
 };
@@ -1610,8 +1779,18 @@ const moveMeleeChargeAgent = (agent, destination, squad, sim, walls, dt) => {
   });
   const halfW = (Number(sim?.field?.width) || 2700) / 2;
   const halfH = (Number(sim?.field?.height) || 1488) / 2;
-  agent.x = clamp(nextX, -halfW + 2, halfW - 2);
-  agent.y = clamp(nextY, -halfH + 2, halfH - 2);
+  const legalStep = resolveTrainingLegalMovementStep({
+    sim,
+    start: { x: previousX, y: previousY },
+    target: {
+      x: clamp(nextX, -halfW + 2, halfW - 2),
+      y: clamp(nextY, -halfH + 2, halfH - 2)
+    },
+    walls,
+    radius: (agent.radius || AGENT_RADIUS) + 0.5
+  });
+  agent.x = legalStep.x;
+  agent.y = legalStep.y;
   agent.vx = (agent.x - previousX) / Math.max(0.001, Number(dt) || 0.001);
   agent.vy = (agent.y - previousY) / Math.max(0.001, Number(dt) || 0.001);
   if (Math.abs(agent.vx) + Math.abs(agent.vy) > 0.08) {
@@ -1809,6 +1988,9 @@ const clearAvoidanceMemory = (subject) => {
   subject._avoidSide = 0;
   subject._avoidSideUntil = 0;
   subject._avoidObstacleKey = '';
+  subject._avoidObstacle = null;
+  subject._avoidForwardX = 0;
+  subject._avoidForwardY = 0;
 };
 
 const makeAvoidanceObstacleKey = (wall) => {
@@ -1816,6 +1998,48 @@ const makeAvoidanceObstacleKey = (wall) => {
   if (typeof wall.id === 'string' && wall.id) return `id:${wall.id}`;
   const snap = (value) => Math.round((Number(value) || 0) / AVOID_KEY_GRID);
   return [snap(wall.x), snap(wall.y), snap(wall.w), snap(wall.h)].join(':');
+};
+
+const hasPassedAvoidanceObstacle = (origin = {}, subject = null, wall = null) => {
+  if (!subject || !wall || wall?.destroyed) return true;
+  const forward = normalizeVec(subject?._avoidForwardX, subject?._avoidForwardY);
+  if (forward.len <= 0.0001) return false;
+  const toObstacleX = (Number(wall?.x) || 0) - (Number(origin?.x) || 0);
+  const toObstacleY = (Number(wall?.y) || 0) - (Number(origin?.y) || 0);
+  const obstacleHalfExtent = Math.max(
+    1.5,
+    (Math.max(Number(wall?.w) || Number(wall?.width) || 0, Number(wall?.h) || Number(wall?.depth) || 0) * 0.5) + 1.5
+  );
+  return ((toObstacleX * forward.x) + (toObstacleY * forward.y)) < -obstacleHalfExtent;
+};
+
+const isAvoidanceObstacleStillLocal = (origin = {}, wall = null, probe = 0) => {
+  if (!wall || wall?.destroyed) return false;
+  const obstacleHalfExtent = Math.max(
+    1.5,
+    Math.max(Number(wall?.w) || Number(wall?.width) || 0, Number(wall?.h) || Number(wall?.depth) || 0) * 0.5
+  );
+  const clearDistance = obstacleHalfExtent + Math.max(4, Number(probe) || 0) * 1.6;
+  return Math.hypot(
+    (Number(origin?.x) || 0) - (Number(wall?.x) || 0),
+    (Number(origin?.y) || 0) - (Number(wall?.y) || 0)
+  ) <= clearDistance;
+};
+
+const resolveAvoidanceBoundaryFlow = (origin = {}, dir = {}, wall = null, side = 1) => {
+  const away = normalizeVec(
+    (Number(origin?.x) || 0) - (Number(wall?.x) || 0),
+    (Number(origin?.y) || 0) - (Number(wall?.y) || 0)
+  );
+  const safeAway = away.len > 0.0001 ? away : normalizeVec(-dir.x, -dir.y);
+  const tangentA = { x: -safeAway.y, y: safeAway.x };
+  const tangentB = { x: safeAway.y, y: -safeAway.x };
+  const pick = side >= 0 ? tangentA : tangentB;
+  const boundaryFlow = normalizeVec(
+    pick.x + (safeAway.x * 0.9),
+    pick.y + (safeAway.y * 0.9)
+  );
+  return { x: boundaryFlow.x, y: boundaryFlow.y };
 };
 
 const computeAvoidanceDirection = (origin, desiredDir, walls = [], probe = OBSTACLE_AVOID_PROBE, subject = null, nowSec = 0) => {
@@ -1829,8 +2053,27 @@ const computeAvoidanceDirection = (origin, desiredDir, walls = [], probe = OBSTA
     y: (Number(origin?.y) || 0) + (dir.y * probe)
   };
   const hit = raycastObstacles(origin, ahead, walls, 1);
+  const rememberedWall = subject?._avoidObstacle || null;
+  const rememberedKey = String(subject?._avoidObstacleKey || '');
+  const rememberedSide = Number(subject?._avoidSide) || 0;
+  const rememberedStillRelevant = !!rememberedWall
+    && !rememberedWall?.destroyed
+    && rememberedSide !== 0
+    && !hasPassedAvoidanceObstacle(origin, subject, rememberedWall)
+    // Side memory belongs to the obstacle transit, not to a stale direction
+    // forever.  Once the agent is well clear and its present segment no
+    // longer hits that wall, release it so a rejoin gate cannot be pulled
+    // back into an old tangent.
+    && (isAvoidanceObstacleStillLocal(origin, rememberedWall, probe)
+      || (hit?.obstacle && makeAvoidanceObstacleKey(hit.obstacle) === rememberedKey));
   if (!hit?.obstacle) {
-    if ((Number(subject?._avoidSideUntil) || 0) <= nowSec) clearAvoidanceMemory(subject);
+    if (rememberedStillRelevant) {
+      // Do not flip merely because the desired vector momentarily points away
+      // from the wall.  The selected side is released after the obstacle has
+      // actually moved behind the agent, rather than after a tiny timer.
+      return resolveAvoidanceBoundaryFlow(origin, dir, rememberedWall, rememberedSide);
+    }
+    if ((Number(subject?._avoidSideUntil) || 0) <= nowSec || !rememberedKey) clearAvoidanceMemory(subject);
     return { x: 0, y: 0 };
   }
   const wall = hit.obstacle;
@@ -1842,19 +2085,19 @@ const computeAvoidanceDirection = (origin, desiredDir, walls = [], probe = OBSTA
   const obstacleKey = makeAvoidanceObstacleKey(wall);
   let side = dotA >= dotB ? 1 : -1;
   if (subject) {
-    const sameObstacle = obstacleKey && subject._avoidObstacleKey === obstacleKey;
-    const stickyActive = sameObstacle && (Number(subject._avoidSide) || 0) !== 0 && (Number(subject._avoidSideUntil) || 0) > nowSec;
+    const sameObstacle = obstacleKey && rememberedKey === obstacleKey;
+    const stickyActive = sameObstacle && rememberedStillRelevant;
     if (stickyActive) side = Number(subject._avoidSide) || side;
     subject._avoidSide = side;
     subject._avoidSideUntil = nowSec + AVOID_SIDE_LOCK_SEC;
     subject._avoidObstacleKey = obstacleKey;
+    subject._avoidObstacle = wall;
+    if (!stickyActive) {
+      subject._avoidForwardX = dir.x;
+      subject._avoidForwardY = dir.y;
+    }
   }
-  const pick = side >= 0 ? tangentA : tangentB;
-  const boundaryFlow = normalizeVec(
-    pick.x + (away.x * 0.9),
-    pick.y + (away.y * 0.9)
-  );
-  return { x: boundaryFlow.x, y: boundaryFlow.y };
+  return resolveAvoidanceBoundaryFlow(origin, dir, wall, side);
 };
 
 const resolveSweptObstacleStep = (start = {}, end = {}, walls = [], inflate = 0) => {
@@ -2722,10 +2965,22 @@ const resolveAgentCombatDirective = ({
     nowSec
   });
   const controllerLeash = tacticalIntent?.combatLeash || null;
-  agent._formationDetached = Math.hypot(
-    (Number(agent?.x) || 0) - (Number(squad?.x) || 0),
-    (Number(agent?.y) || 0) - (Number(squad?.y) || 0)
-  ) > (controllerLeash?.hard || formationEnvelope.hardRadius);
+  const controllerState = agent?._squadController || {};
+  const passageState = String(controllerState?.locomotionState || '');
+  const activePassagePlanId = Math.floor(Number(squad?._squadController?.passagePlan?.id) || 0);
+  const agentPassageId = Math.floor(Number(controllerState?.passageId) || 0);
+  const inCardPassage = isTrainingCardSquad(squad)
+    && isTrainingCardPassageState(passageState)
+    && activePassagePlanId > 0
+    && agentPassageId === activePassagePlanId;
+  agent._formationDetached = inCardPassage
+    && agent?._formationRecovery?.active !== true
+    && controllerState?.rejoin?.active !== true
+    ? false
+    : Math.hypot(
+      (Number(agent?.x) || 0) - (Number(squad?.x) || 0),
+      (Number(agent?.y) || 0) - (Number(squad?.y) || 0)
+    ) > (controllerLeash?.hard || formationEnvelope.hardRadius);
   if (agent._formationDetached) {
     clearAgentCombatTargets(agent);
     return null;
@@ -2919,6 +3174,113 @@ const computeTeamAwareSeparation = (
     const push = ((targetGap - dist) / targetGap) * strength;
     sx += (dx / dist) * push;
     sy += (dy / dist) * push;
+  });
+  return { x: sx, y: sy };
+};
+
+const resolvePassageFlowSteering = ({
+  agent = null,
+  squad = null,
+  flowIntent = null,
+  neighbors = []
+} = {}) => {
+  if (
+    !agent
+    || !squad
+    || !flowIntent
+    || flowIntent?.detached === true
+    || (!flowIntent.active && !flowIntent.expanding)
+  ) return null;
+  const forward = normalizeVec(flowIntent?.directionX, flowIntent?.directionY);
+  if (forward.len <= 0.0001) return null;
+  const side = { x: -forward.y, y: forward.x };
+  const laneCount = Math.max(1, Math.floor(Number(flowIntent?.laneCount) || 1));
+  const lane = clamp(Math.floor(Number(flowIntent?.lane) || 0), 0, laneCount - 1);
+  const laneSpacing = Math.max(AGENT_RADIUS * 2.04, Number(flowIntent?.laneSpacing) || 0);
+  const queueSpacing = Math.max(AGENT_RADIUS * 2.08, Number(flowIntent?.queueSpacing) || laneSpacing);
+  const desiredLaneOffset = (lane - ((laneCount - 1) * 0.5)) * laneSpacing;
+  const relativeX = (Number(agent?.x) || 0) - (Number(squad?.x) || 0);
+  const relativeY = (Number(agent?.y) || 0) - (Number(squad?.y) || 0);
+  const currentLaneOffset = (relativeX * side.x) + (relativeY * side.y);
+  const laneError = desiredLaneOffset - currentLaneOffset;
+  let nearestFront = Infinity;
+  (Array.isArray(neighbors) ? neighbors : []).forEach((other) => {
+    if (!other || other === agent || other.dead || other.squadId !== agent.squadId) return;
+    const dx = (Number(other?.x) || 0) - (Number(agent?.x) || 0);
+    const dy = (Number(other?.y) || 0) - (Number(agent?.y) || 0);
+    const longitudinal = (dx * forward.x) + (dy * forward.y);
+    const lateral = Math.abs((dx * side.x) + (dy * side.y));
+    if (longitudinal <= 0 || lateral > laneSpacing * 0.78) return;
+    nearestFront = Math.min(nearestFront, longitudinal);
+  });
+  const queuePressure = Number.isFinite(nearestFront)
+    ? clamp((queueSpacing - nearestFront) / Math.max(0.5, queueSpacing), 0, 1)
+    : 0;
+  const formationWeight = clamp(Number(flowIntent?.formationWeight) || 0, 0, 1);
+  const laneWeight = (flowIntent.active ? 0.46 : 0.24) * (1 - (formationWeight * 0.5));
+  const laneSteer = clamp(laneError / Math.max(1, laneSpacing), -1, 1) * laneWeight;
+  return {
+    forwardX: forward.x,
+    forwardY: forward.y,
+    laneX: side.x * laneSteer,
+    laneY: side.y * laneSteer,
+    queuePressure,
+    formationWeight,
+    // This is a moving corridor look-ahead, not a persistent 2D slot.  It is
+    // intentionally the recovery progress goal while an agent is in flow.
+    goalX: (Number(agent?.x) || 0) + (forward.x * Math.max(queueSpacing * 2.4, 11)) + (side.x * clamp(laneError, -laneSpacing, laneSpacing)),
+    goalY: (Number(agent?.y) || 0) + (forward.y * Math.max(queueSpacing * 2.4, 11)) + (side.y * clamp(laneError, -laneSpacing, laneSpacing))
+  };
+};
+
+const computeStreamSeparation = ({
+  agent = null,
+  neighbors = [],
+  flowIntent = null,
+  targetGap = 4.8
+} = {}) => {
+  if (!agent || !flowIntent) return { x: 0, y: 0 };
+  const forward = normalizeVec(flowIntent.forwardX, flowIntent.forwardY);
+  const side = { x: -forward.y, y: forward.x };
+  const streamId = Math.floor(Number(flowIntent.streamId) || 0);
+  const passageId = Math.floor(Number(flowIntent.passageId) || 0);
+  let sx = 0;
+  let sy = 0;
+  (Array.isArray(neighbors) ? neighbors : []).forEach((other) => {
+    if (!other || other === agent || other.dead || String(other?.squadId || '') !== String(agent?.squadId || '')) return;
+    const otherState = String(other?._squadController?.locomotionState || '');
+    if (!otherState || ![
+      CARD_LOCOMOTION_STATE.STREAM_APPROACH,
+      CARD_LOCOMOTION_STATE.STREAM,
+      CARD_LOCOMOTION_STATE.STREAM_EXIT
+    ].includes(otherState)) return;
+    if (Math.floor(Number(other?._squadController?.passageId) || 0) !== passageId) return;
+    const dx = finiteNumber(agent?.x) - finiteNumber(other?.x);
+    const dy = finiteNumber(agent?.y) - finiteNumber(other?.y);
+    const dist = Math.hypot(dx, dy);
+    if (dist <= 0.0001) return;
+    const longitudinal = ((finiteNumber(other?.x) - finiteNumber(agent?.x)) * forward.x)
+      + ((finiteNumber(other?.y) - finiteNumber(agent?.y)) * forward.y);
+    const lateral = Math.abs((finiteNumber(other?.x) - finiteNumber(agent?.x)) * side.x
+      + ((finiteNumber(other?.y) - finiteNumber(agent?.y)) * side.y));
+    const otherStream = Math.floor(Number(other?._squadController?.streamId) || 0);
+    const sameStream = otherStream === streamId;
+    const gap = sameStream
+      ? Math.max(AGENT_RADIUS * 1.72, targetGap * 0.62)
+      : targetGap * 0.92;
+    if (dist >= gap || lateral > targetGap * (sameStream ? 0.58 : 1.7)) return;
+    // Same-stream followers only receive a tiny backward correction when they
+    // genuinely overlap a leader.  A rear neighbour never pushes a leader.
+    if (sameStream && longitudinal <= 0) return;
+    const strength = sameStream ? 0.08 : 0.16;
+    const push = ((gap - dist) / gap) * strength;
+    if (sameStream) {
+      sx += -forward.x * push;
+      sy += -forward.y * push;
+    } else {
+      sx += (dx / dist) * push;
+      sy += (dy / dist) * push;
+    }
   });
   return { x: sx, y: sy };
 };
@@ -3464,15 +3826,22 @@ const recordTrainingTargetNavigationPlan = ({
     retryCooldown,
     20
   );
+  const passageFallbackSucceeded = planned?.ok === true
+    && planned?.formationFailed === true
+    && planned?.passageSucceeded === true;
   const failureCount = planned?.ok
-    ? 0
+    ? (passageFallbackSucceeded
+      ? Math.max(1, Number(previousTargetState?.failureCount) || 0, 1)
+      : 0)
     : Math.min(12, (Number(previousTargetState?.failureCount) || 0) + 1);
   const blockedUntil = !planned?.ok && failureCount >= failureLimit
     ? nowSec + unreachableCooldown
     : 0;
   const targetState = {
     failureCount,
-    retryAt: planned?.ok ? 0 : nowSec + retryCooldown,
+    retryAt: planned?.ok
+      ? (passageFallbackSucceeded ? nowSec + retryCooldown : 0)
+      : nowSec + retryCooldown,
     blockedUntil
   };
   const targetStates = { ...previousTargets, [safeTargetId]: targetState };
@@ -3508,7 +3877,9 @@ const planTrainingNavigationTarget = (squad = null, sim = null, target = {}, wal
       ? requestedTarget
       : navigator.resolveLegalPosition(source, requestedTarget, { obstacles: walls, radius }))
     : requestedTarget;
-  const navigationClearance = resolveTrainingNavigationPathClearance(sim);
+  const navigationClearance = isTrainingCardSquad(squad)
+    ? resolveTrainingNavigationPathClearance(sim, { passage: true })
+    : resolveTrainingNavigationPathClearance(sim);
   let destination = navigator?.findNearestWalkablePoint
     ? navigator.findNearestWalkablePoint(rawDestination, {
       obstacles: walls,
@@ -3529,13 +3900,17 @@ const planTrainingNavigationTarget = (squad = null, sim = null, target = {}, wal
   if (!consumeTrainingNavigationPlanBudget(sim)) {
     return { ok: false, deferred: true, destination };
   }
-  const route = navigator.planRoute(source, destination, {
-    obstacles: walls,
-    radius,
+  const plannedRoute = planTrainingRouteWithPassageFallback({
+    squad,
+    sim,
+    start: source,
+    target: destination,
+    walls,
     maxSearchNodes: resolveTrainingAiNavigationSearchNodes(squad, sim),
     preferLocalDetour: true,
     preferredLaneId: roadCorridor?.laneId
   });
+  const route = plannedRoute.route;
   const routeReachesDestination = doesTrainingRouteReachTarget(route, destination);
   const highlandEgressPrefix = resolveTrainingHighlandEgressPrefix(sim, source, route);
   if (
@@ -3543,7 +3918,16 @@ const planTrainingNavigationTarget = (squad = null, sim = null, target = {}, wal
     && isTrainingRouteInsideRoadCorridor(squad, sim, source, route)
   ) {
     applyTrainingNavigationRoute(squad, route);
-    return { ok: true, destination };
+    squad._trainingNavigationScale = plannedRoute.scale;
+    return {
+      ok: true,
+      destination,
+      route,
+      scale: plannedRoute.scale,
+      formationFailed: plannedRoute.formationFailed === true,
+      passageAttempted: plannedRoute.passageAttempted === true,
+      passageSucceeded: plannedRoute.passageSucceeded === true
+    };
   }
   if (roadCorridor && (routeReachesDestination || highlandEgressPrefix.length > 0)) {
     const fallbackRoute = buildTrainingRoadFallbackRoute(squad, sim, destination, {
@@ -3552,7 +3936,16 @@ const planTrainingNavigationTarget = (squad = null, sim = null, target = {}, wal
     });
     if (fallbackRoute.length > 0) {
       applyTrainingNavigationRoute(squad, fallbackRoute);
-      return { ok: true, destination };
+      squad._trainingNavigationScale = 'PASSAGE';
+      return {
+        ok: true,
+        destination,
+        route: fallbackRoute,
+        scale: 'PASSAGE',
+        formationFailed: plannedRoute.formationFailed === true,
+        passageAttempted: plannedRoute.passageAttempted === true,
+        passageSucceeded: plannedRoute.passageSucceeded === true
+      };
     }
   }
   return { ok: false, destination };
@@ -3580,7 +3973,9 @@ const resolveTrainingRangedApproachPlan = ({
   const targetPoint = { x: Number(target?.x) || 0, y: Number(target?.y) || 0 };
   const navigator = sim?.trainingNavigator;
   const radius = resolveTrainingNavigationAgentRadius(squad, sim);
-  const clearance = resolveTrainingNavigationPathClearance(sim);
+  const clearance = isTrainingCardSquad(squad)
+    ? resolveTrainingNavigationPathClearance(sim, { passage: true })
+    : resolveTrainingNavigationPathClearance(sim);
   const roadCorridor = resolveTrainingRoadCorridor(squad, sim);
   const targetRadius = Math.max(0, Number(target?.radius) || 0);
   const attackRange = resolveSquadAttackRange(squad);
@@ -3620,17 +4015,21 @@ const resolveTrainingRangedApproachPlan = ({
         destination = constrainPointToTrainingRoadCorridor(destination, roadCorridor, radius);
       }
       if (raycastObstacles(destination, targetPoint, visionWalls, Math.max(0.8, radius * 0.12))) return;
-      let route = navigator?.planRoute
+      const plannedRoute = navigator?.planRoute
         ? (consumeTrainingNavigationPlanBudget(sim)
-          ? navigator.planRoute(source, destination, {
-            obstacles: walls,
-            radius,
+          ? planTrainingRouteWithPassageFallback({
+            squad,
+            sim,
+            start: source,
+            target: destination,
+            walls,
             maxSearchNodes: resolveTrainingAiNavigationSearchNodes(squad, sim),
             preferLocalDetour: true,
             preferredLaneId: roadCorridor?.laneId
           })
           : null)
-        : [destination];
+        : { route: [destination], scale: 'AGENT' };
+      let route = plannedRoute?.route || null;
       if (!route) {
         best = best || { deferred: true, destination: null, route: [], score: Infinity };
         return;
@@ -3651,14 +4050,31 @@ const resolveTrainingRangedApproachPlan = ({
       const distanceError = Math.abs(Math.hypot(destination.x - targetPoint.x, destination.y - targetPoint.y) - preferredDistance);
       const score = routeDistanceFrom(source, route) + (distanceError * 1.5) + (offsetIndex * 0.01);
       if (!best || score < best.score) {
-        best = { destination, route, score };
+        best = {
+          destination,
+          route,
+          score,
+          scale: plannedRoute?.scale || 'AGENT',
+          formationFailed: plannedRoute?.formationFailed === true,
+          passageAttempted: plannedRoute?.passageAttempted === true,
+          passageSucceeded: plannedRoute?.passageSucceeded === true
+        };
       }
     });
   });
 
   if (!best || best.deferred) return { ok: false, deferred: !!best?.deferred, destination: null, route: [] };
   applyTrainingNavigationRoute(squad, best.route);
-  return { ok: true, destination: best.destination, route: best.route };
+  squad._trainingNavigationScale = best.scale;
+  return {
+    ok: true,
+    destination: best.destination,
+    route: best.route,
+    scale: best.scale,
+    formationFailed: best.formationFailed === true,
+    passageAttempted: best.passageAttempted === true,
+    passageSucceeded: best.passageSucceeded === true
+  };
 };
 
 const planTrainingAttackNavigationTarget = ({
@@ -3784,7 +4200,7 @@ const updateTrainingAutoAdvancePlan = (squad = null, sim = null, walls = [], now
     return true;
   }
   if (state?.goalId === goal.id && (Number(state.retryAt) || 0) > nowSec) {
-    squad.action = '路径等待';
+    squad.action = '路径重算';
     return true;
   }
   const planned = planTrainingNavigationTarget(squad, sim, goal, walls);
@@ -3803,7 +4219,7 @@ const updateTrainingAutoAdvancePlan = (squad = null, sim = null, walls = [], now
     ? (plan.kind === TRAINING_MAP_AI_PLAN_KIND.RETREAT_FROM_TOWER
       ? '撤出塔区'
       : (attacksBuilding ? '随兵推进' : '护送兵线'))
-    : (planned.deferred ? '路径排队' : '路径等待');
+    : (planned.deferred ? '路径排队' : '路径绕行');
   return true;
 };
 
@@ -3903,7 +4319,7 @@ const isPointInsideTrainingHighland = (point = {}, sim = {}) => (
     .some((regionId) => String(regionId || '').startsWith('terrain-highland-'))
 );
 
-const constrainMinionAgentsToTrainingRoadCorridor = (squad = {}, sim = {}, agents = []) => {
+const constrainMinionAgentsToTrainingRoadCorridor = (squad = {}, sim = {}, agents = [], walls = []) => {
   if (
     !isTrainingMinionSquad(squad)
     || !(Number(squad?.minionPathCorridorWidth) > 0)
@@ -3930,8 +4346,15 @@ const constrainMinionAgentsToTrainingRoadCorridor = (squad = {}, sim = {}, agent
       agent.vx -= outward.x * outwardSpeed;
       agent.vy -= outward.y * outwardSpeed;
     }
-    agent.x = constrained.x;
-    agent.y = constrained.y;
+    const legalStep = resolveTrainingLegalMovementStep({
+      sim,
+      start: point,
+      target: constrained,
+      walls,
+      radius: Math.max(0.5, Number(agent.radius) || AGENT_RADIUS) + 0.5
+    });
+    agent.x = legalStep.x;
+    agent.y = legalStep.y;
     agent._formationLocked = false;
     agent._formationHold = false;
     agent._formationHoldSpacing = '';
@@ -4048,9 +4471,13 @@ const buildTrainingRoadFallbackRoute = (
     const previous = route[route.length - 1] || requestedSource;
     if (Math.hypot(next.x - previous.x, next.y - previous.y) > 1) route.push(next);
   };
-  const segmentBlocked = (from = {}, to = {}) => (
-    !!raycastObstacles(from, to, blockingWalls, navigationRadius)?.obstacle
-  );
+  const segmentBlocked = (from = {}, to = {}) => !isTrainingMovementSegmentTraversable({
+    sim,
+    start: from,
+    target: to,
+    walls: blockingWalls,
+    radius: navigationRadius
+  });
   let previous = { x: Number(requestedSource?.x) || 0, y: Number(requestedSource?.y) || 0 };
   let pointIndex = 0;
   while (pointIndex < rawRoute.length) {
@@ -4138,8 +4565,14 @@ const resolveMinionNavigationWaypoints = ({
 
   const firstTarget = requested[0];
   const navigationRadius = resolveTrainingNavigationAgentRadius(squad, sim);
-  const directHit = raycastObstacles(squad, firstTarget, walls, navigationRadius);
-  if (!directHit?.obstacle) {
+  const directPath = isTrainingMovementSegmentTraversable({
+    sim,
+    start: squad,
+    target: firstTarget,
+    walls,
+    radius: navigationRadius
+  });
+  if (directPath) {
     squad._minionNavigationRoute = null;
     return requested;
   }
@@ -4501,7 +4934,7 @@ const updateSquadBehaviorPlan = (squad, sim, nowSec = 0, walls = [], crowd = nul
       ? (String(squad?.trainingAi?.state || '') === 'Chase'
         ? '追击目标'
         : (orderType === ORDER_ATTACK_MOVE ? '攻击前进' : '移动'))
-      : '路径等待';
+      : (isTrainingCardSquad(squad) ? '路径绕行' : '路径等待');
   } else if (isRanged && dist < Math.max(attackRange.min + 6, desired * 0.72) && !hasWaypoint) {
     const planned = planTrainingAttackNavigationTarget({
       squad,
@@ -4532,7 +4965,7 @@ const updateSquadBehaviorPlan = (squad, sim, nowSec = 0, walls = [], crowd = nul
       ? (String(squad?.trainingAi?.state || '') === 'Chase'
         ? '追击目标'
         : (orderType === ORDER_ATTACK_MOVE ? '攻击前进' : '移动'))
-      : '路径等待';
+      : (isTrainingCardSquad(squad) ? '路径绕行' : '路径等待');
   } else if (!hasWaypoint) {
     squad.action = squad.behavior === 'defend' ? '防御' : (orderType === ORDER_ATTACK_MOVE ? '攻击前进' : '普通攻击');
   }
@@ -4708,13 +5141,21 @@ const stepMinionWaveCombatAgent = ({
   const halfHeight = (Number(sim?.field?.height) || 1488) * 0.5;
   next.x = clamp(next.x, -halfWidth + 2, halfWidth - 2);
   next.y = clamp(next.y, -halfHeight + 2, halfHeight - 2);
-  agent.x = next.x;
-  agent.y = next.y;
-  agent.vx = (next.x - start.x) / safeDt;
-  agent.vy = (next.y - start.y) / safeDt;
-  if (Math.hypot(next.x - destination.x, next.y - destination.y) <= 0.32) {
-    agent.x = destination.x;
-    agent.y = destination.y;
+  const legalStep = resolveTrainingLegalMovementStep({
+    sim,
+    start,
+    target: { x: next.x, y: next.y },
+    walls,
+    radius: (Number(agent.radius) || AGENT_RADIUS) + 0.5
+  });
+  agent.x = legalStep.x;
+  agent.y = legalStep.y;
+  agent.vx = (agent.x - start.x) / safeDt;
+  agent.vy = (agent.y - start.y) / safeDt;
+  if (
+    legalStep.legal
+    && Math.hypot(agent.x - destination.x, agent.y - destination.y) <= 0.32
+  ) {
     agent.vx = 0;
     agent.vy = 0;
   }
@@ -4780,13 +5221,28 @@ const createAgentsForSquad = (squad, crowd) => {
   const deploySlots = Array.isArray(squad?.deploySlots)
     ? squad.deploySlots.map((slot) => normalizeFormationSlot(slot))
     : [];
+  const deploySlotsByType = new Map();
+  (Array.isArray(squad?.deploySlots) ? squad.deploySlots : []).forEach((slot) => {
+    const unitTypeId = typeof slot?.unitTypeId === 'string' ? slot.unitTypeId.trim() : '';
+    if (!unitTypeId) return;
+    const typedSlots = deploySlotsByType.get(unitTypeId) || [];
+    typedSlots.push(normalizeFormationSlot(slot));
+    deploySlotsByType.set(unitTypeId, typedSlots);
+  });
+  const deployedSlotCursorByType = new Map();
 
-  const resolveFormationSlotForOrder = (slotOrder, fallbackOffset) => (
-    deploySlots[slotOrder] || {
+  const resolveFormationSlotForType = (unitTypeId, slotOrder, fallbackOffset) => {
+    const typedSlots = deploySlotsByType.get(unitTypeId) || [];
+    const typedIndex = deployedSlotCursorByType.get(unitTypeId) || 0;
+    if (typedSlots[typedIndex]) {
+      deployedSlotCursorByType.set(unitTypeId, typedIndex + 1);
+      return typedSlots[typedIndex];
+    }
+    return deploySlots[slotOrder] || {
       side: Number(fallbackOffset?.side) || 0,
       front: -(Number(fallbackOffset?.back) || 0)
-    }
-  );
+    };
+  };
 
   const resolveSpawnPoint = (slot) => {
     return {
@@ -4823,7 +5279,7 @@ const createAgentsForSquad = (squad, crowd) => {
     const attackRange = resolveUnitTypeAttackRange(unitType);
     for (let i = 0; i < safeCount; i += 1) {
       const offset = slotOffsetForIndex(slotOrder, baseCols);
-      const formationSlot = resolveFormationSlotForOrder(slotOrder, offset);
+      const formationSlot = resolveFormationSlotForType(unitTypeId, slotOrder, offset);
       const spawnPoint = resolveSpawnPoint(formationSlot);
       agents.push(createAgent({
         id: `${squad.id}_ag_${slotOrder + 1}`,
@@ -4920,9 +5376,137 @@ const doesTrainingRouteReachTarget = (route = [], target = {}, radius = LEADER_A
   ) <= Math.max(1, Number(radius) || LEADER_ARRIVAL_RADIUS);
 };
 
+const planTrainingRouteWithPassageFallback = ({
+  squad = null,
+  sim = null,
+  start = {},
+  target = {},
+  walls = [],
+  maxSearchNodes = 0,
+  preferLocalDetour = true,
+  preferredLaneId = ''
+} = {}) => {
+  const navigator = sim?.trainingNavigator;
+  if (!navigator?.planRoute) return {
+    route: [{ x: Number(target?.x) || 0, y: Number(target?.y) || 0 }],
+    scale: 'AGENT',
+    formationFailed: false,
+    passageAttempted: false,
+    passageSucceeded: false
+  };
+  const agentRadius = resolveTrainingNavigationAgentRadius(squad, sim);
+  const formationRadius = resolveTrainingFormationNavigationRadius(squad, sim);
+  const formationPathClearance = resolveTrainingNavigationPathClearance(sim);
+  const passagePathClearance = resolveTrainingNavigationPathClearance(sim, { passage: true });
+  const sharedOptions = {
+    obstacles: walls,
+    maxSearchNodes,
+    preferLocalDetour,
+    preferredLaneId
+  };
+  const pending = squad?._trainingPassageFallbackPending;
+  const deferPassageFallback = isTrainingCardAiSquad(squad);
+  const pendingMatches = isTrainingCardSquad(squad)
+    && deferPassageFallback
+    && pending
+    && Math.hypot(
+      finiteNumber(pending?.start?.x) - finiteNumber(start?.x),
+      finiteNumber(pending?.start?.y) - finiteNumber(start?.y)
+    ) < 8
+    && Math.hypot(
+      finiteNumber(pending?.target?.x) - finiteNumber(target?.x),
+      finiteNumber(pending?.target?.y) - finiteNumber(target?.y)
+    ) < 8;
+  const formationRoute = pendingMatches
+    ? (Array.isArray(pending?.route) ? pending.route : [])
+    : navigator.planRoute(start, target, {
+      ...sharedOptions,
+      radius: formationRadius,
+      pathClearance: formationPathClearance
+    });
+  if (doesTrainingRouteReachTarget(formationRoute, target)) {
+    if (isTrainingCardSquad(squad)) delete squad._trainingPassageFallbackPending;
+    return {
+      route: formationRoute,
+      scale: 'FORMATION',
+      radius: formationRadius,
+      formationFailed: false,
+      passageAttempted: false,
+      passageSucceeded: false
+    };
+  }
+  if (!isTrainingCardSquad(squad) || formationRadius <= agentRadius + 0.05) {
+    return {
+      route: formationRoute,
+      scale: 'FORMATION',
+      radius: formationRadius,
+      formationFailed: true,
+      passageAttempted: false,
+      passageSucceeded: false
+    };
+  }
+  if (deferPassageFallback && !pendingMatches) {
+    squad._trainingPassageFallbackPending = {
+      start: { x: Number(start?.x) || 0, y: Number(start?.y) || 0 },
+      target: { x: Number(target?.x) || 0, y: Number(target?.y) || 0 },
+      route: Array.isArray(formationRoute) ? formationRoute.map((point) => ({
+        x: Number(point?.x) || 0,
+        y: Number(point?.y) || 0
+      })) : []
+    };
+    return {
+      route: formationRoute,
+      scale: 'FORMATION',
+      radius: formationRadius,
+      formationFailed: true,
+      passageAttempted: false,
+      passageSucceeded: false,
+      deferredPassage: true
+    };
+  }
+  const passageRoute = navigator.planRoute(start, target, {
+    ...sharedOptions,
+    radius: agentRadius,
+    pathClearance: passagePathClearance
+  });
+  if (doesTrainingRouteReachTarget(passageRoute, target)) {
+    delete squad._trainingPassageFallbackPending;
+    return {
+      route: passageRoute,
+      scale: 'PASSAGE',
+      radius: agentRadius,
+      formationFailed: true,
+      passageAttempted: true,
+      passageSucceeded: true
+    };
+  }
+  delete squad._trainingPassageFallbackPending;
+  return {
+    route: passageRoute,
+    scale: 'PASSAGE',
+    radius: agentRadius,
+    formationFailed: true,
+    passageAttempted: true,
+    passageSucceeded: false
+  };
+};
+
 const advanceSquadWaypoint = (squad = null) => {
   if (!squad || !Array.isArray(squad.waypoints) || squad.waypoints.length <= 0) return null;
   const reached = squad.waypoints.shift() || null;
+  if (isTrainingCardSquad(squad) && Array.isArray(squad?._passageRoute)) {
+    const route = squad._passageRoute;
+    if (route.length > 0 && reached) {
+      const reachedIndex = route.findIndex((point) => (
+        Math.hypot(
+          (Number(point?.x) || 0) - (Number(reached?.x) || 0),
+          (Number(point?.y) || 0) - (Number(reached?.y) || 0)
+        ) <= 0.05
+      ));
+      if (reachedIndex >= 0) route.splice(0, reachedIndex + 1);
+      else route.shift();
+    }
+  }
   if (squad.order && typeof squad.order === 'object') {
     const pathLength = Array.isArray(squad.order.pathPoints) ? squad.order.pathPoints.length : 0;
     squad.order.pathIndex = Math.min(
@@ -4957,6 +5541,11 @@ const beginSquadFormationArrival = (squad = null, target = null, nowSec = 0) => 
   squad.speed = 0;
   squad.action = '到达整队';
 };
+
+const hasActiveTrainingCardPassage = (squad = null) => (
+  isTrainingCardSquad(squad)
+  && squad?._squadController?.passageDebug?.passageActive === true
+);
 
 const updateSquadFormationArrival = ({
   squad = null,
@@ -5018,9 +5607,33 @@ const clearAgentFormationRecovery = (
   monitor = null
 ) => {
   if (!agent) return;
+  const previous = agent?._formationRecovery && typeof agent._formationRecovery === 'object'
+    ? agent._formationRecovery
+    : {};
   const monitoredProgressAt = Number(monitor?.lastProgressAt);
+  const monitoredMeaningfulX = Number(monitor?.lastMeaningfulX);
+  const monitoredMeaningfulY = Number(monitor?.lastMeaningfulY);
+  const monitoredMeaningfulError = Number(monitor?.lastMeaningfulError);
+  if (previous?.active !== true && previous?.mode === 'NORMAL') {
+    previous.lastX = Number(agent?.x) || 0;
+    previous.lastY = Number(agent?.y) || 0;
+    previous.lastError = Math.max(0, Number(error) || 0);
+    if (Number.isFinite(monitoredMeaningfulX)) previous.lastMeaningfulX = monitoredMeaningfulX;
+    if (Number.isFinite(monitoredMeaningfulY)) previous.lastMeaningfulY = monitoredMeaningfulY;
+    if (Number.isFinite(monitoredMeaningfulError)) previous.lastMeaningfulError = Math.max(0, monitoredMeaningfulError);
+    if (Number.isFinite(monitoredProgressAt)) previous.lastProgressAt = monitoredProgressAt;
+    previous.terrainBlocked = false;
+    agent._formationDetached = false;
+    agent.formationRecoveryState = 'NONE';
+    if (agent?.isMinionWaveUnit === true) {
+      agent._minionRecovery = previous;
+      agent.minionRecoveryState = 'NONE';
+    }
+    return;
+  }
   const state = {
     active: false,
+    mode: 'NORMAL',
     route: [],
     routeIndex: 0,
     plannedAt: 0,
@@ -5028,12 +5641,27 @@ const clearAgentFormationRecovery = (
     targetY: 0,
     lastX: Number(agent?.x) || 0,
     lastY: Number(agent?.y) || 0,
+    lastMeaningfulX: Number.isFinite(monitoredMeaningfulX)
+      ? monitoredMeaningfulX
+      : (Number.isFinite(Number(previous?.lastMeaningfulX)) ? Number(previous.lastMeaningfulX) : (Number(agent?.x) || 0)),
+    lastMeaningfulY: Number.isFinite(monitoredMeaningfulY)
+      ? monitoredMeaningfulY
+      : (Number.isFinite(Number(previous?.lastMeaningfulY)) ? Number(previous.lastMeaningfulY) : (Number(agent?.y) || 0)),
     lastError: Math.max(0, Number(error) || 0),
-    lastProgressAt: Number.isFinite(monitoredProgressAt) ? monitoredProgressAt : nowSec,
+    lastMeaningfulError: Number.isFinite(monitoredMeaningfulError)
+      ? Math.max(0, monitoredMeaningfulError)
+      : (Number.isFinite(Number(previous?.lastMeaningfulError))
+        ? Math.max(0, Number(previous.lastMeaningfulError))
+        : Math.max(0, Number(error) || 0)),
+    lastProgressAt: Number.isFinite(monitoredProgressAt)
+      ? monitoredProgressAt
+      : (Number.isFinite(Number(previous?.lastProgressAt)) ? Number(previous.lastProgressAt) : nowSec),
     failedSince: 0,
-    obstacleId: ''
+    obstacleId: '',
+    terrainBlocked: false
   };
   agent._formationRecovery = state;
+  agent._formationDetached = false;
   agent.formationRecoveryState = 'NONE';
   if (agent?.isMinionWaveUnit === true) {
     agent._minionRecovery = state;
@@ -5048,6 +5676,7 @@ const resolveAgentFormationRecoveryGuidance = ({
   walls = [],
   target = null,
   enabled = true,
+  flowing = false,
   nowSec = 0
 } = {}) => {
   if (!agent || !squad || !enabled || !target) {
@@ -5073,6 +5702,7 @@ const resolveAgentFormationRecoveryGuidance = ({
     : (agent?._minionRecovery && typeof agent._minionRecovery === 'object'
       ? agent._minionRecovery
       : {});
+  const wasDetached = agent?._formationDetached === true || previous?.active === true;
   const isMinion = isTrainingMinionSquad(squad);
   const stuckDelay = isMinion ? MINION_RECOVERY_STUCK_DELAY_SEC : FORMATION_RECOVERY_STUCK_DELAY_SEC;
   const replanInterval = isMinion ? MINION_RECOVERY_REPLAN_INTERVAL_SEC : FORMATION_RECOVERY_REPLAN_INTERVAL_SEC;
@@ -5081,6 +5711,8 @@ const resolveAgentFormationRecoveryGuidance = ({
   const maximumSpeedMul = isMinion ? MINION_RECOVERY_MAX_SPEED_MUL : FORMATION_RECOVERY_MAX_SPEED_MUL;
   const previousLastX = Number(previous?.lastX);
   const previousLastY = Number(previous?.lastY);
+  const previousMeaningfulX = Number(previous?.lastMeaningfulX);
+  const previousMeaningfulY = Number(previous?.lastMeaningfulY);
   const movedDistance = Math.hypot(
     point.x - (Number.isFinite(previousLastX) ? previousLastX : point.x),
     point.y - (Number.isFinite(previousLastY) ? previousLastY : point.y)
@@ -5094,22 +5726,74 @@ const resolveAgentFormationRecoveryGuidance = ({
     (Number(target?.x) || 0) - point.x,
     (Number(target?.y) || 0) - point.y
   );
-  const movedTowardTarget = movedDistance > 0.001
-    ? (((point.x - (Number.isFinite(previousLastX) ? previousLastX : point.x)) * targetDirection.x)
-      + ((point.y - (Number.isFinite(previousLastY) ? previousLastY : point.y)) * targetDirection.y))
-    : 0;
-  if (movedDistance >= 0.08 || error <= previousError - 0.18 || movedTowardTarget >= 0.12) {
+  let lastMeaningfulX = Number.isFinite(previousMeaningfulX) ? previousMeaningfulX : point.x;
+  let lastMeaningfulY = Number.isFinite(previousMeaningfulY) ? previousMeaningfulY : point.y;
+  let lastMeaningfulError = Number.isFinite(Number(previous?.lastMeaningfulError))
+    ? Number(previous.lastMeaningfulError)
+    : previousError;
+  const netMeaningfulTowardTarget = (
+    ((point.x - lastMeaningfulX) * targetDirection.x)
+    + ((point.y - lastMeaningfulY) * targetDirection.y)
+  );
+  // Merely moving is not progress: an agent circling an obstacle can travel a
+  // long distance while making no net advance toward its local goal.  Keep a
+  // small monotonic progress marker even before recovery becomes active.
+  const madeMeaningfulProgress = error <= Math.min(previousError, lastMeaningfulError) - 0.18
+    || netMeaningfulTowardTarget >= 0.34
+    || (error <= releaseDistance && movedDistance >= 0.08);
+  if (madeMeaningfulProgress) {
     lastProgressAt = nowSec;
+    lastMeaningfulX = point.x;
+    lastMeaningfulY = point.y;
+    lastMeaningfulError = error;
   }
   const directHit = error > releaseDistance
     ? raycastObstacles(point, target, walls, radius)
     : null;
-  const stalled = previous?.active === true
-    && error > triggerDistance
-    && nowSec - lastProgressAt >= stuckDelay;
-  const needsRecovery = error > releaseDistance && !!directHit?.obstacle;
+  const terrainSegmentBlocked = error > releaseDistance && !isTrainingMovementSegmentTraversable({
+    sim,
+    start: point,
+    target,
+    walls,
+    radius
+  });
+  const terrainBlockedAt = Number(agent?._terrainBlockedAt);
+  const recentTerrainBlock = agent?._nextFormationStepIllegal === true
+    || (
+      Number.isFinite(terrainBlockedAt)
+      && terrainBlockedAt > 0
+      && nowSec - terrainBlockedAt <= Math.max(0.35, stuckDelay * 2.5)
+    );
+  const stalled = error > triggerDistance && nowSec - lastProgressAt >= stuckDelay;
+  const directBlockHasPersisted = nowSec - lastProgressAt >= (stuckDelay * 0.65);
+  // A nearby visual slot can graze an obstacle while the agent still has room
+  // to continue with normal local avoidance.  Reserve immediate recovery for
+  // a genuinely detached target or an already-illegal move; otherwise let
+  // the progress tracker confirm that the local steer cannot clear it.
+  const directObstacleRequiresRecovery = !!directHit?.obstacle && (
+    error >= triggerDistance
+    || recentTerrainBlock
+    || directBlockHasPersisted
+  );
+  const terrainTopologyRequiresRecovery = terrainSegmentBlocked && (
+    error >= triggerDistance
+    || recentTerrainBlock
+    || directBlockHasPersisted
+  );
+  const needsRecovery = error > releaseDistance && (
+    ((directObstacleRequiresRecovery || terrainTopologyRequiresRecovery)
+      && (!flowing || recentTerrainBlock || directBlockHasPersisted || error >= triggerDistance))
+    || recentTerrainBlock
+    || stalled
+    || wasDetached
+  );
   if (!needsRecovery) {
-    clearAgentFormationRecovery(agent, nowSec, error, { lastProgressAt });
+    clearAgentFormationRecovery(agent, nowSec, error, {
+      lastProgressAt,
+      lastMeaningfulX,
+      lastMeaningfulY,
+      lastMeaningfulError
+    });
     return null;
   }
 
@@ -5136,12 +5820,24 @@ const resolveAgentFormationRecoveryGuidance = ({
   const obstacleChanged = obstacleId && obstacleId !== String(previous?.obstacleId || '');
   const previousRouteIndex = Math.max(0, Math.floor(Number(previous?.routeIndex) || 0));
   const routeMissing = previousRoute.length <= 0 || previousRouteIndex >= previousRoute.length;
-  const shouldReplan = !!navigator?.planRoute
+  const previousPlanAt = Number(previous?.plannedAt) || 0;
+  const planAge = nowSec - previousPlanAt;
+  const recoveryRoutePlannerAvailable = !!navigator?.planRoute || !!sim?.field || !!sim?.trainingMap;
+  const replanDue = !previousPlanAt
+    || planAge >= replanInterval;
+  const shouldReplan = recoveryRoutePlannerAvailable
     && (
-      routeMissing
-      || targetDrift >= targetDriftThreshold
-      || obstacleChanged
-      || (stalled && nowSec - (Number(previous?.plannedAt) || 0) >= replanInterval)
+      obstacleChanged
+      || (
+        replanDue
+        && (
+          routeMissing
+          || targetDrift >= targetDriftThreshold
+          || stalled
+          || terrainSegmentBlocked
+          || recentTerrainBlock
+        )
+      )
     );
   let route = previousRoute.map((entry) => ({ x: Number(entry?.x) || 0, y: Number(entry?.y) || 0 }));
   let routeIndex = previousRouteIndex;
@@ -5149,22 +5845,24 @@ const resolveAgentFormationRecoveryGuidance = ({
   let failedSince = Number(previous?.failedSince) || 0;
 
   if (shouldReplan && consumeFormationRecoveryPlanBudget(sim)) {
-    const safeStart = navigator.findNearestWalkablePoint?.(point, {
+    const safeStart = navigator?.findNearestWalkablePoint?.(point, {
       obstacles: walls,
       radius,
       maxSearchDistance: Math.max(48, triggerDistance * 3)
     }) || point;
-    const planned = navigator.planRoute(safeStart, destination, {
-      obstacles: walls,
-      radius,
-      maxSearchNodes: 220,
-      preferLocalDetour: true,
-      preferredLaneId: roadCorridor?.laneId
-    });
+    const planned = navigator?.planRoute
+      ? navigator.planRoute(safeStart, destination, {
+        obstacles: walls,
+        radius,
+        maxSearchNodes: 220,
+        preferLocalDetour: true,
+        preferredLaneId: roadCorridor?.laneId
+      })
+      : [];
     const startEscape = Math.hypot(safeStart.x - point.x, safeStart.y - point.y) > 0.2
       ? [safeStart]
       : [];
-    const candidateRoute = [...startEscape, ...(Array.isArray(planned) ? planned : [])]
+    let candidateRoute = [...startEscape, ...(Array.isArray(planned) ? planned : [])]
       .filter((entry, index, rows) => (
         index === 0
         || Math.hypot(
@@ -5172,18 +5870,43 @@ const resolveAgentFormationRecoveryGuidance = ({
           (Number(entry?.y) || 0) - (Number(rows[index - 1]?.y) || 0)
         ) > 0.5
       ));
-    const reachesTarget = doesTrainingRouteReachTarget(
+    let reachesTarget = doesTrainingRouteReachTarget(
       candidateRoute,
       destination,
       Math.max(6, radius * 2.5)
     );
-    const staysOnRoad = !roadCorridor || isTrainingRouteInsideRoadCorridor(
+    let staysOnRoad = !roadCorridor || isTrainingRouteInsideRoadCorridor(
       squad,
       sim,
       point,
       candidateRoute,
       radius
     );
+    if (!reachesTarget || !staysOnRoad) {
+      // A recovery route is a local, individual concern.  Falling back here
+      // lets a stranded unit step through a nearby legal gap without making
+      // the shared CARD route wait for an A* result.
+      candidateRoute = planTrainingMapLocalDetour({
+        field: sim?.field,
+        mapConfig: sim?.trainingMap,
+        start: point,
+        target: destination,
+        obstacles: walls,
+        radius
+      });
+      reachesTarget = doesTrainingRouteReachTarget(
+        candidateRoute,
+        destination,
+        Math.max(6, radius * 2.5)
+      );
+      staysOnRoad = !roadCorridor || isTrainingRouteInsideRoadCorridor(
+        squad,
+        sim,
+        point,
+        candidateRoute,
+        radius
+      );
+    }
     if (reachesTarget && staysOnRoad) {
       route = candidateRoute;
       routeIndex = 0;
@@ -5198,6 +5921,17 @@ const resolveAgentFormationRecoveryGuidance = ({
   while (routeIndex < route.length) {
     const waypoint = route[routeIndex];
     if (Math.hypot(waypoint.x - point.x, waypoint.y - point.y) > waypointRadius) break;
+    const nextWaypoint = route[routeIndex + 1] || null;
+    // Do not consume a close corner merely because it lies inside the usual
+    // waypoint radius.  The following segment can still clip the same wall
+    // (or a highland edge) until the agent has actually rounded that corner.
+    if (nextWaypoint && !isTrainingMovementSegmentTraversable({
+      sim,
+      start: point,
+      target: nextWaypoint,
+      walls,
+      radius
+    })) break;
     routeIndex += 1;
   }
   const waypoint = route[routeIndex] || null;
@@ -5220,6 +5954,7 @@ const resolveAgentFormationRecoveryGuidance = ({
   }
   const state = {
     active: true,
+    mode: 'RECOVERING',
     route,
     routeIndex,
     plannedAt,
@@ -5227,12 +5962,17 @@ const resolveAgentFormationRecoveryGuidance = ({
     targetY: destination.y,
     lastX: point.x,
     lastY: point.y,
+    lastMeaningfulX,
+    lastMeaningfulY,
     lastError: error,
+    lastMeaningfulError,
     lastProgressAt,
     failedSince,
-    obstacleId
+    obstacleId,
+    terrainBlocked: terrainSegmentBlocked || recentTerrainBlock
   };
   agent._formationRecovery = state;
+  agent._formationDetached = true;
   agent.formationRecoveryState = waypoint ? 'ROUTING' : 'ESCAPING';
   if (isMinion) {
     agent._minionRecovery = state;
@@ -5262,10 +6002,35 @@ const syncTrainingNavigationOrderPath = (squad = null) => {
 const applyTrainingNavigationRoute = (squad = null, route = [], remainingWaypoints = []) => {
   const plannedRoute = Array.isArray(route) ? route : [];
   const remaining = Array.isArray(remainingWaypoints) ? remainingWaypoints : [];
-  squad.waypoints = [...plannedRoute, ...remaining].map((point) => ({
+  const combined = [...plannedRoute, ...remaining].map((point) => ({
     x: Number(point?.x) || 0,
     y: Number(point?.y) || 0
-  }));
+  })).filter((point, index, rows) => (
+    index === 0
+    || Math.hypot(point.x - rows[index - 1].x, point.y - rows[index - 1].y) > 0.05
+  ));
+  if (isTrainingCardSquad(squad)) {
+    delete squad._trainingPassageFallbackPending;
+    const nextRouteSignature = [{ x: Number(squad?.x) || 0, y: Number(squad?.y) || 0 }, ...combined]
+      .map((point) => `${Number(point?.x || 0).toFixed(2)},${Number(point?.y || 0).toFixed(2)}`)
+      .join(';');
+    const previousCompletedSignature = String(squad?._squadController?.passageCompletedRouteSignature || '');
+    if (previousCompletedSignature && previousCompletedSignature !== nextRouteSignature) {
+      squad._squadController.passageCompletedRouteSignature = '';
+      squad._squadController.passageCompletedAt = 0;
+    }
+    squad._passageRoute = combined.map((point) => ({ ...point }));
+    const anchor = {
+      x: Number(squad?.x) || 0,
+      y: Number(squad?.y) || 0
+    };
+    squad._passagePlanRoute = [anchor, ...combined]
+      .filter((point, index, rows) => (
+        index === 0
+        || Math.hypot(point.x - rows[index - 1].x, point.y - rows[index - 1].y) > 0.05
+      ));
+  }
+  squad.waypoints = combined.map((point) => ({ ...point }));
   syncTrainingNavigationOrderPath(squad);
 };
 
@@ -5287,13 +6052,17 @@ const attemptTrainingNavigationReplan = ({
     squad._navigationReplanAt = nowSec + Math.min(0.12, resolveTrainingNavigationReplanCooldown(sim));
     return false;
   }
-  const route = navigator.planRoute(source, target, {
-    obstacles: walls,
-    radius: resolveTrainingNavigationAgentRadius(squad, sim),
+  const plannedRoute = planTrainingRouteWithPassageFallback({
+    squad,
+    sim,
+    start: source,
+    target,
+    walls,
     maxSearchNodes: resolveTrainingAiNavigationSearchNodes(squad, sim),
     preferLocalDetour: true,
     preferredLaneId: roadCorridor?.laneId
   });
+  const route = plannedRoute.route;
   const cooldown = resolveTrainingNavigationReplanCooldown(sim);
   squad._navigationReplanAt = nowSec + cooldown;
   squad._navigationReplanAttempts = Math.max(0, Number(squad?._navigationReplanAttempts) || 0) + 1;
@@ -5307,6 +6076,8 @@ const attemptTrainingNavigationReplan = ({
     applyTrainingNavigationRoute(squad, route, currentWaypoints.slice(1));
     squad._navigationFailureCount = 0;
     squad._navigationStuckSince = 0;
+    squad._navigationWaitUntil = 0;
+    squad._trainingNavigationScale = plannedRoute.scale;
     return true;
   }
 
@@ -5319,6 +6090,8 @@ const attemptTrainingNavigationReplan = ({
       applyTrainingNavigationRoute(squad, fallbackRoute, currentWaypoints.slice(1));
       squad._navigationFailureCount = 0;
       squad._navigationStuckSince = 0;
+      squad._navigationWaitUntil = 0;
+      squad._trainingNavigationScale = 'PASSAGE';
       return true;
     }
   }
@@ -5327,11 +6100,15 @@ const attemptTrainingNavigationReplan = ({
     6,
     Math.max(0, Number(squad?._navigationFailureCount) || 0) + 1
   );
-  if (squad._navigationFailureCount < NAVIGATION_MAX_FAILURES_BEFORE_WAIT) return false;
-
+  // A failed formation-scale route is not a command to freeze a CARD squad.
+  // The shared agent-scale attempt above may still find a passage; when even
+  // that cannot, keep the current route/momentum and retry with cooldown.
   const recoveryPoint = navigator?.findNearestWalkablePoint?.(source, {
     obstacles: walls,
-    radius: resolveTrainingNavigationAgentRadius(squad, sim) + resolveTrainingNavigationPathClearance(sim)
+    radius: resolveTrainingNavigationAgentRadius(squad, sim) + resolveTrainingNavigationPathClearance(
+      sim,
+      { passage: isTrainingCardSquad(squad) }
+    )
   });
   if (recoveryPoint && Math.hypot(
     (Number(recoveryPoint?.x) || 0) - source.x,
@@ -5339,11 +6116,9 @@ const attemptTrainingNavigationReplan = ({
   ) > NAVIGATION_MIN_PROGRESS) {
     applyTrainingNavigationRoute(squad, [recoveryPoint], currentWaypoints);
   }
-  squad._navigationWaitUntil = nowSec + (cooldown * Math.min(4, squad._navigationFailureCount));
-  squad.vx = 0;
-  squad.vy = 0;
-  squad.speed = 0;
-  squad.action = '路径等待';
+  squad._navigationWaitUntil = 0;
+  squad._navigationRetryAt = nowSec + (cooldown * Math.min(4, squad._navigationFailureCount));
+  squad.action = isTrainingCardSquad(squad) ? '路径绕行' : '路径重算';
   return false;
 };
 
@@ -5357,8 +6132,15 @@ const updateTrainingNavigationRecovery = ({
   dt = 0
 } = {}) => {
   if (!squad || !sim?.trainingNavigator || !target || squad?.skillRush?.ttl > 0) return;
+  if (
+    isTrainingCardSquad(squad)
+    && (
+      hasActiveTrainingCardPassage(squad)
+      || String(squad?._trainingNavigationScale || '').toUpperCase() === 'PASSAGE'
+    )
+  ) return;
   if (resolveTrainingRoadCorridor(squad, sim) && squad?._trainingRoadCorridorEntered === true) return;
-  if ((Number(squad?._navigationWaitUntil) || 0) > nowSec) return;
+  if (!isTrainingCardSquad(squad) && (Number(squad?._navigationWaitUntil) || 0) > nowSec) return;
 
   const current = { x: Number(squad?.x) || 0, y: Number(squad?.y) || 0 };
   const targetDistanceBefore = Math.hypot(
@@ -5513,6 +6295,7 @@ const leaderMoveStep = (squad, sim, crowd, dt, forwardVec, steeringWeights = DEF
     target
     && !(Number(squad?.skillRush?.ttl) > 0)
     && (Number(squad?._navigationWaitUntil) || 0) > nowSec
+    && !isTrainingCardSquad(squad)
   ) {
     target = null;
     squad.vx = 0;
@@ -5555,11 +6338,25 @@ const leaderMoveStep = (squad, sim, crowd, dt, forwardVec, steeringWeights = DEF
   } else if (target && (isFixedLaneMinion || !staminaResting)) {
     const toTarget = normalizeVec((Number(target.x) || 0) - (Number(squad.x) || 0), (Number(target.y) || 0) - (Number(squad.y) || 0));
     if (toTarget.len <= LEADER_ARRIVAL_RADIUS) {
-      if (targetFromWaypoint) advanceSquadWaypoint(squad);
-      if (targetFromWaypoint && (!squad.waypoints || squad.waypoints.length <= 0)) {
+      const hasFollowingWaypoint = targetFromWaypoint
+        && Array.isArray(squad?.waypoints)
+        && squad.waypoints.length > 1;
+      const holdForPassage = targetFromWaypoint
+        && !hasFollowingWaypoint
+        && hasActiveTrainingCardPassage(squad);
+      if (targetFromWaypoint && !holdForPassage) advanceSquadWaypoint(squad);
+      if (targetFromWaypoint && !holdForPassage && (!squad.waypoints || squad.waypoints.length <= 0)) {
         beginSquadFormationArrival(squad, target, nowSec);
         currentSpeed = 0;
         desiredSpeed = 0;
+      } else if (holdForPassage) {
+        // Keep the terminal waypoint until every agent has cleared the shared
+        // passage.  The anchor may sit at the destination, while stream agents
+        // continue their forward exit and reformation independently.
+        desiredSpeed = 0;
+        squad.vx = 0;
+        squad.vy = 0;
+        squad.speed = 0;
       }
     } else {
       const avoidanceProbe = Math.max(
@@ -5728,6 +6525,16 @@ const leaderMoveStep = (squad, sim, crowd, dt, forwardVec, steeringWeights = DEF
       }
     }
   }
+  const terrainStep = resolveTrainingLegalMovementStep({
+    sim,
+    start: { x: prevX, y: prevY },
+    target: { x: nx, y: ny },
+    walls,
+    radius: LEADER_COLLISION_RADIUS
+  });
+  const terrainBlocked = !terrainStep.legal;
+  nx = terrainStep.x;
+  ny = terrainStep.y;
   const movedX = nx - prevX;
   const movedY = ny - prevY;
   squad.x = nx;
@@ -5745,7 +6552,7 @@ const leaderMoveStep = (squad, sim, crowd, dt, forwardVec, steeringWeights = DEF
     }
   }
   if (
-    (sweptStep.collided || roadCollided || (Math.abs(pushNx) + Math.abs(pushNy)) > 1e-4)
+    (sweptStep.collided || roadCollided || terrainBlocked || (Math.abs(pushNx) + Math.abs(pushNy)) > 1e-4)
     && target
     && !(Number(squad?.skillRush?.ttl) > 0)
   ) {
@@ -6017,12 +6824,20 @@ const updateSquadSpeedPolicyState = (squad, agents = [], dt = 0) => {
     squad.reformUntil = 0;
     return;
   }
+  const coreAlive = isTrainingCardSquad(squad)
+    ? alive.filter((agent) => (
+      agent?._formationDetached !== true
+      && agent?._formationRecovery?.active !== true
+      && agent?._squadController?.rejoin?.active !== true
+    ))
+    : alive;
+  const reformMembers = coreAlive.length > 0 ? coreAlive : alive;
   const threshold = Math.max(10, Number(squad.reformRadiusThreshold) || Math.max(16, Number(squad.radius) || 16));
-  const inRange = alive.filter((agent) => {
+  const inRange = reformMembers.filter((agent) => {
     const dist = Math.hypot((Number(agent.x) || 0) - (Number(squad.x) || 0), (Number(agent.y) || 0) - (Number(squad.y) || 0));
     return dist <= threshold;
   }).length;
-  const ratio = inRange / Math.max(1, alive.length);
+  const ratio = inRange / Math.max(1, reformMembers.length);
   squad.reformUntil = Math.max(0, (Number(squad.reformUntil) || 0) - dt);
   if (ratio >= 0.7 || squad.reformUntil <= 0) {
     squad.speedPolicy = SPEED_POLICY_MARCH;
@@ -6099,6 +6914,7 @@ const resolveForcedAgentLanding = (sim, agent, direction = {}, distance = 0) => 
   }
   return resolveTrainingMapLegalPosition({
     field: sim?.field,
+    mapConfig: sim?.trainingMap,
     start,
     target,
     ...options
@@ -6293,7 +7109,14 @@ export const resolveTrainingAiSkillPreflight = ({
   if ((normalizedKind === 'archer' || normalizedKind === 'artillery') && blocked) {
     return { ok: false, reason: 'line-of-sight-blocked', retrySec: 1.2 };
   }
-  if (normalizedKind === 'cavalry' && blocked) {
+  const cavalryPathLegal = normalizedKind !== 'cavalry' || isTrainingMovementSegmentTraversable({
+    sim,
+    start: source,
+    target: targetPoint,
+    walls,
+    radius: Math.max(0.6, Number(squad?.radius) || LEADER_COLLISION_RADIUS)
+  });
+  if (normalizedKind === 'cavalry' && (blocked || !cavalryPathLegal)) {
     return { ok: false, reason: 'charge-path-blocked', retrySec: 1.2 };
   }
   return {
@@ -7244,7 +8067,7 @@ export const updateCrowdSim = (crowd, sim, dt) => {
       agents,
       passage: squad?._narrowPassage
     });
-    const narrowPassage = passageIntent
+    const narrowPassage = squadKind !== TRAINING_SQUAD_KIND.CARD && passageIntent
       ? resolveTrainingNarrowPassageState({
         squad,
         sim,
@@ -7256,13 +8079,17 @@ export const updateCrowdSim = (crowd, sim, dt) => {
         nowSec
       })
       : { active: false, columns: baseCols, width: Infinity, distance: 0 };
-    resolveSquadFormationCohesion({
-      squad,
-      agents,
-      passage: narrowPassage,
-      moving: (Number(squad.skillRush?.ttl) || 0) > 0 || hasMovementWaypoints,
-      nowSec
-    });
+    // CARD squads have one cohesion authority in TrainingCardSquadTactics.
+    // The legacy controller remains for minions/other squad kinds only.
+    if (squadKind !== TRAINING_SQUAD_KIND.CARD) {
+      resolveSquadFormationCohesion({
+        squad,
+        agents,
+        passage: narrowPassage,
+        moving: (Number(squad.skillRush?.ttl) || 0) > 0 || hasMovementWaypoints,
+        nowSec
+      });
+    }
     const cardAiFrame = squadKind === TRAINING_SQUAD_KIND.CARD
       ? prepareTrainingCardSquadAiFrame({
         squad,
@@ -7279,16 +8106,21 @@ export const updateCrowdSim = (crowd, sim, dt) => {
       })
       : null;
     const squadController = cardAiFrame?.formation || null;
-    const controllerPassage = squadController?.terrain?.state === 'PASSAGE'
-      ? {
-        active: true,
+    const controllerPassage = (
+      squadController?.terrain?.state === 'PASSAGE'
+      || squadController?.terrain?.state === 'EXPAND'
+    )
+    ? {
+        active: squadController?.terrain?.state === 'PASSAGE',
+        flowing: squadController?.terrain?.state === 'PASSAGE',
+        expanding: squadController?.terrain?.state === 'EXPAND',
         columns: Math.max(1, Number(squadController?.terrain?.columns) || 1),
         width: Number(squadController?.terrain?.corridorWidth) || Infinity,
         distance: Number(squadController?.terrain?.frontClearance) || 0
       }
       : null;
     const activePassage = controllerPassage || narrowPassage;
-    if (squadController) {
+    if (squadController && squadKind !== TRAINING_SQUAD_KIND.CARD) {
       formationSpacingScale *= clamp(Number(squadController?.terrain?.compression) || 1, 0.76, 1);
     }
     forward = leaderMoveStep(squad, sim, crowd, safeDt, forward, steeringWeights, movementWalls);
@@ -7349,10 +8181,22 @@ export const updateCrowdSim = (crowd, sim, dt) => {
         clearAgentCombatTargets(agent);
         const flagOffsetX = -formationForward.x * flagBack;
         const flagOffsetY = -formationForward.y * flagBack;
-        agent.x = (Number(squad.x) || 0) + flagOffsetX;
-        agent.y = (Number(squad.y) || 0) + flagOffsetY;
-        agent.vx = Number(squad.vx) || 0;
-        agent.vy = Number(squad.vy) || 0;
+        const flagStep = resolveTrainingLegalMovementStep({
+          sim,
+          start: { x: Number(agent.x) || 0, y: Number(agent.y) || 0 },
+          target: {
+            x: (Number(squad.x) || 0) + flagOffsetX,
+            y: (Number(squad.y) || 0) + flagOffsetY
+          },
+          walls: movementWalls,
+          radius: (agent.radius || AGENT_RADIUS) + 0.5
+        });
+        const previousFlagX = Number(agent.x) || 0;
+        const previousFlagY = Number(agent.y) || 0;
+        agent.x = flagStep.x;
+        agent.y = flagStep.y;
+        agent.vx = (agent.x - previousFlagX) / Math.max(1e-4, safeDt);
+        agent.vy = (agent.y - previousFlagY) / Math.max(1e-4, safeDt);
         if (Math.abs(agent.vx) + Math.abs(agent.vy) > 0.08) {
           agent.yaw = formationPose.current.yaw;
         } else {
@@ -7385,13 +8229,16 @@ export const updateCrowdSim = (crowd, sim, dt) => {
         cardTacticalIntent
       });
       const controllerSlot = cardTacticalIntent?.formationSlot || null;
-      const slot = controllerSlot || resolveNarrowPassageFormationSlot({
-        index,
-        standardSlot,
-        passage: activePassage,
-        spacing,
-        spacingScale: formationSpacingScale
-      });
+      const slot = controllerSlot
+        || (squadKind === TRAINING_SQUAD_KIND.CARD
+          ? standardSlot
+          : resolveNarrowPassageFormationSlot({
+            index,
+            standardSlot,
+            passage: activePassage,
+            spacing,
+            spacingScale: formationSpacingScale
+          }));
       const castOffset = resolveAgentCastOffset(agent);
       const currentSlotPosition = formationLocalToWorld(formationPose.current, slot);
       const previousSlotPosition = formationLocalToWorld(formationPose.previous, slot);
@@ -7400,6 +8247,7 @@ export const updateCrowdSim = (crowd, sim, dt) => {
       const targetSlotVx = (currentSlotPosition.x - previousSlotPosition.x) / Math.max(0.001, safeDt);
       const targetSlotVy = (currentSlotPosition.y - previousSlotPosition.y) / Math.max(0.001, safeDt);
       const toDesired = normalizeVec(desiredX - (agent.x || 0), desiredY - (agent.y || 0));
+      const flowIntent = cardTacticalIntent?.passageFlow || null;
       const formationEnvelope = resolveSquadFormationEnvelope(squad);
       const combatTetherPressure = clamp(
         (toDesired.len - formationEnvelope.softRadius)
@@ -7417,7 +8265,9 @@ export const updateCrowdSim = (crowd, sim, dt) => {
         * ((squad.skillRush?.ttl || 0) > 0 ? 1.45 : 1)
         * castSpeedMul;
       const modeSpeedMul = resolveAgentModeSpeedMul(agent, squad, crowd);
-      const controllerSpeedMul = cardTacticalIntent?.catchUpMultiplier || 1;
+      const controllerSpeedMul = cardTacticalIntent?.passageFlow
+        ? 1
+        : (cardTacticalIntent?.catchUpMultiplier || 1);
       const marchWorldSpeed = Math.max(
         6,
         Number(squad._marchWorldSpeedBase)
@@ -7452,20 +8302,49 @@ export const updateCrowdSim = (crowd, sim, dt) => {
       const isMelee = isMeleeAgent(agent);
       const hasAnchor = engagementEnabled && isMelee && !!agent.engagePairKey
         && Number.isFinite(Number(agent.engageAx)) && Number.isFinite(Number(agent.engageAy));
+      const neighborRadius = Math.max(
+        12,
+        Number(flowIntent?.queueSpacing) || 0,
+        Number(flowIntent?.streamSpacing) || 0,
+        flowIntent ? (speed * 0.22) + (Number(flowIntent?.streamSpacing) || 0) : 0
+      ) * 1.35;
+      const neighbors = querySpatialNearby(spatial, agent.x, agent.y, neighborRadius, nearbyAgents);
+      const passageFlow = isTrainingCardSquad(squad)
+        ? resolveTrainingCardPassageFlowSteering({
+          agent,
+          squad,
+          flowIntent,
+          neighbors,
+          speed
+        })
+        : resolvePassageFlowSteering({
+          agent,
+          squad,
+          flowIntent,
+        neighbors
+        });
       const formationRecoveryGuidance = resolveAgentFormationRecoveryGuidance({
         agent,
         squad,
         sim,
         walls: movementWalls,
-        target: { x: desiredX, y: desiredY },
-        enabled: !combatDirective
+        target: passageFlow
+          ? { x: passageFlow.goalX, y: passageFlow.goalY }
+          : { x: desiredX, y: desiredY },
+        enabled: !passageFlow
+          && !combatDirective
           && !hasAnchor
           && !castOffset.active
           && !isTrainingNeutralSquad(squad),
+        flowing: !!passageFlow,
         nowSec
       });
-      const neighbors = querySpatialNearby(spatial, agent.x, agent.y, 12, nearbyAgents);
-      const separationDistance = Math.max(AGENT_MIN_FORMATION_SEPARATION_GAP, spacing * formationSpacingScale * 0.94);
+      const separationDistance = Math.max(
+        AGENT_MIN_FORMATION_SEPARATION_GAP,
+        passageFlow
+          ? Math.max(spacing * 0.74, Number(flowIntent?.queueSpacing) || 0)
+          : spacing * (squadKind === TRAINING_SQUAD_KIND.CARD ? 1 : formationSpacingScale) * 0.94
+      );
       const slotWalls = queryObstacleCandidates(
         movementWalls,
         desiredX,
@@ -7473,7 +8352,7 @@ export const updateCrowdSim = (crowd, sim, dt) => {
         (agent.radius || AGENT_RADIUS) + 0.5,
         nearbyWalls
       );
-      const slotBlocked = slotWalls.some((wall) => (
+      const slotBlocked = !passageFlow && slotWalls.some((wall) => (
         !wall?.destroyed
         &&
         pushOutOfRect({ x: desiredX, y: desiredY }, wall, (agent.radius || AGENT_RADIUS) + 0.5)?.pushed
@@ -7489,6 +8368,9 @@ export const updateCrowdSim = (crowd, sim, dt) => {
         && !castOffset.active
         && !combatDirective
         && !hasAnchor
+        && !passageFlow
+        && !agent._formationDetached
+        && !(squadKind === TRAINING_SQUAD_KIND.CARD && leaderMoving)
         && !slotBlocked
         && !hasForeignNeighbor
       ) {
@@ -7508,7 +8390,14 @@ export const updateCrowdSim = (crowd, sim, dt) => {
           movementWalls,
           (agent.radius || AGENT_RADIUS) + 0.5
         );
-        if (!sweptFormationStep.collided) {
+        const formationStepLegal = !sweptFormationStep.collided && isTrainingMovementSegmentTraversable({
+          sim,
+          start: { x: previousX, y: previousY },
+          target: sweptFormationStep,
+          walls: movementWalls,
+          radius: (agent.radius || AGENT_RADIUS) + 0.5
+        });
+        if (formationStepLegal) {
           agent.x = formationStep.x;
           agent.y = formationStep.y;
           agent.vx = (agent.x - previousX) / Math.max(1e-4, safeDt);
@@ -7522,6 +8411,7 @@ export const updateCrowdSim = (crowd, sim, dt) => {
           agent.state = Math.abs(agent.vx) + Math.abs(agent.vy) > 0.08 ? 'move' : 'idle';
           return;
         }
+        agent._nextFormationStepIllegal = true;
         agent._formationLocked = false;
       }
       const wasFormationHold = agent._formationHold
@@ -7535,7 +8425,7 @@ export const updateCrowdSim = (crowd, sim, dt) => {
       const leaderSettling = !leaderMoving || (Math.hypot(Number(squad.vx) || 0, Number(squad.vy) || 0) <= AGENT_SETTLE_SPEED);
       const shouldKeepFormationHold = wasFormationHold
         && toDesired.len <= AGENT_IDLE_RELEASE_RADIUS;
-      const shouldHoldFormation = !combatDirective && !hasAnchor && stationaryHold && (
+      const shouldHoldFormation = !combatDirective && !hasAnchor && !passageFlow && stationaryHold && (
         toDesired.len <= AGENT_IDLE_DEADZONE || shouldKeepFormationHold
       );
 
@@ -7553,9 +8443,17 @@ export const updateCrowdSim = (crowd, sim, dt) => {
       agent._formationHold = false;
       agent._formationHoldSpacing = '';
 
-      const sep = computeTeamAwareSeparation(agent, neighbors, separationDistance, {
-        allowOwnSquadSoftSeparation: !!combatDirective || hasAnchor
+      const genericSep = computeTeamAwareSeparation(agent, neighbors, separationDistance, {
+        allowOwnSquadSoftSeparation: !!combatDirective || hasAnchor || !!passageFlow
       });
+      const sep = passageFlow && isTrainingCardSquad(squad)
+        ? computeStreamSeparation({
+          agent,
+          neighbors,
+          flowIntent: passageFlow,
+          targetGap: Math.max(AGENT_RADIUS * 2.1, Number(flowIntent?.streamSpacing) || separationDistance)
+        })
+        : genericSep;
       const sepScale = combatDirective
         ? 1
         : stationaryHold
@@ -7574,20 +8472,26 @@ export const updateCrowdSim = (crowd, sim, dt) => {
         1
       );
       const combatSteering = resolveAgentCombatSteering(agent, combatDirective);
-      const lockCombatPosition = combatSteering?.lockPosition === true || (
+      const lockCombatPosition = !passageFlow && (combatSteering?.lockPosition === true || (
         combatDirective?.formationBound === true
         && !leaderMoving
         && toDesired.len <= AGENT_SETTLE_RADIUS
-      );
+      ));
       const recoveryDirection = formationRecoveryGuidance?.active
         ? normalizeVec(
           (Number(formationRecoveryGuidance?.x) || 0) - (Number(agent?.x) || 0),
           (Number(formationRecoveryGuidance?.y) || 0) - (Number(agent?.y) || 0)
         )
         : null;
+      const flowDirection = passageFlow
+        ? normalizeVec(
+          passageFlow.forwardX + passageFlow.laneX,
+          passageFlow.forwardY + passageFlow.laneY
+        )
+        : null;
       const steeringDirection = combatSteering?.moving
         ? combatSteering
-        : (recoveryDirection || toDesired);
+        : (recoveryDirection || flowDirection || toDesired);
       const avoid = computeAvoidanceDirection(agent, steeringDirection, movementWalls, AGENT_AVOID_PROBE, agent, nowSec);
       const slotW = Math.max(0, Number(steeringWeights?.slot) || DEFAULT_STEERING_WEIGHTS.slot);
       const sepW = Math.max(0, Number(steeringWeights?.separation) || DEFAULT_STEERING_WEIGHTS.separation);
@@ -7597,17 +8501,19 @@ export const updateCrowdSim = (crowd, sim, dt) => {
       const sepGainLocal = sepGain * settleBlend;
       const avoidGainLocal = avoidGain * settleBlend;
       const slotSpeed = speed * slotGain * slotArrivalRate;
-      const directFormationVelocity = resolveDirectFormationVelocity({
-        agent,
-        targetX: desiredX,
-        targetY: desiredY,
-        maxRelativeSpeed: speed * slotGain * 1.15,
-        deadzone: leaderSettling ? AGENT_SETTLE_DEADZONE : 0,
-        dt: safeDt
-      });
+      const directFormationVelocity = passageFlow
+        ? { vx: 0, vy: 0 }
+        : resolveDirectFormationVelocity({
+          agent,
+          targetX: desiredX,
+          targetY: desiredY,
+          maxRelativeSpeed: speed * slotGain * 1.15,
+          deadzone: leaderSettling ? AGENT_SETTLE_DEADZONE : 0,
+          dt: safeDt
+        });
       let desiredVx;
       let desiredVy;
-      if (combatDirective && combatSteering) {
+      if (!passageFlow && combatDirective && combatSteering) {
         const combatSpeed = speed * (combatDirective.kind.startsWith('support') ? 0.94 : 1.04);
         const targetSteer = combatDirective.formationBound
           ? 0
@@ -7640,7 +8546,7 @@ export const updateCrowdSim = (crowd, sim, dt) => {
           desiredVx = 0;
           desiredVy = 0;
         }
-      } else if (formationRecoveryGuidance?.active && recoveryDirection) {
+      } else if (!passageFlow && formationRecoveryGuidance?.active && recoveryDirection) {
         const recoverySpeed = speed * Math.max(1, Number(formationRecoveryGuidance?.speedMul) || 1);
         const recoveryStepSpeed = Math.min(recoverySpeed, recoveryDirection.len / Math.max(0.001, safeDt));
         desiredVx = (recoveryDirection.x * recoveryStepSpeed)
@@ -7649,15 +8555,74 @@ export const updateCrowdSim = (crowd, sim, dt) => {
         desiredVy = (recoveryDirection.y * recoveryStepSpeed)
           + (sep.y * 40 * sepScale * sepGainLocal * sepW)
           + (avoid.y * recoverySpeed * avoidGainLocal * 0.42 * avoidW);
+      } else if (passageFlow) {
+        // A passage member advances along the shared route, uses only weak
+        // lane centering, then lets local separation/avoidance settle the
+        // queue.  It does not chase a changing two-dimensional formation slot.
+        const queueSpeed = Number.isFinite(Number(passageFlow.targetSpeed))
+          ? Math.max(0, Number(passageFlow.targetSpeed))
+          : speed * (1 - (passageFlow.queuePressure * 0.4));
+        const laneVelocityX = Number.isFinite(Number(passageFlow.laneVelocityX))
+          ? Number(passageFlow.laneVelocityX)
+          : passageFlow.laneX * speed;
+        const laneVelocityY = Number.isFinite(Number(passageFlow.laneVelocityY))
+          ? Number(passageFlow.laneVelocityY)
+          : passageFlow.laneY * speed;
+        const streamState = String(passageFlow.state || flowIntent?.state || CARD_LOCOMOTION_STATE.STREAM);
+        const weakSeparation = streamState === CARD_LOCOMOTION_STATE.STREAM
+          ? 0.18
+          : 0.34;
+        const passageTangent = normalizeVec(passageFlow.forwardX, passageFlow.forwardY);
+        const passageSide = { x: -passageTangent.y, y: passageTangent.x };
+        const avoidanceForward = (avoid.x * passageTangent.x) + (avoid.y * passageTangent.y);
+        let avoidanceLateral = (avoid.x * passageSide.x) + (avoid.y * passageSide.y);
+        const laneError = Number(passageFlow.laneError) || 0;
+        // The shared route already establishes a legal corridor.  Generic
+        // obstacle avoidance must not pull a stream away from its lane into
+        // the wall on the opposite side; retain only a small correction that
+        // agrees with the lane merge direction.
+        if (Math.abs(laneError) > 0.2 && (avoidanceLateral * laneError) < 0) {
+          avoidanceLateral = 0;
+        }
+        const passageAvoidance = {
+          x: (passageTangent.x * clamp(avoidanceForward, -0.22, 0.22))
+            + (passageSide.x * clamp(avoidanceLateral, -0.28, 0.28)),
+          y: (passageTangent.y * clamp(avoidanceForward, -0.22, 0.22))
+            + (passageSide.y * clamp(avoidanceLateral, -0.28, 0.28))
+        };
+        const passageLaneSpacing = Math.max(
+          AGENT_RADIUS * 2.04,
+          Number(flowIntent?.streamSpacing) || spacing
+        );
+        const mergeForwardScale = streamState === CARD_LOCOMOTION_STATE.STREAM_APPROACH
+          ? clamp(
+            1 - (Math.abs(laneError) / Math.max(1, passageLaneSpacing * 0.9)),
+            0.14,
+            1
+          )
+          : 1;
+        const passageForwardSpeed = queueSpeed * mergeForwardScale;
+        desiredVx = (passageFlow.forwardX * passageForwardSpeed)
+          + laneVelocityX
+          + (sep.x * 20 * weakSeparation * sepW)
+          + (passageAvoidance.x * speed * 0.58 * avoidW);
+        desiredVy = (passageFlow.forwardY * passageForwardSpeed)
+          + laneVelocityY
+          + (sep.y * 20 * weakSeparation * sepW)
+          + (passageAvoidance.y * speed * 0.58 * avoidW);
       } else {
-        desiredVx = directFormationVelocity.vx
+        // Once an obstacle has claimed a side, formation is a weak visual
+        // tether until that obstacle is passed.  This prevents slot attraction
+        // from pulling the agent straight back across the wall each frame.
+        const avoidanceFormationWeight = Math.hypot(avoid.x, avoid.y) > 0.0001 ? 0.22 : 1;
+        desiredVx = (directFormationVelocity.vx * avoidanceFormationWeight)
           + (sep.x * 40 * sepScale * sepGainLocal * sepW)
-          + (avoid.x * speed * avoidGainLocal * 0.5 * avoidW);
-        desiredVy = directFormationVelocity.vy
+          + (avoid.x * speed * avoidGainLocal * 0.9 * avoidW);
+        desiredVy = (directFormationVelocity.vy * avoidanceFormationWeight)
           + (sep.y * 40 * sepScale * sepGainLocal * sepW)
-          + (avoid.y * speed * avoidGainLocal * 0.5 * avoidW);
+          + (avoid.y * speed * avoidGainLocal * 0.9 * avoidW);
       }
-      if (hasAnchor && !combatDirective) {
+      if (hasAnchor && !combatDirective && !passageFlow) {
         const anchorDir = normalizeVec((Number(agent.engageAx) || 0) - (agent.x || 0), (Number(agent.engageAy) || 0) - (agent.y || 0));
         const steerGain = clamp((Number(engagementCfg?.anchorSteerGain) || 0.72) * anchorW, 0.08, 2.4);
         const steerCap = speed * clamp(Number(engagementCfg?.anchorSteerCapMul) || 0.58, 0.1, 1.4);
@@ -7680,13 +8645,18 @@ export const updateCrowdSim = (crowd, sim, dt) => {
         !combatDirective
         && !hasAnchor
         && stationaryHold
+        && !passageFlow
         && toDesired.len <= AGENT_IDLE_DEADZONE
       ) {
         clearAvoidanceMemory(agent);
         desiredVx = 0;
         desiredVy = 0;
       }
-      const usesDirectFormationMotion = !combatDirective && !hasAnchor;
+      const usesDirectFormationMotion = !isTrainingCardSquad(squad)
+        && !combatDirective
+        && !hasAnchor
+        && !passageFlow
+        && !formationRecoveryGuidance?.active;
       const accelStep = usesDirectFormationMotion
         ? null
         : clampVecLength(
@@ -7700,7 +8670,7 @@ export const updateCrowdSim = (crowd, sim, dt) => {
       let vy = usesDirectFormationMotion
         ? desiredVy
         : (Number(agent.vy) || 0) + accelStep.y;
-      if (lockCombatPosition) {
+      if (lockCombatPosition && !passageFlow) {
         vx = 0;
         vy = 0;
       }
@@ -7759,6 +8729,18 @@ export const updateCrowdSim = (crowd, sim, dt) => {
       const halfH = (Number(sim?.field?.height) || 1488) / 2;
       nx = clamp(nx, -halfW + 2, halfW - 2);
       ny = clamp(ny, -halfH + 2, halfH - 2);
+      const terrainStep = resolveTrainingLegalMovementStep({
+        sim,
+        start: { x: Number(agent.x) || 0, y: Number(agent.y) || 0 },
+        target: { x: nx, y: ny },
+        walls: movementWalls,
+        radius: (agent.radius || AGENT_RADIUS) + 0.5
+      });
+      const terrainBlocked = !terrainStep.legal;
+      nx = terrainStep.x;
+      ny = terrainStep.y;
+      if (terrainBlocked) agent._terrainBlockedAt = nowSec;
+      agent._nextFormationStepIllegal = terrainBlocked;
       const pushN = normalizeVec(pushNx, pushNy);
       if (pushN.len > 1e-4) {
         const vn = (vx * pushN.x) + (vy * pushN.y);
@@ -7773,9 +8755,13 @@ export const updateCrowdSim = (crowd, sim, dt) => {
       const shouldLockFormation = (
         !combatDirective
         && !hasAnchor
+        && !passageFlow
+        && !formationRecoveryGuidance?.active
+        && !agent._formationDetached
         && !slotBlocked
         && !hasForeignNeighbor
         && !sweptStep.collided
+        && !terrainBlocked
         && Math.hypot(desiredX - nx, desiredY - ny) <= AGENT_SETTLE_DEADZONE
         && Math.hypot(vx - targetSlotVx, vy - targetSlotVy) <= AGENT_FORMATION_LOCK_RELATIVE_SPEED
       );
@@ -7796,6 +8782,16 @@ export const updateCrowdSim = (crowd, sim, dt) => {
       if (Math.abs(vx) + Math.abs(vy) > 0.08) {
         if (squadKind === TRAINING_SQUAD_KIND.NEUTRAL) {
           updateAgentYawFromVelocity(agent, vx, vy, safeDt);
+        } else if (
+          squadKind === TRAINING_SQUAD_KIND.CARD
+          && !combatDirective
+          && !hasAnchor
+          && !passageFlow
+          && !formationRecoveryGuidance?.active
+          && !agent._formationDetached
+          && !castOffset.active
+        ) {
+          agent.yaw = formationPose.current.yaw;
         } else {
           agent.yaw = Math.atan2(vy, vx);
         }
@@ -7806,7 +8802,7 @@ export const updateCrowdSim = (crowd, sim, dt) => {
       });
     }
 
-    constrainMinionAgentsToTrainingRoadCorridor(squad, sim, sorted);
+    constrainMinionAgentsToTrainingRoadCorridor(squad, sim, sorted, movementWalls);
     refreshMeleeAttackOrder(squad, sorted, nowSec);
 
     if (squad.skillRush) {

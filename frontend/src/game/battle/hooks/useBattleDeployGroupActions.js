@@ -16,8 +16,7 @@ export default function useBattleDeployGroupActions({
   setCards,
   setMinimapSnapshot,
   setDeployNotice,
-  setConfirmDeleteGroupId,
-  onDeployGroupRemoved
+  setConfirmDeleteGroupId
 } = {}) {
   const syncDeployUiFromRuntime = useCallback((runtime, preferredSelectedId = '') => {
     if (!runtime) return;
@@ -168,12 +167,10 @@ export default function useBattleDeployGroupActions({
     setCards(runtime.getCardRows());
     setMinimapSnapshot(runtime.getMinimapSnapshot());
     setConfirmDeleteGroupId('');
-    onDeployGroupRemoved?.(groupId);
     setDeployNotice('部队已删除');
   }, [
     confirmDeleteGroupId,
     isTrainingMode,
-    onDeployGroupRemoved,
     runtimeRef,
     setCards,
     setConfirmDeleteGroupId,

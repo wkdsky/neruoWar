@@ -1,6 +1,10 @@
 import BattleRuntime from './BattleRuntime';
 import CameraController from '../render/CameraController';
 import { resolveTrainingAgentSelectionRadius } from '../../shared/trainingUnitSelection';
+import {
+  DEFAULT_FORMATION_ID,
+  DEFAULT_FORMATION_NAME
+} from '../../../formation/defaultFormation';
 
 const readSquadHighlight = (snapshot = {}, squadId = '', offset = 12) => {
   const values = [];
@@ -171,25 +175,6 @@ const buildMixedInit = () => {
   ];
   return init;
 };
-
-const buildFormationTemplates = () => ([
-  {
-    formationId: 'line',
-    name: '横向阵',
-    placements: [
-      { unitTypeId: 'infantry_basic', x: 0, y: 0 },
-      { unitTypeId: 'infantry_basic', x: 2, y: 0 }
-    ]
-  },
-  {
-    formationId: 'column',
-    name: '纵深阵',
-    placements: [
-      { unitTypeId: 'infantry_basic', x: 0, y: 0 },
-      { unitTypeId: 'infantry_basic', x: 0, y: 2 }
-    ]
-  }
-]);
 
 describe('BattleRuntime training control', () => {
   test('loads the versioned three-lane map, supports presets, and seeds training objectives', () => {
@@ -806,13 +791,11 @@ describe('BattleRuntime training control', () => {
     expect(squad.waypoints.some((point) => point.y !== -250)).toBe(true);
   });
 
-  test('projects per-兵种 counts and formation metadata into a deployment card', () => {
+  test('projects per-兵种 counts and system formation metadata into a deployment card', () => {
     const runtime = new BattleRuntime(buildMixedInit());
     const result = runtime.createDeployGroup('attacker', {
       name: '前线混编',
       templateName: '混编模板',
-      templateFormations: [{ formationId: 'line', name: '横向阵' }],
-      activeFormationId: 'line',
       units: { infantry_basic: 12, archer_basic: 8 },
       x: -450,
       y: 0,
@@ -825,8 +808,8 @@ describe('BattleRuntime training control', () => {
     expect(row).toMatchObject({
       name: '前线混编',
       templateName: '混编模板',
-      formationName: '横向阵',
-      templateFormations: [{ formationId: 'line', name: '横向阵' }],
+      formationName: DEFAULT_FORMATION_NAME,
+      formationId: DEFAULT_FORMATION_ID,
       unitMetrics: {
         totalCount: 20,
         totalHp: 184,
@@ -899,228 +882,49 @@ describe('BattleRuntime training control', () => {
     ]);
   });
 
-  test('reorders deployment formations without changing the active formation', () => {
-    const runtime = new BattleRuntime(buildInit());
+  test('uses deterministic default slots from deployment through open-field marching', () => {
+    const runtime = new BattleRuntime(buildMixedInit());
     const created = runtime.createDeployGroup('attacker', {
-      units: { infantry_basic: 20 },
-      templateFormations: [
-        { formationId: 'one', name: '一', placements: [{ unitTypeId: 'infantry_basic', x: 0, y: 0 }] },
-        { formationId: 'two', name: '二', placements: [{ unitTypeId: 'infantry_basic', x: 1, y: 0 }] },
-        { formationId: 'three', name: '三', placements: [{ unitTypeId: 'infantry_basic', x: 2, y: 0 }] }
-      ],
-      activeFormationId: 'two'
-    });
-    const result = runtime.reorderDeployGroupFormations(created.groupId, ['three', 'one', 'two']);
-    expect(result.ok).toBe(true);
-    expect(result.formations.map((formation) => formation.formationId)).toEqual(['three', 'one', 'two']);
-    expect(runtime.getDeployGroupById(created.groupId).activeFormationId).toBe('two');
-  });
-
-  test('switches formations instantly before training and reforms over time during training', () => {
-    const runtime = new BattleRuntime(buildInit());
-    const formations = buildFormationTemplates();
-    const created = runtime.createDeployGroup('attacker', {
-      units: { infantry_basic: 100 },
+      units: { infantry_basic: 100, archer_basic: 100 },
       x: -420,
       y: 0,
       placed: true,
-      controlMode: 'USER',
-      templateFormations: formations,
-      activeFormationId: 'line'
+      controlMode: 'USER'
     });
 
-    expect(runtime.setDeployGroupFormation(created.groupId, formations[1], 'attacker')).toMatchObject({
-      ok: true,
-      reforming: false
+    expect(created.ok).toBe(true);
+    const group = runtime.getDeployGroupById(created.groupId, 'attacker');
+    const infantrySlots = group.deploySlots.filter((slot) => slot.unitTypeId === 'infantry_basic');
+    const archerSlots = group.deploySlots.filter((slot) => slot.unitTypeId === 'archer_basic');
+    const averageFront = (slots) => slots.reduce((sum, slot) => sum + slot.front, 0) / Math.max(1, slots.length);
+
+    expect(group.formationRect).toMatchObject({
+      formationId: DEFAULT_FORMATION_ID,
+      formationName: DEFAULT_FORMATION_NAME
     });
-    expect(runtime.getDeployGroupById(created.groupId, 'attacker').activeFormationId).toBe('column');
-    expect(runtime.setDeployGroupFormation(created.groupId, formations[0], 'attacker').ok).toBe(true);
+    expect(infantrySlots).toHaveLength(2);
+    expect(archerSlots).toHaveLength(2);
+    expect(averageFront(infantrySlots)).toBeGreaterThan(averageFront(archerSlots));
+
     expect(runtime.startBattle().ok).toBe(true);
-
     const squad = runtime.getSquadById('attacker_squad_1');
-    const beforeSlots = runtime.crowd.agentsBySquad.get(squad.id).map((agent) => ({ ...agent.formationSlot }));
-    const beforePositions = new Map(runtime.crowd.agentsBySquad.get(squad.id).map((agent) => [
+    const agents = runtime.crowd.agentsBySquad.get(squad.id).filter((agent) => !agent.isFlagBearer);
+    const initialSlots = new Map(agents.map((agent) => [
       agent.id,
-      { x: agent.x, y: agent.y }
+      { side: agent.formationSlot.side, front: agent.formationSlot.front }
     ]));
-    const anchorBefore = { x: squad.x, y: squad.y };
-    const result = runtime.setDeployGroupFormation(squad.id, formations[1], 'attacker');
 
-    expect(result).toMatchObject({ ok: true, reforming: true, reformDurationSec: 4.6 });
-    expect(squad.activeFormationId).toBe('column');
-    expect(squad.formationChange).toMatchObject({
-      fromFormationId: 'line',
-      toFormationId: 'column',
-      remainingSec: 4.6
+    expect(squad.formationRect).toMatchObject({
+      formationId: DEFAULT_FORMATION_ID,
+      formationName: DEFAULT_FORMATION_NAME
     });
-    expect(runtime.getDeployGroupFormations(squad.id).map((formation) => formation.formationId)).toEqual(['line', 'column']);
-    expect(runtime.crowd.agentsBySquad.get(squad.id).map((agent) => agent.formationSlot)).not.toEqual(beforeSlots);
+    expect(runtime.commandMove(squad.id, { x: -220, y: 0 })).toBe(true);
+    for (let index = 0; index < 60; index += 1) runtime.step(0.05);
 
-    runtime.step(0.05);
-    expect(squad.x).toBeCloseTo(anchorBefore.x, 6);
-    expect(squad.y).toBeCloseTo(anchorBefore.y, 6);
-    expect(runtime.crowd.agentsBySquad.get(squad.id).some((agent) => {
-      const before = beforePositions.get(agent.id);
-      return before && Math.hypot(agent.x - before.x, agent.y - before.y) > 0.01;
-    })).toBe(true);
-    expect(runtime.getCardRows().find((row) => row.id === squad.id)).toMatchObject({
-      action: '换阵中',
-      formationChange: expect.objectContaining({ toFormationId: 'column' })
+    expect(squad.x).toBeGreaterThan(-400);
+    agents.forEach((agent) => {
+      expect(agent.formationSlot).toEqual(initialSlots.get(agent.id));
     });
-
-    for (let index = 0; index < 100; index += 1) runtime.step(0.05);
-
-    expect(squad.formationChange).toBeNull();
-    expect(squad.speedPolicy).toBe('MARCH');
-    const agents = runtime.crowd.agentsBySquad.get(squad.id)
-      .filter((agent) => !agent.dead && !agent.isFlagBearer);
-    const formationForward = {
-      x: Math.cos(squad.formationRect.facingRad),
-      y: Math.sin(squad.formationRect.facingRad)
-    };
-    const formationSide = { x: -formationForward.y, y: formationForward.x };
-    const largestSlotError = Math.max(...agents.map((agent) => {
-      const slot = agent.formationSlot;
-      const expectedX = squad.x + (formationSide.x * slot.side) + (formationForward.x * slot.front);
-      const expectedY = squad.y + (formationSide.y * slot.side) + (formationForward.y * slot.front);
-      return Math.hypot(agent.x - expectedX, agent.y - expectedY);
-    }));
-
-    expect(largestSlotError).toBeLessThan(1e-5);
-  });
-
-  test('reforms formations after a regular battle begins', () => {
-    const init = buildInit();
-    init.mode = 'battle';
-    const runtime = new BattleRuntime(init);
-    const formations = buildFormationTemplates();
-    const created = runtime.createDeployGroup('attacker', {
-      units: { infantry_basic: 100 },
-      x: -420,
-      y: 0,
-      placed: true,
-      templateFormations: formations,
-      activeFormationId: 'line'
-    });
-
-    expect(created.ok).toBe(true);
-    expect(runtime.createDeployGroup('defender', {
-      units: { infantry_basic: 100 },
-      x: 420,
-      y: 0,
-      placed: true
-    }).ok).toBe(true);
-
-    expect(runtime.startBattle().ok).toBe(true);
-
-    const squad = runtime.getSquadById('attacker_squad_1');
-    const result = runtime.setDeployGroupFormation(squad.id, formations[1], 'attacker');
-
-    expect(result).toMatchObject({ ok: true, reforming: true, reformDurationSec: 4.6 });
-    expect(squad.activeFormationId).toBe('column');
-    expect(squad.formationChange).toMatchObject({
-      fromFormationId: 'line',
-      toFormationId: 'column',
-      remainingSec: 4.6
-    });
-
-    for (let index = 0; index < 100; index += 1) runtime.step(0.05);
-
-    expect(squad.formationChange).toBeNull();
-    expect(squad.speedPolicy).toBe('MARCH');
-  });
-
-  test('reapplies the same formation at the same anchor and physically restores displaced soldiers', () => {
-    const runtime = new BattleRuntime(buildInit());
-    const formations = buildFormationTemplates();
-    const created = runtime.createDeployGroup('attacker', {
-      units: { infantry_basic: 100 },
-      x: -420,
-      y: 0,
-      placed: true,
-      controlMode: 'USER',
-      templateFormations: formations,
-      activeFormationId: 'line'
-    });
-
-    expect(created.ok).toBe(true);
-    expect(runtime.startBattle().ok).toBe(true);
-
-    const squad = runtime.getSquadById('attacker_squad_1');
-    const displaced = runtime.crowd.agentsBySquad.get(squad.id)
-      .find((agent) => !agent.dead && !agent.isFlagBearer);
-    const anchorBefore = { x: squad.x, y: squad.y };
-    displaced.x -= 70;
-    displaced.y += 34;
-    displaced.vx = 0;
-    displaced.vy = 0;
-    displaced._formationLocked = false;
-    const displacedBefore = { x: displaced.x, y: displaced.y };
-
-    const result = runtime.setDeployGroupFormation(squad.id, formations[0], 'attacker');
-
-    expect(result).toMatchObject({ ok: true, changed: true, reforming: true });
-    expect(squad.formationChange).toMatchObject({
-      fromFormationId: 'line',
-      toFormationId: 'line'
-    });
-    runtime.step(0.05);
-    expect(squad.x).toBeCloseTo(anchorBefore.x, 6);
-    expect(squad.y).toBeCloseTo(anchorBefore.y, 6);
-    expect(Math.hypot(displaced.x - displacedBefore.x, displaced.y - displacedBefore.y)).toBeGreaterThan(0);
-
-    for (let index = 0; index < 320 && squad.formationChange; index += 1) runtime.step(0.05);
-
-    const forward = {
-      x: Math.cos(squad.formationRect.facingRad),
-      y: Math.sin(squad.formationRect.facingRad)
-    };
-    const side = { x: -forward.y, y: forward.x };
-    const expected = {
-      x: squad.x + (side.x * displaced.formationSlot.side) + (forward.x * displaced.formationSlot.front),
-      y: squad.y + (side.y * displaced.formationSlot.side) + (forward.y * displaced.formationSlot.front)
-    };
-    expect(squad.formationChange).toBeNull();
-    expect(Math.hypot(displaced.x - expected.x, displaced.y - expected.y)).toBeLessThan(2.4);
-  });
-
-  test('keeps formation change active after its minimum time until every slot converges', () => {
-    const runtime = new BattleRuntime(buildInit());
-    const formations = buildFormationTemplates();
-    const created = runtime.createDeployGroup('attacker', {
-      units: { infantry_basic: 100 },
-      x: -420,
-      y: 0,
-      placed: true,
-      controlMode: 'USER',
-      templateFormations: formations,
-      activeFormationId: 'line'
-    });
-
-    expect(created.ok).toBe(true);
-    expect(runtime.startBattle().ok).toBe(true);
-
-    const squad = runtime.getSquadById('attacker_squad_1');
-    expect(runtime.setDeployGroupFormation(squad.id, formations[1], 'attacker')).toMatchObject({
-      ok: true,
-      reforming: true
-    });
-    const blocked = runtime.crowd.agentsBySquad.get(squad.id)
-      .find((agent) => !agent.dead && !agent.isFlagBearer);
-
-    for (let index = 0; index < 94; index += 1) {
-      blocked.x = squad.x - 90;
-      blocked.y = squad.y + 52;
-      blocked.vx = 0;
-      blocked.vy = 0;
-      blocked._formationLocked = false;
-      runtime.step(0.05);
-    }
-
-    expect(squad.formationChange).not.toBeNull();
-    expect(squad.formationChange.remainingSec).toBe(0);
-    expect(squad.formationChange.maximumError).toBeGreaterThan(20);
-    expect(squad.action).toBe('换阵中');
   });
 
   test('clears a stale arrival assembly when an explicit behavior or guard order replaces it', () => {
@@ -1160,26 +964,21 @@ describe('BattleRuntime training control', () => {
     expectCleared();
   });
 
-  test('rotates a template formation without rebuilding its custom slots', () => {
+  test('rotates the default formation frame without changing its generated slots', () => {
     const runtime = new BattleRuntime(buildInit());
     const created = runtime.createDeployGroup('attacker', {
-      units: { infantry_basic: 20 },
-      templateFormations: [{
-        formationId: 'line',
-        name: '横向阵',
-        placements: [
-          { unitTypeId: 'infantry_basic', x: 0, y: 0 },
-          { unitTypeId: 'infantry_basic', x: 2, y: 0 }
-        ]
-      }],
-      activeFormationId: 'line'
+      units: { infantry_basic: 20 }
     });
     const before = runtime.getDeployGroupSlots(created.groupId, 'attacker');
     const result = runtime.setDeployGroupRect(created.groupId, { facingRad: Math.PI / 2 }, 'attacker');
     const group = runtime.getDeployGroupById(created.groupId, 'attacker');
 
     expect(result.ok).toBe(true);
-    expect(group.formationRect).toMatchObject({ formationId: 'line', formationName: '横向阵', facingRad: Math.PI / 2 });
+    expect(group.formationRect).toMatchObject({
+      formationId: DEFAULT_FORMATION_ID,
+      formationName: DEFAULT_FORMATION_NAME,
+      facingRad: Math.PI / 2
+    });
     expect(group.deploySlots.map((slot) => [slot.side, slot.front, slot.unitTypeId])).toEqual(
       before.map((slot) => [slot.side, slot.front, slot.unitTypeId])
     );
@@ -1322,7 +1121,7 @@ describe('BattleRuntime training control', () => {
     expect(squad._crowdFormationForward.y).toBeCloseTo(Math.sin(squad.formationRect.facingRad), 6);
   });
 
-  test('keeps every soldier in its slot through a single-direction marching turn', () => {
+  test('keeps every soldier close to its persistent slot through a single-direction marching turn', () => {
     const runtime = new BattleRuntime(buildInit());
     const created = runtime.createDeployGroup('attacker', {
       units: { infantry_basic: 100 },
@@ -1369,7 +1168,7 @@ describe('BattleRuntime training control', () => {
     expect(squad.speed).toBeGreaterThan(0);
     expect(turnSteps.length).toBeGreaterThan(0);
     expect(turnSteps.every((step) => step <= 1e-6)).toBe(true);
-    expect(largestSlotError).toBeLessThan(1e-5);
+    expect(largestSlotError).toBeLessThan(2.5);
   });
 
   test('picks training deployment groups only from visible soldier-ring ranges', () => {
@@ -1777,85 +1576,6 @@ describe('BattleRuntime training control', () => {
     expect(runtime.getFocusAnchor()).toBeNull();
     expect(runtime.focusSquadId).toBe('');
     expect(runtime.selectedBattleSquadId).toBe('');
-  });
-
-  test('keeps a pocket formation skeleton while changing soldier spacing', () => {
-    const init = buildInit();
-    init.attacker.rosterUnits = [{ unitTypeId: 'infantry_basic', count: 200 }];
-    const runtime = new BattleRuntime(init);
-    const created = runtime.createDeployGroup('attacker', {
-      units: { infantry_basic: 200 },
-      x: -450,
-      y: 0,
-      placed: true,
-      controlMode: 'USER',
-      templateFormations: [{
-        formationId: 'pocket',
-        name: '口袋阵',
-        placements: [
-          { unitTypeId: 'infantry_basic', x: 0, y: 0 },
-          { unitTypeId: 'infantry_basic', x: 2, y: 0 },
-          { unitTypeId: 'infantry_basic', x: 0, y: 1 },
-          { unitTypeId: 'infantry_basic', x: 2, y: 1 }
-        ]
-      }],
-      activeFormationId: 'pocket'
-    });
-    expect(created.ok).toBe(true);
-    runtime.setSelectedDeployGroup(created.groupId);
-    runtime.setFocusSquad(created.groupId);
-
-    expect(runtime.startBattle().ok).toBe(true);
-    const squad = runtime.getSquadById('attacker_squad_1');
-    const agents = runtime.crowd.agentsBySquad.get(squad.id);
-    const upperLeft = agents.find((agent) => agent.formationSlot.side < 0 && agent.formationSlot.front > 0);
-    const upperRight = agents.find((agent) => agent.formationSlot.side > 0 && agent.formationSlot.front > 0);
-    const lowerLeft = agents.find((agent) => agent.formationSlot.side < 0 && agent.formationSlot.front < 0);
-    const standardPocketWidth = upperRight.formationSpacingSlots.standard.side - upperLeft.formationSpacingSlots.standard.side;
-    const compactPocketWidth = upperRight.formationSpacingSlots.compact.side - upperLeft.formationSpacingSlots.compact.side;
-    const standardRankGap = upperLeft.formationSpacingSlots.standard.front - lowerLeft.formationSpacingSlots.standard.front;
-    const compactRankGap = upperLeft.formationSpacingSlots.compact.front - lowerLeft.formationSpacingSlots.compact.front;
-
-    expect(squad.formationSpacing).toBe('standard');
-    expect(compactPocketWidth).toBeCloseTo(standardPocketWidth, 6);
-    expect(compactRankGap).toBeCloseTo(standardRankGap * 0.76, 6);
-    expect(runtime.commandFormationSpacing(squad.id, 'loose')).toBe(true);
-    expect(squad.formationSpacing).toBe('loose');
-    expect(squad.speedPolicy).toBe('MARCH');
-  });
-
-  test('settles a compact formation after changing spacing and stopping', () => {
-    const runtime = new BattleRuntime(buildInit());
-    const created = runtime.createDeployGroup('attacker', {
-      units: { infantry_basic: 30 },
-      x: -450,
-      y: 0,
-      placed: true,
-      controlMode: 'USER'
-    });
-    expect(created.ok).toBe(true);
-    runtime.setSelectedDeployGroup(created.groupId);
-    runtime.setFocusSquad(created.groupId);
-    expect(runtime.startBattle().ok).toBe(true);
-
-    const squad = runtime.getSquadById('attacker_squad_1');
-    for (let index = 0; index < 180; index += 1) runtime.step(0.016);
-    expect(runtime.commandFormationSpacing(squad.id, 'compact')).toBe(true);
-    for (let index = 0; index < 300; index += 1) runtime.step(0.016);
-    expect(runtime.commandMove(squad.id, { x: -412, y: 12 })).toBe(true);
-    for (let index = 0; index < 600; index += 1) runtime.step(0.016);
-
-    const agents = runtime.crowd.agentsBySquad.get(squad.id).filter((agent) => !agent.isFlagBearer);
-    const settled = new Map(agents.map((agent) => [agent.id, { x: agent.x, y: agent.y }]));
-    for (let index = 0; index < 120; index += 1) runtime.step(0.016);
-
-    const maxDrift = Math.max(...agents.map((agent) => {
-      const previous = settled.get(agent.id);
-      return Math.hypot(agent.x - previous.x, agent.y - previous.y);
-    }));
-    const maxSpeed = Math.max(...agents.map((agent) => Math.hypot(agent.vx, agent.vy)));
-    expect(maxDrift).toBeLessThan(0.02);
-    expect(maxSpeed).toBeLessThan(0.02);
   });
 
   test('tracks configured slot cooldowns and training skill points independently', () => {

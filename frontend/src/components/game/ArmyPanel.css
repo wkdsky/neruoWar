@@ -1429,162 +1429,6 @@
   overflow: hidden;
 }
 
-.army-formation-build-stage {
-  display: grid;
-  grid-template-rows: auto minmax(0, 1fr);
-  gap: 8px;
-  min-height: 0;
-  overflow: hidden;
-}
-
-.army-formation-selected-strip {
-  display: flex;
-  gap: 8px;
-  overflow-x: auto;
-  padding-bottom: 2px;
-}
-
-.army-formation-top-unit {
-  position: relative;
-  min-width: 138px;
-  border: 1px solid rgba(148, 163, 184, 0.24);
-  border-radius: 8px;
-  background: rgba(15, 23, 42, 0.76);
-  color: #e2e8f0;
-  padding: 8px 28px 8px 8px;
-  display: grid;
-  grid-template-columns: 12px minmax(0, 1fr);
-  gap: 7px;
-  text-align: left;
-  cursor: grab;
-}
-
-.army-formation-top-unit.is-depleted {
-  cursor: pointer;
-  opacity: 0.74;
-}
-
-.army-formation-top-unit.is-selected {
-  border-color: rgba(45, 212, 191, 0.72);
-  background: rgba(20, 83, 45, 0.34);
-}
-
-.army-formation-top-unit i {
-  width: 12px;
-  height: 12px;
-  border-radius: 3px;
-  margin-top: 2px;
-}
-
-.army-formation-top-unit strong,
-.army-formation-top-unit span {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.army-formation-top-unit strong {
-  color: #f8fafc;
-  font-size: 12px;
-}
-
-.army-formation-top-unit span {
-  color: #93c5fd;
-  font-size: 11px;
-}
-
-.army-formation-top-unit em {
-  position: absolute;
-  right: 7px;
-  bottom: 6px;
-  min-width: 20px;
-  height: 20px;
-  border-radius: 999px;
-  display: grid;
-  place-items: center;
-  background: rgba(250, 204, 21, 0.2);
-  color: #fde68a;
-  font-style: normal;
-  font-size: 11px;
-  font-weight: 700;
-}
-
-.army-formation-build-layout {
-  display: grid;
-  grid-template-columns: minmax(190px, 230px) minmax(0, 1fr);
-  gap: 8px;
-  min-height: 0;
-  overflow: hidden;
-}
-
-.army-formation-slot-panel {
-  border: 1px solid rgba(148, 163, 184, 0.26);
-  border-radius: 8px;
-  background: rgba(9, 14, 23, 0.82);
-  padding: 8px;
-  display: grid;
-  grid-template-rows: auto minmax(0, 1fr);
-  gap: 8px;
-  min-height: 0;
-  overflow: hidden;
-}
-
-.army-formation-slot-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-}
-
-.army-formation-slot-head span {
-  color: #99f6e4;
-  font-size: 11px;
-}
-
-.army-formation-slot-list {
-  display: grid;
-  gap: 8px;
-  align-content: start;
-  min-height: 0;
-  overflow-x: hidden;
-  overflow-y: auto;
-  overscroll-behavior: contain;
-  padding-right: 2px;
-}
-
-.army-formation-slot-card {
-  position: relative;
-  border: 1px solid rgba(148, 163, 184, 0.24);
-  border-radius: 8px;
-  background: rgba(15, 23, 42, 0.7);
-  padding: 8px;
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  gap: 5px;
-  cursor: pointer;
-}
-
-.army-formation-slot-card.is-active {
-  border-color: rgba(96, 165, 250, 0.72);
-}
-
-.army-formation-slot-card.is-legal {
-  border-color: rgba(74, 222, 128, 0.74);
-  box-shadow: inset 0 0 0 1px rgba(34, 197, 94, 0.16);
-}
-
-.army-formation-slot-card input {
-  min-width: 0;
-  padding: 5px 6px;
-}
-
-.army-formation-slot-card > span {
-  align-self: center;
-  color: #cbd5e1;
-  font-size: 11px;
-}
-
 .army-formation-mini-preview {
   grid-column: 1 / -1;
   position: relative;
@@ -1601,20 +1445,9 @@
   transition: border-color 0.18s ease, background-color 0.18s ease;
 }
 
-.army-formation-slot-card:hover .army-formation-mini-preview,
-.army-formation-slot-card.is-active .army-formation-mini-preview {
-  border-color: rgba(45, 212, 191, 0.42);
-  background:
-    linear-gradient(180deg, rgba(15, 118, 110, 0.24), rgba(2, 6, 23, 0.62));
-}
-
 .army-formation-mini-preview.is-static {
   height: 96px;
   margin-top: 2px;
-}
-
-.army-formation-mini-preview.is-compact {
-  height: 70px;
 }
 
 .army-formation-mini-board {
@@ -1662,17 +1495,6 @@
   transform: translate(-50%, -50%);
 }
 
-.army-formation-slot-card .btn {
-  grid-column: 1 / -1;
-  justify-self: start;
-}
-
-.army-formation-canvas-shell.is-adaptive {
-  min-height: 0;
-  height: 100%;
-  aspect-ratio: auto;
-}
-
 .army-template-preview-stage {
   display: grid;
   grid-template-columns: minmax(260px, 1fr) minmax(260px, 1fr);
@@ -1697,49 +1519,9 @@
   grid-column: 1 / -1;
 }
 
-.army-template-preview-formations {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 8px;
-  min-height: 0;
-  overflow: auto;
-}
-
 .army-template-preview-section .army-troop-composition {
   min-height: 0;
   overflow: auto;
-}
-
-.army-template-preview-formation {
-  border: 1px solid rgba(248, 113, 113, 0.36);
-  border-radius: 8px;
-  background: rgba(127, 29, 29, 0.12);
-  padding: 8px;
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto auto;
-  gap: 8px;
-  align-items: center;
-}
-
-.army-template-preview-formation.is-legal {
-  border-color: rgba(74, 222, 128, 0.48);
-  background: rgba(20, 83, 45, 0.22);
-}
-
-.army-template-preview-formation strong {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  color: #f8fafc;
-  font-size: 13px;
-}
-
-.army-template-preview-formation span,
-.army-template-preview-formation em {
-  color: #cbd5e1;
-  font-size: 11px;
-  font-style: normal;
 }
 
 .army-toast-stack {
@@ -1795,42 +1577,16 @@
   }
 }
 
-.army-formation-editor {
-  display: grid;
-  grid-template-columns: minmax(190px, 230px) minmax(420px, 1fr) minmax(220px, 260px);
-  gap: 10px;
-  align-items: stretch;
-}
-
-.army-formation-unit-list,
-.army-formation-stage-panel,
-.army-formation-unit-detail {
+.army-formation-unit-list {
   border: 1px solid rgba(148, 163, 184, 0.26);
   border-radius: 8px;
   background: rgba(9, 14, 23, 0.82);
   padding: 8px;
-}
-
-.army-formation-unit-list {
   max-height: min(66vh, 640px);
   overflow: auto;
   display: grid;
   gap: 7px;
   align-content: start;
-}
-
-.army-formation-stage-panel {
-  display: grid;
-  grid-template-rows: auto minmax(0, 1fr) auto;
-  gap: 8px;
-  min-height: 0;
-}
-
-.army-formation-unit-detail {
-  display: grid;
-  grid-template-rows: auto auto auto minmax(0, 1fr);
-  gap: 8px;
-  min-width: 0;
 }
 
 .army-formation-panel-title {
@@ -1897,228 +1653,6 @@
   font-style: normal;
 }
 
-.army-formation-canvas-shell {
-  position: relative;
-  min-height: 440px;
-  aspect-ratio: 1 / 1;
-  border: 1px solid rgba(125, 211, 252, 0.38);
-  border-radius: 14px;
-  background:
-    linear-gradient(180deg, rgba(27, 38, 63, 0.98), rgba(7, 12, 25, 0.98) 58%, rgba(5, 10, 22, 1));
-  box-shadow:
-    inset 0 0 0 2px rgba(15, 23, 42, 0.86),
-    inset 0 0 22px rgba(56, 189, 248, 0.18),
-    0 16px 34px rgba(2, 6, 23, 0.42),
-    0 0 24px rgba(99, 102, 241, 0.22);
-  overflow: hidden;
-}
-
-.army-formation-canvas-shell::before {
-  content: "";
-  position: absolute;
-  inset: 7px;
-  border: 2px solid rgba(96, 165, 250, 0.34);
-  border-radius: 10px;
-  box-shadow:
-    inset 0 0 16px rgba(14, 165, 233, 0.14),
-    0 0 18px rgba(168, 85, 247, 0.14);
-  pointer-events: none;
-  z-index: 1;
-}
-
-.army-formation-canvas {
-  display: block;
-  width: 100%;
-  height: 100%;
-  background: #020617;
-  cursor: crosshair;
-  touch-action: none;
-}
-
-.army-formation-canvas.is-placement-mode {
-  cursor: copy;
-}
-
-.army-formation-canvas.is-move-mode {
-  cursor: cell;
-}
-
-.army-formation-renderer-error {
-  position: absolute;
-  inset: 8px;
-  z-index: 4;
-  display: grid;
-  place-items: center;
-  border-radius: 10px;
-  border: 1px solid rgba(248, 113, 113, 0.42);
-  background: rgba(7, 10, 18, 0.94);
-  color: #fecaca;
-  padding: 16px;
-  text-align: center;
-  font-size: 13px;
-  font-weight: 700;
-  pointer-events: none;
-}
-
-.army-formation-marquee {
-  position: absolute;
-  z-index: 3;
-  border: 1px solid rgba(125, 211, 252, 0.9);
-  background: rgba(14, 165, 233, 0.14);
-  box-shadow:
-    inset 0 0 0 1px rgba(255, 255, 255, 0.18),
-    0 0 18px rgba(56, 189, 248, 0.22);
-  pointer-events: none;
-}
-
-.army-formation-selection-frame {
-  position: absolute;
-  z-index: 3;
-  border: 1px solid rgba(250, 204, 21, 0.92);
-  background: rgba(250, 204, 21, 0.06);
-  box-shadow:
-    inset 0 0 0 1px rgba(255, 255, 255, 0.18),
-    0 0 18px rgba(250, 204, 21, 0.28);
-  pointer-events: none;
-}
-
-.army-formation-selection-frame.is-moving {
-  border-color: rgba(45, 212, 191, 0.95);
-  background: rgba(20, 184, 166, 0.08);
-  box-shadow:
-    inset 0 0 0 1px rgba(255, 255, 255, 0.16),
-    0 0 20px rgba(45, 212, 191, 0.32);
-}
-
-.army-formation-selection-toolbar {
-  position: absolute;
-  z-index: 4;
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  transform: translateX(-50%);
-  border: 1px solid rgba(125, 211, 252, 0.42);
-  border-radius: 8px;
-  background: rgba(2, 6, 23, 0.86);
-  box-shadow:
-    0 12px 28px rgba(2, 6, 23, 0.44),
-    0 0 18px rgba(56, 189, 248, 0.18);
-  padding: 4px;
-}
-
-.army-formation-selection-toolbar span {
-  min-width: 22px;
-  height: 22px;
-  border: 1px solid rgba(148, 163, 184, 0.28);
-  border-radius: 6px;
-  display: grid;
-  place-items: center;
-  color: #bae6fd;
-  font-size: 11px;
-  font-weight: 800;
-}
-
-.army-formation-selection-toolbar button {
-  border: 1px solid rgba(148, 163, 184, 0.28);
-  border-radius: 6px;
-  background: rgba(15, 23, 42, 0.88);
-  color: #e2e8f0;
-  padding: 4px 9px;
-  font-size: 11px;
-  cursor: pointer;
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-}
-
-.army-formation-selection-toolbar button:hover,
-.army-formation-selection-toolbar button.is-active {
-  border-color: rgba(45, 212, 191, 0.72);
-  color: #ccfbf1;
-  background: rgba(13, 148, 136, 0.3);
-}
-
-.army-formation-selection-toolbar button.is-danger:hover {
-  border-color: rgba(248, 113, 113, 0.72);
-  color: #fecaca;
-  background: rgba(127, 29, 29, 0.36);
-}
-
-.army-formation-dimension-badge {
-  position: absolute;
-  top: 14px;
-  right: 14px;
-  z-index: 2;
-  min-width: 58px;
-  border: 1px solid rgba(125, 211, 252, 0.46);
-  border-radius: 8px;
-  background: rgba(2, 6, 23, 0.76);
-  color: #e0f2fe;
-  box-shadow: 0 0 14px rgba(56, 189, 248, 0.2);
-  padding: 5px 8px;
-  font-size: 13px;
-  font-weight: 800;
-  line-height: 1;
-  text-align: center;
-  pointer-events: none;
-}
-
-.army-formation-canvas-hint {
-  position: absolute;
-  left: 8px;
-  right: 8px;
-  bottom: 8px;
-  z-index: 2;
-  border: 1px solid rgba(148, 163, 184, 0.22);
-  border-radius: 8px;
-  background: rgba(2, 6, 23, 0.72);
-  color: #d1fae5;
-  padding: 6px 8px;
-  font-size: 11px;
-  pointer-events: none;
-}
-
-.army-formation-selected-actions {
-  min-height: 30px;
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 6px;
-}
-
-.army-formation-selected-actions span {
-  color: #94a3b8;
-  font-size: 11px;
-}
-
-.army-formation-detail-head {
-  display: flex;
-  justify-content: space-between;
-  gap: 8px;
-}
-
-.army-formation-detail-head h5 {
-  margin: 0;
-  color: #f8fafc;
-  font-size: 13px;
-}
-
-.army-formation-detail-head span {
-  display: block;
-  margin-top: 3px;
-  font-size: 11px;
-}
-
-.army-formation-preview {
-  height: 210px;
-  border: 1px solid rgba(148, 163, 184, 0.22);
-  border-radius: 8px;
-  background:
-    radial-gradient(circle at 50% 62%, rgba(20, 184, 166, 0.18), transparent 46%),
-    linear-gradient(180deg, rgba(15, 23, 42, 0.78), rgba(3, 7, 18, 0.86));
-  overflow: hidden;
-}
-
 .army-formation-preview-canvas {
   display: block;
   width: 100%;
@@ -2179,21 +1713,12 @@
     position: static;
   }
 
-  .army-formation-editor {
-    grid-template-columns: minmax(180px, 220px) minmax(0, 1fr);
-  }
-
-  .army-unit-selection-stage,
-  .army-formation-build-layout {
+  .army-unit-selection-stage {
     grid-template-columns: 1fr;
   }
 
   .army-template-preview-stage {
     grid-template-columns: 1fr;
-  }
-
-  .army-formation-unit-detail {
-    grid-column: 1 / -1;
   }
 
   .army-template-troop-info-panel {
@@ -2254,22 +1779,8 @@
     grid-template-columns: repeat(3, minmax(0, 1fr));
   }
 
-  .army-formation-editor {
+  .army-unit-selection-stage {
     grid-template-columns: 1fr;
-  }
-
-  .army-unit-selection-stage,
-  .army-template-preview-formations {
-    grid-template-columns: 1fr;
-  }
-
-  .army-formation-stage-panel {
-    min-height: auto;
-  }
-
-  .army-formation-canvas-shell,
-  .army-formation-canvas-shell.is-adaptive {
-    min-height: min(78vw, 520px);
   }
 
   .army-unit-card,
@@ -2296,7 +1807,6 @@
 
   .army-template-actions,
   .army-item-style-modal-head,
-  .army-formation-slot-head,
   .army-template-editor-head,
   .army-template-editor-actions {
     flex-wrap: wrap;
@@ -2398,18 +1908,12 @@
     min-height: 180px;
   }
 
-  .army-formation-canvas-shell,
-  .army-formation-canvas-shell.is-adaptive {
-    min-height: min(84vw, 440px);
-  }
-
   .army-formation-unit-list {
     max-height: 220px;
   }
 
   .army-unit-selection-dropzone,
-  .army-template-troop-info-panel,
-  .army-formation-stage-panel {
+  .army-template-troop-info-panel {
     min-height: auto;
   }
 }
@@ -2498,16 +2002,6 @@
     width: min(82%, 220px);
   }
 
-  .army-formation-canvas-shell,
-  .army-formation-canvas-shell.is-adaptive {
-    min-height: min(88vw, 360px);
-  }
-
-  .army-formation-preview {
-    height: 180px;
-  }
-
-  .army-formation-selected-actions,
   .army-template-editor-actions {
     width: 100%;
     flex-wrap: wrap;

@@ -82,9 +82,6 @@ const MAX_TEMPLATE_COUNT = 100;
 const MAX_TEMPLATE_UNIT_COUNT = 100;
 const MAX_TEMPLATE_TOTAL_COUNT = 100;
 const TRAINING_MAX_GROUP_TOTAL = 10000;
-const MAX_TEMPLATE_FORMATION_COUNT = 9;
-const MAX_TEMPLATE_FORMATION_NAME_LEN = 24;
-const MAX_TEMPLATE_FORMATION_COORD = 999;
 const MAX_COMBAT_ARMY_COUNT = 100;
 const MAX_TRAINING_TEAM_ARMY_COUNT = 6;
 const MAX_TRAINING_ARMY_COUNT = MAX_TRAINING_TEAM_ARMY_COUNT * 2;
@@ -93,21 +90,16 @@ const MAX_ARMY_UNIT_COUNT = 1000000;
 const MAX_ARMY_DEPLOY_SLOT_COUNT = 1000;
 const MAX_ARMY_COORD = 100000;
 const MAX_ARMY_SKILL_SLOT_COUNT = 3;
+const DEFAULT_FORMATION_ID = 'AUTO_DEFAULT';
+const DEFAULT_FORMATION_NAME = '系统默认阵型';
 
 const buildTemplateId = () => `tpl_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
-const buildFormationId = () => `fmt_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
 const buildArmyId = (scope = 'army') => `${scope}_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
 
 const normalizeTemplateName = (rawName, fallback = '未命名模板') => {
   const name = typeof rawName === 'string' ? rawName.trim() : '';
   if (!name) return fallback;
   return limitNameByDisplayWidth(name, MAX_TEMPLATE_NAME_LEN);
-};
-
-const normalizeFormationName = (rawName, fallback = '默认阵型') => {
-  const name = typeof rawName === 'string' ? rawName.trim() : '';
-  if (!name) return fallback;
-  return name.slice(0, MAX_TEMPLATE_FORMATION_NAME_LEN);
 };
 
 const normalizeArmyName = (rawName, fallback = '未命名部队') => {
@@ -202,156 +194,17 @@ const normalizeTemplatePercentagesLoose = (rawUnits) => {
     .filter((entry) => entry.count > 0);
 };
 
-const getFormationId = (formation) => {
-  const formationId = typeof formation?.formationId === 'string' ? formation.formationId.trim() : '';
-  if (formationId) return formationId;
-  return typeof formation?.id === 'string' ? formation.id.trim() : '';
-};
-
-const buildUnitCountMap = (units = []) => (
-  normalizeTemplateUnitsLoose(units).reduce((acc, entry) => {
-    acc.set(entry.unitTypeId, entry.count);
-    return acc;
-  }, new Map())
-);
-
-const buildDefaultFormationPlacements = (units = []) => {
-  const placements = [];
-  let cursor = 0;
-  normalizeTemplateUnitsLoose(units).forEach((entry) => {
-    for (let i = 0; i < entry.count && cursor < MAX_TEMPLATE_TOTAL_COUNT; i += 1) {
-      const row = Math.floor(cursor / 10);
-      placements.push({
-        unitTypeId: entry.unitTypeId,
-        x: (cursor % 10) - 4,
-        y: row - 4
-      });
-      cursor += 1;
-    }
-  });
-  return placements;
-};
-
-const countFormationPlacements = (placements = []) => (
-  (Array.isArray(placements) ? placements : []).reduce((acc, placement) => {
-    const unitTypeId = typeof placement?.unitTypeId === 'string' ? placement.unitTypeId.trim() : '';
-    if (!unitTypeId) return acc;
-    acc.set(unitTypeId, (acc.get(unitTypeId) || 0) + 1);
-    return acc;
-  }, new Map())
-);
-
-const isFormationLegal = (formation, units) => {
-  const unitCounts = buildUnitCountMap(units);
-  const placements = Array.isArray(formation?.placements) ? formation.placements : [];
-  const total = Array.from(unitCounts.values()).reduce((sum, count) => sum + count, 0);
-  if (total <= 0 || placements.length !== total) return false;
-  const placementCounts = countFormationPlacements(placements);
-  return Array.from(unitCounts.entries()).every(([unitTypeId, count]) => (
-    (placementCounts.get(unitTypeId) || 0) === count
-  ));
-};
-
-const normalizeFormationPlacements = (rawPlacements, unitTypeMap, unitCounts, strict = false) => {
-  const source = Array.isArray(rawPlacements) ? rawPlacements : [];
-  const out = [];
-  const occupied = new Set();
-  const used = new Map();
-  for (const raw of source) {
-    if (out.length >= MAX_TEMPLATE_TOTAL_COUNT) break;
-    const unitTypeId = typeof raw?.unitTypeId === 'string' ? raw.unitTypeId.trim() : '';
-    if (!unitTypeId) continue;
-    if (strict && (!unitTypeMap[unitTypeId] || !unitCounts.has(unitTypeId))) {
-      return { error: '阵型中存在无效兵种' };
-    }
-    if (!unitCounts.has(unitTypeId)) continue;
-    const x = Math.max(
-      -MAX_TEMPLATE_FORMATION_COORD,
-      Math.min(MAX_TEMPLATE_FORMATION_COORD, Math.floor(Number(raw?.x) || 0))
-    );
-    const y = Math.max(
-      -MAX_TEMPLATE_FORMATION_COORD,
-      Math.min(MAX_TEMPLATE_FORMATION_COORD, Math.floor(Number(raw?.y) || 0))
-    );
-    const cellKey = `${x}:${y}`;
-    if (occupied.has(cellKey)) {
-      if (strict) return { error: '阵型中存在重复站位' };
-      continue;
-    }
-    const nextUsed = (used.get(unitTypeId) || 0) + 1;
-    if (nextUsed > (unitCounts.get(unitTypeId) || 0)) {
-      if (strict) return { error: '阵型兵种数量超过部队基础数' };
-      continue;
-    }
-    occupied.add(cellKey);
-    used.set(unitTypeId, nextUsed);
-    out.push({ unitTypeId, x, y });
-  }
-  return { placements: out };
-};
-
-const normalizeTemplateFormationsLoose = (rawFormations, units) => {
-  const unitCounts = buildUnitCountMap(units);
-  const source = Array.isArray(rawFormations) && rawFormations.length > 0
-    ? rawFormations
-    : [{
-      formationId: buildFormationId(),
-      name: '默认阵型',
-      placements: buildDefaultFormationPlacements(units)
-    }];
-  const formations = source
-    .slice(0, MAX_TEMPLATE_FORMATION_COUNT)
-    .map((formation, index) => {
-      const normalized = normalizeFormationPlacements(
-        formation?.placements || [],
-        {},
-        unitCounts,
-        false
-      );
-      return {
-        formationId: getFormationId(formation) || buildFormationId(),
-        name: normalizeFormationName(formation?.name, index <= 0 ? '默认阵型' : `新建阵型${index}`),
-        placements: normalized.placements || []
-      };
-    });
-  return formations.length > 0 ? formations : [{
-    formationId: buildFormationId(),
-    name: '默认阵型',
-    placements: buildDefaultFormationPlacements(units)
-  }];
-};
-
 const normalizeTemplateForStorage = (template) => {
   const raw = template && typeof template.toObject === 'function'
     ? template.toObject()
     : (template || {});
   const units = normalizeTemplatePercentagesLoose(raw.units);
-  const unitCounts = buildUnitCountMap(units);
-  const formations = (Array.isArray(raw.formations) ? raw.formations : [])
-    .slice(0, MAX_TEMPLATE_FORMATION_COUNT)
-    .map((formation, index) => {
-      const normalized = normalizeFormationPlacements(
-        formation?.placements || [],
-        {},
-        unitCounts,
-        false
-      );
-      return {
-        formationId: getFormationId(formation) || buildFormationId(),
-        name: normalizeFormationName(formation?.name, index <= 0 ? '默认阵型' : `新建阵型${index}`),
-        placements: (normalized.placements || []).map((placement) => ({
-          unitTypeId: placement.unitTypeId,
-          x: placement.x,
-          y: placement.y
-        }))
-      };
-    });
 
   return {
     templateId: typeof raw.templateId === 'string' ? raw.templateId.trim() : '',
     name: normalizeTemplateName(raw.name, '未命名模板'),
     units,
-    formations,
+    formations: Array.isArray(raw.formations) ? raw.formations : [],
     createdAt: raw.createdAt || new Date(),
     updatedAt: raw.updatedAt || new Date()
   };
@@ -370,49 +223,11 @@ const persistArmyTemplates = async (userId, templates) => {
   ).select('armyTemplates');
 };
 
-const normalizeTemplateFormationsStrict = (rawFormations, unitTypeMap, units) => {
-  const unitCounts = buildUnitCountMap(units);
-  const source = Array.isArray(rawFormations) && rawFormations.length > 0
-    ? rawFormations
-    : [{
-      formationId: buildFormationId(),
-      name: '默认阵型',
-      placements: buildDefaultFormationPlacements(units)
-    }];
-  const formations = [];
-  for (const [index, formation] of source.slice(0, MAX_TEMPLATE_FORMATION_COUNT).entries()) {
-    const normalized = normalizeFormationPlacements(
-      formation?.placements || [],
-      unitTypeMap,
-      unitCounts,
-      true
-    );
-    if (normalized.error) return { error: normalized.error };
-    formations.push({
-      formationId: getFormationId(formation) || buildFormationId(),
-      name: normalizeFormationName(formation?.name, index <= 0 ? '默认阵型' : `新建阵型${index}`),
-      placements: normalized.placements || []
-    });
-  }
-  if (!formations.some((formation) => isFormationLegal(formation, units))) {
-    return { error: '至少需要一个合法阵型' };
-  }
-  return { formations };
-};
-
 const serializeArmyTemplate = (template, unitTypeMap) => {
   const units = normalizeTemplatePercentagesLoose(template?.units).map((entry) => ({
     unitTypeId: entry.unitTypeId,
     unitName: unitTypeMap[entry.unitTypeId]?.name || entry.unitTypeId,
     count: entry.count
-  }));
-  const formations = normalizeTemplateFormationsLoose(template?.formations, units).map((formation) => ({
-    id: formation.formationId,
-    formationId: formation.formationId,
-    name: formation.name,
-    placements: formation.placements,
-    totalPlaced: formation.placements.length,
-    legal: isFormationLegal(formation, units)
   }));
   const totalCount = units.reduce((sum, item) => sum + item.count, 0);
   const createdAtMs = new Date(template?.createdAt || 0).getTime();
@@ -421,7 +236,6 @@ const serializeArmyTemplate = (template, unitTypeMap) => {
     templateId: typeof template?.templateId === 'string' ? template.templateId.trim() : '',
     name: normalizeTemplateName(template?.name, '未命名模板'),
     units,
-    formations,
     totalCount,
     createdAt: Number.isFinite(createdAtMs) && createdAtMs > 0 ? new Date(createdAtMs).toISOString() : null,
     updatedAt: Number.isFinite(updatedAtMs) && updatedAtMs > 0 ? new Date(updatedAtMs).toISOString() : null
@@ -493,41 +307,6 @@ const normalizeArmyUnitsLoose = (rawUnits) => {
   return Object.entries(byId).map(([unitTypeId, count]) => ({ unitTypeId, count }));
 };
 
-const normalizeArmyFormationSnapshots = (rawFormations, unitTypeMap = {}) => {
-  const source = Array.isArray(rawFormations) ? rawFormations : [];
-  const seen = new Set();
-  return source.slice(0, MAX_TEMPLATE_FORMATION_COUNT).map((formation, index) => {
-    const formationId = getFormationId(formation) || buildFormationId();
-    const occupied = new Set();
-    const placements = (Array.isArray(formation?.placements) ? formation.placements : [])
-      .slice(0, MAX_TEMPLATE_TOTAL_COUNT)
-      .reduce((out, raw) => {
-        const unitTypeId = typeof raw?.unitTypeId === 'string' ? raw.unitTypeId.trim() : '';
-        if (!unitTypeId || (Object.keys(unitTypeMap).length > 0 && !unitTypeMap[unitTypeId])) return out;
-        const x = Math.max(
-          -MAX_TEMPLATE_FORMATION_COORD,
-          Math.min(MAX_TEMPLATE_FORMATION_COORD, Math.floor(Number(raw?.x) || 0))
-        );
-        const y = Math.max(
-          -MAX_TEMPLATE_FORMATION_COORD,
-          Math.min(MAX_TEMPLATE_FORMATION_COORD, Math.floor(Number(raw?.y) || 0))
-        );
-        const key = `${x}:${y}`;
-        if (occupied.has(key)) return out;
-        occupied.add(key);
-        out.push({ unitTypeId, x, y });
-        return out;
-      }, []);
-    if (seen.has(formationId)) return null;
-    seen.add(formationId);
-    return {
-      formationId,
-      name: normalizeFormationName(formation?.name, index <= 0 ? '默认阵型' : `阵型${index + 1}`),
-      placements
-    };
-  }).filter(Boolean);
-};
-
 const normalizeArmyFormationRect = (rawRect) => {
   if (!rawRect || typeof rawRect !== 'object') return null;
   const clampPositive = (value) => Math.max(0, Math.min(MAX_ARMY_COORD, Number(value) || 0));
@@ -539,7 +318,6 @@ const normalizeArmyFormationRect = (rawRect) => {
     const snapped = Math.round(offset / step) * step;
     return Math.abs(snapped + Math.PI) <= 1e-6 ? Math.PI : snapped;
   };
-  const formationId = typeof rawRect?.formationId === 'string' ? rawRect.formationId.trim().slice(0, 96) : '';
   const facingRad = Math.max(-Math.PI * 2, Math.min(Math.PI * 2, Number(rawRect.facingRad) || 0));
   const rawDirectionOffsetRad = Number(rawRect.directionOffsetRad);
   const rawDirectionRad = Number(rawRect.directionRad);
@@ -555,8 +333,8 @@ const normalizeArmyFormationRect = (rawRect) => {
     directionOffsetRad,
     directionRad: facingRad + directionOffsetRad,
     slotCount: Math.max(0, Math.min(MAX_ARMY_DEPLOY_SLOT_COUNT, Math.floor(Number(rawRect.slotCount) || 0))),
-    formationId,
-    formationName: normalizeFormationName(rawRect.formationName, '').slice(0, MAX_TEMPLATE_FORMATION_NAME_LEN)
+    formationId: DEFAULT_FORMATION_ID,
+    formationName: DEFAULT_FORMATION_NAME
   };
 };
 
@@ -599,10 +377,6 @@ const serializeArmyInstance = (rawArmy, unitTypeMap, { includeTeam = false } = {
   }));
   const totalCount = units.reduce((sum, entry) => sum + entry.count, 0);
   const armyId = getArmyInstanceId(army);
-  const templateFormations = normalizeArmyFormationSnapshots(army.templateFormations, unitTypeMap).map((formation) => ({
-    id: formation.formationId,
-    ...formation
-  }));
   const createdAtMs = new Date(army.createdAt || 0).getTime();
   const updatedAtMs = new Date(army.updatedAt || 0).getTime();
   const result = {
@@ -613,8 +387,6 @@ const serializeArmyInstance = (rawArmy, unitTypeMap, { includeTeam = false } = {
     name: normalizeArmyName(army.name, '未命名部队'),
     units,
     totalCount,
-    templateFormations,
-    activeFormationId: typeof army.activeFormationId === 'string' ? army.activeFormationId.trim() : '',
     formationRect: normalizeArmyFormationRect(army.formationRect),
     deploySlots: normalizeArmyDeploySlots(army.deploySlots),
     skillSlots: normalizeArmySkillSlots(army.skillSlots),
@@ -722,13 +494,13 @@ const normalizeArmyInstanceForStorage = ({
   const existingArmy = existing ? toPlainObject(existing) : null;
   const unitsResult = normalizeArmyUnitsStrict(raw.units, unitTypeMap, { maxTotal });
   if (unitsResult.error) return unitsResult;
+  const legacyTemplateFormations = Array.isArray(existingArmy?.templateFormations)
+    ? existingArmy.templateFormations
+    : [];
+  const legacyActiveFormationId = typeof existingArmy?.activeFormationId === 'string'
+    ? existingArmy.activeFormationId
+    : '';
 
-  const formationSource = raw.templateFormations || raw.formations || existingArmy?.templateFormations || [];
-  const templateFormations = normalizeArmyFormationSnapshots(formationSource, unitTypeMap);
-  const requestedFormationId = typeof raw.activeFormationId === 'string' ? raw.activeFormationId.trim() : '';
-  const activeFormationId = templateFormations.some((formation) => formation.formationId === requestedFormationId)
-    ? requestedFormationId
-    : (templateFormations[0]?.formationId || '');
   const now = new Date();
   const safeTeam = raw.team === 'defender' ? 'defender' : 'attacker';
   const fallbackControlMode = safeTeam === 'defender' ? 'AI' : 'USER';
@@ -741,8 +513,8 @@ const normalizeArmyInstanceForStorage = ({
     templateName: normalizeArmyName(raw.templateName || existingArmy?.templateName || raw.name, '未命名模板'),
     name: normalizeArmyName(raw.name || existingArmy?.name, '未命名部队'),
     units: unitsResult.units,
-    templateFormations,
-    activeFormationId,
+    templateFormations: legacyTemplateFormations,
+    activeFormationId: legacyActiveFormationId,
     formationRect: normalizeArmyFormationRect(raw.formationRect),
     deploySlots: normalizeArmyDeploySlots(raw.deploySlots),
     skillSlots: normalizeArmySkillSlots(raw.skillSlots),
@@ -1187,7 +959,6 @@ router.post('/combat-armies', authenticateToken, async (req, res) => {
       return res.status(400).json({ error: normalizedUnits.error });
     }
 
-    const templateFormations = normalizeArmyFormationSnapshots(template.formations, unitTypeMap);
     const now = new Date();
     const created = {
       armyId: buildArmyId('combat'),
@@ -1195,8 +966,6 @@ router.post('/combat-armies', authenticateToken, async (req, res) => {
       templateName: normalizeArmyName(template.name, '未命名模板'),
       name: normalizeArmyName(req.body?.name, normalizeArmyName(template.name, '未命名部队')),
       units: normalizedUnits.units,
-      templateFormations,
-      activeFormationId: templateFormations[0]?.formationId || '',
       formationRect: null,
       deploySlots: [],
       skillSlots: [],
@@ -1411,21 +1180,12 @@ router.post('/templates', authenticateToken, async (req, res) => {
     if (normalizedUnits.error) {
       return res.status(400).json({ error: normalizedUnits.error });
     }
-    const normalizedFormations = normalizeTemplateFormationsStrict(
-      req.body?.formations,
-      unitTypeMap,
-      normalizedUnits.units
-    );
-    if (normalizedFormations.error) {
-      return res.status(400).json({ error: normalizedFormations.error });
-    }
     const templateName = normalizeTemplateName(req.body?.name, `模板${existingTemplates.length + 1}`);
     const now = new Date();
     const created = {
       templateId: buildTemplateId(),
       name: templateName,
       units: normalizedUnits.units,
-      formations: normalizedFormations.formations,
       createdAt: now,
       updatedAt: now
     };
@@ -1473,9 +1233,8 @@ router.put('/templates/:templateId', authenticateToken, async (req, res) => {
     const unitTypeMap = buildUnitTypeMap(unitTypes);
     const hasUnitsPayload = Object.prototype.hasOwnProperty.call(req.body || {}, 'units');
     const hasNamePayload = Object.prototype.hasOwnProperty.call(req.body || {}, 'name');
-    const hasFormationsPayload = Object.prototype.hasOwnProperty.call(req.body || {}, 'formations');
-    if (!hasUnitsPayload && !hasNamePayload && !hasFormationsPayload) {
-      return res.status(400).json({ error: '至少提供 name、units 或 formations 字段' });
+    if (!hasUnitsPayload && !hasNamePayload) {
+      return res.status(400).json({ error: '至少提供 name 或 units 字段' });
     }
 
     const current = templates[index];
@@ -1492,25 +1251,11 @@ router.put('/templates/:templateId', authenticateToken, async (req, res) => {
       nextUnits = normalizedUnits.units;
     }
 
-    let nextFormations = normalizeTemplateFormationsLoose(current?.formations, nextUnits);
-    if (hasFormationsPayload || hasUnitsPayload) {
-      const formationsPayload = hasFormationsPayload ? req.body?.formations : undefined;
-      const normalizedFormations = normalizeTemplateFormationsStrict(
-        formationsPayload,
-        unitTypeMap,
-        nextUnits
-      );
-      if (normalizedFormations.error) {
-        return res.status(400).json({ error: normalizedFormations.error });
-      }
-      nextFormations = normalizedFormations.formations;
-    }
-
     const nextTemplate = {
       templateId,
       name: nextName,
       units: nextUnits,
-      formations: nextFormations,
+      formations: Array.isArray(current?.formations) ? current.formations : [],
       createdAt: current?.createdAt || new Date(),
       updatedAt: new Date()
     };

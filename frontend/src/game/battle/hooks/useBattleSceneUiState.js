@@ -24,8 +24,6 @@ const useBattleSceneUiState = () => {
   const [skillConfirmState, setSkillConfirmState] = useState(null);
   const [skillPopupSquadId, setSkillPopupSquadId] = useState('');
   const [skillPopupPos, setSkillPopupPos] = useState(createDefaultPopupPos);
-  const [spacingPickOpen, setSpacingPickOpen] = useState(false);
-  const [spacingPopupPos, setSpacingPopupPos] = useState(createDefaultPopupPos);
   const [selectedSquadId, setSelectedSquadId] = useState('');
   const [resultState, setResultState] = useState(createDefaultResultState);
   const [deployDraggingGroup, setDeployDraggingGroup] = useState(createDefaultDeployDraggingGroup);
@@ -69,10 +67,6 @@ const useBattleSceneUiState = () => {
     setSkillPopupSquadId,
     skillPopupPos,
     setSkillPopupPos,
-    spacingPickOpen,
-    setSpacingPickOpen,
-    spacingPopupPos,
-    setSpacingPopupPos,
     selectedSquadId,
     setSelectedSquadId,
     resultState,

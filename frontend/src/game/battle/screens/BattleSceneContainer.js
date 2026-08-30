@@ -26,10 +26,8 @@ import AimOverlayCanvas from '../presentation/ui/AimOverlayCanvas';
 import BattleDebugPanel from '../presentation/ui/BattleDebugPanel';
 import BattleQuickDeployModal from '../presentation/ui/BattleQuickDeployModal';
 import BattleTemplateFillModal from '../presentation/ui/BattleTemplateFillModal';
-import BattleFormationSpacingFloat from '../presentation/ui/BattleFormationSpacingFloat';
 import BattleSkillPickFloat from '../presentation/ui/BattleSkillPickFloat';
 import DeployGroupInfoPanel from '../presentation/ui/DeployGroupInfoPanel';
-import BattleFormationWheel from '../presentation/ui/BattleFormationWheel';
 import TrainingSkillTreeModal from '../presentation/ui/TrainingSkillTreeModal';
 import TrainingSettingsModal from '../presentation/ui/TrainingSettingsModal';
 import TrainingFlagLabels from '../presentation/ui/TrainingFlagLabels';
@@ -48,7 +46,6 @@ import {
   BATTLE_FOLLOW_YAW_DEG,
   BATTLE_PITCH_HIGH_DEG,
   BATTLE_PITCH_LOW_DEG,
-  BATTLE_UI_MODE_SPACING_PICK,
   BATTLE_UI_MODE_NONE,
   BATTLE_UI_MODE_PATH,
   BATTLE_UI_MODE_SKILL_CONFIRM,
@@ -104,20 +101,6 @@ const serializeTrainingArmyGroup = (group = {}) => {
     templateId: String(group?.templateId || '').trim(),
     templateName: String(group?.templateName || '').trim(),
     units,
-    templateFormations: Array.isArray(group?.templateFormations)
-      ? group.templateFormations.slice(0, 9).map((formation) => ({
-        formationId: String(formation?.formationId || formation?.id || '').trim(),
-        name: String(formation?.name || '').trim(),
-        placements: Array.isArray(formation?.placements)
-          ? formation.placements.map((placement) => ({
-            unitTypeId: String(placement?.unitTypeId || '').trim(),
-            x: Math.floor(Number(placement?.x) || 0),
-            y: Math.floor(Number(placement?.y) || 0)
-          })).filter((placement) => placement.unitTypeId)
-          : []
-      })).filter((formation) => formation.formationId)
-      : [],
-    activeFormationId: String(group?.activeFormationId || group?.formationRect?.formationId || '').trim(),
     formationRect: group?.formationRect && typeof group.formationRect === 'object'
       ? { ...group.formationRect }
       : null,
@@ -239,7 +222,6 @@ const BattleSceneContainer = ({
   const pointerWorldRef = useRef({ x: 0, y: 0 });
   const panDragRef = useRef(null);
   const deployYawDragRef = useRef(null);
-  const deployRectDragRef = useRef(null);
   const deployDirectionArcDragRef = useRef(null);
   const skillPaintDragRef = useRef(null);
   const spacePressedRef = useRef(false);
@@ -250,13 +232,6 @@ const BattleSceneContainer = ({
   const trainingArmySaveInFlightRef = useRef(null);
   const resetDeployNoticeTimeoutRef = useRef(null);
   const [mapKeyCommand, setMapKeyCommand] = useState('');
-  const [deployFormationLibrary, setDeployFormationLibrary] = useState({});
-  const [formationWheelState, setFormationWheelState] = useState({
-    open: false,
-    groupId: '',
-    x: 0,
-    y: 0
-  });
   const [trainingSettingsOpen, setTrainingSettingsOpen] = useState(false);
   const [trainingSceneReady, setTrainingSceneReady] = useState(false);
   const [templateEditorState, setTemplateEditorState] = useState({
@@ -303,10 +278,6 @@ const BattleSceneContainer = ({
     setSkillPopupSquadId,
     skillPopupPos,
     setSkillPopupPos,
-    spacingPickOpen,
-    setSpacingPickOpen,
-    spacingPopupPos,
-    setSpacingPopupPos,
     selectedSquadId,
     setSelectedSquadId,
     resultState,
@@ -622,8 +593,6 @@ const BattleSceneContainer = ({
     setSkillConfirmState,
     setSkillPopupSquadId,
     setSkillPopupPos,
-    setSpacingPickOpen,
-    setSpacingPopupPos,
     setResultState,
     setDeployDraggingGroup,
     setDeployInfoState,
@@ -698,264 +667,6 @@ const BattleSceneContainer = ({
     else mapKeyCommandsRef.current.delete(command);
     setMapKeyCommand(Array.from(mapKeyCommandsRef.current).sort().join('|'));
   }, []);
-
-  const handleDeployGroupFormationsChange = useCallback((groupId, formations = [], activeFormationId = '') => {
-    const safeGroupId = String(groupId || '').trim();
-    if (!safeGroupId) return;
-    setDeployFormationLibrary((prev) => {
-      const legalFormations = (Array.isArray(formations) ? formations : [])
-        .filter((formation) => formation && formation.legal !== false)
-        .slice(0, 9);
-      if (legalFormations.length <= 0) {
-        const next = { ...prev };
-        delete next[safeGroupId];
-        return next;
-      }
-      const fallbackId = String(legalFormations[0]?.formationId || legalFormations[0]?.id || '').trim();
-      return {
-        ...prev,
-        [safeGroupId]: {
-          formations: legalFormations,
-          activeFormationId: String(activeFormationId || fallbackId || '').trim()
-        }
-      };
-    });
-  }, []);
-
-  const handleDeployGroupRemoved = useCallback((groupId) => {
-    const safeGroupId = String(groupId || '').trim();
-    if (!safeGroupId) return;
-    setDeployFormationLibrary((prev) => {
-      if (!Object.prototype.hasOwnProperty.call(prev, safeGroupId)) return prev;
-      const next = { ...prev };
-      delete next[safeGroupId];
-      return next;
-    });
-    setFormationWheelState((prev) => (
-      prev.groupId === safeGroupId ? { ...prev, open: false, groupId: '' } : prev
-    ));
-  }, []);
-
-  useEffect(() => {
-    if (!open || runtimeVersion <= 0) {
-      setDeployFormationLibrary({});
-      return;
-    }
-    const runtime = runtimeRef.current;
-    const deployGroups = runtime?.getDeployGroups?.();
-    const allGroups = [
-      ...(Array.isArray(deployGroups?.attacker) ? deployGroups.attacker : []),
-      ...(Array.isArray(deployGroups?.defender) ? deployGroups.defender : [])
-    ];
-    const nextLibrary = allGroups.reduce((library, group) => {
-      const groupId = String(group?.id || '').trim();
-      const formations = (Array.isArray(group?.templateFormations) ? group.templateFormations : [])
-        .filter((formation) => formation && formation.legal !== false && Array.isArray(formation.placements) && formation.placements.length > 0)
-        .slice(0, 9);
-      if (!groupId || formations.length <= 0) return library;
-      library[groupId] = {
-        formations,
-        activeFormationId: String(group?.activeFormationId || group?.formationRect?.formationId || formations[0]?.formationId || formations[0]?.id || '').trim()
-      };
-      return library;
-    }, {});
-    setDeployFormationLibrary(nextLibrary);
-  }, [open, runtimeRef, runtimeVersion]);
-
-  const getSceneRelativePosition = useCallback((event = null, fallbackWorld = null) => {
-    const sceneRect = sceneRef.current?.getBoundingClientRect();
-    let x = Number(sceneRect?.width) * 0.5 || 360;
-    let y = Number(sceneRect?.height) * 0.5 || 240;
-    if (event?.currentTarget?.getBoundingClientRect && sceneRect) {
-      const targetRect = event.currentTarget.getBoundingClientRect();
-      x = (targetRect.left + (targetRect.width * 0.5)) - sceneRect.left;
-      y = (targetRect.top + (targetRect.height * 0.5)) - sceneRect.top;
-    } else if (Number.isFinite(Number(event?.clientX)) && Number.isFinite(Number(event?.clientY)) && sceneRect) {
-      x = Number(event.clientX) - sceneRect.left;
-      y = Number(event.clientY) - sceneRect.top;
-    } else if (fallbackWorld && worldToDomRef.current) {
-      const dom = worldToDomRef.current({ x: Number(fallbackWorld.x) || 0, y: Number(fallbackWorld.y) || 0, z: 0 });
-      if (dom?.visible !== false) {
-        x = Number(dom.x) || x;
-        y = Number(dom.y) || y;
-      }
-    }
-    const maxX = Math.max(28, Number(sceneRect?.width) || x);
-    const maxY = Math.max(28, Number(sceneRect?.height) || y);
-    const marginX = Math.min(152, Math.max(28, (maxX * 0.5) - 4));
-    const marginY = Math.min(152, Math.max(28, (maxY * 0.5) - 4));
-    return {
-      x: clamp(x, marginX, Math.max(marginX, maxX - marginX)),
-      y: clamp(y, marginY, Math.max(marginY, maxY - marginY))
-    };
-  }, [worldToDomRef]);
-
-  const openFormationWheelForGroup = useCallback((groupId, event = null) => {
-    const runtime = runtimeRef.current;
-    const safeGroupId = String(groupId || '').trim();
-    const runtimePhase = runtime?.getPhase?.();
-    const canChangeFormation = runtimePhase === 'deploy' || runtimePhase === 'battle';
-    if (!runtime || !canChangeFormation || !safeGroupId) return false;
-    const library = deployFormationLibrary[safeGroupId];
-    const runtimeFormations = runtime.getDeployGroupFormations?.(safeGroupId) || [];
-    const formations = runtimeFormations.length > 0
-      ? runtimeFormations
-      : (Array.isArray(library?.formations) ? library.formations : []);
-    if (formations.length <= 0) {
-      setDeployNotice('该部队没有可切换的模板阵型');
-      return false;
-    }
-    const group = runtime.getFormationGroupById?.(safeGroupId)
-      || runtime.getSquadById?.(safeGroupId)
-      || runtime.getDeployGroupById(safeGroupId);
-    const activeFormationId = String(
-      group?.activeFormationId
-      || group?.formationRect?.formationId
-      || library?.activeFormationId
-      || formations[0]?.formationId
-      || ''
-    ).trim();
-    setDeployFormationLibrary((prev) => ({
-      ...prev,
-      [safeGroupId]: {
-        ...(prev[safeGroupId] || {}),
-        formations,
-        activeFormationId
-      }
-    }));
-    const pos = getSceneRelativePosition(event, group || pointerWorldRef.current);
-    setFormationWheelState({
-      open: true,
-      groupId: safeGroupId,
-      x: pos.x,
-      y: pos.y
-    });
-    setDeployActionAnchorMode('');
-    return true;
-  }, [
-    deployFormationLibrary,
-    getSceneRelativePosition,
-    pointerWorldRef,
-    runtimeRef,
-    setDeployActionAnchorMode,
-    setDeployNotice
-  ]);
-
-  const handleFormationKey = useCallback(() => {
-    if (phase !== 'deploy' && phase !== 'battle') return;
-    const targetGroupId = deployDraggingGroupId || selectedSquadId;
-    if (!targetGroupId) return;
-    openFormationWheelForGroup(targetGroupId);
-  }, [deployDraggingGroupId, openFormationWheelForGroup, phase, selectedSquadId]);
-
-  const handleCloseFormationWheel = useCallback(() => {
-    setFormationWheelState((prev) => ({ ...prev, open: false }));
-  }, []);
-
-  const handlePickDeployFormation = useCallback((formation, targetGroupIdOverride = '') => {
-    const runtime = runtimeRef.current;
-    const groupId = String(targetGroupIdOverride || formationWheelState.groupId || deployDraggingGroupId || selectedSquadId || '').trim();
-    const runtimePhase = runtime?.getPhase?.();
-    const canChangeFormation = runtimePhase === 'deploy' || runtimePhase === 'battle';
-    if (!runtime || !canChangeFormation || !groupId || !formation) return;
-    const group = runtime.getFormationGroupById?.(groupId)
-      || runtime.getSquadById?.(groupId)
-      || runtime.getDeployGroupById(groupId);
-    if (!group) {
-      setFormationWheelState((prev) => ({ ...prev, open: false, groupId: '' }));
-      return;
-    }
-    const groupTeam = group.team === TEAM_DEFENDER ? TEAM_DEFENDER : TEAM_ATTACKER;
-    const result = runtime.setDeployGroupFormation(groupId, formation, groupTeam);
-    if (!result?.ok) {
-      setDeployNotice(result?.reason || '阵型切换失败');
-      return;
-    }
-    const formationId = String(formation?.formationId || formation?.id || '').trim();
-    setDeployFormationLibrary((prev) => {
-      const source = prev[groupId];
-      if (!source) return prev;
-      return {
-        ...prev,
-        [groupId]: {
-          ...source,
-          activeFormationId: formationId || source.activeFormationId || ''
-        }
-      };
-    });
-    if (runtimePhase === 'deploy') runtime.setSelectedDeployGroup(groupId);
-    else runtime.setSelectedBattleSquad?.(groupId);
-    runtime.setFocusSquad(groupId);
-    setSelectedSquadId(groupId);
-    setFormationWheelState((prev) => ({ ...prev, open: false }));
-
-    if (runtimePhase === 'deploy' && group.placed !== false && !runtime.canDeployGroupFitAt(groupId, group, groupTeam)) {
-      runtime.setDeployGroupPlaced(groupTeam, groupId, false);
-      setDeployDraggingGroup({ groupId, team: groupTeam });
-      setDeployActionAnchorMode('');
-      setDeployNotice('新阵型放不下当前位置，已回到鼠标吸附状态；右键可取消放置');
-    } else if (result.reforming) {
-      setDeployNotice(`开始换阵：${formation?.name || '未命名阵型'}（约 ${Math.ceil(result.reformDurationSec || 0)} 秒）`);
-    } else {
-      setDeployNotice(`已切换阵型：${formation?.name || '未命名阵型'}`);
-    }
-    setCards(runtime.getCardRows());
-    setMinimapSnapshot(runtime.getMinimapSnapshot());
-  }, [
-    deployDraggingGroupId,
-    formationWheelState.groupId,
-    runtimeRef,
-    selectedSquadId,
-    setCards,
-    setDeployActionAnchorMode,
-    setDeployDraggingGroup,
-    setDeployNotice,
-    setMinimapSnapshot,
-    setSelectedSquadId
-  ]);
-
-  const handleReorderDeployFormations = useCallback((groupId = '', formations = []) => {
-    const runtime = runtimeRef.current;
-    const safeGroupId = String(groupId || '').trim();
-    if (!runtime || runtime.getPhase?.() !== 'deploy' || !safeGroupId) return;
-    const orderedIds = (Array.isArray(formations) ? formations : [])
-      .map((formation) => String(formation?.formationId || formation?.id || '').trim())
-      .filter(Boolean);
-    const result = runtime.reorderDeployGroupFormations?.(safeGroupId, orderedIds, 'any');
-    if (result?.ok === false) {
-      setDeployNotice(result.reason || '阵型快捷键调整失败');
-      return;
-    }
-    const nextFormations = Array.isArray(result?.formations) ? result.formations : formations;
-    setDeployFormationLibrary((prev) => {
-      const source = prev[safeGroupId];
-      if (!source) return prev;
-      return {
-        ...prev,
-        [safeGroupId]: { ...source, formations: nextFormations.slice(0, 9) }
-      };
-    });
-    setCards(runtime.getCardRows?.() || []);
-  }, [runtimeRef, setCards, setDeployNotice]);
-
-  const handleFormationHotkey = useCallback((slotIndex = 0) => {
-    if (phase !== 'deploy' && phase !== 'battle') return;
-    const runtime = runtimeRef.current;
-    const groupId = String(
-      deployDraggingGroupId
-      || selectedSquadId
-      || runtime?.getDeployGroups?.()?.selectedId
-      || ''
-    ).trim();
-    if (!groupId) return;
-    const runtimeFormations = runtime?.getDeployGroupFormations?.(groupId, 'any') || [];
-    const formations = runtimeFormations.length > 0
-      ? runtimeFormations
-      : (deployFormationLibrary[groupId]?.formations || []);
-    const formation = formations[Math.max(0, Math.min(8, Math.floor(Number(slotIndex) || 0)))];
-    if (!formation) return;
-    handlePickDeployFormation(formation, groupId);
-  }, [deployDraggingGroupId, deployFormationLibrary, handlePickDeployFormation, phase, runtimeRef, selectedSquadId]);
 
   useEffect(() => {
     if (!open) return undefined;
@@ -1084,8 +795,6 @@ const BattleSceneContainer = ({
     setPendingPathPoints,
     setPlanningHoverPoint,
     setSkillConfirmState,
-    setSpacingPickOpen,
-    setSpacingPopupPos,
     setDeployDraggingGroup,
     setDeployActionAnchorMode,
     setSelectedPaletteItemId,
@@ -1109,13 +818,11 @@ const BattleSceneContainer = ({
     closeSkillConfirm,
     closeSkillPick,
     commitPathPlanning,
-    closeSpacingPick,
     executeBattleAction,
     handleCycleSpeedMode,
     handleBattleActionClick,
     handleSkillPick,
-    handleFinishPathPlanning,
-    handlePickFormationSpacing
+    handleFinishPathPlanning
   } = useBattleActions({
     runtimeRef,
     cameraRef,
@@ -1134,8 +841,6 @@ const BattleSceneContainer = ({
     setClockPaused,
     setPendingPathPoints,
     setPlanningHoverPoint,
-    setSpacingPickOpen,
-    setSpacingPopupPos,
     setSkillPopupPos,
     setSkillPopupSquadId
   });
@@ -1161,8 +866,7 @@ const BattleSceneContainer = ({
     setDeployActionAnchorMode,
     setCards,
     setMinimapSnapshot,
-    setTemplateFillPreview,
-    onDeployGroupFormationsChange: handleDeployGroupFormationsChange
+    setTemplateFillPreview
   });
 
   const modalInteractionLocked = templateEditorState.open || templateFillPreview.open;
@@ -1186,7 +890,6 @@ const BattleSceneContainer = ({
     pointerWorldRef,
     panDragRef,
     deployYawDragRef,
-    deployRectDragRef,
     deployDirectionArcDragRef,
     skillPaintDragRef,
     spacePressedRef,
@@ -1205,7 +908,6 @@ const BattleSceneContainer = ({
     followBattleSquad,
     closeSkillConfirm,
     closeSkillPick,
-    closeSpacingPick,
     recallDeployDraggingGroup: handleRecallDeployDraggingGroup,
     setClockPaused,
     setCards,
@@ -1239,7 +941,6 @@ const BattleSceneContainer = ({
     DEPLOY_PITCH_DEG,
     BATTLE_UI_MODE_NONE,
     BATTLE_UI_MODE_PATH,
-    BATTLE_UI_MODE_SPACING_PICK,
     BATTLE_UI_MODE_SKILL_PICK,
     BATTLE_UI_MODE_SKILL_CONFIRM,
     skillRangeByClass,
@@ -1265,8 +966,7 @@ const BattleSceneContainer = ({
     setCards,
     setMinimapSnapshot,
     setDeployNotice,
-    setConfirmDeleteGroupId,
-    onDeployGroupRemoved: handleDeployGroupRemoved
+    setConfirmDeleteGroupId
   });
 
   const syncTrainingUi = useCallback(() => {
@@ -1298,12 +998,10 @@ const BattleSceneContainer = ({
       setPlanningHoverPoint(null);
       setSkillConfirmState(null);
       setSkillPopupSquadId('');
-      setSpacingPickOpen(false);
       setBattleUiMode(BATTLE_UI_MODE_NONE);
       if (
         battleUiMode === BATTLE_UI_MODE_PATH
         || battleUiMode === BATTLE_UI_MODE_SKILL_CONFIRM
-        || battleUiMode === BATTLE_UI_MODE_SPACING_PICK
       ) {
         setClockPaused(false);
       }
@@ -1320,7 +1018,6 @@ const BattleSceneContainer = ({
     setBattleUiMode,
     setClockPaused,
     setDeployNotice,
-    setSpacingPickOpen,
     setPendingPathPoints,
     setPlanningHoverPoint,
     setSelectedSquadId,
@@ -1680,7 +1377,6 @@ const BattleSceneContainer = ({
     templateFillPreviewOpen: templateFillPreview.open,
     deployDraggingGroupId,
     deployDraggingTeam,
-    deployRectDragRef,
     deployDirectionArcDragRef,
     battleUiMode,
     worldActionsVisibleForSquadId,
@@ -1696,7 +1392,6 @@ const BattleSceneContainer = ({
     commitPathPlanning,
     setBattleUiMode,
     setSkillPopupSquadId,
-    setSpacingPickOpen,
     setClockPaused,
     setWorldActionsVisibleForSquadId,
     setAimState,
@@ -1713,28 +1408,20 @@ const BattleSceneContainer = ({
       closeTrainingSkillTree();
       return;
     }
-    if (formationWheelState.open) {
-      handleCloseFormationWheel();
-      return;
-    }
     handleEscape();
-  }, [closeTrainingSkillTree, formationWheelState.open, handleCloseFormationWheel, handleEscape, modalInteractionLocked, skillTreeModal.open, trainingSettingsOpen]);
+  }, [closeTrainingSkillTree, handleEscape, modalInteractionLocked, skillTreeModal.open, trainingSettingsOpen]);
 
   useBattleSceneGlobalInput({
     open,
     interactionLocked: modalInteractionLocked,
     runtimeRef,
     spacePressedRef,
-    spacingPickOpen,
     isSkillPickMode: battleUiMode === BATTLE_UI_MODE_SKILL_PICK,
     onEscape: handleSceneEscape,
     onTogglePause: handleTogglePause,
     onTogglePitch: handleTogglePitch,
     onMapKeyCommand: handleMapKeyCommand,
-    onFormationKey: isTrainingMode ? undefined : handleFormationKey,
-    onFormationHotkey: isTrainingMode ? handleFormationHotkey : undefined,
     onSkillHotkey: handleTrainingSkillHotkey,
-    onCloseSpacingPick: closeSpacingPick,
     onCloseSkillPick: closeSkillPick
   });
 
@@ -2008,7 +1695,6 @@ const BattleSceneContainer = ({
               onDeployInfo={handleOpenDeployInfo}
               onDeployMove={handleDeployMoveWithInfoClose}
               onDeployEdit={handleDeployEditWithInfoClose}
-              onDeployFormation={(groupId, event) => openFormationWheelForGroup(groupId, event)}
               onDeployDelete={handleDeployDeleteWithInfoClose}
               confirmDeleteGroupId={confirmDeleteGroupId}
               onConfirmDelete={handleConfirmDeployDeleteWithInfoClose}
@@ -2019,9 +1705,6 @@ const BattleSceneContainer = ({
               onPlacementAction={handleDeployPlacementAction}
               onOpenSkillTree={handleOpenTrainingSkillTree}
               onCastSkillSlot={handleCastTrainingSkillSlot}
-              onFormationSpacingPick={(squadId, spacing) => handlePickFormationSpacing(spacing, squadId)}
-              onFormationPick={isTrainingMode ? (groupId, formation) => handlePickDeployFormation(formation, groupId) : undefined}
-              onFormationReorder={isTrainingMode ? handleReorderDeployFormations : undefined}
               trainingSkillTreeOpen={skillTreeModal.open && skillTreeModal.groupId === selectedCardRow?.id}
               trainingSkillTreeSlotIndex={skillTreeModal.groupId === selectedCardRow?.id ? skillTreeModal.slotIndex : -1}
               trainingSkillTreeProgress={selectedTrainingSkillTreeProgress}
@@ -2055,15 +1738,6 @@ const BattleSceneContainer = ({
                 </button>
                 <span className="pve2-hint">{`交互态：${battleUiMode}`}</span>
               </div>
-            ) : null}
-
-            {phase === 'battle' ? (
-              <BattleFormationSpacingFloat
-                open={spacingPickOpen}
-                popupPos={spacingPopupPos}
-                value={selectedCardRow?.formationSpacing || 'standard'}
-                onPickSpacing={handlePickFormationSpacing}
-              />
             ) : null}
 
             {phase === 'battle' && !isTrainingMode ? (
@@ -2214,7 +1888,6 @@ const BattleSceneContainer = ({
                   onInfo={(event) => handleOpenDeployInfo(worldActionGroupId, event)}
                   onMove={(event) => handleDeployMoveWithInfoClose(worldActionGroupId, event)}
                   onEdit={(event) => handleDeployEditWithInfoClose(worldActionGroupId, event)}
-                  onFormation={isTrainingMode ? undefined : (event) => openFormationWheelForGroup(worldActionGroupId, event)}
                   onDelete={(event) => handleDeployDeleteWithInfoClose(worldActionGroupId, event)}
                   showDelete={!isTrainingMode}
                   deleteTitle={isTrainingMode
@@ -2225,17 +1898,6 @@ const BattleSceneContainer = ({
                     : '删除'}
                 />
               </div>
-            ) : null}
-
-            {(phase === 'deploy' || phase === 'battle') && !isTrainingMode ? (
-              <BattleFormationWheel
-                open={formationWheelState.open}
-                formations={deployFormationLibrary[formationWheelState.groupId]?.formations || []}
-                activeFormationId={deployFormationLibrary[formationWheelState.groupId]?.activeFormationId || ''}
-                position={{ x: formationWheelState.x, y: formationWheelState.y }}
-                onPick={handlePickDeployFormation}
-                onClose={handleCloseFormationWheel}
-              />
             ) : null}
 
             {phase === 'deploy' && !deployPlacementLocked && deployInfoState.open && deployInfoData ? (

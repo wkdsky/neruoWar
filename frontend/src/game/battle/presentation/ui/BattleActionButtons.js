@@ -1,10 +1,9 @@
 import React, { useMemo } from 'react';
 
-export const BATTLE_ACTION_IDS = ['planPath', 'formationSpacing', 'freeAttack', 'skills', 'standby', 'retreat'];
+export const BATTLE_ACTION_IDS = ['planPath', 'freeAttack', 'skills', 'standby', 'retreat'];
 
 const ACTION_META = {
   planPath: { label: '规划', title: '规划路径' },
-  formationSpacing: { label: '间隔', title: '士兵间距' },
   freeAttack: { label: '警戒', title: '自由攻击' },
   skills: { label: '技能', title: '兵种技能' },
   standby: { label: '待命', title: '待命' },

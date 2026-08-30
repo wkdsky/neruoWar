@@ -42,6 +42,7 @@ import {
   resolveSquadControllerBoundarySteering,
   resolveSquadControllerCombatLeash,
   resolveSquadControllerFormationSlot,
+  resolveSquadControllerPassageFlowIntent,
   syncSquadControllerCombat
 } from './TrainingCardSquadTactics';
 import { isTrainingCardSquad } from './TrainingSquadKind';
@@ -65,6 +66,7 @@ export {
   resolveSquadControllerBoundarySteering,
   resolveSquadControllerCombatLeash,
   resolveSquadControllerFormationSlot,
+  resolveSquadControllerPassageFlowIntent,
   resolveTrainingMapAiTargetScoring,
   scoreTrainingMapAiTarget,
   selectTrainingMapAiObjective,
@@ -149,6 +151,7 @@ export const resolveTrainingCardAgentTacticalIntent = ({
     formationSlot: fallbackSlot && typeof fallbackSlot === 'object'
       ? resolveSquadControllerFormationSlot({ squad, agent, fallbackSlot })
       : null,
+    passageFlow: resolveSquadControllerPassageFlowIntent({ squad, agent }),
     catchUpMultiplier: resolveSquadControllerAgentSpeedMultiplier(agent, squad),
     combatLeash: resolveSquadControllerCombatLeash({ agent, squad }),
     combatTarget: isSupport

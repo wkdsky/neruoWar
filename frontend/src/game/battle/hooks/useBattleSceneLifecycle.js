@@ -49,8 +49,6 @@ export default function useBattleSceneLifecycle({
   setSkillConfirmState,
   setSkillPopupSquadId,
   setSkillPopupPos,
-  setSpacingPickOpen,
-  setSpacingPopupPos,
   setResultState,
   setDeployDraggingGroup,
   setDeployInfoState,
@@ -129,8 +127,6 @@ export default function useBattleSceneLifecycle({
     setSkillConfirmState(null);
     setSkillPopupSquadId('');
     setSkillPopupPos(createDefaultPopupPos());
-    setSpacingPickOpen(false);
-    setSpacingPopupPos(createDefaultPopupPos());
     setResultState(createDefaultResultState());
     setDeployDraggingGroup(createDefaultDeployDraggingGroup());
     setDeployInfoState(createDefaultDeployInfoState());
@@ -167,8 +163,6 @@ export default function useBattleSceneLifecycle({
     setSkillConfirmState,
     setSkillPopupSquadId,
     setSkillPopupPos,
-    setSpacingPickOpen,
-    setSpacingPopupPos,
     setResultState,
     setDeployDraggingGroup,
     setDeployInfoState,
@@ -203,8 +197,6 @@ export default function useBattleSceneLifecycle({
     setPendingPathPoints([]);
     setPlanningHoverPoint(null);
     setSkillConfirmState(null);
-    setSpacingPickOpen(false);
-    setSpacingPopupPos(createDefaultPopupPos());
     setDeployInfoState(createDefaultDeployInfoState());
     setPaused(false);
     setLoopPaused(false);
@@ -216,8 +208,6 @@ export default function useBattleSceneLifecycle({
     setPendingPathPoints,
     setPlanningHoverPoint,
     setSkillConfirmState,
-    setSpacingPickOpen,
-    setSpacingPopupPos,
     setDeployInfoState,
     setPaused,
     setLoopPaused

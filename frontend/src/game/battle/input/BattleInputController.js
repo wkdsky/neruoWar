@@ -43,7 +43,6 @@ const INTERACTIVE_UI_SELECTOR = [
   '.pve2-training-squad-skills-panel',
   '.pve2-training-skill-slots',
   '.pve2-training-flag-label',
-  '.pve2-formation-slots',
   '.pve2-template-strip',
   '.pve2-template-row-main',
   '.pve2-template-row-actions',
@@ -54,13 +53,11 @@ const INTERACTIVE_UI_SELECTOR = [
   '.pve2-minimap-wrap',
   '.pve2-action-pad',
   '.pve2-skill-float',
-  '.pve2-formation-spacing-float',
   '.pve2-path-confirm-btn',
   '.pve2-hud',
   '.pve2-quick-deploy-backdrop',
   '.pve2-quick-deploy-panel',
   '.pve2-deploy-info',
-  '.pve2-formation-wheel',
   '.number-pad-dialog-overlay',
   '.number-pad-dialog'
 ].join(', ');
@@ -142,7 +139,6 @@ export const createBattleInputController = ({
   pointerWorldRef,
   panDragRef,
   deployYawDragRef,
-  deployRectDragRef,
   deployDirectionArcDragRef,
   skillPaintDragRef = { current: null },
   spacePressedRef,
@@ -387,10 +383,6 @@ export const createBattleInputController = ({
     deployYawDragRef.current = null;
   };
 
-  const clearDeployRectDrag = () => {
-    deployRectDragRef.current = null;
-  };
-
   const setDirectionArcCursor = (cursor = '') => {
     const canvas = canvasRef?.current;
     if (canvas?.style) canvas.style.cursor = cursor;
@@ -583,10 +575,6 @@ export const createBattleInputController = ({
     const battleUiMode = getters.getBattleUiMode?.();
     const skillConfirmState = skillConfirmOverride || getters.getSkillConfirmState?.();
 
-    if (battleUiMode === constants.BATTLE_UI_MODE_SPACING_PICK) {
-      callbacks.closeSpacingPick?.();
-      return;
-    }
     if (battleUiMode === constants.BATTLE_UI_MODE_SKILL_PICK) {
       callbacks.closeSkillPick?.();
     }
@@ -790,10 +778,6 @@ export const createBattleInputController = ({
 
     const battleUiMode = getters.getBattleUiMode?.();
     const skillConfirmState = getters.getSkillConfirmState?.();
-    if (battleUiMode === constants.BATTLE_UI_MODE_SPACING_PICK) {
-      callbacks.closeSpacingPick?.();
-      return;
-    }
     if (event.button === 2 && skillPaintDragRef?.current) {
       event.preventDefault();
       restoreSkillPaintDrag();
@@ -1174,7 +1158,6 @@ export const createBattleInputController = ({
       if (interactionLocked) {
         clearPanDrag();
         clearDeployYawDrag();
-        clearDeployRectDrag();
         clearDeployDirectionArcDrag();
         restoreSkillPaintDrag();
         return;
@@ -1191,7 +1174,6 @@ export const createBattleInputController = ({
       if (!canPan) {
         clearPanDrag();
         clearDeployYawDrag();
-        clearDeployRectDrag();
         clearDeployDirectionArcDrag();
         return;
       }
@@ -1202,7 +1184,6 @@ export const createBattleInputController = ({
         }
         if ((Number(event?.buttons) & 1) === 1 && updateSkillPaintDrag(event)) return;
       }
-      if (!isDeploy) clearDeployRectDrag();
       if (!canEditDirectionArc) clearDeployDirectionArcDrag();
       const directionDrag = deployDirectionArcDragRef.current;
       if (canEditDirectionArc && directionDrag && runtime) {
@@ -1227,28 +1208,6 @@ export const createBattleInputController = ({
         }
         return;
       }
-      const rectDrag = deployRectDragRef.current;
-      if (isDeploy && rectDrag && runtime) {
-        if ((event.buttons & 1) !== 1) {
-          clearDeployRectDrag();
-          return;
-        }
-        const px = ((event.clientX - rect.left) / Math.max(1, rect.width)) * canvas.width;
-        const py = ((event.clientY - rect.top) / Math.max(1, rect.height)) * canvas.height;
-        const camera = cameraControllerRef.current;
-        camera.buildMatrices?.(canvas.width, canvas.height);
-        const world = camera.screenToGround(px, py, { width: canvas.width, height: canvas.height });
-        if (world?.valid !== false && Number.isFinite(Number(world?.x)) && Number.isFinite(Number(world?.y))) {
-          const dx = (Number(world.x) || 0) - (Number(rectDrag.centerX) || 0);
-          const dy = (Number(world.y) || 0) - (Number(rectDrag.centerY) || 0);
-          const projection = ((dx * (Number(rectDrag.axisX) || 0)) + (dy * (Number(rectDrag.axisY) || 0))) * (Number(rectDrag.sideSign) || 1);
-          const width = Math.max(8, Math.abs(projection) * 2);
-          runtime.setDeployGroupRect(rectDrag.groupId, { width }, rectDrag.team);
-          syncCardsAndMinimap();
-        }
-        return;
-      }
-
       const rotate = deployYawDragRef.current;
       if (rotate) {
         if ((event.buttons & 2) !== 2) {
@@ -1301,7 +1260,6 @@ export const createBattleInputController = ({
       if (interactionLocked) {
         clearPanDrag();
         clearDeployYawDrag();
-        clearDeployRectDrag();
         clearDeployDirectionArcDrag();
         restoreSkillPaintDrag();
         return;
@@ -1310,7 +1268,6 @@ export const createBattleInputController = ({
       if (completedSkillPaint) {
         clearPanDrag();
         clearDeployYawDrag();
-        clearDeployRectDrag();
         clearDeployDirectionArcDrag();
         handleBattlePrimaryAction(event, completedSkillPaint);
         return;
@@ -1327,7 +1284,6 @@ export const createBattleInputController = ({
       }
       clearPanDrag();
       clearDeployYawDrag();
-      clearDeployRectDrag();
       clearDeployDirectionArcDrag();
       if (!pan?.primaryAction || pan.moved || event.button !== 0) return;
       if (pan.primaryAction === 'map') {
@@ -1339,7 +1295,6 @@ export const createBattleInputController = ({
     const handleWindowBlur = () => {
       clearPanDrag();
       clearDeployYawDrag();
-      clearDeployRectDrag();
       clearDeployDirectionArcDrag();
       restoreSkillPaintDrag();
       runtimeRef.current?.setHoveredDeployGroup?.('');
@@ -1361,7 +1316,6 @@ export const createBattleInputController = ({
     beginPanDrag,
     clearPanDrag,
     clearDeployYawDrag,
-    clearDeployRectDrag,
     clearDeployDirectionArcDrag,
     clearSkillPaintDrag: restoreSkillPaintDrag,
     resolveEventWorldPoint,

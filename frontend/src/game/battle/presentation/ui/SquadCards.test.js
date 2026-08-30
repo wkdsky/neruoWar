@@ -25,14 +25,6 @@ const selectedSquad = {
     { unitTypeId: 'infantry', unitName: '步兵', count: 12, startCount: 12 },
     { unitTypeId: 'archer', unitName: '弓兵', count: 6, startCount: 8 }
   ],
-  formationName: '横向阵',
-  templateFormations: [{
-    formationId: 'line',
-    name: '横向阵',
-    placements: [{ unitTypeId: 'infantry', x: 0, y: 0 }]
-  }],
-  activeFormationId: 'line',
-  formationRect: { width: 48, depth: 24 },
   unitMetrics: { cohesiveSpeed: 1.1, totalAtk: 42, totalDef: 24, range: 3 },
   trainingSkillPoints: 4
 };
@@ -53,7 +45,7 @@ describe('SquadCards training controls', () => {
     expect(commandPanel.querySelector('.pve2-training-squad-meta-row')).toBeNull();
     expect(commandPanel.querySelectorAll('.pve2-training-skill-pair')).toHaveLength(3);
     expect(commandPanel.querySelectorAll('.pve2-training-skill-tree-toggle')).toHaveLength(3);
-    expect(commandPanel.querySelector('.pve2-formation-popover-trigger')).not.toBeNull();
+    expect(commandPanel.querySelector('.pve2-formation-popover-trigger')).toBeNull();
 
     fireEvent.click(screen.getByRole('button', { name: '辅助技能树 · 槽位 3' }));
     expect(onOpenSkillTree).toHaveBeenCalledWith(
@@ -117,31 +109,17 @@ describe('SquadCards training controls', () => {
     expect(screen.getByText('返回高地重生点')).not.toBeNull();
   });
 
-  test('keeps training battle commands and spacing choices together in the selected command strip', () => {
+  test('keeps training battle commands without formation controls', () => {
     const onBattleAction = jest.fn();
-    const onFormationSpacingPick = jest.fn();
-    const onFormationPick = jest.fn();
-    const formations = [
-      ...selectedSquad.templateFormations,
-      {
-        formationId: 'column',
-        name: '纵深阵',
-        placements: [{ unitTypeId: 'infantry', x: 0, y: 0 }]
-      }
-    ];
     render(
       <SquadCards
         squads={[{
           ...selectedSquad,
-          action: '待命',
-          formationSpacing: 'standard',
-          templateFormations: formations
+          action: '待命'
         }]}
         phase="battle"
         isTrainingMode
         onBattleAction={onBattleAction}
-        onFormationSpacingPick={onFormationSpacingPick}
-        onFormationPick={onFormationPick}
       />
     );
 
@@ -152,16 +130,8 @@ describe('SquadCards training controls', () => {
     expect(onBattleAction).toHaveBeenCalledWith('training_squad_1', 'freeAttack', expect.anything());
 
     expect(screen.queryByRole('button', { name: '跟随部队' })).toBeNull();
-
-    fireEvent.click(screen.getByRole('button', { name: '紧凑' }));
-    expect(onFormationSpacingPick).toHaveBeenCalledWith('training_squad_1', 'compact');
-
-    fireEvent.click(screen.getByRole('button', { name: '阵型选择' }));
-    fireEvent.click(screen.getByRole('button', { name: '2 · 纵深阵' }));
-    expect(onFormationPick).toHaveBeenCalledWith(
-      'training_squad_1',
-      expect.objectContaining({ formationId: 'column' })
-    );
+    expect(screen.queryByRole('button', { name: '紧凑' })).toBeNull();
+    expect(screen.queryByRole('button', { name: '阵型选择' })).toBeNull();
   });
 
   test('uses separate compact actions for templates and troop creation', () => {

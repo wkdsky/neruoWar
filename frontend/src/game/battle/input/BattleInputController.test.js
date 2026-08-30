@@ -70,7 +70,6 @@ const createFixture = ({
     pointerWorldRef: { current: { x: 0, y: 0 } },
     panDragRef: { current: null },
     deployYawDragRef: { current: null },
-    deployRectDragRef: { current: null },
     deployDirectionArcDragRef: { current: null },
     skillPaintDragRef: { current: null },
     spacePressedRef: { current: false }
@@ -86,14 +85,12 @@ const createFixture = ({
     pointerWorldRef: refs.pointerWorldRef,
     panDragRef: refs.panDragRef,
     deployYawDragRef: refs.deployYawDragRef,
-    deployRectDragRef: refs.deployRectDragRef,
     deployDirectionArcDragRef: refs.deployDirectionArcDragRef,
     skillPaintDragRef: refs.skillPaintDragRef,
     spacePressedRef: refs.spacePressedRef,
     constants: {
       BATTLE_UI_MODE_NONE: 'none',
       BATTLE_UI_MODE_PATH: 'path',
-      BATTLE_UI_MODE_SPACING_PICK: 'spacing-pick',
       BATTLE_UI_MODE_SKILL_PICK: 'skill-pick',
       BATTLE_UI_MODE_SKILL_CONFIRM: 'skill-confirm',
       ORDER_MOVE: 'MOVE',

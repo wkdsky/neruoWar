@@ -5,15 +5,13 @@ import {
   BATTLE_FOLLOW_YAW_DEG,
   BATTLE_PITCH_HIGH_DEG,
   BATTLE_PITCH_LOW_DEG,
-  BATTLE_UI_MODE_SPACING_PICK,
   BATTLE_UI_MODE_NONE,
   BATTLE_UI_MODE_PATH,
   BATTLE_UI_MODE_SKILL_CONFIRM,
   TEAM_ATTACKER,
   TEAM_DEFENDER,
   createDefaultAimState,
-  createDefaultDeployDraggingGroup,
-  createDefaultPopupPos
+  createDefaultDeployDraggingGroup
 } from '../screens/battleSceneConstants';
 
 export const focusDeployZoneIfOffscreen = ({
@@ -85,8 +83,6 @@ export default function useBattleSceneSelection({
   setPendingPathPoints,
   setPlanningHoverPoint,
   setSkillConfirmState,
-  setSpacingPickOpen,
-  setSpacingPopupPos,
   setDeployDraggingGroup,
   setDeployActionAnchorMode,
   setSelectedPaletteItemId,
@@ -135,8 +131,6 @@ export default function useBattleSceneSelection({
     setPendingPathPoints([]);
     setPlanningHoverPoint(null);
     setSkillConfirmState(null);
-    setSpacingPickOpen(false);
-    setSpacingPopupPos(createDefaultPopupPos());
     setDeployDraggingGroup(createDefaultDeployDraggingGroup());
     setDeployActionAnchorMode('');
     setSelectedPaletteItemId('');
@@ -154,8 +148,6 @@ export default function useBattleSceneSelection({
     setDeployActionAnchorMode,
     setDeployDraggingGroup,
     setHoverSquadIdOnCard,
-    setSpacingPickOpen,
-    setSpacingPopupPos,
     setPendingPathPoints,
     setPhase,
     setPlanningHoverPoint,
@@ -228,7 +220,7 @@ export default function useBattleSceneSelection({
     setSelectedSquadId(squadId);
     setWorldActionsVisibleForSquadId(!isTrainingMode && canControl ? squadId : '');
     setBattleUiMode((prev) => (
-      prev === BATTLE_UI_MODE_PATH || prev === BATTLE_UI_MODE_SKILL_CONFIRM || prev === BATTLE_UI_MODE_SPACING_PICK
+      prev === BATTLE_UI_MODE_PATH || prev === BATTLE_UI_MODE_SKILL_CONFIRM
         ? prev
         : BATTLE_UI_MODE_NONE
     ));

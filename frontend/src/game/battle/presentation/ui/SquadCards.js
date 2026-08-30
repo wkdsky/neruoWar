@@ -3,7 +3,6 @@ import { ArrowUpDown, Ban, Bot, Check, Pencil, Plus, Trash2, User, UserPlus, X }
 import DeployActionButtons from './DeployActionButtons';
 import BattleActionButtons from './BattleActionButtons';
 import TrainingSkillSlots from './TrainingSkillSlots';
-import BattleFormationSlots from './BattleFormationSlots';
 import { normalizeTemplateUnits } from '../../screens/battleSceneUtils';
 
 const iconByClass = {
@@ -65,36 +64,6 @@ const cardLayoutClassByCount = (count = 0) => (
   Math.max(0, Math.floor(Number(count) || 0)) > 8 ? 'is-two-column' : ''
 );
 
-const FORMATION_SPACING_OPTIONS = [
-  { value: 'loose', label: '松散' },
-  { value: 'standard', label: '标准' },
-  { value: 'compact', label: '紧凑' }
-];
-
-const TrainingFormationSpacingControl = ({ value = 'standard', disabled = false, onPick }) => (
-  <div className="pve2-training-spacing-control" aria-label="士兵间隔">
-    <span>士兵间隔</span>
-    <div>
-      {FORMATION_SPACING_OPTIONS.map((option) => (
-        <button
-          key={option.value}
-          type="button"
-          className={option.value === value ? 'is-active' : ''}
-          disabled={disabled}
-          aria-pressed={option.value === value}
-          onMouseDown={(event) => event.stopPropagation()}
-          onClick={(event) => {
-            event.stopPropagation();
-            onPick?.(option.value);
-          }}
-        >
-          {option.label}
-        </button>
-      ))}
-    </div>
-  </div>
-);
-
 const SquadCards = ({
   squads = [],
   phase = 'deploy',
@@ -107,7 +76,6 @@ const SquadCards = ({
   onDeployInfo,
   onDeployMove,
   onDeployEdit,
-  onDeployFormation,
   onDeployDelete,
   confirmDeleteGroupId = '',
   onConfirmDelete,
@@ -118,9 +86,6 @@ const SquadCards = ({
   onPlacementAction,
   onOpenSkillTree,
   onCastSkillSlot,
-  onFormationSpacingPick,
-  onFormationPick,
-  onFormationReorder,
   trainingSkillTreeOpen = false,
   trainingSkillTreeSlotIndex = -1,
   trainingSkillTreeProgress = {},
@@ -152,12 +117,6 @@ const SquadCards = ({
     && selectedRow?.alive
     && !disabled
   );
-  const canShowFormationPicker = (
-    isTrainingMode
-    && selectedRow
-    && (phase === 'deploy' || (phase === 'battle' && selectedRow.alive && selectedRow.controlMode !== 'AI'))
-  );
-
   const renderTemplateCard = (template, index) => {
     const templateId = typeof template?.templateId === 'string' ? template.templateId : `idx_${index}`;
     const templateUnits = normalizeTemplateUnits(template?.units || []);
@@ -446,28 +405,14 @@ const SquadCards = ({
             {selectedRow.towerLocked ? <strong>已被塔锁定</strong> : null}
           </div>
         ) : null}
-        {(phase === 'deploy' || canShowBattleActions || canShowFormationPicker) ? (
+        {(phase === 'deploy' || canShowBattleActions) ? (
           <div className="pve2-training-squad-command-row">
-          {canShowFormationPicker ? (
-            <BattleFormationSlots
-              formations={selectedRow.templateFormations}
-              activeFormationId={selectedRow.activeFormationId || selectedRow.formationId}
-              editable={isTrainingMode && phase === 'deploy'}
-              disabled={disabled}
-              showHoverGrid={isTrainingMode}
-              onPick={(formation) => onFormationPick?.(selectedRow.id, formation)}
-              onReorder={phase === 'deploy'
-                ? (formations) => onFormationReorder?.(selectedRow.id, formations)
-                : undefined}
-            />
-          ) : null}
           {canShowDeployActions ? (
             <DeployActionButtons
               layout="line"
               onInfo={(event) => onDeployInfo?.(selectedRow.id, event)}
               onMove={(event) => onDeployMove?.(selectedRow.id, event)}
               onEdit={(event) => onDeployEdit?.(selectedRow.id, event)}
-              onFormation={isTrainingMode ? undefined : (event) => onDeployFormation?.(selectedRow.id, event)}
               onDelete={(event) => onDeployDelete?.(selectedRow.id, event)}
               showDelete={false}
             />
@@ -481,11 +426,6 @@ const SquadCards = ({
                 actionIds={['planPath', 'freeAttack', 'standby', 'retreat']}
                 className="pve2-training-command-actions"
                 onAction={(actionId, payload) => onBattleAction?.(selectedRow.id, actionId, payload)}
-              />
-              <TrainingFormationSpacingControl
-                value={selectedRow.formationSpacing || 'standard'}
-                disabled={disabled}
-                onPick={(spacing) => onFormationSpacingPick?.(selectedRow.id, spacing)}
               />
             </>
           ) : null}
@@ -606,7 +546,6 @@ const SquadCards = ({
                     onInfo={(event) => onDeployInfo?.(selectedRow.id, event)}
                     onMove={(event) => onDeployMove?.(selectedRow.id, event)}
                     onEdit={(event) => onDeployEdit?.(selectedRow.id, event)}
-                    onFormation={isTrainingMode ? undefined : (event) => onDeployFormation?.(selectedRow.id, event)}
                     onDelete={(event) => onDeployDelete?.(selectedRow.id, event)}
                     showDelete
                     deleteTitle="删除"

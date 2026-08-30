@@ -1,7 +1,6 @@
 import { useCallback } from 'react';
 import {
   BATTLE_UI_MODE_GUARD,
-  BATTLE_UI_MODE_SPACING_PICK,
   BATTLE_UI_MODE_NONE,
   BATTLE_UI_MODE_PATH,
   BATTLE_UI_MODE_SKILL_CONFIRM,
@@ -18,7 +17,6 @@ export default function useBattleEscapeHandler({
   templateFillPreviewOpen = false,
   deployDraggingGroupId = '',
   deployDraggingTeam = '',
-  deployRectDragRef,
   deployDirectionArcDragRef,
   battleUiMode = BATTLE_UI_MODE_NONE,
   worldActionsVisibleForSquadId = '',
@@ -34,7 +32,6 @@ export default function useBattleEscapeHandler({
   commitPathPlanning,
   setBattleUiMode,
   setSkillPopupSquadId,
-  setSpacingPickOpen,
   setClockPaused,
   setWorldActionsVisibleForSquadId,
   setAimState,
@@ -65,11 +62,6 @@ export default function useBattleEscapeHandler({
       }
       return;
     }
-    if (deployRectDragRef.current) {
-      deployRectDragRef.current = null;
-      setDeployNotice('已取消阵型调整');
-      return;
-    }
     if (deployDirectionArcDragRef?.current) {
       const directionDrag = deployDirectionArcDragRef.current;
       deployDirectionArcDragRef.current = null;
@@ -85,10 +77,9 @@ export default function useBattleEscapeHandler({
       commitPathPlanning(false);
       return;
     }
-    if (battleUiMode === BATTLE_UI_MODE_SPACING_PICK || battleUiMode === BATTLE_UI_MODE_SKILL_PICK || battleUiMode === BATTLE_UI_MODE_GUARD) {
+    if (battleUiMode === BATTLE_UI_MODE_SKILL_PICK || battleUiMode === BATTLE_UI_MODE_GUARD) {
       setBattleUiMode(BATTLE_UI_MODE_NONE);
       setSkillPopupSquadId('');
-      setSpacingPickOpen(false);
       setClockPaused(false);
       return;
     }
@@ -112,7 +103,6 @@ export default function useBattleEscapeHandler({
     deployDraggingTeam,
     deployDirectionArcDragRef,
     deployInfoOpen,
-    deployRectDragRef,
     handleCloseQuickDeploy,
     handleCloseTemplateFillPreview,
     quickDeployOpen,
@@ -123,7 +113,6 @@ export default function useBattleEscapeHandler({
     setDeployNotice,
     setDeployDraggingGroup,
     setDeployInfoState,
-    setSpacingPickOpen,
     setSkillPopupSquadId,
     setWorldActionsVisibleForSquadId,
     onRecallDeployDraggingGroup,

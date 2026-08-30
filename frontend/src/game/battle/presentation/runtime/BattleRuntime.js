@@ -8,14 +8,13 @@
  */
 import {
   addCrowdSquad,
-  applyCrowdSquadFormation,
   createCrowdSim,
-  releaseCrowdSquadFormationLock,
   updateCrowdSim,
   triggerCrowdSkill
 } from '../../simulation/crowd/CrowdSim';
 import { querySpatialNearby, rotate2D } from '../../simulation/crowd/crowdPhysics';
 import { resetTrainingCardSquadAiRuntime } from '../../simulation/crowd/TrainingCardSquadAi';
+import { isTrainingCardSquad } from '../../simulation/crowd/TrainingSquadKind';
 import { degToRad, normalizeDeg } from '../../shared/angle';
 import { limitNameByDisplayWidth } from '../../shared/nameLimits';
 import { snapTrainingDirectionOffset } from '../../shared/trainingDirectionArc';
@@ -24,6 +23,11 @@ import {
   resolveTrainingAgentSelectionRadius
 } from '../../shared/trainingUnitSelection';
 import { normalizeAttackRange } from '../../../unit/attackRange';
+import {
+  buildDefaultFormationLayout,
+  DEFAULT_FORMATION_ID,
+  DEFAULT_FORMATION_NAME
+} from '../../../formation/defaultFormation';
 import { buildBattleSummary } from './BattleSummary';
 import {
   buildRepConfig,
@@ -115,9 +119,6 @@ const ORDER_CHARGE = 'CHARGE';
 const SPEED_MODE_B = 'B_HARMONIC';
 const SPEED_MODE_C = 'C_PER_TYPE';
 const SPEED_MODE_AUTO = 'AUTO';
-const FORMATION_SPACING_LOOSE = 'loose';
-const FORMATION_SPACING_STANDARD = 'standard';
-const FORMATION_SPACING_COMPACT = 'compact';
 const SPEED_AUTH_USER = 'USER';
 const SPEED_AUTH_AI = 'AI';
 const CONTROL_MODE_USER = 'USER';
@@ -176,17 +177,27 @@ const SKILL_POWER_CONFIG_BY_CLASS = {
 };
 const CLASS_TAG_SET = new Set(['infantry', 'cavalry', 'archer', 'artillery']);
 const DEPLOY_FORMATION_SPACING_DEFAULT = 12;
-const DEPLOY_FORMATION_RATIO_MIN = 1 / 6;
-const DEPLOY_FORMATION_RATIO_MAX = 6;
-const DEPLOY_FORMATION_MIN_EDGE = 8;
-const DEPLOY_FORMATION_MAX_EDGE_MUL = 5.8;
-const TEMPLATE_FORMATION_CELL_SPACING = 13;
-const MAX_DEPLOY_TEMPLATE_FORMATIONS = 9;
-const FORMATION_CHANGE_DURATION_SEC = 4.6;
 const TRAINING_DEPLOY_AGENT_CLEARANCE = 4;
 const TRAINING_DEPLOY_GROUP_CLEARANCE = 8;
 
 const clamp = (value, min, max) => Math.min(max, Math.max(min, value));
+
+const resolveTrainingPassagePathClearance = (mapConfig = {}) => {
+  const navigation = mapConfig?.navigation && typeof mapConfig.navigation === 'object'
+    ? mapConfig.navigation
+    : {};
+  const passage = navigation?.passage && typeof navigation.passage === 'object'
+    ? navigation.passage
+    : {};
+  const configuredPassage = Number(
+    passage?.pathClearance
+      ?? navigation?.passagePathClearance
+  );
+  if (Number.isFinite(configuredPassage)) return clamp(configuredPassage, 0, 8);
+  const configuredPath = Number(navigation?.pathClearance);
+  if (Number.isFinite(configuredPath)) return clamp(Math.min(configuredPath, 2.5), 0, 8);
+  return 0.75;
+};
 const cloneJsonValue = (value, fallback = null) => {
   try {
     return value === undefined ? fallback : JSON.parse(JSON.stringify(value));
@@ -256,10 +267,6 @@ const normalizeTrainingRespawnDelay = (value) => {
   ), TRAINING_RESPAWN_DELAY_OPTIONS[0]);
 };
 
-const normalizeFormationSpacing = (value) => {
-  if (value === FORMATION_SPACING_LOOSE || value === FORMATION_SPACING_COMPACT) return value;
-  return FORMATION_SPACING_STANDARD;
-};
 const clampToRange = (value, min, max) => {
   const safeMin = Number(min) || 0;
   const safeMax = Number(max) || 0;
@@ -924,6 +931,21 @@ const clampPointToField = (point, field, radius = 0) => ({
   y: clamp(Number(point?.y) || 0, -field.height / 2 + radius, field.height / 2 - radius)
 });
 
+const resolveTrainingSquadBoundaryRadius = (squad = {}, mapConfig = {}) => {
+  const visualRadius = Math.max(2, Number(squad?.radius) || 2);
+  if (!isTrainingCardSquad(squad)) return visualRadius;
+  const navigationScale = String(squad?._trainingNavigationScale || '').toUpperCase();
+  if (navigationScale !== 'PASSAGE') return visualRadius;
+  const configuredAgentRadius = Number(squad?.navigationAgentRadius);
+  const mapAgentRadius = Number(mapConfig?.navigation?.agentRadius);
+  return Math.max(
+    2,
+    Number.isFinite(configuredAgentRadius) && configuredAgentRadius > 0
+      ? configuredAgentRadius
+      : (Number.isFinite(mapAgentRadius) && mapAgentRadius > 0 ? mapAgentRadius : TRAINING_DEPLOY_AGENT_CLEARANCE)
+  );
+};
+
 const normalizeUnitsList = (list = []) => {
   const map = {};
   (Array.isArray(list) ? list : []).forEach((row) => {
@@ -1188,16 +1210,6 @@ const buildDeployGroupInfo = (group = null, unitTypeMap = new Map(), repConfig =
   };
 };
 
-const resolveFormationName = (source = {}) => {
-  const directName = String(source?.formationRect?.formationName || '').trim();
-  if (directName) return directName;
-  const activeId = String(source?.activeFormationId || '').trim();
-  const templateFormation = (Array.isArray(source?.templateFormations) ? source.templateFormations : [])
-    .find((formation) => String(formation?.formationId || formation?.id || '').trim() === activeId)
-    || (Array.isArray(source?.templateFormations) ? source.templateFormations[0] : null);
-  return String(templateFormation?.name || '').trim() || '默认阵型';
-};
-
 const buildCardComposition = (remainUnits = {}, startUnits = {}, unitTypeMap = new Map()) => {
   const remainMap = normalizeUnitsMap(remainUnits || {});
   const startMap = normalizeUnitsMap(startUnits || remainUnits || {});
@@ -1238,8 +1250,8 @@ const buildCardDetails = (source = {}, unitTypeMap = new Map(), isBattle = false
     : (buildCompositionMetrics(startUnits, unitTypeMap) || {});
   return {
     unitComposition: buildCardComposition(remainUnits, startUnits, unitTypeMap),
-    formationName: resolveFormationName(source),
-    formationId: String(source?.formationRect?.formationId || source?.activeFormationId || '').trim(),
+    formationName: DEFAULT_FORMATION_NAME,
+    formationId: DEFAULT_FORMATION_ID,
     unitMetrics: metrics,
     formationRect: source?.formationRect && typeof source.formationRect === 'object'
       ? {
@@ -1264,23 +1276,6 @@ const hashWaypoints = (waypoints = []) => {
   return out;
 };
 
-const hashFormationGeometry = (formationRect = null, deploySlots = []) => {
-  const rect = formationRect && typeof formationRect === 'object' ? formationRect : {};
-  const values = [
-    Number(rect.width) || 0,
-    Number(rect.depth) || 0,
-    Number(rect.spacing) || 0,
-    Math.max(0, Math.floor(Number(rect.slotCount) || 0))
-  ].map((value) => Math.round(value * 1000) / 1000);
-  const slots = (Array.isArray(deploySlots) ? deploySlots : []).map((slot) => [
-    Math.round((Number(slot?.side) || 0) * 1000) / 1000,
-    Math.round((Number(slot?.front) || 0) * 1000) / 1000,
-    String(slot?.unitTypeId || ''),
-    Math.max(0, Math.floor(Number(slot?.templateIndex) || 0))
-  ].join(':'));
-  return `${values.join(':')}|${slots.join('|')}`;
-};
-
 const clearPlannedMoveRoute = (squad) => {
   if (!squad) return;
   squad._plannedMoveWaypoints = [];
@@ -1288,6 +1283,21 @@ const clearPlannedMoveRoute = (squad) => {
   if (squad.order && typeof squad.order === 'object') {
     squad.order.pathPoints = [];
     squad.order.pathIndex = 0;
+  }
+  if (isTrainingCardSquad(squad)) {
+    delete squad._passageRoute;
+    delete squad._passagePlanRoute;
+    squad._trainingNavigationScale = '';
+    const runtime = squad?._squadController;
+    if (runtime && typeof runtime === 'object') {
+      runtime.passagePlan = null;
+      runtime.passageInactiveSince = 0;
+      runtime.passageCompletedRouteSignature = '';
+      runtime.passageCompletedAt = 0;
+      if (runtime.terrain && typeof runtime.terrain === 'object') {
+        runtime.terrain.sampledAt = -Infinity;
+      }
+    }
   }
 };
 
@@ -1321,6 +1331,20 @@ const setPlannedMoveRoute = (squad, waypoints = []) => {
   }));
   squad._plannedMoveWaypoints = next;
   squad._plannedMoveWaypointIndex = 0;
+  if (isTrainingCardSquad(squad)) {
+    delete squad._passageRoute;
+    delete squad._passagePlanRoute;
+    const runtime = squad?._squadController;
+    if (runtime && typeof runtime === 'object') {
+      runtime.passagePlan = null;
+      runtime.passageInactiveSince = 0;
+      runtime.passageCompletedRouteSignature = '';
+      runtime.passageCompletedAt = 0;
+      if (runtime.terrain && typeof runtime.terrain === 'object') {
+        runtime.terrain.sampledAt = -Infinity;
+      }
+    }
+  }
   if (squad.order && typeof squad.order === 'object') {
     squad.order.pathPoints = next.slice();
     squad.order.pathIndex = 0;
@@ -1396,131 +1420,10 @@ const resolveFormationDirectionState = (team = TEAM_ATTACKER, rect = {}) => {
   };
 };
 
-const normalizeTemplateFormationPlacements = (placements = [], units = {}) => {
-  const remaining = normalizeUnitsMap(units || {});
-  const occupied = new Set();
-  const out = [];
-  (Array.isArray(placements) ? placements : []).forEach((placement) => {
-    const unitTypeId = typeof placement?.unitTypeId === 'string' ? placement.unitTypeId.trim() : '';
-    if (!unitTypeId || !remaining[unitTypeId]) return;
-    const x = Math.floor(Number(placement?.x) || 0);
-    const y = Math.floor(Number(placement?.y) || 0);
-    const key = `${x}:${y}`;
-    if (occupied.has(key)) return;
-    occupied.add(key);
-    remaining[unitTypeId] -= 1;
-    out.push({ unitTypeId, x, y });
-  });
-  return out;
-};
-
-const buildTemplateFormationState = (formation = {}, group = {}, team = TEAM_ATTACKER, repConfig = {}) => {
-  const placements = normalizeTemplateFormationPlacements(formation?.placements || [], group?.units || {});
-  if (placements.length <= 0) return null;
-  const minX = Math.min(...placements.map((placement) => placement.x));
-  const maxX = Math.max(...placements.map((placement) => placement.x));
-  const minY = Math.min(...placements.map((placement) => placement.y));
-  const maxY = Math.max(...placements.map((placement) => placement.y));
-  const centerX = (minX + maxX) * 0.5;
-  const centerY = (minY + maxY) * 0.5;
-  const { facingRad, directionOffsetRad, directionRad } = resolveFormationDirectionState(
-    team,
-    group?.formationRect
-  );
-  const slotCount = Math.max(resolveDeploySlotCount(group?.units || {}, repConfig), placements.length);
-  const width = Math.max(DEPLOY_FORMATION_MIN_EDGE, ((maxX - minX) + 1) * TEMPLATE_FORMATION_CELL_SPACING);
-  const depth = Math.max(DEPLOY_FORMATION_MIN_EDGE, ((maxY - minY) + 1) * TEMPLATE_FORMATION_CELL_SPACING);
-  const baseSlots = placements.map((placement, index) => ({
-    side: (placement.x - centerX) * TEMPLATE_FORMATION_CELL_SPACING,
-    front: -(placement.y - centerY) * TEMPLATE_FORMATION_CELL_SPACING,
-    row: Math.max(0, placement.y - minY),
-    col: Math.max(0, placement.x - minX),
-    unitTypeId: placement.unitTypeId,
-    templateIndex: index
-  }));
-  const fallbackRect = {
-    width,
-    depth,
-    area: width * depth,
-    spacing: TEMPLATE_FORMATION_CELL_SPACING,
-    facingRad,
-    directionOffsetRad,
-    directionRad,
-    slotCount
-  };
-  const fallbackSlots = buildFormationSlots(slotCount, fallbackRect);
-  const deploySlots = Array.from({ length: slotCount }, (_, index) => baseSlots[index] || fallbackSlots[index] || { side: 0, front: 0, row: 0, col: 0 });
-  const formationId = String(formation?.formationId || formation?.id || '').trim();
-  return {
-    formationRect: {
-      ...fallbackRect,
-      formationId,
-      formationName: typeof formation?.name === 'string' ? formation.name.trim() : ''
-    },
-    deploySlots
-  };
-};
-
 const resolveDeploySlotCount = (units = {}, repConfig = {}) => {
   const normalized = normalizeUnitsMap(units || {});
   const count = estimateRepAgents(normalized, Math.max(1, Number(repConfig?.maxAgentWeight) || 50));
   return Math.max(1, Math.floor(Number(count) || 1));
-};
-
-const clampFormationByArea = (inputRect = {}) => {
-  const spacing = Math.max(4, Number(inputRect?.spacing) || DEPLOY_FORMATION_SPACING_DEFAULT);
-  const baseArea = Math.max(spacing * spacing, Number(inputRect?.area) || (spacing * spacing));
-  const edgeMin = Math.max(DEPLOY_FORMATION_MIN_EDGE, spacing * 0.72);
-  const edgeMax = Math.max(edgeMin, Math.sqrt(baseArea) * DEPLOY_FORMATION_MAX_EDGE_MUL);
-  let width = Number(inputRect?.width);
-  let depth = Number(inputRect?.depth);
-  if (!Number.isFinite(width) && Number.isFinite(depth) && depth > 0) width = baseArea / depth;
-  if (!Number.isFinite(depth) && Number.isFinite(width) && width > 0) depth = baseArea / width;
-  if (!Number.isFinite(width) || width <= 0) width = Math.sqrt(baseArea);
-  if (!Number.isFinite(depth) || depth <= 0) depth = Math.sqrt(baseArea);
-
-  width = clamp(width, edgeMin, edgeMax);
-  depth = baseArea / Math.max(edgeMin, width);
-  depth = clamp(depth, edgeMin, edgeMax);
-  width = baseArea / Math.max(edgeMin, depth);
-  width = clamp(width, edgeMin, edgeMax);
-
-  let ratio = width / Math.max(1e-6, depth);
-  if (ratio < DEPLOY_FORMATION_RATIO_MIN) {
-    width = Math.sqrt(baseArea * DEPLOY_FORMATION_RATIO_MIN);
-    depth = baseArea / Math.max(edgeMin, width);
-  } else if (ratio > DEPLOY_FORMATION_RATIO_MAX) {
-    width = Math.sqrt(baseArea * DEPLOY_FORMATION_RATIO_MAX);
-    depth = baseArea / Math.max(edgeMin, width);
-  }
-  width = clamp(width, edgeMin, edgeMax);
-  depth = clamp(baseArea / Math.max(edgeMin, width), edgeMin, edgeMax);
-  ratio = width / Math.max(1e-6, depth);
-
-  return {
-    area: width * depth,
-    width,
-    depth,
-    spacing,
-    ratio
-  };
-};
-
-const buildFormationSlots = (slotCount = 1, formationRect = {}) => {
-  const total = Math.max(1, Math.floor(Number(slotCount) || 1));
-  const width = Math.max(DEPLOY_FORMATION_MIN_EDGE, Number(formationRect?.width) || DEPLOY_FORMATION_MIN_EDGE);
-  const depth = Math.max(DEPLOY_FORMATION_MIN_EDGE, Number(formationRect?.depth) || DEPLOY_FORMATION_MIN_EDGE);
-  const rows = Math.max(1, Math.ceil(Math.sqrt(total * (depth / Math.max(1, width)))));
-  const cols = Math.max(1, Math.ceil(total / rows));
-  const stepSide = width / Math.max(1, cols);
-  const stepFront = depth / Math.max(1, rows);
-  return Array.from({ length: total }, (_, index) => {
-    const row = Math.floor(index / cols);
-    const col = index % cols;
-    const side = ((col + 0.5) - (cols * 0.5)) * stepSide;
-    const front = (((rows - 1 - row) + 0.5) - (rows * 0.5)) * stepFront;
-    return { side, front, row, col };
-  });
 };
 
 const resolveDeployGroupSlotPoints = (group = {}, worldPoint = null, fallbackTeam = TEAM_ATTACKER) => {
@@ -1535,7 +1438,11 @@ const resolveDeployGroupSlotPoints = (group = {}, worldPoint = null, fallbackTea
   const sideY = forwardX;
   const slots = Array.isArray(group?.deploySlots) && group.deploySlots.length > 0
     ? group.deploySlots
-    : buildFormationSlots(Math.max(1, Number(group?.formationRect?.slotCount) || 1), group?.formationRect || {});
+    : buildDefaultFormationLayout({
+      units: group?.units || {},
+      slotCount: Math.max(1, Number(group?.formationRect?.slotCount) || 1),
+      spacing: Math.max(1, Number(group?.formationRect?.spacing) || DEPLOY_FORMATION_SPACING_DEFAULT)
+    }).deploySlots;
   return slots.map((slot) => ({
     x: centerX + (sideX * (Number(slot?.side) || 0)) + (forwardX * (Number(slot?.front) || 0)),
     y: centerY + (sideY * (Number(slot?.side) || 0)) + (forwardY * (Number(slot?.front) || 0))
@@ -1565,56 +1472,31 @@ const resolveTrainingSpawnSeed = (initData = {}, options = {}, mapConfig = {}) =
   return String(configured ?? `${mapConfig?.mapId || 'training-map'}:${mapConfig?.mapVersion || 1}`);
 };
 
-const normalizeDeploySlotsForCount = (slots = [], slotCount = 1, fallbackRect = {}) => {
-  const total = Math.max(1, Math.floor(Number(slotCount) || 1));
-  const fallbackSlots = buildFormationSlots(total, fallbackRect);
-  return Array.from({ length: total }, (_, index) => {
-    const slot = Array.isArray(slots) ? slots[index] : null;
-    if (!slot) return fallbackSlots[index] || { side: 0, front: 0, row: 0, col: 0 };
-    return {
-      side: Number(slot?.side) || 0,
-      front: Number(slot?.front) || 0,
-      row: Math.max(0, Math.floor(Number(slot?.row) || 0)),
-      col: Math.max(0, Math.floor(Number(slot?.col) || 0)),
-      unitTypeId: typeof slot?.unitTypeId === 'string' ? slot.unitTypeId.trim() : '',
-      templateIndex: Math.max(0, Math.floor(Number(slot?.templateIndex) || index))
-    };
-  });
-};
-
-const buildDeployGroupFormationState = (group = {}, team = TEAM_ATTACKER, repConfig = {}) => {
+const buildDeployGroupFormationState = (
+  group = {},
+  team = TEAM_ATTACKER,
+  repConfig = {},
+  unitTypeMap = new Map()
+) => {
   const units = normalizeUnitsMap(group?.units || {});
   const slotCount = resolveDeploySlotCount(units, repConfig);
-  const spacing = Math.max(4, Number(group?.formationRect?.spacing) || DEPLOY_FORMATION_SPACING_DEFAULT);
   const prevRect = group?.formationRect && typeof group.formationRect === 'object' ? group.formationRect : {};
   const { facingRad, directionOffsetRad, directionRad } = resolveFormationDirectionState(team, prevRect);
-  const fallbackCols = Math.max(1, Math.ceil(Math.sqrt(slotCount)));
-  const fallbackRows = Math.max(1, Math.ceil(slotCount / fallbackCols));
-  const baseRect = clampFormationByArea({
-    width: Number(prevRect.width) || (fallbackCols * spacing),
-    depth: Number(prevRect.depth) || (fallbackRows * spacing),
-    area: Number(prevRect.area) || ((fallbackCols * spacing) * (fallbackRows * spacing)),
-    spacing
-  });
-  const formationRect = {
-    area: baseRect.area,
-    width: baseRect.width,
-    depth: baseRect.depth,
-    spacing,
-    facingRad,
-    directionOffsetRad,
-    directionRad,
+  const layout = buildDefaultFormationLayout({
+    units,
+    unitTypes: unitTypeMap,
     slotCount,
-    formationId: typeof prevRect.formationId === 'string' ? prevRect.formationId : '',
-    formationName: typeof prevRect.formationName === 'string' ? prevRect.formationName : ''
-  };
-  const hasTemplateSlots = !!formationRect.formationId && Array.isArray(group?.deploySlots) && group.deploySlots.length > 0;
+    spacing: DEPLOY_FORMATION_SPACING_DEFAULT,
+    facingRad,
+    directionOffsetRad
+  });
   return {
     ...group,
-    formationRect,
-    deploySlots: hasTemplateSlots
-      ? normalizeDeploySlotsForCount(group.deploySlots, slotCount, formationRect)
-      : buildFormationSlots(slotCount, formationRect)
+    formationRect: {
+      ...layout.formationRect,
+      directionRad
+    },
+    deploySlots: layout.deploySlots
   };
 };
 
@@ -1656,10 +1538,6 @@ const buildSavedDeployGroups = (deployUnits, team, field, unitTypeMap, { default
       units,
       templateId: String(rawGroup?.templateId || '').trim(),
       templateName: limitNameByDisplayWidth(String(rawGroup?.templateName || '').trim()),
-      templateFormations: Array.isArray(rawGroup?.templateFormations)
-        ? rawGroup.templateFormations.slice(0, MAX_DEPLOY_TEMPLATE_FORMATIONS).map((formation) => ({ ...formation }))
-        : [],
-      activeFormationId: String(rawGroup?.activeFormationId || '').trim(),
       skillSlots: Array.isArray(rawGroup?.skillSlots)
         ? rawGroup.skillSlots.slice(0, 3).map((slot) => ({ ...slot }))
         : (defaultSkillSlots ? buildDefaultTrainingSkillSlots(units, unitTypeMap) : []),
@@ -1905,10 +1783,6 @@ const createSquad = ({
     sortOrder: Math.max(0, Math.floor(Number(group?.sortOrder) || index)),
     units,
     templateId: typeof group?.templateId === 'string' ? group.templateId : '',
-    templateFormations: Array.isArray(group?.templateFormations)
-      ? group.templateFormations.slice(0, MAX_DEPLOY_TEMPLATE_FORMATIONS).map((formation) => ({ ...formation }))
-      : [],
-    activeFormationId: String(group?.activeFormationId || group?.formationRect?.formationId || '').trim(),
     skillSlots: normalizeSkillSlots(group?.skillSlots),
     startCount,
     remain: startCount,
@@ -1941,8 +1815,8 @@ const createSquad = ({
         directionOffsetRad: direction.directionOffsetRad,
         directionRad: direction.directionRad,
         slotCount: Math.max(1, Math.floor(Number(group.formationRect.slotCount) || 1)),
-        formationId: typeof group.formationRect.formationId === 'string' ? group.formationRect.formationId : '',
-        formationName: typeof group.formationRect.formationName === 'string' ? group.formationRect.formationName : ''
+        formationId: DEFAULT_FORMATION_ID,
+        formationName: DEFAULT_FORMATION_NAME
         };
       })()
       : null,
@@ -1952,7 +1826,9 @@ const createSquad = ({
           side: Number(slot?.side) || 0,
           front: Number(slot?.front) || 0,
           row: Math.max(0, Math.floor(Number(slot?.row) || 0)),
-          col: Math.max(0, Math.floor(Number(slot?.col) || 0))
+          col: Math.max(0, Math.floor(Number(slot?.col) || 0)),
+          unitTypeId: typeof slot?.unitTypeId === 'string' ? slot.unitTypeId.trim() : '',
+          templateIndex: Math.max(0, Math.floor(Number(slot?.templateIndex) || 0))
         }))
       : [],
     x: startX,
@@ -2001,7 +1877,7 @@ const createSquad = ({
     speedMode: SPEED_MODE_B,
     speedModeAuthority: SPEED_AUTH_AI,
     speedPolicy: SPEED_POLICY_MARCH,
-    formationSpacing: FORMATION_SPACING_STANDARD,
+    formationSpacing: 'standard',
     reformUntil: 0,
     reformRadiusThreshold: Math.max(18, radius * 1.4),
     underAttackTimer: 0,
@@ -3066,43 +2942,6 @@ export default class BattleRuntime {
     return group ? normalizeSkillSlots(group.skillSlots) : normalizeSkillSlots([]);
   }
 
-  getDeployGroupFormations(groupId = '', team = TEAM_ANY) {
-    const group = this.getFormationGroupById(groupId, team);
-    if (!group) return [];
-    return (Array.isArray(group.templateFormations) ? group.templateFormations : [])
-      .filter((formation) => formation && formation.legal !== false)
-      .slice(0, MAX_DEPLOY_TEMPLATE_FORMATIONS)
-      .map((formation, index) => ({
-        ...formation,
-        formationId: String(formation?.formationId || formation?.id || `formation_${index}`).trim()
-      }));
-  }
-
-  reorderDeployGroupFormations(groupId = '', orderedFormationIds = [], team = TEAM_ANY) {
-    if (this.phase !== 'deploy') return { ok: false, reason: '仅部署阶段可调整阵型快捷键' };
-    const group = this.getDeployGroupById(groupId, team);
-    if (!group) return { ok: false, reason: '未找到部队' };
-    const source = this.getDeployGroupFormations(group.id, group.team);
-    if (source.length <= 1) return { ok: true, formations: source };
-    const byId = new Map(source.map((formation) => [formation.formationId, formation]));
-    const requested = Array.isArray(orderedFormationIds) ? orderedFormationIds : [];
-    const next = [];
-    requested.forEach((id) => {
-      const safeId = String(id || '').trim();
-      const formation = byId.get(safeId);
-      if (!formation || next.some((item) => item.formationId === safeId)) return;
-      next.push(formation);
-    });
-    source.forEach((formation) => {
-      if (!next.some((item) => item.formationId === formation.formationId)) next.push(formation);
-    });
-    group.templateFormations = next.slice(0, MAX_DEPLOY_TEMPLATE_FORMATIONS).map((formation) => ({ ...formation }));
-    return {
-      ok: true,
-      formations: group.templateFormations.map((formation) => ({ ...formation }))
-    };
-  }
-
   setDeployGroupSkillSlots(groupId = '', skillSlots = [], team = TEAM_ANY) {
     if (this.phase !== 'deploy') return { ok: false, reason: '仅部署阶段可配置技能' };
     const group = this.getDeployGroupById(groupId, team);
@@ -3140,28 +2979,10 @@ export default class BattleRuntime {
   hydrateDeployGroupFormation(group = null, fallbackTeam = TEAM_ATTACKER) {
     if (!group || typeof group !== 'object') return null;
     const team = group?.team === TEAM_DEFENDER ? TEAM_DEFENDER : resolveTeamTag(fallbackTeam);
-    const hasStoredFormation = !!group?.formationRect?.formationId
-      && Array.isArray(group?.deploySlots)
-      && group.deploySlots.length > 0;
-    if (!hasStoredFormation) {
-      const formations = Array.isArray(group?.templateFormations) ? group.templateFormations : [];
-      const activeFormationId = String(group?.activeFormationId || '').trim();
-      const formation = formations.find((item) => (
-        String(item?.formationId || item?.id || '').trim() === activeFormationId
-      )) || formations[0] || null;
-      const templateState = formation
-        ? buildTemplateFormationState(formation, group, team, this.repConfig)
-        : null;
-      if (templateState) {
-        Object.assign(group, templateState);
-        group.activeFormationId = String(formation?.formationId || formation?.id || '').trim();
-        return group;
-      }
-    }
     const hydrated = buildDeployGroupFormationState({
       ...group,
       team
-    }, team, this.repConfig);
+    }, team, this.repConfig, this.unitTypeMap);
     Object.assign(group, hydrated);
     return group;
   }
@@ -3182,9 +3003,6 @@ export default class BattleRuntime {
     this.hydrateDeployGroupFormation(group, group.team);
     const current = group.formationRect || {};
     const previousFormationRect = { ...current };
-    const previousDeploySlots = Array.isArray(group.deploySlots)
-      ? group.deploySlots.map((slot) => ({ ...slot }))
-      : [];
     const nextFacing = Number.isFinite(Number(partialRect?.facingRad))
       ? Number(partialRect.facingRad)
       : normalizeFormationFacing(group.team, current.facingRad);
@@ -3195,49 +3013,20 @@ export default class BattleRuntime {
         ? normalizeDirectionOffset(Number(partialRect.directionRad) - nextFacing)
         : currentDirection.directionOffsetRad);
     const nextDirection = nextFacing + nextDirectionOffset;
-    const spacing = Math.max(4, Number(partialRect?.spacing) || Number(current.spacing) || DEPLOY_FORMATION_SPACING_DEFAULT);
-    const slotCount = Math.max(1, Math.floor(Number(current.slotCount) || resolveDeploySlotCount(group.units || {}, this.repConfig)));
-    const requestedArea = Number.isFinite(Number(partialRect?.area))
-      ? Math.max(spacing * spacing, Number(partialRect.area))
-      : Math.max(spacing * spacing, Number(current.area) || (Number(current.width) || spacing) * (Number(current.depth) || spacing));
-    let requestedWidth = Number(partialRect?.width);
-    if (!Number.isFinite(requestedWidth) && Number.isFinite(Number(partialRect?.depth)) && Number(partialRect.depth) > 0) {
-      requestedWidth = requestedArea / Number(partialRect.depth);
-    }
-    if (!Number.isFinite(requestedWidth)) requestedWidth = Number(current.width) || Math.sqrt(requestedArea);
-    const normalizedRect = clampFormationByArea({
-      width: requestedWidth,
-      area: requestedArea,
-      spacing
-    });
     group.formationRect = {
-      area: normalizedRect.area,
-      width: normalizedRect.width,
-      depth: normalizedRect.depth,
-      spacing,
+      ...current,
       facingRad: nextFacing,
       directionOffsetRad: nextDirectionOffset,
       directionRad: nextDirection,
-      slotCount,
-      formationId: typeof partialRect?.formationId === 'string'
-        ? partialRect.formationId.trim()
-        : String(current.formationId || '').trim(),
-      formationName: typeof partialRect?.formationName === 'string'
-        ? partialRect.formationName.trim()
-        : String(current.formationName || '').trim()
+      formationId: DEFAULT_FORMATION_ID,
+      formationName: DEFAULT_FORMATION_NAME
     };
-    // A facing-only update must leave template coordinates untouched.  This
-    // is the path used by the deployment mouse wheel.
-    group.deploySlots = Array.isArray(group.deploySlots) && group.deploySlots.length > 0
-      ? normalizeDeploySlotsForCount(group.deploySlots, slotCount, group.formationRect)
-      : buildFormationSlots(slotCount, group.formationRect);
     if (
       this.isTrainingMapHighlandSpawnEnabled()
       && group.placed !== false
       && !this.isDeployGroupPlacementValid(group, group)
     ) {
       group.formationRect = previousFormationRect;
-      group.deploySlots = previousDeploySlots;
       return { ok: false, reason: '调整后的阵型超出己方高地或与其他部队重叠' };
     }
     return {
@@ -3283,86 +3072,6 @@ export default class BattleRuntime {
       ok: true,
       directionOffsetRad: normalizedOffset,
       directionRad: group.formationRect.directionRad
-    };
-  }
-
-  setDeployGroupFormation(groupId = '', formation = null, team = TEAM_ANY) {
-    const isBattleFormationChange = this.phase === 'battle';
-    if (this.phase !== 'deploy' && !isBattleFormationChange) {
-      return { ok: false, reason: '当前阶段不可切换阵型' };
-    }
-    const group = this.getFormationGroupById(groupId, team);
-    if (!group) return { ok: false, reason: '未找到部队' };
-    if (isBattleFormationChange && !this.canControlSquad(group)) {
-      return { ok: false, reason: '该部队由 AI 接管' };
-    }
-    const nextFormation = buildTemplateFormationState(formation, group, group.team, this.repConfig);
-    if (!nextFormation) return { ok: false, reason: '阵型不可用' };
-    const nextFormationId = String(formation?.formationId || formation?.id || '').trim();
-    const currentFormationId = String(group?.formationRect?.formationId || group?.activeFormationId || '').trim();
-    const currentFormationSignature = hashFormationGeometry(group?.formationRect, group?.deploySlots);
-    const nextFormationSignature = hashFormationGeometry(nextFormation.formationRect, nextFormation.deploySlots);
-    const geometryChanged = currentFormationSignature !== nextFormationSignature;
-    const previousFormationRect = group?.formationRect && typeof group.formationRect === 'object'
-      ? { ...group.formationRect }
-      : null;
-    const previousDeploySlots = Array.isArray(group.deploySlots)
-      ? group.deploySlots.map((slot) => ({ ...slot }))
-      : [];
-    const previousActiveFormationId = group.activeFormationId;
-    const direction = resolveFormationDirectionState(group.team, group.formationRect);
-    const facingRad = normalizeFormationFacing(group.team, group.formationRect?.facingRad);
-    group.formationRect = {
-      ...nextFormation.formationRect,
-      facingRad,
-      directionOffsetRad: direction.directionOffsetRad,
-      directionRad: facingRad + direction.directionOffsetRad
-    };
-    group.deploySlots = normalizeDeploySlotsForCount(
-      nextFormation.deploySlots,
-      group.formationRect.slotCount,
-      group.formationRect
-    );
-    group.activeFormationId = nextFormationId;
-    if (
-      !isBattleFormationChange
-      && this.isTrainingMapHighlandSpawnEnabled()
-      && group.placed !== false
-      && !this.isDeployGroupPlacementValid(group, group)
-    ) {
-      group.formationRect = previousFormationRect;
-      group.deploySlots = previousDeploySlots;
-      group.activeFormationId = previousActiveFormationId;
-      return { ok: false, reason: '当前高地无法容纳该阵型' };
-    }
-    if (isBattleFormationChange) {
-      group.formationChange = {
-        fromFormationId: currentFormationId,
-        toFormationId: nextFormationId,
-        remainingSec: FORMATION_CHANGE_DURATION_SEC,
-        durationSec: FORMATION_CHANGE_DURATION_SEC,
-        startedAt: Math.max(0, Number(this.sim?.timeElapsed) || 0),
-        stableSince: 0,
-        maximumError: Infinity,
-        readyRatio: 0,
-        reapply: currentFormationId === nextFormationId && !geometryChanged,
-        geometryChanged
-      };
-      group.speedPolicy = SPEED_POLICY_REFORM;
-      group.reformUntil = FORMATION_CHANGE_DURATION_SEC;
-      group.action = '换阵中';
-      if (this.crowd) {
-        applyCrowdSquadFormation(this.crowd, group, group.deploySlots, group.formationRect);
-      }
-      this.markCommandIssued('formation_change');
-    }
-    return {
-      ok: true,
-      changed: true,
-      reforming: isBattleFormationChange,
-      reformDurationSec: isBattleFormationChange ? FORMATION_CHANGE_DURATION_SEC : 0,
-      formationRect: { ...group.formationRect },
-      slotCount: group.deploySlots.length
     };
   }
 
@@ -3416,8 +3125,6 @@ export default class BattleRuntime {
     deploySlots = [],
     templateId = '',
     templateName = '',
-    templateFormations = [],
-    activeFormationId = '',
     skillSlots = undefined
   } = {}) {
     if (this.phase !== 'deploy') return { ok: false, reason: '仅部署阶段可新建部队' };
@@ -3501,10 +3208,6 @@ export default class BattleRuntime {
       units: nextUnits,
       templateId: typeof templateId === 'string' ? templateId.trim() : '',
       templateName: typeof templateName === 'string' ? limitNameByDisplayWidth(templateName.trim()) : '',
-      templateFormations: Array.isArray(templateFormations)
-        ? templateFormations.slice(0, MAX_DEPLOY_TEMPLATE_FORMATIONS).map((formation) => ({ ...formation }))
-        : [],
-      activeFormationId: typeof activeFormationId === 'string' ? activeFormationId.trim() : '',
       skillSlots: skillSlots === undefined
         ? (this.isTrainingMode ? buildDefaultTrainingSkillSlots(nextUnits, this.unitTypeMap) : normalizeSkillSlots([]))
         : normalizeSkillSlots(skillSlots),
@@ -4480,6 +4183,10 @@ export default class BattleRuntime {
           mapVersion: this.trainingMap.mapVersion,
           activePresetId: this.trainingMapPresetId,
           lanes: cloneJsonValue(this.trainingMap.lanes, []),
+          // Crowd tactics uses ramp polygons to keep PASSAGE_FLOW active until
+          // the body leaves a highland transition; navigator already owns the
+          // same full topology for route planning.
+          terrainRegions: cloneJsonValue(this.trainingMap.terrainRegions, []),
           navigation: cloneJsonValue(this.trainingMap.navigation, null),
           movementCalibration: cloneJsonValue(this.trainingMap.movementCalibration, null)
         }
@@ -4844,29 +4551,80 @@ export default class BattleRuntime {
       y: Number(start?.y) || Number(squad?.y) || 0
     };
     const configuredAgentRadius = Number(this.trainingMap?.navigation?.agentRadius);
-    const radius = Number.isFinite(configuredAgentRadius) && configuredAgentRadius > 0
+    const agentRadius = Number.isFinite(configuredAgentRadius) && configuredAgentRadius > 0
       ? clamp(configuredAgentRadius, 1, 8)
-      : Math.max(TRAINING_DEPLOY_AGENT_CLEARANCE, Number(squad?.radius) || 10);
+      : (isTrainingCardSquad(squad)
+        ? TRAINING_DEPLOY_AGENT_CLEARANCE
+        : Math.max(TRAINING_DEPLOY_AGENT_CLEARANCE, Number(squad?.radius) || 10));
+    const configuredFormationRadius = Number(this.trainingMap?.navigation?.formationRouteRadius);
+    const formationSpacing = Math.max(
+      TRAINING_DEPLOY_AGENT_CLEARANCE * 2,
+      Number(squad?.formationRect?.spacing) || 0
+    );
+    const formationRadius = isTrainingCardSquad(squad)
+      ? (Number.isFinite(configuredFormationRadius) && configuredFormationRadius > 0
+        ? clamp(Math.max(agentRadius, configuredFormationRadius), agentRadius, 42)
+        : clamp(
+          Math.max(
+            agentRadius * 2.2,
+            formationSpacing * 1.45,
+            Math.min((Number(squad?.radius) || 0) * 0.22, formationSpacing * 5.5)
+          ),
+          agentRadius,
+          36
+        ))
+      : agentRadius;
     const safeTarget = this.trainingMapNavigator.isWalkable(
       requestedTarget,
-      { obstacles: sourceBuildings, radius }
+      { obstacles: sourceBuildings, radius: agentRadius }
     )
       ? requestedTarget
       : this.trainingMapNavigator.resolveLegalPosition(
         routeStart,
         requestedTarget,
-        { obstacles: sourceBuildings, radius }
+        { obstacles: sourceBuildings, radius: agentRadius }
       );
-    const route = this.trainingMapNavigator.planRoute(
+    const routeReachesTarget = (route = []) => {
+      const last = Array.isArray(route) && route.length > 0 ? route[route.length - 1] : null;
+      return !!last && Math.hypot(
+        (Number(last?.x) || 0) - safeTarget.x,
+        (Number(last?.y) || 0) - safeTarget.y
+      ) <= Math.max(6, agentRadius * 2.5);
+    };
+    const formationRoute = this.trainingMapNavigator.planRoute(
       routeStart,
       safeTarget,
       {
         obstacles: sourceBuildings,
-        radius,
+        radius: formationRadius,
         preferLocalDetour: true
       }
     );
-    return Array.isArray(route) && route.length > 0 ? route : [safeTarget];
+    if (routeReachesTarget(formationRoute) || !isTrainingCardSquad(squad)) {
+      squad._trainingNavigationScale = 'FORMATION';
+      return Array.isArray(formationRoute) && formationRoute.length > 0 ? formationRoute : [safeTarget];
+    }
+    // A player-issued card order must use exactly the same two-scale policy as
+    // autonomous movement: a formation route is preferred, while a legal
+    // soldier-sized corridor activates flow instead of declaring no route.
+    const passageRoute = this.trainingMapNavigator.planRoute(
+      routeStart,
+      safeTarget,
+      {
+        obstacles: sourceBuildings,
+        radius: agentRadius,
+        pathClearance: resolveTrainingPassagePathClearance(this.trainingMap),
+        preferLocalDetour: true
+      }
+    );
+    if (routeReachesTarget(passageRoute)) {
+      squad._trainingNavigationScale = 'PASSAGE';
+      return passageRoute;
+    }
+    squad._trainingNavigationScale = 'FORMATION';
+    return Array.isArray(formationRoute) && formationRoute.length > 0
+      ? formationRoute
+      : (Array.isArray(passageRoute) && passageRoute.length > 0 ? passageRoute : [safeTarget]);
   }
 
   resolveRawFocusAnchor() {
@@ -5131,16 +4889,6 @@ export default class BattleRuntime {
     return true;
   }
 
-  commandFormationSpacing(squadId, spacing = FORMATION_SPACING_STANDARD) {
-    if (this.phase !== 'battle' || !this.sim) return false;
-    const squad = this.getSquadById(squadId);
-    if (!this.canControlSquad(squad)) return false;
-    squad.formationSpacing = normalizeFormationSpacing(spacing);
-    releaseCrowdSquadFormationLock(this.crowd, squad.id);
-    this.markCommandIssued('formation_spacing');
-    return true;
-  }
-
   commandSkill(squadId, targetSpec) {
     if (this.phase !== 'battle' || !this.sim || !this.crowd) return { ok: false, reason: '战斗未开始' };
     if (!this.canControlSquad(this.getSquadById(squadId))) return { ok: false, reason: '该部队由 AI 接管' };
@@ -5317,7 +5065,7 @@ export default class BattleRuntime {
     };
     (this.sim.squads || []).forEach((squad) => {
       if (!squad) return;
-      const radius = Math.max(2, Number(squad.radius) || 2);
+      const radius = resolveTrainingSquadBoundaryRadius(squad, this.trainingMap);
       const preX = Number(squad.x) || 0;
       const safePoint = clampPointToField({ x: preX, y: squad.y }, this.field, radius);
       const bounds = allowCrossMidline
@@ -5484,10 +5232,6 @@ export default class BattleRuntime {
           classTag: inferClassFromUnitType(this.unitTypeMap.get(Object.keys(group.units)[0]) || {}),
           unitCategories: getGroupSkillTreeCategories(group.units, this.unitTypeMap),
           templateId: typeof group?.templateId === 'string' ? group.templateId : '',
-          templateFormations: Array.isArray(group?.templateFormations)
-            ? group.templateFormations.slice(0, MAX_DEPLOY_TEMPLATE_FORMATIONS).map((formation) => ({ ...formation }))
-            : [],
-          activeFormationId: String(group?.activeFormationId || group?.formationRect?.formationId || '').trim(),
           skillSlots: normalizeSkillSlots(group?.skillSlots),
           spawnSlotId: String(group?.spawnSlotId || ''),
           spawnRegionId: String(group?.spawnRegionId || ''),
@@ -5514,10 +5258,6 @@ export default class BattleRuntime {
           classTag: inferClassFromUnitType(this.unitTypeMap.get(Object.keys(group.units)[0]) || {}),
           unitCategories: getGroupSkillTreeCategories(group.units, this.unitTypeMap),
           templateId: typeof group?.templateId === 'string' ? group.templateId : '',
-          templateFormations: Array.isArray(group?.templateFormations)
-            ? group.templateFormations.slice(0, MAX_DEPLOY_TEMPLATE_FORMATIONS).map((formation) => ({ ...formation }))
-            : [],
-          activeFormationId: String(group?.activeFormationId || group?.formationRect?.formationId || '').trim(),
           skillSlots: normalizeSkillSlots(group?.skillSlots),
           spawnSlotId: String(group?.spawnSlotId || ''),
           spawnRegionId: String(group?.spawnRegionId || ''),
@@ -5557,10 +5297,6 @@ export default class BattleRuntime {
         ? squad.unitCategories
         : getGroupSkillTreeCategories(squad?.units || {}, this.unitTypeMap),
       templateId: typeof squad?.templateId === 'string' ? squad.templateId : '',
-      templateFormations: Array.isArray(squad?.templateFormations)
-        ? squad.templateFormations.slice(0, MAX_DEPLOY_TEMPLATE_FORMATIONS).map((formation) => ({ ...formation }))
-        : [],
-      activeFormationId: String(squad?.activeFormationId || squad?.formationRect?.formationId || '').trim(),
       skillSlots: normalizeSkillSlots(squad?.skillSlots),
       trainingSkillPoints: this.isTrainingMode
         ? this.getTrainingSquadSkillPointState(squad.id).points
@@ -5572,10 +5308,6 @@ export default class BattleRuntime {
       speedMode: squad.speedMode || SPEED_MODE_B,
       speedModeAuthority: squad.speedModeAuthority || SPEED_AUTH_AI,
       speedPolicy: squad.speedPolicy || SPEED_POLICY_MARCH,
-      formationChange: squad.formationChange && typeof squad.formationChange === 'object'
-        ? { ...squad.formationChange }
-        : null,
-      formationSpacing: normalizeFormationSpacing(squad.formationSpacing),
       behavior: squad.behavior || 'idle',
       debugTargetScore: squad.debugTargetScore || null,
       trainingAi: squad.trainingAi && typeof squad.trainingAi === 'object'

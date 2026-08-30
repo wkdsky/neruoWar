@@ -710,7 +710,7 @@ describe('individual soldier combat behavior', () => {
     expect(squad.x).toBeGreaterThan(132);
   });
 
-  test('waits for a genuinely distant straggler and resumes after it rejoins', () => {
+  test('keeps the anchor marching while one distant soldier rejoins', () => {
     const squad = buildCombatSquad({
       id: 'distant-straggler-formation',
       team: 'attacker',
@@ -754,30 +754,28 @@ describe('individual soldier combat behavior', () => {
     straggler.vx = 0;
     straggler.vy = 0;
     straggler._formationLocked = false;
+    const persistentSlot = { ...straggler.formationSlot };
     let sawWaiting = false;
-    let waitingDistance = 0;
-    let anchorAtWait = null;
-    let resumedAfterWait = false;
+    let maximumCohesionPenalty = 0;
 
     for (let index = 0; index < 700; index += 1) {
       squad.stamina = 100;
       updateCrowdSim(crowd, sim, 0.05);
-      const distance = Math.hypot(straggler.x - squad.x, straggler.y - squad.y);
       if (squad.formationCohesionState === 'WAITING') {
         sawWaiting = true;
-        waitingDistance = Math.max(waitingDistance, distance);
-        if (anchorAtWait === null) anchorAtWait = squad.x;
-      } else if (sawWaiting && anchorAtWait !== null && squad.x > anchorAtWait + 12) {
-        resumedAfterWait = true;
       }
-      if (resumedAfterWait && squad.x > 235 && distance < 30) break;
+      maximumCohesionPenalty = Math.max(
+        maximumCohesionPenalty,
+        1 - (Number(squad?._formationCohesionSpeedScale) || 1)
+      );
+      if (squad.x > 235) break;
     }
 
-    expect(sawWaiting).toBe(true);
-    expect(waitingDistance).toBeGreaterThan(90);
-    expect(resumedAfterWait).toBe(true);
+    expect(sawWaiting).toBe(false);
+    expect(maximumCohesionPenalty).toBeLessThanOrEqual(0.001);
     expect(squad.x).toBeGreaterThan(235);
-    expect(Math.hypot(straggler.x - squad.x, straggler.y - squad.y)).toBeLessThan(30);
+    expect(straggler.x).toBeGreaterThan(-150);
+    expect(straggler.formationSlot).toEqual(persistentSlot);
   });
 
   test('keeps a move order active at the destination until every lagging soldier reaches its slot', () => {
@@ -2725,7 +2723,10 @@ describe('training-map forced displacement', () => {
 
     updateCrowdSim(crowd, sim, 0.1);
 
-    expect(planRoute).toHaveBeenCalledTimes(1);
+    // CARD navigation first tests formation clearance, then immediately asks
+    // for a soldier-scale passage before it records a true route failure.
+    expect(planRoute).toHaveBeenCalledTimes(2);
+    expect(planRoute.mock.calls[0][2].radius).toBeGreaterThan(planRoute.mock.calls[1][2].radius);
     expect(attacker._navigationFailureCount).toBe(1);
     expect(attacker._navigationReplanAt).toBeCloseTo(0.3);
   });
