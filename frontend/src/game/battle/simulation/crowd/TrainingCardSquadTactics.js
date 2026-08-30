@@ -696,6 +696,20 @@ const resolveFormationSlot = ({
     ? agent._squadController
     : {};
   if (!ignoreRejoin && state?.rejoin?.active && state?.rejoin?.phase === 'GATE' && state.rejoin.gateSlot) {
+    if (
+      runtime?.anchor
+      && Number.isFinite(Number(state.rejoin?.gateX))
+      && Number.isFinite(Number(state.rejoin?.gateY))
+    ) {
+      // A detached unit first pursues a snapshot of the rear/body corridor.
+      // Converting that world target back to the current anchor frame keeps
+      // the generic slot consumer unchanged without making the gate run away
+      // at the squad's march speed every frame.
+      return worldToLocal(runtime.anchor, {
+        x: Number(state.rejoin.gateX),
+        y: Number(state.rejoin.gateY)
+      });
+    }
     return normalizeSlot(state.rejoin.gateSlot, fallbackSlot);
   }
   const base = normalizeSlot(agent?.formationSlot, fallbackSlot);
@@ -1059,6 +1073,7 @@ export const prepareSquadControllerFrame = ({
   const terrainScanInterval = runtime?.terrain?.state === SQUAD_FORMATION_RUNTIME_STATE.PASSAGE
     ? 0.08
     : FORMATION_SCAN_INTERVAL;
+  let passageRows = null;
   if (
     nowSec - sampledAt >= terrainScanInterval
     || !Number.isFinite(sampledAt)
@@ -1078,7 +1093,7 @@ export const prepareSquadControllerFrame = ({
           || Math.hypot(point.x - rows[index - 1].x, point.y - rows[index - 1].y) > 0.05
         ));
       }
-      updateTrainingCardPassagePlan({
+      const passageUpdate = updateTrainingCardPassagePlan({
         squad,
         agents: orderedAgents,
         runtime,
@@ -1091,6 +1106,7 @@ export const prepareSquadControllerFrame = ({
             : squad?.waypoints),
         nowSec
       });
+      passageRows = passageUpdate?.rows || [];
     } else {
       runtime.terrain = resolveTerrainSample({
         squad,
@@ -1106,18 +1122,19 @@ export const prepareSquadControllerFrame = ({
   }
   updateReformState({ squad, runtime, agents, orderedAgents, nowSec });
   if (isTrainingCardSquad(squad) && runtime?.passagePlan) {
-    updateTrainingCardPassageAgents({
-      squad,
-      agents: orderedAgents,
-      plan: runtime.passagePlan,
-      nowSec
-    });
-    const passageRows = orderedAgents
-      .filter((agent) => !agent?.isFlagBearer && agent?._squadController)
-      .map((agent) => String(agent?._squadController?.locomotionState || ''));
-    const approaching = passageRows.filter((state) => state === CARD_LOCOMOTION_STATE.STREAM_APPROACH).length;
-    const streaming = passageRows.filter((state) => state === CARD_LOCOMOTION_STATE.STREAM).length;
-    const exiting = passageRows.filter((state) => state === CARD_LOCOMOTION_STATE.STREAM_EXIT).length;
+    if (!passageRows) {
+      passageRows = updateTrainingCardPassageAgents({
+        squad,
+        agents: orderedAgents,
+        plan: runtime.passagePlan,
+        nowSec
+      });
+    }
+    const passageStates = passageRows
+      .map((row) => String(row?.state || CARD_LOCOMOTION_STATE.FORMATION));
+    const approaching = passageStates.filter((state) => state === CARD_LOCOMOTION_STATE.STREAM_APPROACH).length;
+    const streaming = passageStates.filter((state) => state === CARD_LOCOMOTION_STATE.STREAM).length;
+    const exiting = passageStates.filter((state) => state === CARD_LOCOMOTION_STATE.STREAM_EXIT).length;
     runtime.passageDebug = {
       ...(runtime.passageDebug || {}),
       agentsApproaching: approaching,
@@ -1165,7 +1182,10 @@ export const prepareSquadControllerFrame = ({
       agent?._formationDetached === true
       || agent?._formationRecovery?.active === true
     );
-    const needsGateForDetachedAgent = initiallyDetached && normalError >= spacing * 1.45;
+    const recoveryThroughPassage = agent?._formationRecovery?.passageRecovery === true;
+    const needsGateForDetachedAgent = !recoveryThroughPassage
+      && initiallyDetached
+      && normalError >= spacing * 1.45;
     const needsGateForNormalAgent = !passageFlowActive
       && normalError >= triggerDistance
       && lag >= spacing * 2.1;
@@ -1174,17 +1194,26 @@ export const prepareSquadControllerFrame = ({
         side: clamp(normalSlot.side, -spacing, spacing),
         front: -rearExtent - (spacing * 1.15)
       };
+      const gateSlot = resolveLegalRejoinGateSlot({
+        anchor,
+        requestedSlot: requestedGateSlot,
+        sim,
+        walls,
+        spacing
+      });
+      const snapshotGate = needsGateForDetachedAgent;
+      const gate = localToWorld(anchor, gateSlot);
       rejoin = {
         active: true,
         phase: 'GATE',
         startedAt: nowSec,
-        gateSlot: resolveLegalRejoinGateSlot({
-          anchor,
-          requestedSlot: requestedGateSlot,
-          sim,
-          walls,
-          spacing
-        })
+        gateSlot,
+        gateMode: snapshotGate ? 'SNAPSHOT' : 'FOLLOWING',
+        ...(snapshotGate ? {
+          gateX: gate.x,
+          gateY: gate.y,
+          gateUpdatedAt: nowSec
+        } : {})
       };
       // A rejoiner is a detached individual even when it did not originate
       // from a terrain recovery.  Keep it out of core cohesion and flow until
@@ -1192,10 +1221,47 @@ export const prepareSquadControllerFrame = ({
       agent._formationDetached = true;
     }
     if (rejoin?.active) agent._formationDetached = true;
-    if (rejoin?.active && rejoin.phase === 'GATE') {
+    if (
+      rejoin?.active
+      && rejoin.phase === 'GATE'
+      && rejoin.gateMode === 'FOLLOWING'
+      && agent?._formationRecovery?.active === true
+      && normalError >= Math.max(triggerDistance * 1.7, spacing * 7)
+    ) {
+      // A normal lagger may become a true detached recovery one frame after
+      // the tactical gate is first created.  Freeze that far-away gate at
+      // the current rear/body corridor so it cannot keep retreating with the
+      // moving anchor for the entire recovery route.
       const gate = localToWorld(anchor, rejoin.gateSlot);
-      if (Math.hypot(gate.x - finiteNumber(agent?.x), gate.y - finiteNumber(agent?.y)) <= spacing * 1.22) {
-        rejoin = { ...rejoin, phase: 'SLOT', reachedAt: nowSec };
+      rejoin = {
+        ...rejoin,
+        gateMode: 'SNAPSHOT',
+        gateX: gate.x,
+        gateY: gate.y,
+        gateUpdatedAt: nowSec
+      };
+    }
+    if (rejoin?.active && rejoin.phase === 'GATE') {
+      const gate = Number.isFinite(Number(rejoin?.gateX)) && Number.isFinite(Number(rejoin?.gateY))
+        ? { x: Number(rejoin.gateX), y: Number(rejoin.gateY) }
+        : localToWorld(anchor, rejoin.gateSlot);
+      const movingGate = localToWorld(anchor, rejoin.gateSlot);
+      const gateDrift = Math.hypot(movingGate.x - gate.x, movingGate.y - gate.y);
+      const gateDistance = Math.hypot(gate.x - finiteNumber(agent?.x), gate.y - finiteNumber(agent?.y));
+      if (gateDistance <= spacing * 1.22) {
+        if (rejoin.gateMode !== 'SNAPSHOT' || gateDrift <= spacing * 3.2) {
+          rejoin = { ...rejoin, phase: 'SLOT', reachedAt: nowSec };
+        } else {
+          // The squad has moved on while this unit was approaching the old
+          // snapshot.  Refresh only after it reached that snapshot, so the
+          // target remains catchable instead of continuously escaping.
+          rejoin = {
+            ...rejoin,
+            gateX: movingGate.x,
+            gateY: movingGate.y,
+            gateUpdatedAt: nowSec
+          };
+        }
       }
     }
     if (rejoin?.active && rejoin.phase === 'SLOT' && normalError <= spacing * 1.28) {
@@ -1207,18 +1273,21 @@ export const prepareSquadControllerFrame = ({
       : (agent?._formationDetached === true
       || agent?._formationRecovery?.active === true
       || rejoin?.active === true);
+    // Install the newly created rejoin state before resolving the active
+    // slot.  Otherwise a freshly detached agent spends one frame pulling at
+    // its moving exact slot before the stable rear/body gate takes effect.
     agent._squadController = {
       ...agentState,
-      activeSlot: resolveFormationSlot({
-        squad,
-        runtime,
-        agent,
-        fallbackSlot: fallback,
-        ignoreRejoin: false
-      }),
       normalSlot,
       rejoin
     };
+    agent._squadController.activeSlot = resolveFormationSlot({
+      squad,
+      runtime,
+      agent,
+      fallbackSlot: fallback,
+      ignoreRejoin: false
+    });
     rows.push({
       agent,
       normalError,

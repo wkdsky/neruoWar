@@ -7,7 +7,9 @@ import {
   queryObstacleCandidates,
   querySpatialNearby,
   pushOutOfRect,
-  raycastObstacles
+  raycastObstacles,
+  resolveObstacleIdentity,
+  resolveObstacleNavigationSignature
 } from './crowdPhysics';
 import {
   createCombatEffectsPool,
@@ -154,22 +156,7 @@ const MINION_ROAD_SEARCH_MARGIN = 24;
 const SUPPORT_ACQUISITION_RADIUS = 132;
 const SUPPORT_CAST_COOLDOWN_SEC = 4.8;
 
-const resolveCrowdObstacleSignature = (obstacles = []) => (
-  (Array.isArray(obstacles) ? obstacles : []).map((obstacle, index) => [
-    String(obstacle?.id || obstacle?.objectId || index),
-    obstacle?.destroyed ? 1 : 0,
-    obstacle?.blocksMovement === false ? 0 : 1,
-    Number(obstacle?.x) || 0,
-    Number(obstacle?.y) || 0,
-    Number(obstacle?.width) || 0,
-    Number(obstacle?.depth) || 0,
-    Number(obstacle?.rotation) || 0,
-    Number(obstacle?.colliderRevision) || 0,
-    String(obstacle?.collider?.kind || ''),
-    Array.isArray(obstacle?.collider?.parts) ? obstacle.collider.parts.length : 0,
-    Array.isArray(obstacle?.collider?.polygon?.points) ? obstacle.collider.polygon.points.length : 0
-  ].join(':')).join('|')
-);
+const resolveCrowdObstacleSignature = (obstacles = []) => resolveObstacleNavigationSignature(obstacles);
 
 const resolveCrowdBlockingWalls = (crowd, obstacles = []) => {
   const signature = resolveCrowdObstacleSignature(obstacles);
@@ -210,7 +197,6 @@ const DEFAULT_AI_DECISIONS_PER_STEP = 1;
 const AVOID_SIDE_LOCK_SEC = 0.32;
 const NARROW_PASSAGE_SCAN_INTERVAL_SEC = 0.24;
 const NARROW_PASSAGE_RELEASE_OPEN_SEC = 0.65;
-const AVOID_KEY_GRID = 6;
 const AGENT_SETTLE_RADIUS = 2.4;
 const AGENT_SETTLE_DEADZONE = 1.08;
 const AGENT_SETTLE_SPEED = 16;
@@ -1991,26 +1977,40 @@ const clearAvoidanceMemory = (subject) => {
   subject._avoidObstacle = null;
   subject._avoidForwardX = 0;
   subject._avoidForwardY = 0;
+  subject._avoidObstacleGeometry = '';
+  subject._avoidPassageId = 0;
+  subject._avoidPassageProgress = 0;
 };
 
 const makeAvoidanceObstacleKey = (wall) => {
   if (!wall) return '';
-  if (typeof wall.id === 'string' && wall.id) return `id:${wall.id}`;
-  const snap = (value) => Math.round((Number(value) || 0) / AVOID_KEY_GRID);
-  return [snap(wall.x), snap(wall.y), snap(wall.w), snap(wall.h)].join(':');
+  return resolveObstacleIdentity(wall);
 };
 
-const hasPassedAvoidanceObstacle = (origin = {}, subject = null, wall = null) => {
+const hasPassedAvoidanceObstacle = (origin = {}, subject = null, wall = null, currentDirection = null) => {
   if (!subject || !wall || wall?.destroyed) return true;
-  const forward = normalizeVec(subject?._avoidForwardX, subject?._avoidForwardY);
-  if (forward.len <= 0.0001) return false;
   const toObstacleX = (Number(wall?.x) || 0) - (Number(origin?.x) || 0);
   const toObstacleY = (Number(wall?.y) || 0) - (Number(origin?.y) || 0);
   const obstacleHalfExtent = Math.max(
     1.5,
     (Math.max(Number(wall?.w) || Number(wall?.width) || 0, Number(wall?.h) || Number(wall?.depth) || 0) * 0.5) + 1.5
   );
-  return ((toObstacleX * forward.x) + (toObstacleY * forward.y)) < -obstacleHalfExtent;
+  const entryForward = normalizeVec(subject?._avoidForwardX, subject?._avoidForwardY);
+  const routeForward = normalizeVec(currentDirection?.x, currentDirection?.y);
+  const passedInitialDirection = entryForward.len > 0.0001
+    && ((toObstacleX * entryForward.x) + (toObstacleY * entryForward.y)) < -obstacleHalfExtent;
+  const passedCurrentDirection = routeForward.len > 0.0001
+    && ((toObstacleX * routeForward.x) + (toObstacleY * routeForward.y)) < -obstacleHalfExtent;
+  const passageId = Math.floor(Number(subject?._squadController?.passageId) || 0);
+  const passageProgress = Number(subject?._squadController?.passageProgress);
+  const rememberedPassageId = Math.floor(Number(subject?._avoidPassageId) || 0);
+  const rememberedPassageProgress = Number(subject?._avoidPassageProgress);
+  const passedRouteProgress = rememberedPassageId > 0
+    && passageId === rememberedPassageId
+    && Number.isFinite(passageProgress)
+    && Number.isFinite(rememberedPassageProgress)
+    && passageProgress >= rememberedPassageProgress + Math.max(3, obstacleHalfExtent * 0.85);
+  return passedInitialDirection || passedCurrentDirection || passedRouteProgress;
 };
 
 const isAvoidanceObstacleStillLocal = (origin = {}, wall = null, probe = 0) => {
@@ -2056,10 +2056,14 @@ const computeAvoidanceDirection = (origin, desiredDir, walls = [], probe = OBSTA
   const rememberedWall = subject?._avoidObstacle || null;
   const rememberedKey = String(subject?._avoidObstacleKey || '');
   const rememberedSide = Number(subject?._avoidSide) || 0;
+  const rememberedGeometry = String(subject?._avoidObstacleGeometry || '');
+  const geometryMatches = !rememberedGeometry
+    || rememberedGeometry === resolveObstacleNavigationSignature([rememberedWall]);
   const rememberedStillRelevant = !!rememberedWall
     && !rememberedWall?.destroyed
     && rememberedSide !== 0
-    && !hasPassedAvoidanceObstacle(origin, subject, rememberedWall)
+    && geometryMatches
+    && !hasPassedAvoidanceObstacle(origin, subject, rememberedWall, dir)
     // Side memory belongs to the obstacle transit, not to a stale direction
     // forever.  Once the agent is well clear and its present segment no
     // longer hits that wall, release it so a rejoin gate cannot be pulled
@@ -2073,7 +2077,7 @@ const computeAvoidanceDirection = (origin, desiredDir, walls = [], probe = OBSTA
       // actually moved behind the agent, rather than after a tiny timer.
       return resolveAvoidanceBoundaryFlow(origin, dir, rememberedWall, rememberedSide);
     }
-    if ((Number(subject?._avoidSideUntil) || 0) <= nowSec || !rememberedKey) clearAvoidanceMemory(subject);
+    if (!geometryMatches || (Number(subject?._avoidSideUntil) || 0) <= nowSec || !rememberedKey) clearAvoidanceMemory(subject);
     return { x: 0, y: 0 };
   }
   const wall = hit.obstacle;
@@ -2092,9 +2096,12 @@ const computeAvoidanceDirection = (origin, desiredDir, walls = [], probe = OBSTA
     subject._avoidSideUntil = nowSec + AVOID_SIDE_LOCK_SEC;
     subject._avoidObstacleKey = obstacleKey;
     subject._avoidObstacle = wall;
+    subject._avoidObstacleGeometry = resolveObstacleNavigationSignature([wall]);
     if (!stickyActive) {
       subject._avoidForwardX = dir.x;
       subject._avoidForwardY = dir.y;
+      subject._avoidPassageId = Math.floor(Number(subject?._squadController?.passageId) || 0);
+      subject._avoidPassageProgress = Number(subject?._squadController?.passageProgress) || 0;
     }
   }
   return resolveAvoidanceBoundaryFlow(origin, dir, wall, side);
@@ -5623,6 +5630,7 @@ const clearAgentFormationRecovery = (
     if (Number.isFinite(monitoredMeaningfulError)) previous.lastMeaningfulError = Math.max(0, monitoredMeaningfulError);
     if (Number.isFinite(monitoredProgressAt)) previous.lastProgressAt = monitoredProgressAt;
     previous.terrainBlocked = false;
+    previous.passageRecovery = false;
     agent._formationDetached = false;
     agent.formationRecoveryState = 'NONE';
     if (agent?.isMinionWaveUnit === true) {
@@ -5658,7 +5666,8 @@ const clearAgentFormationRecovery = (
       : (Number.isFinite(Number(previous?.lastProgressAt)) ? Number(previous.lastProgressAt) : nowSec),
     failedSince: 0,
     obstacleId: '',
-    terrainBlocked: false
+    terrainBlocked: false,
+    passageRecovery: false
   };
   agent._formationRecovery = state;
   agent._formationDetached = false;
@@ -5677,6 +5686,7 @@ const resolveAgentFormationRecoveryGuidance = ({
   target = null,
   enabled = true,
   flowing = false,
+  passageRecovery = false,
   nowSec = 0
 } = {}) => {
   if (!agent || !squad || !enabled || !target) {
@@ -5702,6 +5712,7 @@ const resolveAgentFormationRecoveryGuidance = ({
     : (agent?._minionRecovery && typeof agent._minionRecovery === 'object'
       ? agent._minionRecovery
       : {});
+  const recoveryActivated = previous?.active !== true;
   const wasDetached = agent?._formationDetached === true || previous?.active === true;
   const isMinion = isTrainingMinionSquad(squad);
   const stuckDelay = isMinion ? MINION_RECOVERY_STUCK_DELAY_SEC : FORMATION_RECOVERY_STUCK_DELAY_SEC;
@@ -5726,6 +5737,20 @@ const resolveAgentFormationRecoveryGuidance = ({
     (Number(target?.x) || 0) - point.x,
     (Number(target?.y) || 0) - point.y
   );
+  const previousLateralSign = Math.sign(Number(previous?.lastLateralSign) || 0);
+  const stepX = point.x - (Number.isFinite(previousLastX) ? previousLastX : point.x);
+  const stepY = point.y - (Number.isFinite(previousLastY) ? previousLastY : point.y);
+  const lateralMotion = (stepX * -targetDirection.y) + (stepY * targetDirection.x);
+  const lateralSign = Math.abs(lateralMotion) >= 0.06 ? Math.sign(lateralMotion) : previousLateralSign;
+  let lateralReversals = Math.max(0, Math.floor(Number(previous?.lateralReversals) || 0));
+  if (
+    lateralSign !== 0
+    && previousLateralSign !== 0
+    && lateralSign !== previousLateralSign
+    && error >= Math.max(releaseDistance * 1.2, configuredSpacing)
+  ) {
+    lateralReversals += 1;
+  }
   let lastMeaningfulX = Number.isFinite(previousMeaningfulX) ? previousMeaningfulX : point.x;
   let lastMeaningfulY = Number.isFinite(previousMeaningfulY) ? previousMeaningfulY : point.y;
   let lastMeaningfulError = Number.isFinite(Number(previous?.lastMeaningfulError))
@@ -5746,6 +5771,7 @@ const resolveAgentFormationRecoveryGuidance = ({
     lastMeaningfulX = point.x;
     lastMeaningfulY = point.y;
     lastMeaningfulError = error;
+    lateralReversals = Math.max(0, lateralReversals - 1);
   }
   const directHit = error > releaseDistance
     ? raycastObstacles(point, target, walls, radius)
@@ -5765,6 +5791,9 @@ const resolveAgentFormationRecoveryGuidance = ({
       && nowSec - terrainBlockedAt <= Math.max(0.35, stuckDelay * 2.5)
     );
   const stalled = error > triggerDistance && nowSec - lastProgressAt >= stuckDelay;
+  const oscillating = error > triggerDistance
+    && lateralReversals >= 3
+    && nowSec - lastProgressAt >= stuckDelay * 0.48;
   const directBlockHasPersisted = nowSec - lastProgressAt >= (stuckDelay * 0.65);
   // A nearby visual slot can graze an obstacle while the agent still has room
   // to continue with normal local avoidance.  Reserve immediate recovery for
@@ -5785,6 +5814,8 @@ const resolveAgentFormationRecoveryGuidance = ({
       && (!flowing || recentTerrainBlock || directBlockHasPersisted || error >= triggerDistance))
     || recentTerrainBlock
     || stalled
+    || oscillating
+    || passageRecovery === true
     || wasDetached
   );
   if (!needsRecovery) {
@@ -5967,9 +5998,13 @@ const resolveAgentFormationRecoveryGuidance = ({
     lastError: error,
     lastMeaningfulError,
     lastProgressAt,
+    lastLateralSign: lateralSign,
+    lateralReversals,
+    oscillating,
     failedSince,
     obstacleId,
-    terrainBlocked: terrainSegmentBlocked || recentTerrainBlock
+    terrainBlocked: terrainSegmentBlocked || recentTerrainBlock,
+    passageRecovery: passageRecovery === true || previous?.passageRecovery === true
   };
   agent._formationRecovery = state;
   agent._formationDetached = true;
@@ -5982,6 +6017,8 @@ const resolveAgentFormationRecoveryGuidance = ({
     active: true,
     x: guidanceTarget.x,
     y: guidanceTarget.y,
+    resetLateralVelocity: recoveryActivated,
+    passageRecovery: state.passageRecovery === true,
     speedMul: clamp(
       1.08 + ((error - releaseDistance) / Math.max(1, triggerDistance * 2)),
       1.08,
@@ -6074,6 +6111,7 @@ const attemptTrainingNavigationReplan = ({
     && isTrainingRouteInsideRoadCorridor(squad, sim, source, route)
   ) {
     applyTrainingNavigationRoute(squad, route, currentWaypoints.slice(1));
+    if (squad?._squadController) squad._squadController.passagePlanInvalid = false;
     squad._navigationFailureCount = 0;
     squad._navigationStuckSince = 0;
     squad._navigationWaitUntil = 0;
@@ -6088,6 +6126,7 @@ const attemptTrainingNavigationReplan = ({
     });
     if (fallbackRoute.length > 0) {
       applyTrainingNavigationRoute(squad, fallbackRoute, currentWaypoints.slice(1));
+      if (squad?._squadController) squad._squadController.passagePlanInvalid = false;
       squad._navigationFailureCount = 0;
       squad._navigationStuckSince = 0;
       squad._navigationWaitUntil = 0;
@@ -8106,6 +8145,22 @@ export const updateCrowdSim = (crowd, sim, dt) => {
       })
       : null;
     const squadController = cardAiFrame?.formation || null;
+    if (
+      isTrainingCardSquad(squad)
+      && squadController?.passagePlanInvalid === true
+      && navigationTarget
+    ) {
+      // Geometry changed under the current shared passage and no safe lane
+      // remains.  Spend the existing squad-level navigation budget on a
+      // shared replan before individual recovery needs to do the work alone.
+      attemptTrainingNavigationReplan({
+        squad,
+        sim,
+        walls: movementWalls,
+        target: navigationTarget,
+        nowSec
+      });
+    }
     const controllerPassage = (
       squadController?.terrain?.state === 'PASSAGE'
       || squadController?.terrain?.state === 'EXPAND'
@@ -8305,6 +8360,7 @@ export const updateCrowdSim = (crowd, sim, dt) => {
       const neighborRadius = Math.max(
         12,
         Number(flowIntent?.queueSpacing) || 0,
+        Number(flowIntent?.queueLookahead) || 0,
         Number(flowIntent?.streamSpacing) || 0,
         flowIntent ? (speed * 0.22) + (Number(flowIntent?.streamSpacing) || 0) : 0
       ) * 1.35;
@@ -8315,7 +8371,8 @@ export const updateCrowdSim = (crowd, sim, dt) => {
           squad,
           flowIntent,
           neighbors,
-          speed
+          speed,
+          nowSec
         })
         : resolvePassageFlowSteering({
           agent,
@@ -8323,6 +8380,15 @@ export const updateCrowdSim = (crowd, sim, dt) => {
           flowIntent,
         neighbors
         });
+      const retainedPassageRecovery = agent?._formationRecovery?.active === true
+        && agent?._formationRecovery?.passageRecovery === true
+        ? {
+          x: Number(agent?._formationRecovery?.targetX) || desiredX,
+          y: Number(agent?._formationRecovery?.targetY) || desiredY
+        }
+        : null;
+      const streamWatchdogRecovery = passageFlow?.streamWatchdog?.stalled === true
+        && passageFlow?.streamWatchdog?.frontBlocking !== true;
       const formationRecoveryGuidance = resolveAgentFormationRecoveryGuidance({
         agent,
         squad,
@@ -8330,13 +8396,14 @@ export const updateCrowdSim = (crowd, sim, dt) => {
         walls: movementWalls,
         target: passageFlow
           ? { x: passageFlow.goalX, y: passageFlow.goalY }
-          : { x: desiredX, y: desiredY },
-        enabled: !passageFlow
+          : (retainedPassageRecovery || { x: desiredX, y: desiredY }),
+        enabled: (!passageFlow || streamWatchdogRecovery)
           && !combatDirective
           && !hasAnchor
           && !castOffset.active
           && !isTrainingNeutralSquad(squad),
-        flowing: !!passageFlow,
+        flowing: !!passageFlow && !streamWatchdogRecovery,
+        passageRecovery: streamWatchdogRecovery || !!retainedPassageRecovery,
         nowSec
       });
       const separationDistance = Math.max(
@@ -8590,16 +8657,12 @@ export const updateCrowdSim = (crowd, sim, dt) => {
           y: (passageTangent.y * clamp(avoidanceForward, -0.22, 0.22))
             + (passageSide.y * clamp(avoidanceLateral, -0.28, 0.28))
         };
-        const passageLaneSpacing = Math.max(
-          AGENT_RADIUS * 2.04,
-          Number(flowIntent?.streamSpacing) || spacing
-        );
+        // Merging is primarily a bounded lateral correction over the long
+        // approach distance.  It never turns a clear approach into a sequence
+        // of near-stops; only the route-progress follower model or a real
+        // collision is allowed to take away the remaining forward component.
         const mergeForwardScale = streamState === CARD_LOCOMOTION_STATE.STREAM_APPROACH
-          ? clamp(
-            1 - (Math.abs(laneError) / Math.max(1, passageLaneSpacing * 0.9)),
-            0.14,
-            1
-          )
+          ? clamp(Number(passageFlow.approachForwardRatio), 0.65, 1)
           : 1;
         const passageForwardSpeed = queueSpeed * mergeForwardScale;
         desiredVx = (passageFlow.forwardX * passageForwardSpeed)
@@ -8657,17 +8720,25 @@ export const updateCrowdSim = (crowd, sim, dt) => {
         && !hasAnchor
         && !passageFlow
         && !formationRecoveryGuidance?.active;
-      const accelStep = usesDirectFormationMotion
+      // On recovery entry, discard stale combat/avoidance lateral velocity.
+      // Subsequent recovery frames retain normal acceleration so a moving gate
+      // cannot be overshot when the formation slows down.
+      const usesDirectRecoveryMotion = formationRecoveryGuidance?.resetLateralVelocity === true
+        && !!recoveryDirection
+        && !passageFlow
+        && !combatDirective
+        && !hasAnchor;
+      const accelStep = usesDirectFormationMotion || usesDirectRecoveryMotion
         ? null
         : clampVecLength(
             desiredVx - (Number(agent.vx) || 0),
             desiredVy - (Number(agent.vy) || 0),
             accelCap * safeDt
           );
-      let vx = usesDirectFormationMotion
+      let vx = usesDirectFormationMotion || usesDirectRecoveryMotion
         ? desiredVx
         : (Number(agent.vx) || 0) + accelStep.x;
-      let vy = usesDirectFormationMotion
+      let vy = usesDirectFormationMotion || usesDirectRecoveryMotion
         ? desiredVy
         : (Number(agent.vy) || 0) + accelStep.y;
       if (lockCombatPosition && !passageFlow) {

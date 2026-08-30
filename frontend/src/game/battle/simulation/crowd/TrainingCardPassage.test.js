@@ -8,8 +8,13 @@ import {
   resolvePassageStreamCount,
   resolveTrainingCardPassageFlowIntent,
   resolveTrainingCardPassageFlowSteering,
-  updateTrainingCardPassageAgents
+  updateTrainingCardPassageAgents,
+  updateTrainingCardPassagePlan
 } from './TrainingCardPassage';
+import {
+  createTrainingMapNavigator,
+  planTrainingMapRoute
+} from '../navigation/TrainingMapNavigator';
 
 const buildSquad = ({ controlMode = 'USER', behavior = 'move' } = {}) => {
   const spacing = 8;
@@ -265,6 +270,278 @@ test('follows the shared route tangent after a passage turn', () => {
   });
   expect(flow.forwardX).toBeCloseTo(0);
   expect(flow.forwardY).toBeCloseTo(1);
+});
+
+test('orders curved-stream followers by route progress instead of world tangent projection', () => {
+  const squad = { id: 'curved-stream' };
+  const agent = {
+    id: 'curved-self', squadId: squad.id, x: 0, y: 0, radius: 2.25, vx: 20, vy: 0,
+    _squadController: {
+      locomotionState: 'STREAM', passageId: 8, streamId: 0, passageProgress: 50
+    }
+  };
+  // This is the next unit after a bend: relative to the self unit's old east
+  // tangent it is partly behind, but its shared-route progress is ahead.
+  const leaderAfterTurn = {
+    id: 'curved-leader', squadId: squad.id, x: -7, y: 8, radius: 2.25, vx: 0, vy: 8,
+    _squadController: {
+      locomotionState: 'STREAM',
+      passageId: 8,
+      streamId: 0,
+      passageProgress: 58,
+      passageForwardX: 0,
+      passageForwardY: 1
+    }
+  };
+  const steering = resolveTrainingCardPassageFlowSteering({
+    agent,
+    squad,
+    speed: 20,
+    nowSec: 1,
+    neighbors: [leaderAfterTurn],
+    flowIntent: {
+      active: true,
+      state: 'STREAM',
+      passageId: 8,
+      streamId: 0,
+      progress: 50,
+      forwardX: 1,
+      forwardY: 0,
+      laneOffset: 0,
+      lateral: 0,
+      streamSpacing: 6,
+      queueSpacing: 8,
+      queueLookahead: 30
+    }
+  });
+
+  expect(steering.sameStreamFront).toBe(leaderAfterTurn);
+  expect(steering.frontProgressDifference).toBe(8);
+  expect(steering.targetSpeed).toBeGreaterThan(1);
+  expect(steering.targetSpeed).toBeLessThan(20);
+});
+
+test('keeps a substantial forward component while an approach merges from a large lateral error', () => {
+  const squad = { id: 'approach-stream' };
+  const agent = {
+    id: 'approach-self', squadId: squad.id, x: 0, y: 36, radius: 2.25,
+    _squadController: {
+      locomotionState: 'STREAM_APPROACH', passageId: 9, streamId: 0, passageProgress: 12
+    }
+  };
+  const steering = resolveTrainingCardPassageFlowSteering({
+    agent,
+    squad,
+    speed: 24,
+    nowSec: 1,
+    neighbors: [],
+    flowIntent: {
+      active: true,
+      state: 'STREAM_APPROACH',
+      passageId: 9,
+      streamId: 0,
+      progress: 12,
+      forwardX: 1,
+      forwardY: 0,
+      laneOffset: 0,
+      lateral: 36,
+      streamSpacing: 6,
+      queueSpacing: 8,
+      approachDistance: 48
+    }
+  });
+
+  expect(steering.targetSpeed).toBe(24);
+  expect(steering.approachForwardRatio).toBeGreaterThanOrEqual(0.7);
+  expect(Math.abs(steering.laneVelocityY)).toBeLessThanOrEqual(24 * 0.42);
+});
+
+test('marks an unblocked stream agent for local watchdog recovery only after progress stalls', () => {
+  const squad = { id: 'watchdog-stream' };
+  const agent = {
+    id: 'watchdog-self', squadId: squad.id, x: 0, y: 0, radius: 2.25,
+    _squadController: {
+      locomotionState: 'STREAM',
+      passageId: 10,
+      streamId: 0,
+      passageProgress: 40,
+      streamWatchdog: { progress: 40, lastProgressAt: 0 }
+    }
+  };
+  const steering = resolveTrainingCardPassageFlowSteering({
+    agent,
+    squad,
+    speed: 20,
+    nowSec: 1,
+    neighbors: [],
+    flowIntent: {
+      active: true,
+      state: 'STREAM',
+      passageId: 10,
+      streamId: 0,
+      progress: 40,
+      forwardX: 1,
+      forwardY: 0,
+      laneOffset: 0,
+      lateral: 0,
+      streamSpacing: 6,
+      queueSpacing: 8
+    }
+  });
+
+  expect(steering.streamWatchdog).toMatchObject({ stalled: true, frontBlocking: false });
+  expect(agent._squadController.streamWatchdog.stalled).toBe(true);
+});
+
+test('builds continuous legal lane spines around a sharp passage bend', () => {
+  const walls = [
+    { id: 'turning-gate-top', x: 0, y: 49, width: 20, depth: 70, blocksMovement: true },
+    { id: 'turning-gate-bottom', x: 0, y: -49, width: 20, depth: 70, blocksMovement: true }
+  ];
+  const field = { width: 240, height: 164 };
+  const trainingMap = {
+    navigation: {
+      cellSize: 16,
+      wallClearance: 2,
+      pathClearance: 1,
+      narrowPassage: { cellSize: 4 }
+    },
+    lanes: [],
+    terrainRegions: []
+  };
+  const sim = {
+    field,
+    trainingMap,
+    trainingNavigator: createTrainingMapNavigator({ field, mapConfig: trainingMap })
+  };
+  const route = planTrainingMapRoute({
+    field,
+    mapConfig: trainingMap,
+    start: { x: -70, y: -50 },
+    target: { x: 70, y: -50 },
+    obstacles: walls,
+    radius: 2.25
+  });
+  const plan = createTrainingCardPassagePlan({
+    squad: { x: -120, y: -50, formationRect: { width: 32, spacing: 8 }, deploySlots: [] },
+    sim,
+    walls,
+    route,
+    nowSec: 0
+  });
+
+  expect(route.length).toBeGreaterThan(2);
+  expect(plan).toBeTruthy();
+  expect(plan.streamCount).toBeLessThanOrEqual(plan.requestedStreamCount);
+  plan.streams.forEach((stream) => {
+    expect(stream.spine.length).toBeGreaterThan(2);
+    stream.spineSegments.forEach((segment) => {
+      expect(sim.trainingNavigator.isSegmentTraversable(segment.start, segment.end, {
+        obstacles: walls,
+        radius: plan.wallClearance + 2.25
+      })).toBe(true);
+    });
+  });
+});
+
+test('invalidates passage geometry when a blocker revision changes or the gate opens', () => {
+  const squad = { x: -80, y: 0, formationRect: { width: 32, spacing: 8 }, deploySlots: [] };
+  const walls = [
+    { id: 'revision-top', x: 0, y: 40, width: 40, depth: 60, blocksMovement: true, colliderRevision: 0 },
+    { id: 'revision-bottom', x: 0, y: -40, width: 40, depth: 60, blocksMovement: true, colliderRevision: 0 }
+  ];
+  const args = {
+    squad,
+    sim: { field: { width: 320, height: 180 } },
+    walls,
+    route: [{ x: -80, y: 0 }, { x: 80, y: 0 }]
+  };
+  const first = createTrainingCardPassagePlan({ ...args, nowSec: 0 });
+  walls[0].colliderRevision = 1;
+  const revised = createTrainingCardPassagePlan({ ...args, previousPlan: first, nowSec: 0.1 });
+  walls.forEach((wall) => { wall.destroyed = true; });
+  const opened = createTrainingCardPassagePlan({ ...args, previousPlan: revised, nowSec: 0.2 });
+
+  expect(first).toBeTruthy();
+  expect(revised).toBeTruthy();
+  expect(revised.id).toBeGreaterThan(first.id);
+  expect(revised.geometrySignature).not.toBe(first.geometrySignature);
+  expect(opened).toBeNull();
+});
+
+test('drains active stream members through STREAM_EXIT when a destroyed gate opens the corridor', () => {
+  const squad = {
+    id: 'opened-gate',
+    x: -80,
+    y: 0,
+    formationRect: { width: 32, spacing: 8 },
+    deploySlots: []
+  };
+  const walls = [
+    { id: 'opened-top', x: 0, y: 40, width: 40, depth: 60, blocksMovement: true },
+    { id: 'opened-bottom', x: 0, y: -40, width: 40, depth: 60, blocksMovement: true }
+  ];
+  const sim = { field: { width: 320, height: 180 } };
+  const route = [{ x: -80, y: 0 }, { x: 80, y: 0 }];
+  const plan = createTrainingCardPassagePlan({ squad, sim, walls, route, nowSec: 0 });
+  const agent = {
+    id: 'opened-agent', squadId: squad.id, x: 0, y: 0, weight: 1,
+    _squadController: {}
+  };
+  const runtime = { passagePlan: plan };
+  updateTrainingCardPassageAgents({ squad, agents: [agent], plan, nowSec: 0 });
+  expect(agent._squadController.locomotionState).toBe('STREAM');
+
+  walls.forEach((wall) => { wall.destroyed = true; });
+  const refreshed = updateTrainingCardPassagePlan({
+    squad,
+    agents: [agent],
+    runtime,
+    sim,
+    walls,
+    route,
+    nowSec: 0.1
+  });
+
+  expect(refreshed.plan).toMatchObject({ draining: true });
+  expect(agent._squadController.locomotionState).toBe('STREAM_EXIT');
+});
+
+test('marks a shared replan when a new obstacle makes every cached lane illegal', () => {
+  const squad = {
+    id: 'blocked-gate',
+    x: -80,
+    y: 0,
+    formationRect: { width: 32, spacing: 8 },
+    deploySlots: []
+  };
+  const walls = [
+    { id: 'blocked-top', x: 0, y: 40, width: 40, depth: 60, blocksMovement: true },
+    { id: 'blocked-bottom', x: 0, y: -40, width: 40, depth: 60, blocksMovement: true }
+  ];
+  const sim = { field: { width: 320, height: 180 } };
+  const route = [{ x: -80, y: 0 }, { x: 80, y: 0 }];
+  const plan = createTrainingCardPassagePlan({ squad, sim, walls, route, nowSec: 0 });
+  const agent = {
+    id: 'blocked-agent', squadId: squad.id, x: 0, y: 0, weight: 1,
+    _squadController: {}
+  };
+  const runtime = { passagePlan: plan };
+  updateTrainingCardPassageAgents({ squad, agents: [agent], plan, nowSec: 0 });
+  walls.push({ id: 'new-blocker', x: 0, y: 0, width: 12, depth: 32, blocksMovement: true });
+
+  const refreshed = updateTrainingCardPassagePlan({
+    squad,
+    agents: [agent],
+    runtime,
+    sim,
+    walls,
+    route,
+    nowSec: 0.1
+  });
+
+  expect(refreshed.plan).toBeNull();
+  expect(runtime.passagePlanInvalid).toBe(true);
 });
 
 test('moves agents through stream exit before returning them to formation', () => {

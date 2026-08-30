@@ -21,6 +21,76 @@ export const normalizeVec = (x, y) => {
   return { x: x / len, y: y / len, len };
 };
 
+// Navigation, passage planning and local avoidance all need to agree on when
+// an obstacle is still the same physical blocker.  Keep the identity stable
+// for a transit (id/objectId when one exists), while the geometry signature
+// also includes the collider revision and shape data used by route caches.
+const obstacleDimension = (obstacle = {}, primary = '', fallback = '') => {
+  const primaryValue = Number(obstacle?.[primary]);
+  if (Number.isFinite(primaryValue)) return primaryValue;
+  const fallbackValue = Number(obstacle?.[fallback]);
+  return Number.isFinite(fallbackValue) ? fallbackValue : 0;
+};
+
+const obstacleShapeSignature = (obstacle = {}) => {
+  const collider = obstacle?.collider && typeof obstacle.collider === 'object'
+    ? obstacle.collider
+    : {};
+  const partSignature = (Array.isArray(collider?.parts) ? collider.parts : []).map((part = {}) => [
+    Number(part?.cx) || 0,
+    Number(part?.cy) || 0,
+    Number(part?.w) || 0,
+    Number(part?.d) || 0,
+    Number(part?.ax) || 0,
+    Number(part?.ay) || 0,
+    Number(part?.bx) || 0,
+    Number(part?.by) || 0,
+    Number(part?.r) || 0,
+    Number(part?.yawDeg) || 0
+  ].join(',')).join(';');
+  const polygonSignature = (Array.isArray(collider?.polygon?.points) ? collider.polygon.points : [])
+    .map((point = {}) => `${Number(point?.x) || 0},${Number(point?.y) || 0}`)
+    .join(';');
+  return [
+    String(collider?.kind || ''),
+    Number(collider?.cx) || 0,
+    Number(collider?.cy) || 0,
+    Number(collider?.r) || 0,
+    partSignature,
+    polygonSignature
+  ].join('/');
+};
+
+export const resolveObstacleIdentity = (obstacle = {}, index = 0) => {
+  const stableId = String(obstacle?.id || obstacle?.objectId || '').trim();
+  if (stableId) return `id:${stableId}`;
+  return [
+    'geometry',
+    Math.round((Number(obstacle?.x) || 0) * 100) / 100,
+    Math.round((Number(obstacle?.y) || 0) * 100) / 100,
+    Math.round(obstacleDimension(obstacle, 'width', 'w') * 100) / 100,
+    Math.round(obstacleDimension(obstacle, 'depth', 'h') * 100) / 100,
+    Math.round((Number(obstacle?.rotation) || 0) * 100) / 100,
+    String(obstacle?.collider?.kind || ''),
+    index
+  ].join(':');
+};
+
+export const resolveObstacleNavigationSignature = (obstacles = []) => (
+  (Array.isArray(obstacles) ? obstacles : []).map((obstacle, index) => [
+    resolveObstacleIdentity(obstacle, index),
+    obstacle?.destroyed === true ? 1 : 0,
+    obstacle?.blocksMovement === false ? 0 : 1,
+    Number(obstacle?.x) || 0,
+    Number(obstacle?.y) || 0,
+    obstacleDimension(obstacle, 'width', 'w'),
+    obstacleDimension(obstacle, 'depth', 'h'),
+    Number(obstacle?.rotation) || 0,
+    Number(obstacle?.colliderRevision) || 0,
+    obstacleShapeSignature(obstacle)
+  ].join(':')).join('|')
+);
+
 const normalizeDeg = (deg) => {
   let value = Number(deg) || 0;
   while (value < 0) value += 360;
@@ -44,6 +114,7 @@ const resolveColliderTransform = (obs = {}) => ({
   width: Number(obs?.width) || 0,
   depth: Number(obs?.depth) || 0,
   rotation: Number(obs?.rotation) || 0,
+  colliderRevision: Number(obs?.colliderRevision) || 0,
   collider: obs?.collider || null
 });
 
@@ -55,6 +126,7 @@ const isSameColliderTransform = (entry = null, transform = null) => (
   && entry.width === transform.width
   && entry.depth === transform.depth
   && entry.rotation === transform.rotation
+  && entry.colliderRevision === transform.colliderRevision
   && entry.collider === transform.collider
 );
 

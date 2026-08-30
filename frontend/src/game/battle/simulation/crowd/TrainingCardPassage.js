@@ -4,7 +4,8 @@ import {
   isInsideCollider,
   normalizeVec,
   queryObstacleCandidates,
-  raycastObstacles
+  raycastObstacles,
+  resolveObstacleNavigationSignature
 } from './crowdPhysics';
 import { isTrainingMapTerrainSegmentTraversable } from '../../shared/trainingMap';
 
@@ -27,6 +28,11 @@ const DEFAULT_MAX_STREAMS = 12;
 const finiteNumber = (value, fallback = 0) => (
   Number.isFinite(Number(value)) ? Number(value) : fallback
 );
+
+const smoothstep01 = (value = 0) => {
+  const t = clamp(finiteNumber(value), 0, 1);
+  return t * t * (3 - (2 * t));
+};
 
 const distance = (left = {}, right = {}) => Math.hypot(
   finiteNumber(left?.x) - finiteNumber(right?.x),
@@ -107,6 +113,179 @@ const tangentAtRouteProgress = (plan = {}, progress = 0) => {
   return segment.tangent;
 };
 
+const buildSpineSegments = (spine = []) => {
+  const points = Array.isArray(spine) ? spine : [];
+  const segments = [];
+  for (let index = 1; index < points.length; index += 1) {
+    const start = points[index - 1];
+    const end = points[index];
+    const length = distance(start, end);
+    if (length <= 0.001) continue;
+    const tangent = normalizeVec(end.x - start.x, end.y - start.y);
+    segments.push({
+      start,
+      end,
+      length,
+      startProgress: finiteNumber(start?.progress),
+      endProgress: finiteNumber(end?.progress),
+      tangent: tangent.len > 0.0001 ? { x: tangent.x, y: tangent.y } : { x: 1, y: 0 }
+    });
+  }
+  return segments;
+};
+
+const pointAtSpineProgress = (spine = [], segments = [], progress = 0) => {
+  const rows = Array.isArray(segments) ? segments : [];
+  if (rows.length <= 0) return normalizePoint(spine?.[0]);
+  const safeProgress = clamp(
+    finiteNumber(progress),
+    finiteNumber(rows[0]?.startProgress),
+    finiteNumber(rows[rows.length - 1]?.endProgress)
+  );
+  const segment = rows.find((entry) => safeProgress <= entry.endProgress + 0.001) || rows[rows.length - 1];
+  const span = Math.max(0.001, segment.endProgress - segment.startProgress);
+  const local = clamp((safeProgress - segment.startProgress) / span, 0, 1);
+  return {
+    x: segment.start.x + ((segment.end.x - segment.start.x) * local),
+    y: segment.start.y + ((segment.end.y - segment.start.y) * local)
+  };
+};
+
+const tangentAtSpineProgress = (segments = [], progress = 0) => {
+  const rows = Array.isArray(segments) ? segments : [];
+  if (rows.length <= 0) return { x: 1, y: 0 };
+  const safeProgress = clamp(
+    finiteNumber(progress),
+    finiteNumber(rows[0]?.startProgress),
+    finiteNumber(rows[rows.length - 1]?.endProgress)
+  );
+  const segment = rows.find((entry) => safeProgress <= entry.endProgress + 0.001) || rows[rows.length - 1];
+  return segment.tangent;
+};
+
+const buildOffsetSpine = ({ route = [], segments = [], offset = 0 } = {}) => {
+  const points = Array.isArray(route) ? route : [];
+  if (points.length <= 0) return [];
+  const safeOffset = finiteNumber(offset);
+  return points.map((point, index) => {
+    const previous = segments[Math.max(0, index - 1)] || segments[0] || null;
+    const next = segments[Math.min(segments.length - 1, index)] || previous;
+    const previousTangent = previous?.tangent || next?.tangent || { x: 1, y: 0 };
+    const nextTangent = next?.tangent || previousTangent;
+    let joinTangent = normalizeVec(
+      finiteNumber(previousTangent?.x) + finiteNumber(nextTangent?.x),
+      finiteNumber(previousTangent?.y) + finiteNumber(nextTangent?.y)
+    );
+    if (joinTangent.len <= 0.0001) joinTangent = normalizeVec(previousTangent?.x, previousTangent?.y);
+    const side = { x: -joinTangent.y, y: joinTangent.x };
+    const previousSide = { x: -previousTangent.y, y: previousTangent.x };
+    const joinAlignment = Math.abs((side.x * previousSide.x) + (side.y * previousSide.y));
+    // A true offset miter explodes near a reversal.  A bounded join keeps the
+    // lane continuous and leaves legality validation to reject unsafe lanes.
+    const miter = clamp(1 / Math.max(0.58, joinAlignment), 1, 1.38);
+    const progress = index <= 0
+      ? 0
+      : finiteNumber(segments[index - 1]?.endProgress);
+    return {
+      x: finiteNumber(point?.x) + (side.x * safeOffset * miter),
+      y: finiteNumber(point?.y) + (side.y * safeOffset * miter),
+      progress
+    };
+  });
+};
+
+const isSpineTraversable = ({ spine = [], walls = [], sim = {}, options = {} } = {}) => {
+  const segments = buildSpineSegments(spine);
+  if (segments.length <= 0) return false;
+  const clearance = Math.max(0.5, finiteNumber(options?.agentRadius) + finiteNumber(options?.wallClearance));
+  const pointsClear = spine.every((point) => !queryObstacleCandidates(
+    walls,
+    point?.x,
+    point?.y,
+    clearance
+  ).some((obstacle) => (
+    !obstacle?.destroyed && isInsideCollider(point, obstacle, clearance)
+  )));
+  if (!pointsClear) return false;
+  return segments.every((segment) => {
+    if (sim?.trainingNavigator?.isSegmentTraversable) {
+      return sim.trainingNavigator.isSegmentTraversable(segment.start, segment.end, {
+        obstacles: walls,
+        radius: clearance
+      });
+    }
+    return !raycastObstacles(segment.start, segment.end, walls, clearance)
+      && isTrainingMapTerrainSegmentTraversable(
+        sim?.trainingMap,
+        segment.start,
+        segment.end,
+        { field: sim?.field, rampTolerance: Math.min(2.4, finiteNumber(options?.wallClearance) * 0.2) }
+      );
+  });
+};
+
+const buildValidatedStreamGeometry = ({
+  route = [],
+  segments = [],
+  requestedCount = 1,
+  laneSpacing = 1,
+  walls = [],
+  sim = {},
+  options = {}
+} = {}) => {
+  const initialCount = Math.max(1, Math.floor(finiteNumber(requestedCount, 1)));
+  for (let count = initialCount; count >= 1; count -= 1) {
+    const streams = Array.from({ length: count }, (_, id) => {
+      const offset = (id - ((count - 1) * 0.5)) * laneSpacing;
+      const spine = buildOffsetSpine({ route, segments, offset });
+      return {
+        id,
+        offset,
+        spine,
+        spineSegments: buildSpineSegments(spine),
+        validatedWidth: Math.max(0, finiteNumber(options?.laneWidth))
+      };
+    });
+    if (streams.every((stream) => isSpineTraversable({ spine: stream.spine, walls, sim, options }))) {
+      return streams;
+    }
+  }
+  return [];
+};
+
+export const sampleTrainingCardPassageStream = (plan = null, streamId = 0, progress = 0) => {
+  if (!plan) return null;
+  const streams = Array.isArray(plan?.streams) ? plan.streams : [];
+  const index = clamp(Math.floor(finiteNumber(streamId)), 0, Math.max(0, streams.length - 1));
+  const stream = streams[index] || null;
+  // Plans are squad-level immutable geometry.  The reference check keeps the
+  // hot per-agent query O(1), while the signature remains a compatibility
+  // fallback for restored plans that do not retain the route reference.
+  const spineMatchesRoute = stream?.spineRoute === plan?.route
+    || (
+      !stream?.spineRoute
+      && !!stream?.spineRouteSignature
+      && stream.spineRouteSignature === String(plan?.routeSignature || '')
+    );
+  if (!spineMatchesRoute || !stream?.spine?.length || !stream?.spineSegments?.length) {
+    const tangent = tangentAtRouteProgress(plan, progress);
+    const side = { x: -tangent.y, y: tangent.x };
+    const offset = finiteNumber(stream?.offset, resolvePassageStreamOffset(plan, index));
+    const center = pointAtRouteProgress(plan, progress);
+    return {
+      x: center.x + (side.x * offset),
+      y: center.y + (side.y * offset),
+      tangent,
+      offset
+    };
+  }
+  return {
+    ...pointAtSpineProgress(stream.spine, stream.spineSegments, progress),
+    tangent: tangentAtSpineProgress(stream.spineSegments, progress),
+    offset: finiteNumber(stream?.offset)
+  };
+};
+
 export const projectPointToPassagePlan = (point = {}, plan = null) => {
   const segments = Array.isArray(plan?.segments) ? plan.segments : [];
   if (segments.length <= 0) {
@@ -158,19 +337,7 @@ export const projectPointToPassagePlan = (point = {}, plan = null) => {
   return best;
 };
 
-const obstacleSignature = (obstacles = []) => (
-  (Array.isArray(obstacles) ? obstacles : []).map((obstacle, index) => ([
-    String(obstacle?.id || obstacle?.objectId || index),
-    obstacle?.destroyed === true ? 1 : 0,
-    obstacle?.blocksMovement === false ? 0 : 1,
-    finiteNumber(obstacle?.x).toFixed(2),
-    finiteNumber(obstacle?.y).toFixed(2),
-    finiteNumber(obstacle?.width).toFixed(2),
-    finiteNumber(obstacle?.depth).toFixed(2),
-    finiteNumber(obstacle?.rotation).toFixed(2),
-    String(obstacle?.collider?.kind || '')
-  ].join(':'))).join('|')
-);
+const obstacleSignature = (obstacles = []) => resolveObstacleNavigationSignature(obstacles);
 
 const resolveFieldWidth = (sim = {}) => Math.max(100, finiteNumber(sim?.field?.width, 2700));
 const resolveFieldHeight = (sim = {}) => Math.max(100, finiteNumber(sim?.field?.height, 1488));
@@ -260,7 +427,7 @@ const resolvePassageOptions = (sim = {}, squad = {}) => {
     approachDistance: clamp(
       finiteNumber(
         passage?.approachDistance,
-        finiteNumber(legacy?.entryDistance, Math.max(DEFAULT_APPROACH_DISTANCE, spacing * 3.2))
+        finiteNumber(legacy?.entryDistance, Math.max(DEFAULT_APPROACH_DISTANCE * 1.5, spacing * 4.6))
       ),
       8,
       96
@@ -517,7 +684,7 @@ export const createTrainingCardPassagePlan = ({
     minimumProgress
   });
   if (!segment) return null;
-  const streamCount = resolveStreamCount({ usableWidth: segment.usableWidth, options });
+  const requestedStreamCount = resolveStreamCount({ usableWidth: segment.usableWidth, options });
   const laneSpacing = Math.max(options.agentRadius * 2.05, options.laneWidth);
   const clearProgress = segment.bottleneckEndProgress + options.exitClearDistance;
   const reformationDistance = Math.max(options.exitClearDistance * 1.4, options.scanStep * 2);
@@ -525,14 +692,26 @@ export const createTrainingCardPassagePlan = ({
     1,
     Math.floor(finiteNumber(previousPlan?.id, finiteNumber(squad?._passagePlanSequence, 0))) + 1
   );
-  const streams = Array.from({ length: streamCount }, (_, streamId) => ({
-    id: streamId,
-    offset: (streamId - ((streamCount - 1) * 0.5)) * laneSpacing,
-    tangent: {
-      x: segment.direction.x,
-      y: segment.direction.y
-    }
-  }));
+  const streams = buildValidatedStreamGeometry({
+    route: normalizedRoute,
+    segments: scan.segments,
+    requestedCount: requestedStreamCount,
+    laneSpacing,
+    walls,
+    sim,
+    options
+  });
+  // The centre route was already validated above.  If an outer offset lane
+  // cannot round a corner safely, shrink the plan once at creation time rather
+  // than emitting a lane that will clip a wall or changing lane count per
+  // frame while agents are inside it.
+  if (streams.length <= 0) return null;
+  const streamCount = streams.length;
+  const routeSignature = normalizedRoute.map((point) => `${point.x.toFixed(2)},${point.y.toFixed(2)}`).join(';');
+  streams.forEach((stream) => {
+    stream.spineRoute = normalizedRoute;
+    stream.spineRouteSignature = routeSignature;
+  });
   const plan = {
     id,
     route: normalizedRoute,
@@ -566,6 +745,7 @@ export const createTrainingCardPassagePlan = ({
     usableWidth: segment.usableWidth,
     minimumWidth: segment.minimumWidth,
     streamCount,
+    requestedStreamCount,
     streamSpacing: laneSpacing,
     streams,
     laneWidth: options.laneWidth,
@@ -575,10 +755,11 @@ export const createTrainingCardPassagePlan = ({
     clearProgress: Math.min(scan.length, clearProgress),
     reformationDistance,
     geometrySignature,
-    routeSignature: normalizedRoute.map((point) => `${point.x.toFixed(2)},${point.y.toFixed(2)}`).join(';'),
+    routeSignature,
     createdAt: previousPlan ? finiteNumber(previousPlan.createdAt, nowSec) : nowSec,
     lastValidatedAt: nowSec,
     valid: true,
+    draining: false,
     routeScale: resolveRouteScale(squad)
   };
   squad._passagePlanSequence = Math.max(
@@ -597,18 +778,37 @@ const clearAgentPassageState = (agent = {}) => {
   state.streamId = null;
   state.passageProgress = 0;
   state.passageLateral = 0;
+  state.passageForwardX = 0;
+  state.passageForwardY = 0;
   state.passageExitProgress = 0;
   state.passageEnteredAt = 0;
   state.passageSignature = '';
   state.passageCompletedId = 0;
   state.passageCompletedSignature = '';
   state.passageCompletedAt = 0;
+  state.streamWatchdog = null;
 };
 
 const assignStream = ({ agent, plan, projection, reuseExisting = false }) => {
   const state = agent?._squadController || {};
   const existing = Number.isFinite(Number(state?.streamId)) ? Math.floor(Number(state.streamId)) : -1;
   if (reuseExisting && existing >= 0 && existing < plan.streamCount) return existing;
+  const streams = Array.isArray(plan?.streams) ? plan.streams : [];
+  if (streams.length > 0) {
+    return streams.reduce((bestId, stream, index) => {
+      const bestSample = sampleTrainingCardPassageStream(plan, bestId, projection.progress);
+      const candidateSample = sampleTrainingCardPassageStream(plan, index, projection.progress);
+      const bestDistance = bestSample
+        ? Math.hypot(finiteNumber(agent?.x) - bestSample.x, finiteNumber(agent?.y) - bestSample.y)
+        : Math.abs(finiteNumber(streams[bestId]?.offset) - projection.lateral);
+      const candidateDistance = candidateSample
+        ? Math.hypot(finiteNumber(agent?.x) - candidateSample.x, finiteNumber(agent?.y) - candidateSample.y)
+        : Math.abs(finiteNumber(stream?.offset) - projection.lateral);
+      return candidateDistance < bestDistance
+        ? index
+        : bestId;
+    }, 0);
+  }
   const ratio = plan.usableWidth > 0
     ? clamp((projection.lateral / Math.max(0.1, plan.usableWidth)) + 0.5, 0, 1)
     : 0.5;
@@ -619,6 +819,8 @@ export const resolvePassageStreamOffset = (plan = null, streamId = 0) => {
   if (!plan) return 0;
   const count = Math.max(1, Math.floor(finiteNumber(plan?.streamCount, 1)));
   const lane = clamp(Math.floor(finiteNumber(streamId)), 0, count - 1);
+  const storedOffset = Number(plan?.streams?.[lane]?.offset);
+  if (Number.isFinite(storedOffset)) return storedOffset;
   return (lane - ((count - 1) * 0.5)) * Math.max(0.1, finiteNumber(plan?.streamSpacing, 1));
 };
 
@@ -676,6 +878,8 @@ export const updateTrainingCardPassageAgents = ({
     const samePassage = Math.floor(finiteNumber(state?.passageId)) === planId
       && (!planSignature || !state?.passageSignature || state.passageSignature === planSignature);
     const previousState = String(state?.locomotionState || CARD_LOCOMOTION_STATE.FORMATION);
+    const wasInPlan = Math.floor(finiteNumber(state?.passageId)) === planId
+      && isPassageState(previousState);
     const wasInPassage = samePassage && isPassageState(previousState);
     const completedCurrentPassage = Math.floor(finiteNumber(state?.passageCompletedId))
       === planId
@@ -711,7 +915,15 @@ export const updateTrainingCardPassageAgents = ({
       )
       || routeEndpointReached
     );
-    if (clearExit && (previousState === CARD_LOCOMOTION_STATE.STREAM_EXIT || previousState === CARD_LOCOMOTION_STATE.FORMATION)) {
+    if (plan.draining === true) {
+      // A destroyed/opened bottleneck should drain the agents already in it
+      // through STREAM_EXIT instead of snapping everybody straight back to a
+      // formation slot.  New arrivals stay in normal formation because the
+      // shared soldier-scale passage is no longer needed.
+      locomotionState = wasInPlan && !clearExit
+        ? CARD_LOCOMOTION_STATE.STREAM_EXIT
+        : CARD_LOCOMOTION_STATE.FORMATION;
+    } else if (clearExit && (previousState === CARD_LOCOMOTION_STATE.STREAM_EXIT || previousState === CARD_LOCOMOTION_STATE.FORMATION)) {
       // Once an agent has cleared the exit, keep it in the normal formation
       // controller.  Without this hysteresis an already-cleared member would
       // be classified as STREAM_EXIT again on every frame while the tail was
@@ -744,7 +956,11 @@ export const updateTrainingCardPassageAgents = ({
         ? CARD_LOCOMOTION_STATE.STREAM_EXIT
         : CARD_LOCOMOTION_STATE.STREAM_APPROACH;
     }
-    if (previousState === CARD_LOCOMOTION_STATE.STREAM_EXIT && projection.progress <= plan.endProgress) {
+    if (
+      plan.draining !== true
+      && previousState === CARD_LOCOMOTION_STATE.STREAM_EXIT
+      && projection.progress <= plan.endProgress
+    ) {
       locomotionState = CARD_LOCOMOTION_STATE.STREAM_EXIT;
     }
     const enteringPassage = locomotionState !== CARD_LOCOMOTION_STATE.FORMATION;
@@ -760,8 +976,11 @@ export const updateTrainingCardPassageAgents = ({
       state.streamId = null;
       state.passageProgress = projection.progress;
       state.passageLateral = projection.lateral;
+      state.passageForwardX = 0;
+      state.passageForwardY = 0;
       state.passageExitProgress = 0;
       state.passageEnteredAt = 0;
+      state.streamWatchdog = null;
       rows.push({
         agent,
         state: locomotionState,
@@ -775,8 +994,10 @@ export const updateTrainingCardPassageAgents = ({
       agent,
       plan,
       projection,
-      reuseExisting: wasInPassage
+      reuseExisting: wasInPassage || (plan.draining === true && wasInPlan)
     });
+    const streamSample = sampleTrainingCardPassageStream(plan, streamId, projection.progress);
+    const streamForward = normalizeVec(streamSample?.tangent?.x, streamSample?.tangent?.y);
     state.locomotionState = locomotionState;
     state.passageFlowActive = true;
     state.passageId = planId;
@@ -784,8 +1005,11 @@ export const updateTrainingCardPassageAgents = ({
     state.streamId = streamId;
     state.passageProgress = projection.progress;
     state.passageLateral = projection.lateral;
+    state.passageForwardX = streamForward.len > 0.0001 ? streamForward.x : projection.tangent.x;
+    state.passageForwardY = streamForward.len > 0.0001 ? streamForward.y : projection.tangent.y;
     state.passageExitProgress = plan.endProgress;
     state.passageEnteredAt = wasInPassage ? (state.passageEnteredAt || nowSec) : nowSec;
+    if (!wasInPassage && !(plan.draining === true && wasInPlan)) state.streamWatchdog = null;
     if (agent?._formationRecovery?.active !== true && state?.rejoin?.active !== true) {
       agent._formationDetached = false;
     }
@@ -853,8 +1077,11 @@ export const updateTrainingCardPassagePlan = ({
     && !routePending
     && runtime?.passageCompletedRouteSignature === routeSignature;
   let plan = previousPlan;
+  const geometryChanged = !!plan
+    && String(plan?.geometrySignature || '') !== String(geometry?.signature || '');
   const shouldValidate = force
     || !plan
+    || geometryChanged
     || nowSec - finiteNumber(plan?.lastValidatedAt, -Infinity) >= options.scanInterval;
   if (shouldValidate && !completedSameRoute) {
     const candidatePlan = createTrainingCardPassagePlan({
@@ -870,20 +1097,45 @@ export const updateTrainingCardPassagePlan = ({
     if (candidatePlan) {
       plan = candidatePlan;
     } else {
-      // A transient probe miss must not reset a live passage.  Retain the
-      // cached plan while the route/obstacle geometry is unchanged; a genuine
-      // route change gets a fresh validation and may invalidate it.
-      const previousPlanStillRelevant = previousPlan
-        && finiteNumber(previousPlan?.endProgress, Infinity)
-          >= minimumProgress - Math.max(options.exitClearDistance, options.scanStep);
-      plan = previousPlanStillRelevant && geometry.signature
-        && previousPlan.geometrySignature === geometry.signature
-        ? { ...previousPlan, lastValidatedAt: nowSec }
-        : null;
+      const sameRoute = previousPlan?.routeSignature === routeSignature;
+      const safeToDrainOpenedPassage = sameRoute
+        && Array.isArray(previousPlan?.streams)
+        && previousPlan.streams.length > 0
+        && previousPlan.streams.every((stream) => isSpineTraversable({
+          spine: stream?.spine,
+          walls,
+          sim,
+          options
+        }));
+      if (safeToDrainOpenedPassage) {
+        // A geometry revision can remove the bottleneck (for example a tower
+        // is destroyed).  The cached lane spines are still legal under the
+        // new geometry, so drain current members through STREAM_EXIT instead
+        // of abruptly returning them to exact formation slots.
+        plan = {
+          ...previousPlan,
+          geometrySignature: geometry.signature,
+          draining: true,
+          lastValidatedAt: nowSec,
+          valid: true
+        };
+      } else {
+        // A transient probe miss must not reset a live passage.  Retain the
+        // cached plan while the route/obstacle geometry is unchanged; a genuine
+        // route change gets a fresh validation and may invalidate it.
+        const previousPlanStillRelevant = previousPlan
+          && finiteNumber(previousPlan?.endProgress, Infinity)
+            >= minimumProgress - Math.max(options.exitClearDistance, options.scanStep);
+        plan = previousPlanStillRelevant && geometry.signature
+          && previousPlan.geometrySignature === geometry.signature
+          ? { ...previousPlan, lastValidatedAt: nowSec }
+          : null;
+      }
     }
   } else if (completedSameRoute) {
     plan = null;
   }
+  runtime.passagePlanInvalid = !!previousPlan && geometryChanged && !plan;
   const rows = updateTrainingCardPassageAgents({ squad, agents, plan, nowSec });
   const activeRows = rows.filter((row) => row.state !== CARD_LOCOMOTION_STATE.FORMATION);
   const active = !!plan && activeRows.length > 0;
@@ -1008,37 +1260,62 @@ export const resolveTrainingCardPassageFlowIntent = ({
     && agent?._squadController?.passageSignature
     && agent._squadController.passageSignature !== plan.geometrySignature
   ) return null;
-  const projection = projectPointToPassagePlan(agent, plan);
+  const controller = agent?._squadController || {};
+  const storedProgress = Number(controller?.passageProgress);
+  const projection = Number.isFinite(storedProgress)
+    ? {
+      progress: storedProgress,
+      point: pointAtRouteProgress(plan, storedProgress),
+      tangent: tangentAtRouteProgress(plan, storedProgress),
+      lateral: finiteNumber(controller?.passageLateral)
+    }
+    : projectPointToPassagePlan(agent, plan);
   const streamId = clamp(
     Math.floor(finiteNumber(agent?._squadController?.streamId)),
     0,
     Math.max(0, plan.streamCount - 1)
   );
   const routeTangent = tangentAtRouteProgress(plan, projection.progress);
+  const streamSample = sampleTrainingCardPassageStream(plan, streamId, projection.progress);
   const tangent = normalizeVec(
-    finiteNumber(routeTangent?.x, projection?.tangent?.x),
-    finiteNumber(routeTangent?.y, projection?.tangent?.y)
+    finiteNumber(streamSample?.tangent?.x, routeTangent?.x),
+    finiteNumber(streamSample?.tangent?.y, routeTangent?.y)
   );
   if (tangent.len <= 0.0001) return null;
   const side = { x: -tangent.y, y: tangent.x };
   const laneOffset = resolvePassageStreamOffset(plan, streamId);
   const lanePoint = {
-    x: projection.point.x + (side.x * laneOffset),
-    y: projection.point.y + (side.y * laneOffset)
+    x: finiteNumber(streamSample?.x, projection.point.x + (side.x * laneOffset)),
+    y: finiteNumber(streamSample?.y, projection.point.y + (side.y * laneOffset))
   };
+  const laneLateral = (
+    (finiteNumber(agent?.x) - lanePoint.x) * side.x
+  ) + (
+    (finiteNumber(agent?.y) - lanePoint.y) * side.y
+  );
   let reformSideError = 0;
   if (state === CARD_LOCOMOTION_STATE.STREAM_EXIT) {
     reformSideError = resolveFormationLateralAtProjection({
       squad,
       agent,
       projection,
-      routeSide: side
+      routeSide: { x: -routeTangent.y, y: routeTangent.x }
     }) - laneOffset;
   }
   const clearProgress = Math.max(
     plan.bottleneckEndProgress + plan.exitClearDistance,
     finiteNumber(plan?.clearProgress, plan.endProgress)
   );
+  const previousWatchdog = controller?.streamWatchdog && typeof controller.streamWatchdog === 'object'
+    ? controller.streamWatchdog
+    : null;
+  const watchdogRefresh = previousWatchdog?.stalled === true;
+  const lookAhead = Math.max(10, plan.streamSpacing * 2.5) * (watchdogRefresh ? 1.55 : 1);
+  const goal = sampleTrainingCardPassageStream(
+    plan,
+    streamId,
+    Math.min(plan.routeLength, projection.progress + lookAhead)
+  ) || pointAtRouteProgress(plan, Math.min(plan.routeLength, projection.progress + lookAhead));
   return {
     active: state !== CARD_LOCOMOTION_STATE.FORMATION,
     state,
@@ -1053,10 +1330,15 @@ export const resolveTrainingCardPassageFlowIntent = ({
     lanePointX: lanePoint.x,
     lanePointY: lanePoint.y,
     progress: projection.progress,
-    lateral: projection.lateral,
-    laneError: laneOffset - projection.lateral,
+    lateral: laneOffset + laneLateral,
+    laneError: -laneLateral,
     streamSpacing: plan.streamSpacing,
     queueSpacing: Math.max(plan.streamSpacing * 1.05, plan.laneWidth * 1.12),
+    queueLookahead: Math.max(plan.streamSpacing * 4, lookAhead * 1.65),
+    approachDistance: plan.approachDistance,
+    mergeDistanceRemaining: Math.max(0, plan.bottleneckStartProgress - projection.progress),
+    streamWatchdog: previousWatchdog,
+    watchdogRefresh,
     formationWeight: state === CARD_LOCOMOTION_STATE.STREAM_EXIT
       ? clamp(
         (projection.progress - clearProgress)
@@ -1067,8 +1349,8 @@ export const resolveTrainingCardPassageFlowIntent = ({
       : 0,
     reformSideError: state === CARD_LOCOMOTION_STATE.STREAM_EXIT ? reformSideError : 0,
     clearProgress,
-    goalX: pointAtRouteProgress(plan, Math.min(plan.routeLength, projection.progress + Math.max(10, plan.streamSpacing * 2.5))).x,
-    goalY: pointAtRouteProgress(plan, Math.min(plan.routeLength, projection.progress + Math.max(10, plan.streamSpacing * 2.5))).y
+    goalX: goal.x,
+    goalY: goal.y
   };
 };
 
@@ -1077,7 +1359,8 @@ export const resolveTrainingCardPassageFlowSteering = ({
   squad = null,
   flowIntent = null,
   neighbors = [],
-  speed = 0
+  speed = 0,
+  nowSec = 0
 } = {}) => {
   if (!agent || !squad || !flowIntent?.active) return null;
   const tangent = normalizeVec(flowIntent.forwardX, flowIntent.forwardY);
@@ -1103,37 +1386,112 @@ export const resolveTrainingCardPassageFlowSteering = ({
     Math.max(1, Number(speed) || 0) * (state === CARD_LOCOMOTION_STATE.STREAM_APPROACH ? 0.42 : 0.3)
   );
   let nearestFront = null;
+  const selfProgress = finiteNumber(flowIntent?.progress);
+  const safeSpeed = Math.max(0, Number(speed) || 0);
+  const queueLookahead = Math.max(
+    queueSpacing * 3,
+    finiteNumber(flowIntent?.queueLookahead, queueSpacing * 4),
+    safeSpeed * 0.5
+  );
   (Array.isArray(neighbors) ? neighbors : []).forEach((other) => {
     if (!other || other === agent || other.dead || String(other?.squadId || '') !== String(agent?.squadId || '')) return;
     const otherState = String(other?._squadController?.locomotionState || '');
     if (!isPassageState(otherState)) return;
     if (Math.floor(finiteNumber(other?._squadController?.passageId)) !== Math.floor(finiteNumber(flowIntent?.passageId))) return;
     if (Math.floor(finiteNumber(other?._squadController?.streamId, -1)) !== Math.floor(finiteNumber(flowIntent?.streamId, -1))) return;
+    const otherProgress = Number(other?._squadController?.passageProgress);
+    if (!Number.isFinite(otherProgress)) return;
+    const progressDifference = otherProgress - selfProgress;
+    if (progressDifference <= 0 || progressDifference > queueLookahead) return;
     const dx = finiteNumber(other?.x) - finiteNumber(agent?.x);
     const dy = finiteNumber(other?.y) - finiteNumber(agent?.y);
-    const longitudinal = (dx * tangent.x) + (dy * tangent.y);
+    const worldDistance = Math.hypot(dx, dy);
     const lateral = Math.abs((dx * side.x) + (dy * side.y));
-    if (longitudinal <= 0 || lateral > laneSpacing * 0.86) return;
-    if (!nearestFront || longitudinal < nearestFront.longitudinal) {
-      nearestFront = { agent: other, longitudinal };
+    // Progress is the longitudinal authority.  World distance remains a
+    // safety filter so a self-crossing route cannot make a distant stream
+    // member brake this one, but a curved corner is allowed to look lateral
+    // in the current tangent frame.
+    if (worldDistance > Math.max(queueSpacing * 3.5, safeSpeed * 0.72 + laneSpacing)) return;
+    if (!nearestFront
+      || progressDifference < nearestFront.progressDifference - 0.001
+      || (
+        Math.abs(progressDifference - nearestFront.progressDifference) <= 0.001
+        && worldDistance < nearestFront.worldDistance
+      )) {
+      nearestFront = {
+        agent: other,
+        progressDifference,
+        worldDistance,
+        lateral
+      };
     }
   });
   const minimumGap = Math.max(laneSpacing * 0.72, (finiteNumber(agent?.radius, AGENT_RADIUS) * 2) + 0.25);
-  const desiredGap = Math.max(queueSpacing, (Number(speed) || 0) * 0.16 + minimumGap);
-  const gap = nearestFront?.longitudinal ?? Infinity;
-  const queuePressure = Number.isFinite(gap)
-    ? clamp((desiredGap - gap) / Math.max(0.5, desiredGap - minimumGap), 0, 1)
-    : 0;
-  let targetSpeed = Math.max(0, Number(speed) || 0);
+  const timeHeadway = clamp(queueSpacing / Math.max(1, safeSpeed), 0.2, 0.46);
+  const desiredGap = Math.max(queueSpacing, minimumGap + (safeSpeed * timeHeadway));
+  const gap = nearestFront?.progressDifference ?? Infinity;
+  let targetSpeed = safeSpeed;
+  let frontSpeed = safeSpeed;
   if (Number.isFinite(gap)) {
-    const gapRatio = clamp((gap - minimumGap) / Math.max(0.5, desiredGap - minimumGap), 0.08, 1);
-    targetSpeed *= gapRatio;
-    const frontSpeed = nearestFront?.agent
-      ? ((finiteNumber(nearestFront.agent.vx) * tangent.x) + (finiteNumber(nearestFront.agent.vy) * tangent.y))
-      : targetSpeed;
-    if (frontSpeed > 0 && gap < desiredGap * 1.15) {
-      targetSpeed = Math.min(targetSpeed, frontSpeed * 0.98 + (targetSpeed * 0.02));
+    if (nearestFront?.agent) {
+      const frontTangent = normalizeVec(
+        finiteNumber(nearestFront.agent?._squadController?.passageForwardX, tangent.x),
+        finiteNumber(nearestFront.agent?._squadController?.passageForwardY, tangent.y)
+      );
+      const direction = frontTangent.len > 0.0001 ? frontTangent : tangent;
+      frontSpeed = (finiteNumber(nearestFront.agent.vx) * direction.x)
+        + (finiteNumber(nearestFront.agent.vy) * direction.y);
     }
+    frontSpeed = clamp(frontSpeed, 0, safeSpeed);
+    const release = smoothstep01(clamp(
+      (gap - minimumGap) / Math.max(0.5, desiredGap - minimumGap),
+      0,
+      1
+    ));
+    const selfForwardSpeed = (finiteNumber(agent?.vx) * tangent.x) + (finiteNumber(agent?.vy) * tangent.y);
+    const closingSpeed = Math.max(0, selfForwardSpeed - frontSpeed);
+    targetSpeed = clamp(
+      frontSpeed + ((safeSpeed - frontSpeed) * release) - (closingSpeed * (1 - release) * 0.7),
+      0,
+      safeSpeed
+    );
+    if (gap < minimumGap) {
+      const overlapRatio = clamp(gap / Math.max(0.1, minimumGap), 0, 1);
+      targetSpeed = Math.min(targetSpeed, (frontSpeed * overlapRatio) + (safeSpeed * 0.08 * overlapRatio));
+    }
+  }
+  const queuePressure = safeSpeed > 0.001 ? clamp(1 - (targetSpeed / safeSpeed), 0, 1) : 0;
+  const mergeDemand = clamp(
+    Math.abs(laneError) / Math.max(
+      laneSpacing,
+      finiteNumber(flowIntent?.approachDistance, laneSpacing * 4) * 0.44
+    ),
+    0,
+    1
+  );
+  const approachForwardRatio = state === CARD_LOCOMOTION_STATE.STREAM_APPROACH
+    ? 0.72 + (0.28 * (1 - smoothstep01(mergeDemand)))
+    : 1;
+  const previousWatch = agent?._squadController?.streamWatchdog || {};
+  const previousProgress = Number(previousWatch?.progress);
+  const progressed = !Number.isFinite(previousProgress)
+    || selfProgress >= previousProgress + 0.16;
+  const previousProgressAt = Number(previousWatch?.lastProgressAt);
+  const lastProgressAt = progressed || !Number.isFinite(previousProgressAt)
+    ? nowSec
+    : previousProgressAt;
+  const frontBlocking = Number.isFinite(gap) && gap <= desiredGap * 1.08;
+  const stalled = state === CARD_LOCOMOTION_STATE.STREAM
+    && !frontBlocking
+    && nowSec - lastProgressAt >= 0.9;
+  if (agent?._squadController && typeof agent._squadController === 'object') {
+    agent._squadController.streamWatchdog = {
+      progress: selfProgress,
+      lastProgressAt,
+      stalled,
+      frontBlocking,
+      refreshedAt: stalled ? nowSec : finiteNumber(previousWatch?.refreshedAt)
+    };
   }
   const totalLateral = lateralVelocity;
   return {
@@ -1148,11 +1506,14 @@ export const resolveTrainingCardPassageFlowSteering = ({
     laneVelocityY: side.y * totalLateral,
     targetSpeed,
     queuePressure,
+    approachForwardRatio,
     formationWeight: finiteNumber(flowIntent?.formationWeight),
     goalX: finiteNumber(flowIntent?.goalX),
     goalY: finiteNumber(flowIntent?.goalY),
     sameStreamFront: nearestFront?.agent || null,
-    laneError
+    frontProgressDifference: nearestFront?.progressDifference ?? Infinity,
+    laneError,
+    streamWatchdog: { stalled, frontBlocking, lastProgressAt }
   };
 };
 

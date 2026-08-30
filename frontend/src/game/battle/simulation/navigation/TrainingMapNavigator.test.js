@@ -4,6 +4,7 @@ import {
   getTrainingMapTerrainMultiplier,
   planTrainingMapRoute,
   resolveTrainingHighlandExitPortal,
+  resolveTrainingHighlandRampPortal,
   resolveTrainingMapLegalPosition
 } from './TrainingMapNavigator';
 import { isInsideCollider, raycastObstacles } from '../crowd/crowdPhysics';
@@ -415,6 +416,78 @@ describe('TrainingMapNavigator', () => {
     expect(route[0]).toEqual(portal.entry);
     expect(route).toContainEqual(portal.exit);
     expect(route[route.length - 1]).toEqual(target);
+  });
+
+  test('uses bidirectional ramp portals for lowland-to-highland, highland-to-lowland, and highland-to-highland routes', () => {
+    const field = { width: 800, height: 400 };
+    const portalMap = {
+      navigation: {
+        cellSize: 24,
+        wallClearance: 2,
+        pathClearance: 1,
+        maxSearchNodes: 320
+      },
+      lanes: [],
+      terrainRegions: [
+        {
+          id: 'terrain-highland-west',
+          type: 'highland-west',
+          points: [
+            { x: -300, y: -120 }, { x: -100, y: -120 },
+            { x: -100, y: 120 }, { x: -300, y: 120 }
+          ],
+          ramps: [{
+            id: 'west-ramp',
+            points: [
+              { x: -36, y: -32 }, { x: -100, y: -32 },
+              { x: -100, y: 32 }, { x: -36, y: 32 }
+            ]
+          }]
+        },
+        {
+          id: 'terrain-highland-east',
+          type: 'highland-east',
+          points: [
+            { x: 100, y: -120 }, { x: 300, y: -120 },
+            { x: 300, y: 120 }, { x: 100, y: 120 }
+          ],
+          ramps: [{
+            id: 'east-ramp',
+            points: [
+              { x: 36, y: -32 }, { x: 100, y: -32 },
+              { x: 100, y: 32 }, { x: 36, y: 32 }
+            ]
+          }]
+        }
+      ]
+    };
+    const navigator = createTrainingMapNavigator({ field, mapConfig: portalMap });
+    const cases = [
+      { start: { x: -20, y: 82 }, target: { x: -230, y: 82 }, expectedPortals: 1 },
+      { start: { x: -230, y: 82 }, target: { x: -20, y: 82 }, expectedPortals: 1 },
+      { start: { x: -230, y: 82 }, target: { x: 230, y: 82 }, expectedPortals: 2 }
+    ];
+
+    cases.forEach(({ start, target, expectedPortals }) => {
+      const portal = resolveTrainingHighlandRampPortal({
+        mapConfig: portalMap,
+        start,
+        target,
+        obstacles: [],
+        clearance: 3,
+        field
+      });
+      const route = navigator.planRoute(start, target, { obstacles: [], radius: 2 });
+
+      expect(portal).not.toBeNull();
+      expect((portal.startPortal ? 1 : 0) + (portal.targetPortal ? 1 : 0)).toBe(expectedPortals);
+      expect(route[route.length - 1]).toEqual(target);
+      let previous = start;
+      route.forEach((point) => {
+        expect(navigator.isSegmentTraversable(previous, point, { obstacles: [], radius: 2 })).toBe(true);
+        previous = point;
+      });
+    });
   });
 
   test('continues straight down a clear highland ramp instead of returning to its top edge', () => {

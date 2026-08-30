@@ -3,12 +3,14 @@ import {
   isInsideCollider,
   pushOutOfRect,
   queryObstacleCandidates,
-  raycastObstacles
+  raycastObstacles,
+  resolveObstacleNavigationSignature
 } from '../crowd/crowdPhysics';
 import { filterBlockingObstacles } from '../items/itemObstacleUtils';
 import {
   TRAINING_MAP_WORLD_HEIGHT,
   TRAINING_MAP_WORLD_WIDTH,
+  isPointInsideTrainingMapTerrainRegion,
   isTrainingMapTerrainSegmentTraversable,
   isTrainingMapTerrainWalkable,
   sampleTrainingMapTerrain
@@ -112,21 +114,7 @@ const resolveBlockingObstacles = (obstacles = []) => {
   return blockingObstacles;
 };
 
-const resolveObstacleSourceSignature = (obstacles = []) => (
-  (Array.isArray(obstacles) ? obstacles : []).map((obstacle, index) => ([
-    String(obstacle?.objectId || obstacle?.id || index),
-    finiteNumber(obstacle?.x),
-    finiteNumber(obstacle?.y),
-    finiteNumber(obstacle?.width),
-    finiteNumber(obstacle?.depth),
-    finiteNumber(obstacle?.rotation),
-    String(obstacle?.collider?.kind || ''),
-    finiteNumber(obstacle?.collider?.r),
-    Array.isArray(obstacle?.collider?.parts) ? obstacle.collider.parts.length : 0,
-    obstacle?.blocksMovement !== false,
-    obstacle?.destroyed === true
-  ].join(':'))).join('|')
-);
+const resolveObstacleSourceSignature = (obstacles = []) => resolveObstacleNavigationSignature(obstacles);
 
 const resolvePathClearance = (navigation = {}, override = null) => {
   if (override !== null && override !== undefined && Number.isFinite(Number(override))) {
@@ -596,7 +584,175 @@ const resolveLocalDetourRoute = ({
   return null;
 };
 
-export const resolveTrainingHighlandExitPortal = ({
+const isHighlandRegion = (region = {}) => (
+  String(region?.type || '').startsWith('highland-')
+  || String(region?.type || '') === 'highland'
+);
+
+const routeDistance = (start = {}, route = []) => (
+  (Array.isArray(route) ? route : []).reduce((total, point, index, points) => (
+    total + distance(index <= 0 ? start : points[index - 1], point)
+  ), 0)
+);
+
+const resolveRampShape = ({
+  region = null,
+  ramp = null,
+  obstacles = [],
+  clearance = 0,
+  mapConfig = null,
+  field = null
+} = {}) => {
+  const points = Array.isArray(ramp?.points) ? ramp.points.filter(Boolean) : [];
+  if (!region || points.length !== 4) return null;
+  const lowCenter = {
+    x: (finiteNumber(points[0]?.x) + finiteNumber(points[3]?.x)) * 0.5,
+    y: (finiteNumber(points[0]?.y) + finiteNumber(points[3]?.y)) * 0.5
+  };
+  const highCenter = {
+    x: (finiteNumber(points[1]?.x) + finiteNumber(points[2]?.x)) * 0.5,
+    y: (finiteNumber(points[1]?.y) + finiteNumber(points[2]?.y)) * 0.5
+  };
+  const outward = normalizeDirection(highCenter, lowCenter);
+  if (Math.abs(outward.x) + Math.abs(outward.y) <= 0.0001) return null;
+  const offsetDistance = Math.max(2, finiteNumber(clearance) * 1.4);
+  const high = clampPointToField({
+    x: highCenter.x - (outward.x * offsetDistance),
+    y: highCenter.y - (outward.y * offsetDistance)
+  }, field, clearance);
+  const low = clampPointToField({
+    x: lowCenter.x + (outward.x * offsetDistance),
+    y: lowCenter.y + (outward.y * offsetDistance)
+  }, field, clearance);
+  if (!isPointWalkable(high, obstacles, clearance, mapConfig, field)) return null;
+  if (!isPointWalkable(low, obstacles, clearance, mapConfig, field)) return null;
+  if (!hasDirectPath(high, low, obstacles, clearance, mapConfig, field)) return null;
+  return {
+    id: String(ramp?.id || `${region?.id || 'highland'}-ramp`),
+    region,
+    ramp,
+    points,
+    high,
+    low,
+    highCenter,
+    lowCenter,
+    outward
+  };
+};
+
+const resolveHighlandContext = (mapConfig = null, point = {}) => {
+  const regions = (Array.isArray(mapConfig?.terrainRegions) ? mapConfig.terrainRegions : [])
+    .filter(isHighlandRegion);
+  for (let regionIndex = 0; regionIndex < regions.length; regionIndex += 1) {
+    const region = regions[regionIndex];
+    const insideHighland = isPointInsideTrainingMapTerrainRegion(point, region);
+    const ramp = (Array.isArray(region?.ramps) ? region.ramps : []).find((entry) => (
+      isPointInsidePolygon(point, Array.isArray(entry?.points) ? entry.points : [])
+    )) || null;
+    if (!insideHighland && !ramp) continue;
+    if (!ramp) return { region, ramp: null, onHighSide: true };
+    const points = ramp.points;
+    if (points.length !== 4) return { region: insideHighland ? region : null, ramp, onHighSide: insideHighland };
+    const lowCenter = {
+      x: (finiteNumber(points[0]?.x) + finiteNumber(points[3]?.x)) * 0.5,
+      y: (finiteNumber(points[0]?.y) + finiteNumber(points[3]?.y)) * 0.5
+    };
+    const highCenter = {
+      x: (finiteNumber(points[1]?.x) + finiteNumber(points[2]?.x)) * 0.5,
+      y: (finiteNumber(points[1]?.y) + finiteNumber(points[2]?.y)) * 0.5
+    };
+    const spanX = highCenter.x - lowCenter.x;
+    const spanY = highCenter.y - lowCenter.y;
+    const spanLengthSq = Math.max(0.0001, (spanX * spanX) + (spanY * spanY));
+    const progress = clamp(
+      (((finiteNumber(point?.x) - lowCenter.x) * spanX) + ((finiteNumber(point?.y) - lowCenter.y) * spanY)) / spanLengthSq,
+      0,
+      1
+    );
+    // Ramp polygons commonly overlap the plateau outline.  Once a point is
+    // inside the ramp, classify its side by the ramp's own longitudinal
+    // progress rather than the overlapping highland polygon, otherwise a
+    // low-side ramp point can be incorrectly forced through an exit portal.
+    const onHighSide = progress >= 0.5;
+    return { region: onHighSide ? region : null, ramp, onHighSide, progress, rampRegion: region };
+  }
+  return { region: null, ramp: null, onHighSide: false };
+};
+
+const resolvePortalConnector = ({
+  start = {},
+  target = {},
+  obstacles = [],
+  clearance = 0,
+  mapConfig = null,
+  field = null
+} = {}) => {
+  if (distance(start, target) <= 0.01) return [];
+  if (hasDirectPath(start, target, obstacles, clearance, mapConfig, field)) return [target];
+  return resolveLocalDetourRoute({ start, target, obstacles, clearance, mapConfig, field });
+};
+
+const resolveDirectionalRampPortal = ({
+  direction = 'OUT',
+  region = null,
+  start = {},
+  target = {},
+  obstacles = [],
+  clearance = 0,
+  mapConfig = null,
+  field = null
+} = {}) => {
+  if (!region) return null;
+  const candidates = (Array.isArray(region?.ramps) ? region.ramps : [])
+    .map((ramp) => resolveRampShape({ region, ramp, obstacles, clearance, mapConfig, field }))
+    .filter(Boolean)
+    .map((shape) => {
+      if (direction === 'IN') {
+        const suffix = resolvePortalConnector({
+          start: shape.high,
+          target,
+          obstacles,
+          clearance,
+          mapConfig,
+          field
+        });
+        if (suffix === null) return null;
+        const route = joinRoutePoints([shape.high], suffix);
+        return {
+          ...shape,
+          direction,
+          route,
+          score: distance(start, shape.low) + routeDistance(shape.low, joinRoutePoints([shape.high], suffix))
+        };
+      }
+      const prefix = resolvePortalConnector({
+        start,
+        target: shape.high,
+        obstacles,
+        clearance,
+        mapConfig,
+        field
+      });
+      if (prefix === null) return null;
+      const route = joinRoutePoints(prefix, [shape.low]);
+      return {
+        ...shape,
+        direction,
+        route,
+        score: routeDistance(start, route) + distance(shape.low, target)
+      };
+    })
+    .filter(Boolean)
+    .sort((left, right) => left.score - right.score || left.id.localeCompare(right.id));
+  return candidates[0] || null;
+};
+
+/**
+ * Treat every highland ramp as a bidirectional portal.  The returned anchors
+ * are both lowland points, so callers can plan the middle of an H-A -> lowland
+ * -> H-B journey without asking a coarse grid search to discover either ramp.
+ */
+export const resolveTrainingHighlandRampPortal = ({
   mapConfig = null,
   start = {},
   target = {},
@@ -604,89 +760,64 @@ export const resolveTrainingHighlandExitPortal = ({
   clearance = 0,
   field = null
 } = {}) => {
-  const region = (Array.isArray(mapConfig?.terrainRegions) ? mapConfig.terrainRegions : [])
-    .find((entry) => (
-      String(entry?.type || '').startsWith('highland-')
-      && isPointInsidePolygon(start, entry?.points)
-    )) || null;
-  if (!region || isPointInsidePolygon(target, region?.points)) return null;
-  const offsetDistance = Math.max(2, finiteNumber(clearance) * 1.4);
-  const candidates = (Array.isArray(region?.ramps) ? region.ramps : [])
-    .map((ramp) => {
-      const points = Array.isArray(ramp?.points) ? ramp.points : [];
-      if (points.length !== 4) return null;
-      const lowCenter = {
-        x: (finiteNumber(points[0]?.x) + finiteNumber(points[3]?.x)) * 0.5,
-        y: (finiteNumber(points[0]?.y) + finiteNumber(points[3]?.y)) * 0.5
-      };
-      const highCenter = {
-        x: (finiteNumber(points[1]?.x) + finiteNumber(points[2]?.x)) * 0.5,
-        y: (finiteNumber(points[1]?.y) + finiteNumber(points[2]?.y)) * 0.5
-      };
-      const outward = normalizeDirection(highCenter, lowCenter);
-      if (Math.abs(outward.x) + Math.abs(outward.y) <= 0.0001) return null;
-      const startInsideRamp = isPointInsidePolygon(start, points);
-      const targetDirection = normalizeDirection(start, target);
-      const outwardAlignment = (targetDirection.x * outward.x) + (targetDirection.y * outward.y);
-      const outwardCross = Math.abs((targetDirection.x * outward.y) - (targetDirection.y * outward.x));
-      if (startInsideRamp && outwardAlignment > 0.94 && outwardCross < 0.34) {
-        return {
-          entry: { x: finiteNumber(start?.x), y: finiteNumber(start?.y) },
-          exit: { x: finiteNumber(start?.x), y: finiteNumber(start?.y) },
-          route: [],
-          priority: 0,
-          score: distance(start, target)
-        };
-      }
-      const entry = clampPointToField({
-        x: highCenter.x - (outward.x * offsetDistance),
-        y: highCenter.y - (outward.y * offsetDistance)
-      }, field, clearance);
-      const exit = clampPointToField({
-        x: lowCenter.x + (outward.x * offsetDistance),
-        y: lowCenter.y + (outward.y * offsetDistance)
-      }, field, clearance);
-      if (!isPointWalkable(entry, obstacles, clearance, mapConfig, field)) return null;
-      if (!isPointWalkable(exit, obstacles, clearance, mapConfig, field)) return null;
-      if (!hasDirectPath(entry, exit, obstacles, clearance, mapConfig, field)) return null;
-      const approachTarget = startInsideRamp ? exit : entry;
-      const approach = hasDirectPath(start, approachTarget, obstacles, clearance, mapConfig, field)
-        ? [approachTarget]
-        : resolveLocalDetourRoute({
-          start,
-          target: approachTarget,
-          obstacles,
-          clearance,
-          mapConfig,
-          field
-        });
-      if (!approach?.length) return null;
-      const reducedApproach = reduceRoute(
-        start,
-        approach,
-        obstacles,
-        clearance,
-        mapConfig,
-        field
-      );
-      if (distance(reducedApproach[reducedApproach.length - 1], approachTarget) > 0.01) return null;
-      const route = startInsideRamp
-        ? joinRoutePoints(reducedApproach, [exit])
-        : joinRoutePoints(reducedApproach, [entry, exit]);
-      const approachDistance = route.reduce((total, point, index) => (
-        total + distance(index === 0 ? start : route[index - 1], point)
-      ), 0);
-      return {
-        entry,
-        exit,
-        route,
-        priority: startInsideRamp ? 0 : 1,
-        score: approachDistance + distance(exit, target)
-      };
+  // A segment that already crosses an actual ramp polygon is the shortest
+  // valid portal traversal.  Do not manufacture a top-edge detour for it.
+  if (hasDirectPath(start, target, obstacles, clearance, mapConfig, field)) return null;
+  const startContext = resolveHighlandContext(mapConfig, start);
+  const targetContext = resolveHighlandContext(mapConfig, target);
+  const startRegion = startContext?.region || null;
+  const targetRegion = targetContext?.region || null;
+  if (startRegion && targetRegion && String(startRegion?.id || '') === String(targetRegion?.id || '')) {
+    return null;
+  }
+  const startPortal = startRegion
+    ? resolveDirectionalRampPortal({
+      direction: 'OUT',
+      region: startRegion,
+      start,
+      target,
+      obstacles,
+      clearance,
+      mapConfig,
+      field
     })
-    .filter(Boolean)
-    .sort((left, right) => left.priority - right.priority || left.score - right.score);
-  return candidates[0] || null;
+    : null;
+  const targetPortal = targetRegion
+    ? resolveDirectionalRampPortal({
+      direction: 'IN',
+      region: targetRegion,
+      start,
+      target,
+      obstacles,
+      clearance,
+      mapConfig,
+      field
+    })
+    : null;
+  if ((startRegion && !startPortal) || (targetRegion && !targetPortal)) return null;
+  if (!startPortal && !targetPortal) return null;
+  return {
+    start: startPortal?.low || { x: finiteNumber(start?.x), y: finiteNumber(start?.y) },
+    target: targetPortal?.low || { x: finiteNumber(target?.x), y: finiteNumber(target?.y) },
+    prefix: startPortal?.route || [],
+    suffix: targetPortal?.route || [],
+    startPortal,
+    targetPortal
+  };
+};
+
+// Compatibility for focused callers/tests that only need to inspect an exit.
+export const resolveTrainingHighlandExitPortal = (options = {}) => {
+  const portal = resolveTrainingHighlandRampPortal(options);
+  const exit = portal?.startPortal;
+  if (!exit) return null;
+  return {
+    entry: exit.high,
+    exit: exit.low,
+    route: exit.route,
+    priority: 0,
+    score: exit.score
+  };
 };
 
 // This is deliberately smaller than the full A* planner.  It is used by an
@@ -727,7 +858,7 @@ export const planTrainingMapLocalDetour = ({
   if (!safeStart || !safeTarget) return [];
 
   const startEscape = distance(requestedStart, safeStart) > 0.2 ? [safeStart] : [];
-  const highlandExitPortal = resolveTrainingHighlandExitPortal({
+  const highlandPortal = resolveTrainingHighlandRampPortal({
     mapConfig,
     start: safeStart,
     target: safeTarget,
@@ -735,12 +866,14 @@ export const planTrainingMapLocalDetour = ({
     clearance,
     field: safeField
   });
-  const routeStart = highlandExitPortal?.exit || safeStart;
-  const portalPrefix = highlandExitPortal?.route || [];
+  const routeStart = highlandPortal?.start || safeStart;
+  const routeTarget = highlandPortal?.target || safeTarget;
+  const portalPrefix = highlandPortal?.prefix || [];
+  const portalSuffix = highlandPortal?.suffix || [];
   const finalize = (suffix = []) => {
     const reduced = reduceRoute(
       safeStart,
-      joinRoutePoints(portalPrefix, suffix),
+      joinRoutePoints(portalPrefix, suffix, portalSuffix),
       blockingObstacles,
       clearance,
       mapConfig,
@@ -749,19 +882,19 @@ export const planTrainingMapLocalDetour = ({
     return joinRoutePoints(startEscape, reduced);
   };
 
-  if (distance(routeStart, safeTarget) <= 0.5 || hasDirectPath(
+  if (distance(routeStart, routeTarget) <= 0.5 || hasDirectPath(
     routeStart,
-    safeTarget,
+    routeTarget,
     blockingObstacles,
     clearance,
     mapConfig,
     safeField
   )) {
-    return finalize([safeTarget]);
+    return finalize([routeTarget]);
   }
   const detour = resolveLocalDetourRoute({
     start: routeStart,
-    target: safeTarget,
+    target: routeTarget,
     obstacles: blockingObstacles,
     clearance,
     mapConfig,
@@ -900,7 +1033,7 @@ export const planTrainingMapRoute = ({
     radius: clearance,
     mapConfig
   });
-  const highlandExitPortal = resolveTrainingHighlandExitPortal({
+  const highlandPortal = resolveTrainingHighlandRampPortal({
     mapConfig,
     start: safeStart,
     target: safeTarget,
@@ -911,13 +1044,14 @@ export const planTrainingMapRoute = ({
   if (
     distance(safeStart, safeTarget) <= 1
     || (
-      !highlandExitPortal
+      !highlandPortal
       && hasDirectPath(safeStart, safeTarget, blockingObstacles, clearance, mapConfig, safeField)
     )
   ) {
     return [safeTarget];
   }
-  const routeStart = highlandExitPortal?.exit || safeStart;
+  const routeStart = highlandPortal?.start || safeStart;
+  const routeTarget = highlandPortal?.target || safeTarget;
   const finalizeRoute = (route = []) => {
     const reducedSuffix = reduceRoute(
       routeStart,
@@ -927,19 +1061,19 @@ export const planTrainingMapRoute = ({
       mapConfig,
       safeField
     );
-    if (!highlandExitPortal) return reducedSuffix;
-    return joinRoutePoints(highlandExitPortal.route, reducedSuffix);
+    if (!highlandPortal) return reducedSuffix;
+    return joinRoutePoints(highlandPortal.prefix, reducedSuffix, highlandPortal.suffix);
   };
   if (
-    distance(routeStart, safeTarget) <= 1
-    || hasDirectPath(routeStart, safeTarget, blockingObstacles, clearance, mapConfig, safeField)
+    distance(routeStart, routeTarget) <= 1
+    || hasDirectPath(routeStart, routeTarget, blockingObstacles, clearance, mapConfig, safeField)
   ) {
-    return finalizeRoute([safeTarget]);
+    return finalizeRoute([routeTarget]);
   }
   if (preferLocalDetour) {
     const localRoute = resolveLocalDetourRoute({
       start: routeStart,
-      target: safeTarget,
+      target: routeTarget,
       obstacles: blockingObstacles,
       clearance,
       mapConfig,
@@ -952,7 +1086,7 @@ export const planTrainingMapRoute = ({
   const laneRoute = resolveLaneGuidedRoute({
     mapConfig,
     start: routeStart,
-    target: safeTarget,
+    target: routeTarget,
     obstacles: blockingObstacles,
     clearance,
     field: safeField,
@@ -1011,7 +1145,7 @@ export const planTrainingMapRoute = ({
   };
 
   const startCell = resolveWalkableCell(routeStart);
-  const targetCell = resolveWalkableCell(safeTarget);
+  const targetCell = resolveWalkableCell(routeTarget);
   const startKey = buildKey(startCell.column, startCell.row);
   const targetKey = buildKey(targetCell.column, targetCell.row);
   const open = [{ key: startKey, score: 0 }];
@@ -1071,7 +1205,7 @@ export const planTrainingMapRoute = ({
     const cell = parseKey(key);
     return pointForCell(cell.column, cell.row);
   });
-  route.push(safeTarget);
+  route.push(routeTarget);
   return finalizeRoute(reduceRoute(
     routeStart,
     route,
