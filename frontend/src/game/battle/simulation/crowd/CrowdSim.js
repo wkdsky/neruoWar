@@ -97,6 +97,16 @@ import {
   isTrainingCardPassageState,
   resolveTrainingCardPassageFlowSteering
 } from './TrainingCardPassage';
+import {
+  constrainTrainingCardNavigationAnchor,
+  projectTrainingCardPointToRoute,
+  refreshTrainingCardBodyAnchor,
+  resolveTrainingCardBodyAnchor,
+  resolveTrainingCardFormationAnchor,
+  resolveTrainingCardNavigationAnchor,
+  resolveTrainingCardRoute,
+  syncTrainingCardFormationAnchor
+} from './TrainingCardSquadBody';
 
 const SKILL_CATEGORY_MELEE = 'melee';
 const SKILL_CATEGORY_RANGED = 'ranged';
@@ -143,7 +153,6 @@ const AGENT_MAX_ACCEL = 220;
 const AGENT_REFORM_ACCEL = 260;
 const AGENT_RETREAT_ACCEL = 280;
 const AGENT_AVOID_PROBE = 10;
-const FLAG_BACK_OFFSET = 0.72;
 const AGENT_COMBAT_TARGET_TIE_DISTANCE = 8;
 const AGENT_MELEE_ACQUISITION_RADIUS = 72;
 const AGENT_COMBAT_FORMATION_STEER = 0.42;
@@ -1095,10 +1104,14 @@ const resolveSquadMovementForward = (squad = {}) => {
 const resolveSquadFormationPose = (squad = {}) => ({
   x: Number.isFinite(Number(squad?._formationPoseX))
     ? Number(squad._formationPoseX)
-    : (Number(squad?.x) || 0),
+    : (isTrainingCardSquad(squad)
+      ? finiteNumber(resolveTrainingCardFormationAnchor(squad)?.x, finiteNumber(squad?.x))
+      : (Number(squad?.x) || 0)),
   y: Number.isFinite(Number(squad?._formationPoseY))
     ? Number(squad._formationPoseY)
-    : (Number(squad?.y) || 0),
+    : (isTrainingCardSquad(squad)
+      ? finiteNumber(resolveTrainingCardFormationAnchor(squad)?.y, finiteNumber(squad?.y))
+      : (Number(squad?.y) || 0)),
   yaw: Number.isFinite(Number(squad?._formationPoseYaw))
     ? Number(squad._formationPoseYaw)
     : resolveSquadFormationFacing(squad)
@@ -1112,9 +1125,12 @@ const advanceSquadFormationPose = (
 ) => {
   const previous = previousPose || resolveSquadFormationPose(squad);
   const movement = normalizeVec(movementForward?.x, movementForward?.y);
+  const formationAnchor = isTrainingCardSquad(squad)
+    ? (resolveTrainingCardFormationAnchor(squad) || squad)
+    : squad;
   const current = {
-    x: Number(squad?.x) || 0,
-    y: Number(squad?.y) || 0,
+    x: Number(formationAnchor?.x) || 0,
+    y: Number(formationAnchor?.y) || 0,
     yaw: previous.yaw
   };
   const isNeutralCamp = isTrainingNeutralSquad(squad);
@@ -3898,6 +3914,7 @@ const planTrainingNavigationTarget = (squad = null, sim = null, target = {}, wal
     destination = constrainPointToTrainingRoadCorridor(destination, roadCorridor, radius);
   }
   if (!navigator?.planRoute) {
+    squad._trainingPassageGroupCorridor = false;
     applyTrainingNavigationRoute(
       squad,
       roadCorridor ? buildTrainingRoadFallbackRoute(squad, sim, destination) : [destination]
@@ -3924,6 +3941,7 @@ const planTrainingNavigationTarget = (squad = null, sim = null, target = {}, wal
     routeReachesDestination
     && isTrainingRouteInsideRoadCorridor(squad, sim, source, route)
   ) {
+    squad._trainingPassageGroupCorridor = plannedRoute.groupCorridor === true;
     applyTrainingNavigationRoute(squad, route);
     squad._trainingNavigationScale = plannedRoute.scale;
     return {
@@ -3942,6 +3960,7 @@ const planTrainingNavigationTarget = (squad = null, sim = null, target = {}, wal
       routePrefix: highlandEgressPrefix
     });
     if (fallbackRoute.length > 0) {
+      squad._trainingPassageGroupCorridor = isTrainingCardSquad(squad);
       applyTrainingNavigationRoute(squad, fallbackRoute);
       squad._trainingNavigationScale = 'PASSAGE';
       return {
@@ -4064,13 +4083,15 @@ const resolveTrainingRangedApproachPlan = ({
           scale: plannedRoute?.scale || 'AGENT',
           formationFailed: plannedRoute?.formationFailed === true,
           passageAttempted: plannedRoute?.passageAttempted === true,
-          passageSucceeded: plannedRoute?.passageSucceeded === true
+          passageSucceeded: plannedRoute?.passageSucceeded === true,
+          groupCorridor: plannedRoute?.groupCorridor === true
         };
       }
     });
   });
 
   if (!best || best.deferred) return { ok: false, deferred: !!best?.deferred, destination: null, route: [] };
+  squad._trainingPassageGroupCorridor = best.groupCorridor === true;
   applyTrainingNavigationRoute(squad, best.route);
   squad._trainingNavigationScale = best.scale;
   return {
@@ -5399,7 +5420,8 @@ const planTrainingRouteWithPassageFallback = ({
     scale: 'AGENT',
     formationFailed: false,
     passageAttempted: false,
-    passageSucceeded: false
+    passageSucceeded: false,
+    groupCorridor: false
   };
   const agentRadius = resolveTrainingNavigationAgentRadius(squad, sim);
   const formationRadius = resolveTrainingFormationNavigationRadius(squad, sim);
@@ -5439,7 +5461,8 @@ const planTrainingRouteWithPassageFallback = ({
       radius: formationRadius,
       formationFailed: false,
       passageAttempted: false,
-      passageSucceeded: false
+      passageSucceeded: false,
+      groupCorridor: false
     };
   }
   if (!isTrainingCardSquad(squad) || formationRadius <= agentRadius + 0.05) {
@@ -5449,7 +5472,8 @@ const planTrainingRouteWithPassageFallback = ({
       radius: formationRadius,
       formationFailed: true,
       passageAttempted: false,
-      passageSucceeded: false
+      passageSucceeded: false,
+      groupCorridor: false
     };
   }
   if (deferPassageFallback && !pendingMatches) {
@@ -5468,7 +5492,8 @@ const planTrainingRouteWithPassageFallback = ({
       formationFailed: true,
       passageAttempted: false,
       passageSucceeded: false,
-      deferredPassage: true
+      deferredPassage: true,
+      groupCorridor: false
     };
   }
   const passageRoute = navigator.planRoute(start, target, {
@@ -5484,7 +5509,10 @@ const planTrainingRouteWithPassageFallback = ({
       radius: agentRadius,
       formationFailed: true,
       passageAttempted: true,
-      passageSucceeded: true
+      passageSucceeded: true,
+      // This is deliberately a whole-squad corridor.  The navigation cursor
+      // is only a bounded coordinator; Passage owns every member's flow.
+      groupCorridor: true
     };
   }
   delete squad._trainingPassageFallbackPending;
@@ -5494,7 +5522,8 @@ const planTrainingRouteWithPassageFallback = ({
     radius: agentRadius,
     formationFailed: true,
     passageAttempted: true,
-    passageSucceeded: false
+    passageSucceeded: false,
+    groupCorridor: true
   };
 };
 
@@ -6048,7 +6077,13 @@ const applyTrainingNavigationRoute = (squad = null, route = [], remainingWaypoin
   ));
   if (isTrainingCardSquad(squad)) {
     delete squad._trainingPassageFallbackPending;
-    const nextRouteSignature = [{ x: Number(squad?.x) || 0, y: Number(squad?.y) || 0 }, ...combined]
+    // A replacement route belongs to the physical group.  Starting it at an
+    // old virtual cursor can create a reverse segment back to the body after
+    // a group replan, which is exactly the leader/body split we are removing.
+    const routeStart = resolveTrainingCardBodyAnchor(squad)
+      || resolveTrainingCardNavigationAnchor(squad)
+      || squad;
+    const nextRouteSignature = [{ x: Number(routeStart?.x) || 0, y: Number(routeStart?.y) || 0 }, ...combined]
       .map((point) => `${Number(point?.x || 0).toFixed(2)},${Number(point?.y || 0).toFixed(2)}`)
       .join(';');
     const previousCompletedSignature = String(squad?._squadController?.passageCompletedRouteSignature || '');
@@ -6058,14 +6093,31 @@ const applyTrainingNavigationRoute = (squad = null, route = [], remainingWaypoin
     }
     squad._passageRoute = combined.map((point) => ({ ...point }));
     const anchor = {
-      x: Number(squad?.x) || 0,
-      y: Number(squad?.y) || 0
+      x: Number(routeStart?.x) || 0,
+      y: Number(routeStart?.y) || 0
     };
     squad._passagePlanRoute = [anchor, ...combined]
       .filter((point, index, rows) => (
         index === 0
         || Math.hypot(point.x - rows[index - 1].x, point.y - rows[index - 1].y) > 0.05
       ));
+    // Reset virtual anchors to the body at a shared-route boundary.  This is
+    // a route cursor reset, not a body teleport: real agents remain exactly
+    // where they are and the next formation pose grows from them.
+    constrainTrainingCardNavigationAnchor({
+      squad,
+      route: squad._passagePlanRoute,
+      candidate: {
+        x: Number(routeStart?.x) || 0,
+        y: Number(routeStart?.y) || 0,
+        vx: 0,
+        vy: 0
+      }
+    });
+    syncTrainingCardFormationAnchor({
+      squad,
+      route: squad._passagePlanRoute
+    });
   }
   squad.waypoints = combined.map((point) => ({ ...point }));
   syncTrainingNavigationOrderPath(squad);
@@ -6083,7 +6135,13 @@ const attemptTrainingNavigationReplan = ({
   if ((Number(squad?._navigationReplanAt) || 0) > nowSec) return false;
 
   const currentWaypoints = Array.isArray(squad?.waypoints) ? squad.waypoints.slice() : [];
-  const source = { x: Number(squad?.x) || 0, y: Number(squad?.y) || 0 };
+  const bodyAnchor = isTrainingCardSquad(squad)
+    ? (resolveTrainingCardBodyAnchor(squad) || squad)
+    : squad;
+  const source = {
+    x: Number(bodyAnchor?.x) || 0,
+    y: Number(bodyAnchor?.y) || 0
+  };
   const roadCorridor = resolveTrainingRoadCorridor(squad, sim);
   if (!consumeTrainingNavigationPlanBudget(sim)) {
     squad._navigationReplanAt = nowSec + Math.min(0.12, resolveTrainingNavigationReplanCooldown(sim));
@@ -6110,8 +6168,13 @@ const attemptTrainingNavigationReplan = ({
     routeReachesTarget
     && isTrainingRouteInsideRoadCorridor(squad, sim, source, route)
   ) {
+    squad._trainingPassageGroupCorridor = plannedRoute.groupCorridor === true;
     applyTrainingNavigationRoute(squad, route, currentWaypoints.slice(1));
     if (squad?._squadController) squad._squadController.passagePlanInvalid = false;
+    if (squad?._squadController?.groupProgress) {
+      squad._squadController.groupProgress.needsReplan = false;
+      squad._squadController.groupProgress.replannedAt = nowSec;
+    }
     squad._navigationFailureCount = 0;
     squad._navigationStuckSince = 0;
     squad._navigationWaitUntil = 0;
@@ -6125,8 +6188,13 @@ const attemptTrainingNavigationReplan = ({
       routePrefix: highlandEgressPrefix
     });
     if (fallbackRoute.length > 0) {
+      squad._trainingPassageGroupCorridor = isTrainingCardSquad(squad);
       applyTrainingNavigationRoute(squad, fallbackRoute, currentWaypoints.slice(1));
       if (squad?._squadController) squad._squadController.passagePlanInvalid = false;
+      if (squad?._squadController?.groupProgress) {
+        squad._squadController.groupProgress.needsReplan = false;
+        squad._squadController.groupProgress.replannedAt = nowSec;
+      }
       squad._navigationFailureCount = 0;
       squad._navigationStuckSince = 0;
       squad._navigationWaitUntil = 0;
@@ -6171,17 +6239,27 @@ const updateTrainingNavigationRecovery = ({
   dt = 0
 } = {}) => {
   if (!squad || !sim?.trainingNavigator || !target || squad?.skillRush?.ttl > 0) return;
-  if (
-    isTrainingCardSquad(squad)
-    && (
-      hasActiveTrainingCardPassage(squad)
-      || String(squad?._trainingNavigationScale || '').toUpperCase() === 'PASSAGE'
-    )
-  ) return;
+  const cardSquad = isTrainingCardSquad(squad);
+  const groupProgress = cardSquad ? squad?._squadController?.groupProgress : null;
+  const activeGroupPassage = cardSquad && (
+    hasActiveTrainingCardPassage(squad)
+    || String(squad?._trainingNavigationScale || '').toUpperCase() === 'PASSAGE'
+  );
+  // Passage no longer disables shared recovery.  A flow queue can pause
+  // locally, but a weighted body stall / GROUP_BLOCKED is a topology problem
+  // and must replan the whole corridor from the real body position.
+  if (cardSquad && activeGroupPassage) {
+    const groupBlocked = groupProgress?.state === 'GROUP_BLOCKED';
+    if (groupProgress?.needsReplan === true) {
+      attemptTrainingNavigationReplan({ squad, sim, walls, target, nowSec });
+    }
+    if (groupBlocked || groupProgress?.tailPending === true) return;
+  }
   if (resolveTrainingRoadCorridor(squad, sim) && squad?._trainingRoadCorridorEntered === true) return;
-  if (!isTrainingCardSquad(squad) && (Number(squad?._navigationWaitUntil) || 0) > nowSec) return;
+  if (!cardSquad && (Number(squad?._navigationWaitUntil) || 0) > nowSec) return;
 
-  const current = { x: Number(squad?.x) || 0, y: Number(squad?.y) || 0 };
+  const body = cardSquad ? (resolveTrainingCardBodyAnchor(squad) || squad) : squad;
+  const current = { x: Number(body?.x) || 0, y: Number(body?.y) || 0 };
   const targetDistanceBefore = Math.hypot(
     (Number(target?.x) || 0) - (Number(start?.x) || 0),
     (Number(target?.y) || 0) - (Number(start?.y) || 0)
@@ -6204,7 +6282,18 @@ const updateTrainingNavigationRecovery = ({
   const collisionAt = Number(squad?._navigationCollisionAt) || 0;
   const collidedThisStep = collisionAt > 0
     && collisionAt >= (nowSec - Math.max(0, Number(dt) || 0) - 0.001);
+  const bodyRoute = cardSquad ? resolveTrainingCardRoute(squad) : null;
+  const currentBodyProgress = bodyRoute?.segments?.length > 0
+    ? projectTrainingCardPointToRoute(current, bodyRoute).progress
+    : null;
+  const previousBodyProgress = Number(squad?._navigationRecoveryBodyProgress);
+  const bodyRouteProgressed = Number.isFinite(currentBodyProgress) && (
+    !Number.isFinite(previousBodyProgress)
+    || currentBodyProgress >= previousBodyProgress + NAVIGATION_MIN_PROGRESS
+  );
+  if (Number.isFinite(currentBodyProgress)) squad._navigationRecoveryBodyProgress = currentBodyProgress;
   const madeProgress = (targetDistanceBefore - targetDistanceAfter) >= NAVIGATION_MIN_PROGRESS
+    || bodyRouteProgressed
     || (movedDistance >= NAVIGATION_MIN_MOVEMENT && !collidedThisStep);
   if (madeProgress && !collidedThisStep) {
     squad._navigationFailureCount = 0;
@@ -6219,7 +6308,276 @@ const updateTrainingNavigationRecovery = ({
   attemptTrainingNavigationReplan({ squad, sim, walls, target, nowSec });
 };
 
+const isCardWaypointBodyReached = ({ squad = null, target = null, route = null } = {}) => {
+  if (!squad || !target) return false;
+  const body = resolveTrainingCardBodyAnchor(squad);
+  if (!body) return false;
+  const targetDistance = Math.hypot(
+    (Number(target?.x) || 0) - (Number(body?.x) || 0),
+    (Number(target?.y) || 0) - (Number(body?.y) || 0)
+  );
+  const spacing = Math.max((AGENT_RADIUS * 2) + AGENT_GAP, Number(squad?.formationRect?.spacing) || 0);
+  const physicalRadius = Math.max(
+    LEADER_ARRIVAL_RADIUS,
+    Math.min(Math.max(spacing * 2.25, Number(body?.maxAnchorLead) * 0.54), 30)
+  );
+  if (targetDistance <= physicalRadius) return true;
+  const model = route?.segments ? route : resolveTrainingCardRoute(squad, route);
+  if (!model?.segments?.length) return false;
+  const targetProgress = projectTrainingCardPointToRoute(target, model).progress;
+  const formationDepth = Math.max(spacing, Number(squad?.formationRect?.depth) || 0);
+  // A formation anchor denotes the forward reference of its slots, while the
+  // body is deliberately a weighted P50.  Requiring that P50 to occupy the
+  // exact endpoint would make a correctly reformed deep formation march its
+  // front past the destination.  Completion still comes entirely from real
+  // troop statistics: the weighted front must be at the endpoint and the
+  // weighted body must be within its physically configured depth behind it.
+  const bodyAllowance = clamp(
+    Math.max(physicalRadius, (formationDepth * 0.58) + (spacing * 0.65)),
+    physicalRadius,
+    Math.max(physicalRadius, Number(body?.maxAnchorLead) + spacing)
+  );
+  const frontAllowance = Math.max(LEADER_ARRIVAL_RADIUS, spacing * 0.72);
+  return Number(body?.frontProgress) >= targetProgress - frontAllowance
+    && Number(body?.bodyProgress) >= targetProgress - bodyAllowance;
+};
+
+/**
+ * CARDs do not own a freely-colliding virtual leader.  This path follower is
+ * deliberately separate from squad.x/y: it advances a bounded navigation
+ * cursor, then lets the real weighted body pull the formation pose forward.
+ */
+const cardLeaderMoveStep = (
+  squad,
+  sim,
+  crowd,
+  dt,
+  forwardVec,
+  steeringWeights = DEFAULT_STEERING_WEIGHTS,
+  blockingWalls = null
+) => {
+  const nowSec = Number(sim?.timeElapsed) || 0;
+  const safeDt = Math.max(0.001, Number(dt) || 0.016);
+  const walls = Array.isArray(blockingWalls)
+    ? blockingWalls
+    : filterBlockingObstacles(sim?.buildings || []);
+  const body = refreshTrainingCardBodyAnchor({
+    squad,
+    agents: crowd?.agentsBySquad?.get?.(squad?.id) || [],
+    route: resolveTrainingCardRoute(squad),
+    nowSec,
+    dt: 0,
+    smooth: false
+  }) || resolveTrainingCardBodyAnchor(squad) || squad;
+  const route = resolveTrainingCardRoute(squad);
+  const navigation = resolveTrainingCardNavigationAnchor(squad) || body;
+  const statusMultipliers = resolveSquadStatusMultipliers(squad);
+  const speedMode = squad?.speedMode === SPEED_MODE_C ? SPEED_MODE_C : SPEED_MODE_B;
+  const speedPolicy = typeof squad?.speedPolicy === 'string' ? squad.speedPolicy : SPEED_POLICY_MARCH;
+  const baseGroupSpeed = speedMode === SPEED_MODE_C
+    ? computeRetreatGroupSpeed(squad, crowd)
+    : computeWeightedGroupSpeed(squad, crowd);
+  const speedTargetBase = Math.max(
+    9,
+    baseGroupSpeed * REFERENCE_LEADER_SPEED_MULTIPLIER * resolveTrainingMapMovementScale(sim)
+  );
+  squad._marchWorldSpeedBase = speedTargetBase;
+  const fatiguePenalty = squad?.fatigueTimer > 0 ? 0.72 : 1;
+  const rushSpeed = squad?.skillRush?.ttl > 0 ? 1.45 : 1;
+  const policyMul = speedPolicy === SPEED_POLICY_RETREAT
+    ? 1.08
+    : (speedPolicy === SPEED_POLICY_REFORM ? 0.82 : 1);
+  const cohesionScale = clamp(Number(squad?._formationCohesionSpeedScale) || 1, 0, 1);
+  const groupProgress = squad?._squadController?.groupProgress || {};
+  const groupScale = clamp(Number(groupProgress?.anchorSpeedScale) || 1, 0, 1);
+  const groupBlocked = groupProgress?.state === 'GROUP_BLOCKED';
+  const speedTargetMax = speedTargetBase
+    * fatiguePenalty
+    * statusMultipliers.speedMul
+    * rushSpeed
+    * policyMul
+    * cohesionScale
+    * groupScale;
+  const orderType = resolveSquadOrderType(squad);
+  const lockRangedSkill = !!squad?.activeSkill?.lockMovement;
+  const waypoint = Array.isArray(squad?.waypoints) ? squad.waypoints[0] : null;
+  let target = waypoint ? { x: Number(waypoint?.x) || 0, y: Number(waypoint?.y) || 0 } : null;
+  let targetFromWaypoint = !!waypoint;
+  if (squad?.skillRush?.ttl > 0) {
+    const remain = Math.max(0, Number(squad?.skillRush?.remainDistance) || 0);
+    target = {
+      x: Number(navigation?.x) + (Number(squad?.skillRush?.dirX) || 0) * remain,
+      y: Number(navigation?.y) + (Number(squad?.skillRush?.dirY) || 0) * remain
+    };
+    targetFromWaypoint = false;
+    squad.skillRush.ttl = Math.max(0, Number(squad.skillRush.ttl) - safeDt);
+  }
+  const locksMarch = (
+    (squad?.meleeAttackOrder && squad.meleeAttackOrder.active !== false)
+    || lockRangedSkill
+    || groupBlocked
+  );
+  if (locksMarch) target = null;
+
+  let desiredDirection = normalizeVec(
+    Number(squad?.dirX) || Number(forwardVec?.x) || 1,
+    Number(squad?.dirY) || Number(forwardVec?.y) || 0
+  );
+  if (desiredDirection.len <= 0.0001) desiredDirection = normalizeVec(1, 0);
+  let desiredSpeed = 0;
+  const tailPending = groupProgress?.tailPending === true;
+  if (target && !lockRangedSkill && !groupBlocked) {
+    const reachedBodyWaypoint = targetFromWaypoint && isCardWaypointBodyReached({ squad, target, route });
+    const hasFollowingWaypoint = targetFromWaypoint && Array.isArray(squad?.waypoints) && squad.waypoints.length > 1;
+    // A final waypoint is not complete merely because the cursor/body briefly
+    // reaches its radius. A live PassagePlan still owns the tail until it has
+    // explicitly entered EXPAND (or has been retired). Otherwise a route can
+    // be consumed while rear mass remains on the wrong side of a choke.
+    const activePassagePlan = squad?._squadController?.passagePlan;
+    const passageState = String(groupProgress?.state || '');
+    const passageStillClearing = Boolean(
+      activePassagePlan &&
+        (tailPending || (passageState && passageState !== 'EXPAND' && passageState !== 'FORMATION'))
+    );
+    const holdForPassageTail = targetFromWaypoint && !hasFollowingWaypoint && passageStillClearing;
+    if (reachedBodyWaypoint && !holdForPassageTail) {
+      if (targetFromWaypoint) advanceSquadWaypoint(squad);
+      if (targetFromWaypoint && (!squad?.waypoints || squad.waypoints.length <= 0)) {
+        beginSquadFormationArrival(squad, target, nowSec);
+      }
+      target = Array.isArray(squad?.waypoints) && squad.waypoints.length > 0
+        ? { x: Number(squad.waypoints[0]?.x) || 0, y: Number(squad.waypoints[0]?.y) || 0 }
+        : null;
+    }
+    if (target) {
+      const toTarget = normalizeVec(
+        target.x - (Number(navigation?.x) || 0),
+        target.y - (Number(navigation?.y) || 0)
+      );
+      // The cursor may stop only at the waypoint itself.  Stopping an entire
+      // formation one generic leader-radius short of a destination leaves the
+      // weighted rear inside a final choke, especially when the destination
+      // sits immediately beyond it.
+      const navigationArrivalRadius = targetFromWaypoint
+        ? clamp(Math.max(0.45, Number(body?.maxAnchorLead) * 0.04), 0.45, LEADER_ARRIVAL_RADIUS)
+        : LEADER_ARRIVAL_RADIUS;
+      if (toTarget.len > navigationArrivalRadius) {
+        const avoid = computeAvoidanceDirection(
+          navigation,
+          toTarget,
+          walls,
+          Math.max(OBSTACLE_AVOID_PROBE, speedTargetMax * safeDt * 2.2),
+          navigation,
+          nowSec
+        );
+        const rawDesired = normalizeVec(
+          toTarget.x + (avoid.x * Math.max(0, Number(steeringWeights?.leaderAvoidance) || 1)),
+          toTarget.y + (avoid.y * Math.max(0, Number(steeringWeights?.leaderAvoidance) || 1))
+        );
+        const boundaryAware = resolveTrainingCardAnchorSteering({ squad, desiredDirection: rawDesired });
+        const previousSmooth = normalizeVec(
+          Number(squad?.smoothedDirX) || desiredDirection.x,
+          Number(squad?.smoothedDirY) || desiredDirection.y
+        );
+        const blend = 1 - Math.exp(-safeDt * Math.max(0.2, Number(steeringWeights?.turnHz) || 8.2));
+        const smooth = normalizeVec(
+          previousSmooth.x + ((boundaryAware.x - previousSmooth.x) * blend),
+          previousSmooth.y + ((boundaryAware.y - previousSmooth.y) * blend)
+        );
+        desiredDirection = smooth.len > 0.0001 ? smooth : toTarget;
+        squad.smoothedDirX = desiredDirection.x;
+        squad.smoothedDirY = desiredDirection.y;
+        const hasMoreWaypoints = Array.isArray(squad?.waypoints) && squad.waypoints.length > 1;
+        const slowRadius = hasMoreWaypoints ? LEADER_WAYPOINT_SLOW_RADIUS : LEADER_SLOW_RADIUS;
+        const arrivalT = clamp(
+          (toTarget.len - navigationArrivalRadius) / Math.max(1, slowRadius - navigationArrivalRadius),
+          0,
+          1
+        );
+        const minSpeed = hasMoreWaypoints ? LEADER_WAYPOINT_MIN_SPEED_RATIO : LEADER_FINAL_MIN_SPEED_RATIO;
+        desiredSpeed = speedTargetMax * (minSpeed + ((1 - minSpeed) * smoothstep01(arrivalT)));
+      }
+    }
+  }
+  if (target && !lockRangedSkill && !groupBlocked) {
+    squad.stamina = clamp((Number(squad?.stamina) || 0) - (STAMINA_MOVE_COST * safeDt), 0, STAMINA_MAX);
+  } else {
+    squad.stamina = clamp((Number(squad?.stamina) || 0) + (STAMINA_RECOVER * safeDt), 0, STAMINA_MAX);
+  }
+
+  const previousDirection = normalizeVec(
+    Number(squad?.dirX) || desiredDirection.x,
+    Number(squad?.dirY) || desiredDirection.y
+  );
+  const dot = clamp((previousDirection.x * desiredDirection.x) + (previousDirection.y * desiredDirection.y), -1, 1);
+  const angle = Math.acos(dot);
+  let direction = previousDirection;
+  if (angle > 1e-4) {
+    const cross = (previousDirection.x * desiredDirection.y) - (previousDirection.y * desiredDirection.x);
+    const turn = Math.min(angle, Math.max(0.2, Number(steeringWeights?.maxTurnRate) || LEADER_MAX_TURN_RATE) * safeDt) * (cross >= 0 ? 1 : -1);
+    direction = normalizeVec(
+      (previousDirection.x * Math.cos(turn)) - (previousDirection.y * Math.sin(turn)),
+      (previousDirection.x * Math.sin(turn)) + (previousDirection.y * Math.cos(turn))
+    );
+  }
+  const previousSpeed = Math.max(0, Math.hypot(Number(navigation?.vx) || 0, Number(navigation?.vy) || 0));
+  const maxDv = (desiredSpeed >= previousSpeed ? LEADER_MAX_ACCEL : LEADER_MAX_DECEL) * safeDt;
+  const speed = Math.max(0, previousSpeed + clamp(desiredSpeed - previousSpeed, -maxDv, maxDv));
+  const start = {
+    x: finiteNumber(navigation?.x, finiteNumber(body?.x)),
+    y: finiteNumber(navigation?.y, finiteNumber(body?.y))
+  };
+  let requested = {
+    x: start.x + (direction.x * speed * safeDt),
+    y: start.y + (direction.y * speed * safeDt)
+  };
+  const halfW = (Number(sim?.field?.width) || 2700) * 0.5;
+  const halfH = (Number(sim?.field?.height) || 1488) * 0.5;
+  requested.x = clamp(requested.x, -halfW + 4, halfW - 4);
+  requested.y = clamp(requested.y, -halfH + 4, halfH - 4);
+  const legal = resolveTrainingLegalMovementStep({
+    sim,
+    start,
+    target: requested,
+    walls,
+    radius: resolveTrainingNavigationAgentRadius(squad, sim) + 0.5
+  });
+  if (!legal.legal && target) squad._navigationCollisionAt = nowSec;
+  const nextNavigation = constrainTrainingCardNavigationAnchor({
+    squad,
+    agents: crowd?.agentsBySquad?.get?.(squad?.id) || [],
+    route,
+    candidate: {
+      x: legal.x,
+      y: legal.y,
+      vx: (legal.x - start.x) / safeDt,
+      vy: (legal.y - start.y) / safeDt
+    },
+    nowSec
+  });
+  syncTrainingCardFormationAnchor({
+    squad,
+    agents: crowd?.agentsBySquad?.get?.(squad?.id) || [],
+    route,
+    nowSec,
+    dt: safeDt
+  });
+  squad.dirX = direction.x;
+  squad.dirY = direction.y;
+  squad.navigationSpeed = Math.hypot(Number(nextNavigation?.vx) || 0, Number(nextNavigation?.vy) || 0);
+  if (groupBlocked) squad.action = '部队受阻，重新规划';
+  else if (nextNavigation?.clampedToBody) squad.action = '等待部队主体通过';
+  else if (tailPending && !target) squad.action = '通过窄地后整队';
+  else if (cohesionScale < 0.98 || groupScale < 0.98) squad.action = '减速接应';
+  else if (orderType === ORDER_CHARGE) squad.action = '冲锋';
+  else if (target) squad.action = orderType === ORDER_ATTACK_MOVE ? '攻击前进' : '移动';
+  return { x: direction.x, y: direction.y };
+};
+
 const leaderMoveStep = (squad, sim, crowd, dt, forwardVec, steeringWeights = DEFAULT_STEERING_WEIGHTS, blockingWalls = null) => {
+  if (isTrainingCardSquad(squad)) {
+    return cardLeaderMoveStep(squad, sim, crowd, dt, forwardVec, steeringWeights, blockingWalls);
+  }
   const isFixedLaneMinion = isTrainingMinionSquad(squad);
   const actionState = ensureSquadActionState(squad);
   const actionKind = typeof actionState.kind === 'string' ? actionState.kind : 'none';
@@ -6659,8 +7017,11 @@ const aggregateSquadFromAgents = (squad, agents = []) => {
     remain += weight;
     const ax = Number(agent.x) || 0;
     const ay = Number(agent.y) || 0;
-    centerAccX += ax;
-    centerAccY += ay;
+    // CARD body authority replaces this after aggregation, but keep the
+    // generic aggregate weighted as well so every spatial fallback agrees
+    // with representative troop weight rather than visual-agent count.
+    centerAccX += ax * weight;
+    centerAccY += ay * weight;
     spatialPoints.push({ x: ax, y: ay });
     const d = Math.hypot(ax - anchorX, ay - anchorY);
     if (d > maxDist) maxDist = d;
@@ -6720,8 +7081,8 @@ const aggregateSquadFromAgents = (squad, agents = []) => {
         radiusPadding: 6
       })
     : {
-        x: centerAccX / Math.max(1, alive.length),
-        y: centerAccY / Math.max(1, alive.length),
+        x: centerAccX / Math.max(0.001, remain),
+        y: centerAccY / Math.max(0.001, remain),
         radius: clamp(maxDist + 6, 8, 130)
       };
   const remainRounded = Math.max(1, Math.round(remain));
@@ -8078,7 +8439,34 @@ export const updateCrowdSim = (crowd, sim, dt) => {
       }
     }
 
-    const navigationStart = { x: Number(squad.x) || 0, y: Number(squad.y) || 0 };
+    // Refresh the physical CARD body before any tactical/nav decision.  This
+    // makes all existing squad.x/y gameplay consumers body-first while the
+    // actual route follower remains in navigationAnchor.
+    if (isTrainingCardSquad(squad)) {
+      const initialRoute = resolveTrainingCardRoute(squad);
+      refreshTrainingCardBodyAnchor({
+        squad,
+        agents,
+        route: initialRoute,
+        nowSec,
+        dt: 0,
+        smooth: false
+      });
+      syncTrainingCardFormationAnchor({
+        squad,
+        agents,
+        route: initialRoute,
+        nowSec,
+        dt: 0,
+        immediate: !squad?._formationAnchor
+      });
+    }
+    const navigationStart = isTrainingCardSquad(squad)
+      ? {
+          x: Number(resolveTrainingCardBodyAnchor(squad)?.x) || Number(squad.x) || 0,
+          y: Number(resolveTrainingCardBodyAnchor(squad)?.y) || Number(squad.y) || 0
+        }
+      : { x: Number(squad.x) || 0, y: Number(squad.y) || 0 };
     const navigationTarget = isTrainingCardSquad(squad)
       && (Number(squad?.skillRush?.ttl) || 0) <= 0
       ? resolveTrainingNavigationTarget(squad)
@@ -8097,14 +8485,15 @@ export const updateCrowdSim = (crowd, sim, dt) => {
     let formationSpacingScale = FORMATION_SPACING_SCALE[formationSpacing]
       || FORMATION_SPACING_SCALE[FORMATION_SPACING_STANDARD];
     const hasMovementWaypoints = Array.isArray(squad.waypoints) && squad.waypoints.length > 0;
+    const legacyPassage = squadKind === TRAINING_SQUAD_KIND.CARD ? null : squad?._narrowPassage;
     const passageIntent = (Number(squad.skillRush?.ttl) || 0) > 0
       || hasMovementWaypoints
       || squad?._formationArrival?.active === true
-      || squad?._narrowPassage?.active === true;
+      || legacyPassage?.active === true;
     const rearProbeDistance = resolveFormationRearProbeDistance({
       squad,
       agents,
-      passage: squad?._narrowPassage
+      passage: legacyPassage
     });
     const narrowPassage = squadKind !== TRAINING_SQUAD_KIND.CARD && passageIntent
       ? resolveTrainingNarrowPassageState({
@@ -8147,12 +8536,16 @@ export const updateCrowdSim = (crowd, sim, dt) => {
     const squadController = cardAiFrame?.formation || null;
     if (
       isTrainingCardSquad(squad)
-      && squadController?.passagePlanInvalid === true
+      && (
+        squadController?.passagePlanInvalid === true
+        || squadController?.groupProgress?.needsReplan === true
+      )
       && navigationTarget
     ) {
-      // Geometry changed under the current shared passage and no safe lane
-      // remains.  Spend the existing squad-level navigation budget on a
-      // shared replan before individual recovery needs to do the work alone.
+      // Geometry may have changed, or weighted real-body progress may have
+      // escalated to GROUP_BLOCKED.  Either way, spend the squad navigation
+      // budget on a shared replan before individual recovery has a chance to
+      // erase a material blocked flank from the problem.
       attemptTrainingNavigationReplan({
         squad,
         sim,
@@ -8161,14 +8554,16 @@ export const updateCrowdSim = (crowd, sim, dt) => {
         nowSec
       });
     }
+    const controllerPassageState = String(squadController?.terrain?.state || '');
     const controllerPassage = (
-      squadController?.terrain?.state === 'PASSAGE'
-      || squadController?.terrain?.state === 'EXPAND'
+      controllerPassageState === 'COMPRESS'
+      || controllerPassageState === 'PASSAGE'
+      || controllerPassageState === 'EXPAND'
     )
     ? {
-        active: squadController?.terrain?.state === 'PASSAGE',
-        flowing: squadController?.terrain?.state === 'PASSAGE',
-        expanding: squadController?.terrain?.state === 'EXPAND',
+        active: controllerPassageState !== 'EXPAND',
+        flowing: controllerPassageState === 'PASSAGE',
+        expanding: controllerPassageState === 'EXPAND',
         columns: Math.max(1, Number(squadController?.terrain?.columns) || 1),
         width: Number(squadController?.terrain?.corridorWidth) || Infinity,
         distance: Number(squadController?.terrain?.frontClearance) || 0
@@ -8198,7 +8593,6 @@ export const updateCrowdSim = (crowd, sim, dt) => {
     const sepGain = retreatMode ? 0.52 : (reformMode ? 0.86 : 1);
     const avoidGain = retreatMode ? 0.68 : 0.95;
     const accelCap = retreatMode ? AGENT_RETREAT_ACCEL : (reformMode ? AGENT_REFORM_ACCEL : AGENT_MAX_ACCEL);
-    const flagBack = spacing * FLAG_BACK_OFFSET;
     const sorted = agents;
     const nearbyAgents = [];
     const nearbyWalls = [];
@@ -8232,35 +8626,10 @@ export const updateCrowdSim = (crowd, sim, dt) => {
         );
         if (handled) return;
       }
-      if (agent.isFlagBearer && squadKind === TRAINING_SQUAD_KIND.CARD) {
-        clearAgentCombatTargets(agent);
-        const flagOffsetX = -formationForward.x * flagBack;
-        const flagOffsetY = -formationForward.y * flagBack;
-        const flagStep = resolveTrainingLegalMovementStep({
-          sim,
-          start: { x: Number(agent.x) || 0, y: Number(agent.y) || 0 },
-          target: {
-            x: (Number(squad.x) || 0) + flagOffsetX,
-            y: (Number(squad.y) || 0) + flagOffsetY
-          },
-          walls: movementWalls,
-          radius: (agent.radius || AGENT_RADIUS) + 0.5
-        });
-        const previousFlagX = Number(agent.x) || 0;
-        const previousFlagY = Number(agent.y) || 0;
-        agent.x = flagStep.x;
-        agent.y = flagStep.y;
-        agent.vx = (agent.x - previousFlagX) / Math.max(1e-4, safeDt);
-        agent.vy = (agent.y - previousFlagY) / Math.max(1e-4, safeDt);
-        if (Math.abs(agent.vx) + Math.abs(agent.vy) > 0.08) {
-          agent.yaw = formationPose.current.yaw;
-        } else {
-          agent.yaw = Math.atan2(formationForward.y, formationForward.x);
-        }
-        agent.state = agent.attackCd > 0 ? 'attack' : 'idle';
-        agent.hitTimer = Math.max(0, (Number(agent.hitTimer) || 0) - safeDt);
-        return;
-      }
+      // The flag bearer is a real weighted representative, not a virtual
+      // marker glued to a leader.  It therefore receives the same formation
+      // or stream locomotion as every other CARD member and remains visible in
+      // body/tail statistics.
       const standardSlot = resolveAgentFormationSlot(agent, index, baseCols, spacing, formationSpacing);
       const cardTacticalIntent = resolveTrainingCardAgentTacticalIntent({
         agent,
@@ -8389,6 +8758,8 @@ export const updateCrowdSim = (crowd, sim, dt) => {
         : null;
       const streamWatchdogRecovery = passageFlow?.streamWatchdog?.stalled === true
         && passageFlow?.streamWatchdog?.frontBlocking !== true;
+      const cardGroupBlocked = isTrainingCardSquad(squad)
+        && squad?._squadController?.groupProgress?.state === 'GROUP_BLOCKED';
       const formationRecoveryGuidance = resolveAgentFormationRecoveryGuidance({
         agent,
         squad,
@@ -8398,6 +8769,7 @@ export const updateCrowdSim = (crowd, sim, dt) => {
           ? { x: passageFlow.goalX, y: passageFlow.goalY }
           : (retainedPassageRecovery || { x: desiredX, y: desiredY }),
         enabled: (!passageFlow || streamWatchdogRecovery)
+          && !cardGroupBlocked
           && !combatDirective
           && !hasAnchor
           && !castOffset.active
@@ -8886,6 +9258,18 @@ export const updateCrowdSim = (crowd, sim, dt) => {
     trimOrGrowAgents(squad, agents, crowd, safeDt);
     const liveSquadAgents = crowd.agentsBySquad.get(squad.id) || [];
     aggregateSquadFromAgents(squad, liveSquadAgents);
+    if (isTrainingCardSquad(squad)) {
+      // Commit the body pose only after real agent motion.  The bounded
+      // virtual anchors remain separate and will be coupled again next frame.
+      refreshTrainingCardBodyAnchor({
+        squad,
+        agents: liveSquadAgents,
+        route: resolveTrainingCardRoute(squad),
+        nowSec,
+        dt: safeDt,
+        smooth: true
+      });
+    }
     restoreMinionSquadHoldAnchor(squad);
     completeTrainingCardSquadAiFrame({
       squad,

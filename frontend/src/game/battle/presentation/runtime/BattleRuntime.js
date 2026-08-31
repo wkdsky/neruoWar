@@ -934,8 +934,10 @@ const clampPointToField = (point, field, radius = 0) => ({
 const resolveTrainingSquadBoundaryRadius = (squad = {}, mapConfig = {}) => {
   const visualRadius = Math.max(2, Number(squad?.radius) || 2);
   if (!isTrainingCardSquad(squad)) return visualRadius;
-  const navigationScale = String(squad?._trainingNavigationScale || '').toUpperCase();
-  if (navigationScale !== 'PASSAGE') return visualRadius;
+  // A CARD's visual/formation radius is not a physical leader collider.  The
+  // real representatives are clamped below; using the broad visual radius
+  // here can silently rewrite a valid destination and split bodyAnchor from
+  // squad.x after an otherwise successful group passage.
   const configuredAgentRadius = Number(squad?.navigationAgentRadius);
   const mapAgentRadius = Number(mapConfig?.navigation?.agentRadius);
   return Math.max(
@@ -1288,6 +1290,7 @@ const clearPlannedMoveRoute = (squad) => {
     delete squad._passageRoute;
     delete squad._passagePlanRoute;
     squad._trainingNavigationScale = '';
+    squad._trainingPassageGroupCorridor = false;
     const runtime = squad?._squadController;
     if (runtime && typeof runtime === 'object') {
       runtime.passagePlan = null;
@@ -4546,9 +4549,16 @@ export default class BattleRuntime {
     const sourceBuildings = this.phase === 'battle'
       ? (Array.isArray(this.sim?.buildings) ? this.sim.buildings : this.initialBuildings)
       : this.initialBuildings;
+    const bodyAnchor = squad?.bodyAnchor || squad?._bodyAnchor || squad;
+    const suppliedStartX = Number(start?.x);
+    const suppliedStartY = Number(start?.y);
     const routeStart = {
-      x: Number(start?.x) || Number(squad?.x) || 0,
-      y: Number(start?.y) || Number(squad?.y) || 0
+      x: Number.isFinite(suppliedStartX)
+        ? suppliedStartX
+        : (Number(bodyAnchor?.x) || Number(squad?.x) || 0),
+      y: Number.isFinite(suppliedStartY)
+        ? suppliedStartY
+        : (Number(bodyAnchor?.y) || Number(squad?.y) || 0)
     };
     const configuredAgentRadius = Number(this.trainingMap?.navigation?.agentRadius);
     const agentRadius = Number.isFinite(configuredAgentRadius) && configuredAgentRadius > 0
@@ -4602,6 +4612,7 @@ export default class BattleRuntime {
     );
     if (routeReachesTarget(formationRoute) || !isTrainingCardSquad(squad)) {
       squad._trainingNavigationScale = 'FORMATION';
+      squad._trainingPassageGroupCorridor = false;
       return Array.isArray(formationRoute) && formationRoute.length > 0 ? formationRoute : [safeTarget];
     }
     // A player-issued card order must use exactly the same two-scale policy as
@@ -4619,9 +4630,14 @@ export default class BattleRuntime {
     );
     if (routeReachesTarget(passageRoute)) {
       squad._trainingNavigationScale = 'PASSAGE';
+      // Agent-radius planning is a shared corridor fallback.  CrowdSim's
+      // body/Passage controller will move the whole CARD through it; it is
+      // never permission for a virtual leader to leave the body behind.
+      squad._trainingPassageGroupCorridor = true;
       return passageRoute;
     }
     squad._trainingNavigationScale = 'FORMATION';
+    squad._trainingPassageGroupCorridor = false;
     return Array.isArray(formationRoute) && formationRoute.length > 0
       ? formationRoute
       : (Array.isArray(passageRoute) && passageRoute.length > 0 ? passageRoute : [safeTarget]);
@@ -4686,7 +4702,10 @@ export default class BattleRuntime {
     const currentRoute = append ? getPlannedMoveRouteRemaining(squad) : [];
     const routeStart = currentRoute.length > 0
       ? currentRoute[currentRoute.length - 1]
-      : { x: Number(squad.x) || 0, y: Number(squad.y) || 0 };
+      : {
+        x: Number(squad?.bodyAnchor?.x ?? squad?._bodyAnchor?.x ?? squad.x) || 0,
+        y: Number(squad?.bodyAnchor?.y ?? squad?._bodyAnchor?.y ?? squad.y) || 0
+      };
     const plannedRoute = this.planTrainingMapRoute(squad, routeStart, safe);
     const routeTarget = plannedRoute[plannedRoute.length - 1] || safe;
     if (append) {

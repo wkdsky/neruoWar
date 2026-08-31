@@ -72,14 +72,18 @@ export const resolveTrainingRenderedSquadAnchors = (runtime = null, snapshot = n
     const aggregate = aggregates.get(id);
     const fallbackX = finiteOr(squad.centerX, finiteOr(squad.x));
     const fallbackY = finiteOr(squad.centerY, finiteOr(squad.y));
+    // CARD spatial queries intentionally follow the weighted real body, not a
+    // renderer-picked representative (and never the bounded nav cursor).
+    const body = squad?.bodyAnchor || squad?._bodyAnchor || null;
+    const hasBody = Number.isFinite(Number(body?.x)) && Number.isFinite(Number(body?.y));
     const spatialAnchor = resolveSquadSpatialAnchor(aggregate?.points, {
       fallbackX,
       fallbackY,
       minimumRadius: 8,
       radiusPadding: 6
     });
-    const x = aggregate?.flagBearer?.x ?? spatialAnchor.x;
-    const y = aggregate?.flagBearer?.y ?? spatialAnchor.y;
+    const x = hasBody ? Number(body.x) : (aggregate?.flagBearer?.x ?? spatialAnchor.x);
+    const y = hasBody ? Number(body.y) : (aggregate?.flagBearer?.y ?? spatialAnchor.y);
     anchors.set(id, {
       id,
       squadId: id,
@@ -90,7 +94,9 @@ export const resolveTrainingRenderedSquadAnchors = (runtime = null, snapshot = n
       centerY: y,
       contactX: x,
       contactY: y,
-      radius: spatialAnchor.radius,
+      radius: hasBody
+        ? Math.max(8, Number(body?.radius) || spatialAnchor.radius)
+        : spatialAnchor.radius,
       count: spatialAnchor.count,
       inlierCount: spatialAnchor.inlierCount
     });

@@ -82,6 +82,14 @@ const BattleDebugPanel = ({
       const formation = selectedSquad.formationRuntime;
       lines.push(`编队控制：${formation.state || '-'} ｜ 请求/实际 ${formation.requestedFormation || '-'}/${formation.activeFormation || '-'} ｜ 就绪 ${formatFixed((Number(formation.readyRatio) || 0) * 100, 0)}% ｜ cohesion ${formatFixed(formation.speedScale, 2)}`);
       lines.push(`地形适配：压缩 ${formatFixed((Number(formation.compression) || 1) * 100, 0)}% ｜ 通道 ${formation.passage ? '是' : '否'} ｜ 宽度 ${formation.corridorWidth === null ? '-' : formatFixed(formation.corridorWidth, 1)}`);
+      if (formation.bodyAnchor || formation.navigationAnchor) {
+        const body = formation.bodyAnchor || {};
+        const nav = formation.navigationAnchor || {};
+        lines.push(`CARD锚点：body(${formatFixed(body.x, 1)}, ${formatFixed(body.y, 1)}) P10/50/90 ${formatFixed(body.rearProgress, 1)}/${formatFixed(body.bodyProgress, 1)}/${formatFixed(body.frontProgress, 1)} ｜ nav(${formatFixed(nav.x, 1)}, ${formatFixed(nav.y, 1)}) lead ${formatFixed(nav.lead, 1)}/${formatFixed(body.maxAnchorLead, 1)} lag ${formatFixed(nav.lag, 1)} ${nav.spatiallyClamped ? '空间限位' : (nav.clampedToBody ? '路线限位' : '')}`);
+      }
+      if (formation.passageGroupState && formation.passageGroupState !== 'FORMATION') {
+        lines.push(`通道群体：${formation.passageGroupState} ｜ blocked ${formatFixed(formation.blockedWeight, 1)} ｜ tail ${formatFixed(formation.behindGateWeight, 1)}`);
+      }
     }
     if (selectedSquad?.combatRuntime) {
       const combat = selectedSquad.combatRuntime;

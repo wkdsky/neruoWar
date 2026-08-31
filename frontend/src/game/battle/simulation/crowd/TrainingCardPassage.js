@@ -8,12 +8,31 @@ import {
   resolveObstacleNavigationSignature
 } from './crowdPhysics';
 import { isTrainingMapTerrainSegmentTraversable } from '../../shared/trainingMap';
+import {
+  resolveTrainingCardBodyAnchor,
+  resolveTrainingCardFormationAnchor,
+  resolveTrainingCardNavigationAnchor
+} from './TrainingCardSquadBody';
 
 export const CARD_LOCOMOTION_STATE = Object.freeze({
   FORMATION: 'FORMATION',
   STREAM_APPROACH: 'STREAM_APPROACH',
   STREAM: 'STREAM',
   STREAM_EXIT: 'STREAM_EXIT'
+});
+
+// Group lifecycle is intentionally independent from per-agent locomotion.
+// A stream may have a few agents already exiting while the weighted rear is
+// still queued at the entrance; only this state is allowed to complete the
+// shared corridor.
+export const CARD_PASSAGE_GROUP_STATE = Object.freeze({
+  FORMATION: 'FORMATION',
+  APPROACH: 'APPROACH',
+  COMPRESS: 'COMPRESS',
+  FLOW: 'FLOW',
+  CLEAR_TAIL: 'CLEAR_TAIL',
+  EXPAND: 'EXPAND',
+  GROUP_BLOCKED: 'GROUP_BLOCKED'
 });
 
 const AGENT_RADIUS = 2.25;
@@ -24,6 +43,11 @@ const DEFAULT_PLAN_RETAIN_INTERVAL = 0.72;
 const DEFAULT_APPROACH_DISTANCE = 22;
 const DEFAULT_EXIT_CLEAR_DISTANCE = 18;
 const DEFAULT_MAX_STREAMS = 12;
+const GROUP_OUTLIER_WEIGHT_RATIO = 0.08;
+const GROUP_SLOW_WEIGHT_RATIO = 0.1;
+const GROUP_BLOCKED_WEIGHT_RATIO = 0.24;
+const GROUP_STALL_TIMEOUT = 0.72;
+const GROUP_OUTLIER_TIMEOUT = 4.5;
 
 const finiteNumber = (value, fallback = 0) => (
   Number.isFinite(Number(value)) ? Number(value) : fallback
@@ -286,7 +310,7 @@ export const sampleTrainingCardPassageStream = (plan = null, streamId = 0, progr
   };
 };
 
-export const projectPointToPassagePlan = (point = {}, plan = null) => {
+export const projectPointToPassagePlan = (point = {}, plan = null, preferredProgress = null) => {
   const segments = Array.isArray(plan?.segments) ? plan.segments : [];
   if (segments.length <= 0) {
     return {
@@ -299,6 +323,10 @@ export const projectPointToPassagePlan = (point = {}, plan = null) => {
   }
   const target = normalizePoint(point);
   let best = null;
+  const hasPreferredProgress = preferredProgress !== null
+    && preferredProgress !== undefined
+    && Number.isFinite(Number(preferredProgress));
+  const preferred = finiteNumber(preferredProgress);
   segments.forEach((segment) => {
     const dx = segment.end.x - segment.start.x;
     const dy = segment.end.y - segment.start.y;
@@ -321,9 +349,16 @@ export const projectPointToPassagePlan = (point = {}, plan = null) => {
       distance: Math.hypot(offsetX, offsetY),
       point: projected,
       tangent: segment.tangent,
-      lateral: (offsetX * sideX) + (offsetY * sideY)
+      lateral: (offsetX * sideX) + (offsetY * sideY),
+      // U/C/S-shaped routes can place two legal route legs close together in
+      // world space. A small longitudinal continuity preference prevents an
+      // already streaming agent from teleporting its progress to a different
+      // nearby leg; initial planning still uses pure nearest projection.
+      continuityScore: Math.hypot(offsetX, offsetY) + (hasPreferredProgress
+        ? Math.abs((segment.startProgress + (segment.length * local)) - preferred) * 0.28
+        : 0)
     };
-    if (!best || candidate.distance < best.distance) best = candidate;
+    if (!best || candidate.continuityScore < best.continuityScore) best = candidate;
   });
   if (!best) return best;
   const lastSegment = segments[segments.length - 1];
@@ -468,7 +503,9 @@ const resolvePassageRouteGeometry = (squad = {}, route = null) => {
     : resolveStaticPassageRoute(squad, route);
   const routeStart = staticRoute
     ? null
-    : squad;
+    : (resolveTrainingCardBodyAnchor(squad)
+      || resolveTrainingCardNavigationAnchor(squad)
+      || squad);
   return {
     staticRoute,
     normalizedRoute: normalizeRoute(routeStart, resolvedRoute)
@@ -839,10 +876,13 @@ const resolveFormationLateralAtProjection = ({
   );
   if (formationForward.len <= 0.0001) return fallback;
   const formationSide = { x: -formationForward.y, y: formationForward.x };
-  const slotX = finiteNumber(squad?.x)
+  const formationAnchor = resolveTrainingCardFormationAnchor(squad)
+    || resolveTrainingCardBodyAnchor(squad)
+    || squad;
+  const slotX = finiteNumber(formationAnchor?.x, finiteNumber(squad?.x))
     + (formationForward.x * finiteNumber(formationSlot?.front))
     + (formationSide.x * finiteNumber(formationSlot?.side));
-  const slotY = finiteNumber(squad?.y)
+  const slotY = finiteNumber(formationAnchor?.y, finiteNumber(squad?.y))
     + (formationForward.y * finiteNumber(formationSlot?.front))
     + (formationSide.y * finiteNumber(formationSlot?.side));
   return ((slotX - projection.point.x) * routeSide.x)
@@ -857,7 +897,9 @@ export const updateTrainingCardPassageAgents = ({
 } = {}) => {
   const rows = [];
   const liveAgents = (Array.isArray(agents) ? agents : []).filter((agent) => (
-    agent && !agent.dead && finiteNumber(agent.weight, 1) > 0.001 && !agent.isFlagBearer
+    // A flag bearer is still a movement representative.  Excluding it made
+    // a real weight disappear from stream/tail completion accounting.
+    agent && !agent.dead && finiteNumber(agent.weight, 1) > 0.001
   ));
   liveAgents.forEach((agent) => {
     if (!agent._squadController || typeof agent._squadController !== 'object') agent._squadController = {};
@@ -872,11 +914,15 @@ export const updateTrainingCardPassageAgents = ({
       });
       return;
     }
-    const projection = projectPointToPassagePlan(agent, plan);
     const planId = Math.floor(finiteNumber(plan?.id));
     const planSignature = String(plan?.geometrySignature || '');
     const samePassage = Math.floor(finiteNumber(state?.passageId)) === planId
       && (!planSignature || !state?.passageSignature || state.passageSignature === planSignature);
+    const projection = projectPointToPassagePlan(
+      agent,
+      plan,
+      samePassage ? state?.passageProgress : null
+    );
     const previousState = String(state?.locomotionState || CARD_LOCOMOTION_STATE.FORMATION);
     const wasInPlan = Math.floor(finiteNumber(state?.passageId)) === planId
       && isPassageState(previousState);
@@ -1024,6 +1070,408 @@ export const updateTrainingCardPassageAgents = ({
   return rows;
 };
 
+const passageParticipantWeight = (agent = null) => Math.max(0, finiteNumber(agent?.weight, 1));
+
+const isPassageParticipant = (agent = null) => (
+  !!agent && !agent.dead && passageParticipantWeight(agent) > 0.001
+);
+
+const weightedPassagePercentile = (rows = [], ratio = 0.5, key = 'progress') => {
+  const ordered = (Array.isArray(rows) ? rows : [])
+    .filter((row) => Number.isFinite(Number(row?.[key])) && finiteNumber(row?.weight) > 0.001)
+    .slice()
+    .sort((left, right) => finiteNumber(left?.[key]) - finiteNumber(right?.[key]));
+  const totalWeight = ordered.reduce((sum, row) => sum + Math.max(0, finiteNumber(row?.weight)), 0);
+  if (totalWeight <= 0.001) return 0;
+  const target = clamp(finiteNumber(ratio), 0, 1) * totalWeight;
+  let accumulated = 0;
+  for (let index = 0; index < ordered.length; index += 1) {
+    accumulated += Math.max(0, finiteNumber(ordered[index]?.weight));
+    if (accumulated + 0.0001 >= target) return finiteNumber(ordered[index]?.[key]);
+  }
+  return finiteNumber(ordered[ordered.length - 1]?.[key]);
+};
+
+const isPassageDetachedAgent = (agent = null) => (
+  agent?._formationDetached === true
+  || agent?._formationRecovery?.active === true
+  || agent?._squadController?.rejoin?.active === true
+);
+
+const resolvePassageTailAllowance = ({ squad = null, rows = [], options = {} } = {}) => {
+  const spacing = Math.max(AGENT_RADIUS * 2, finiteNumber(options?.spacing, (AGENT_RADIUS * 2) + AGENT_GAP));
+  const squadDepth = Math.max(0, finiteNumber(squad?.formationRect?.depth));
+  const slotDepth = (Array.isArray(rows) ? rows : []).reduce((maximum, row) => (
+    Math.max(maximum, Math.max(0, -finiteNumber(row?.agent?.formationSlot?.front)))
+  ), 0);
+  return clamp(
+    Math.max(spacing * 2, (slotDepth || squadDepth) + (spacing * 1.1), squadDepth * 0.72),
+    spacing * 2,
+    96
+  );
+};
+
+const clearPassageOutlier = (agent = null) => {
+  if (!agent?._squadController || typeof agent._squadController !== 'object') return;
+  delete agent._squadController.passageOutlier;
+  delete agent._squadController.passageOutlierCandidateSince;
+};
+
+/**
+ * A passage outlier is deliberately a very narrow exception.  A detached
+ * member cannot merely declare itself irrelevant: it must be isolated far
+ * from the real body for a sustained interval, and all ignored troop weight
+ * is capped below GROUP_OUTLIER_WEIGHT_RATIO.  This prevents a whole blocked
+ * flank from disappearing into individual recovery.
+ */
+const classifyPassageOutliers = ({
+  rows = [],
+  plan = null,
+  totalWeight = 0,
+  body = null,
+  nowSec = 0,
+  options = {}
+} = {}) => {
+  const planId = Math.floor(finiteNumber(plan?.id));
+  const signature = String(plan?.geometrySignature || '');
+  const allowedWeight = Math.max(0, totalWeight * GROUP_OUTLIER_WEIGHT_RATIO);
+  const bodyPoint = body || {};
+  const baseIsolationDistance = Math.max(
+    64,
+    finiteNumber(plan?.reformationDistance) * 1.6,
+    finiteNumber(options?.exitClearDistance) * 3
+  );
+  const included = new Set();
+  let outlierWeight = 0;
+  const stableRows = (Array.isArray(rows) ? rows : [])
+    .filter((row) => row?.agent)
+    .slice()
+    .sort((left, right) => String(left?.agent?.id || '').localeCompare(String(right?.agent?.id || '')));
+
+  // Preserve a qualified outlier only while it remains a small, detached,
+  // physically distant exception. The proof survives a harmless passage-plan
+  // rollover; otherwise a 1% soldier can complete one gate and immediately
+  // force the whole squad to plan the same gate again from its old position.
+  stableRows.forEach((row) => {
+    const agent = row?.agent;
+    const state = agent?._squadController || {};
+    const outlier = state?.passageOutlier;
+    const isolationDistance = Math.max(
+      baseIsolationDistance,
+      finiteNumber(outlier?.isolationDistance)
+    );
+    const farFromBody = distance(agent, bodyPoint) >= isolationDistance;
+    const weight = passageParticipantWeight(agent);
+    if (outlier?.active === true && isPassageDetachedAgent(agent) && farFromBody && outlierWeight + weight <= allowedWeight + 0.001) {
+      included.add(agent);
+      outlierWeight += weight;
+    } else if (outlier || Number.isFinite(Number(state?.passageOutlierCandidateSince))) {
+      clearPassageOutlier(agent);
+    }
+  });
+
+  if (!plan) return included;
+
+  // Sorting makes the tiny exception deterministic instead of depending on the
+  // agent iteration order.  No candidate can be marked until it has remained
+  // detached and isolated for GROUP_OUTLIER_TIMEOUT seconds.
+  stableRows
+    .filter((row) => !included.has(row.agent))
+    .forEach((row) => {
+      const agent = row.agent;
+      if (!isPassageDetachedAgent(agent)) {
+        clearPassageOutlier(agent);
+        return;
+      }
+      const weight = passageParticipantWeight(agent);
+      const farFromBody = distance(agent, bodyPoint) >= baseIsolationDistance;
+      const state = agent._squadController && typeof agent._squadController === 'object'
+        ? agent._squadController
+        : (agent._squadController = {});
+      if (!farFromBody || weight > allowedWeight + 0.001 || outlierWeight + weight > allowedWeight + 0.001) {
+        delete state.passageOutlierCandidateSince;
+        return;
+      }
+      const candidateSince = finiteNumber(state?.passageOutlierCandidateSince);
+      state.passageOutlierCandidateSince = candidateSince > 0 ? candidateSince : nowSec;
+      if (nowSec - state.passageOutlierCandidateSince < GROUP_OUTLIER_TIMEOUT) return;
+      state.passageOutlier = {
+        active: true,
+        passageId: planId,
+        signature,
+        routeSignature: String(plan?.routeSignature || ''),
+        isolationDistance: baseIsolationDistance,
+        markedAt: nowSec
+      };
+      included.add(agent);
+      outlierWeight += weight;
+    });
+  return included;
+};
+
+/**
+ * Weighted group-level passage progress.  Per-agent stream state is useful
+ * for steering, but it is never the authority for passage completion: every
+ * alive representative remains in the body/rear/tail statistics unless it
+ * passed the deliberately tiny outlier classifier above.
+ */
+export const resolveTrainingCardPassageGroupProgress = ({
+  squad = null,
+  agents = [],
+  rows = [],
+  plan = null,
+  routeProjectionPlan = null,
+  previous = null,
+  nowSec = 0,
+  options = {}
+} = {}) => {
+  const byAgent = new Map((Array.isArray(rows) ? rows : []).map((row) => [row?.agent, row]));
+  const projectionPlan = plan || routeProjectionPlan;
+  const progressRouteSignature = (Array.isArray(projectionPlan?.route) ? projectionPlan.route : [])
+    .map((point) => `${finiteNumber(point?.x).toFixed(2)},${finiteNumber(point?.y).toFixed(2)}`)
+    .join(';');
+  const hasProgressRoute = Array.isArray(projectionPlan?.segments)
+    && projectionPlan.segments.length > 0;
+  const participantRows = (Array.isArray(agents) ? agents : [])
+    .filter(isPassageParticipant)
+    .map((agent) => {
+      const row = byAgent.get(agent) || null;
+      const state = agent?._squadController || {};
+      const samePassage = !!plan
+        && Math.floor(finiteNumber(state?.passageId)) === Math.floor(finiteNumber(plan?.id))
+        && (!plan?.geometrySignature || !state?.passageSignature || state.passageSignature === plan.geometrySignature);
+      const projection = row?.projection || (projectionPlan
+        ? projectPointToPassagePlan(agent, projectionPlan, samePassage ? state?.passageProgress : null)
+        : null);
+      const terrainBlockedAt = finiteNumber(agent?._terrainBlockedAt);
+      const blockedRecently = terrainBlockedAt > 0 && nowSec - terrainBlockedAt <= 0.9;
+      return {
+        agent,
+        row,
+        projection,
+        progress: finiteNumber(projection?.progress),
+        weight: passageParticipantWeight(agent),
+        detached: isPassageDetachedAgent(agent),
+        terrainBlocked: blockedRecently || agent?._nextFormationStepIllegal === true,
+        streamBlocked: state?.streamWatchdog?.stalled === true,
+        completedCurrentPassage: row?.completedCurrentPassage === true
+      };
+    });
+  const totalWeight = participantRows.reduce((sum, row) => sum + row.weight, 0);
+  const body = resolveTrainingCardBodyAnchor(squad) || squad || {};
+  const outliers = classifyPassageOutliers({
+    rows: participantRows,
+    plan,
+    totalWeight,
+    body,
+    nowSec,
+    options
+  });
+  const trackedRows = participantRows.filter((row) => !outliers.has(row.agent));
+  const statisticsRows = trackedRows.length > 0 ? trackedRows : participantRows;
+  const trackedWeight = statisticsRows.reduce((sum, row) => sum + row.weight, 0);
+  const rearProgress = weightedPassagePercentile(statisticsRows, 0.1);
+  const tailProgress = weightedPassagePercentile(statisticsRows, 0.05);
+  const bodyProgress = weightedPassagePercentile(statisticsRows, 0.5);
+  const frontProgress = weightedPassagePercentile(statisticsRows, 0.9);
+  const detachedWeight = participantRows
+    .filter((row) => row.detached)
+    .reduce((sum, row) => sum + row.weight, 0);
+  const outlierWeight = participantRows
+    .filter((row) => outliers.has(row.agent))
+    .reduce((sum, row) => sum + row.weight, 0);
+  const clearTolerance = Math.max(0.5, finiteNumber(plan?.streamSpacing) * 0.18);
+  const nominalClearProgress = Math.max(0, finiteNumber(plan?.clearProgress, plan?.endProgress) - clearTolerance);
+  const tailAllowance = resolvePassageTailAllowance({ squad, rows: participantRows, options });
+  const routeLength = Math.max(0, finiteNumber(plan?.routeLength));
+  const endpointLeavesNoReformRoom = routeLength > 0
+    && routeLength - nominalClearProgress <= tailAllowance * 0.55;
+  // A destination immediately after the final choke cannot fit the entire
+  // formation beyond the nominal exit-clear distance.  Keep every real member
+  // in the tail test, but use the last physically achievable rear gate rather
+  // than declaring a permanent GROUP_BLOCKED at an endpoint.
+  const clearProgress = endpointLeavesNoReformRoom
+    ? Math.max(
+      finiteNumber(plan?.bottleneckStartProgress),
+      routeLength - tailAllowance
+    )
+    : nominalClearProgress;
+  const pendingRows = plan
+    ? statisticsRows.filter((row) => row.progress < clearProgress)
+    : [];
+  const behindGateWeight = pendingRows.reduce((sum, row) => sum + row.weight, 0);
+  // A detached agent is material tail mass, but it is not itself proof of a
+  // topology failure: a true small rejoiner may still be making progress.
+  // Escalate direct blockage only from collision/stream evidence; the stalled
+  // tail path below still catches a detached mass that cannot follow.
+  const directBlockCandidates = plan ? pendingRows : statisticsRows;
+  const directBlockedWeight = directBlockCandidates
+    .filter((row) => row.terrainBlocked || row.streamBlocked)
+    .reduce((sum, row) => sum + row.weight, 0);
+  const navigationAnchor = resolveTrainingCardNavigationAnchor(squad) || body;
+  const navigationProjection = plan
+    ? projectPointToPassagePlan(navigationAnchor, plan)
+    : null;
+  const navigationProgress = finiteNumber(navigationProjection?.progress, bodyProgress);
+  const maximumAnchorLead = Math.max(
+    finiteNumber(body?.maxAnchorLead),
+    finiteNumber(options?.spacing) * 2.25,
+    1
+  );
+  const navigationLead = Math.max(0, navigationProgress - bodyProgress);
+  const cursorAtRouteEnd = !!plan && navigationProgress >= Math.max(
+    0,
+    routeLength - Math.max(0.6, finiteNumber(plan?.streamSpacing) * 0.24)
+  );
+  const cursorLeadSaturated = !!plan && (
+    cursorAtRouteEnd
+    || navigationLead >= maximumAnchorLead - Math.max(0.6, finiteNumber(options?.spacing) * 0.18)
+  );
+  const samePlan = !!plan
+    && Math.floor(finiteNumber(previous?.passageId)) === Math.floor(finiteNumber(plan?.id))
+    && (!plan?.geometrySignature || previous?.signature === plan.geometrySignature);
+  const sameProgressContext = plan
+    ? samePlan
+    : (!!progressRouteSignature && previous?.routeSignature === progressRouteSignature);
+  const progressEpsilon = Math.max(0.12, finiteNumber(options?.spacing) * 0.025);
+  const madeProgress = !sameProgressContext
+    || bodyProgress >= finiteNumber(previous?.bodyProgress) + progressEpsilon
+    || rearProgress >= finiteNumber(previous?.rearProgress) + (progressEpsilon * 0.6);
+  const lastProgressAt = madeProgress || !Number.isFinite(Number(previous?.lastProgressAt))
+    ? nowSec
+    : finiteNumber(previous?.lastProgressAt);
+  const stallFor = Math.max(0, nowSec - lastProgressAt);
+  const touchDistance = Math.max(
+    finiteNumber(options?.spacing) * 1.5,
+    finiteNumber(plan?.approachDistance) * 0.28
+  );
+  // startProgress includes the pre-compression approach and can legitimately
+  // be zero when a long obstacle begins near the route source.  A queue is a
+  // group-level stall only once the weighted body/front has reached the real
+  // bottleneck mouth (or terrain has already reported a collision).
+  const mouthProgress = Math.max(
+    finiteNumber(plan?.startProgress),
+    finiteNumber(plan?.bottleneckStartProgress) - touchDistance
+  );
+  const touchingPassage = !!plan && (
+    frontProgress >= mouthProgress
+    || bodyProgress >= mouthProgress
+    || directBlockedWeight > 0
+  );
+  // A stationary rear is not itself a topology failure: it may simply be
+  // catching an anchor that has not yet spent its legal lead.  Escalate the
+  // whole squad only after the cursor has either reached that lead cap (or the
+  // route end) and material mass still cannot follow it.  Direct collision /
+  // stream-watchdog evidence remains independently meaningful.
+  const stalledBlockedWeight = touchingPassage
+    && cursorLeadSaturated
+    && stallFor >= Math.min(0.18, GROUP_STALL_TIMEOUT * 0.35)
+    ? behindGateWeight
+    : 0;
+  const blockedWeight = Math.max(directBlockedWeight, stalledBlockedWeight);
+  const blockedRatio = blockedWeight / Math.max(0.001, trackedWeight);
+  const directBlockedRatio = directBlockedWeight / Math.max(0.001, trackedWeight);
+  const detachedWeightRatio = detachedWeight / Math.max(0.001, totalWeight);
+  const tailPending = !!plan && pendingRows.length > 0;
+  const materiallyDirectBlocked = directBlockedRatio >= GROUP_BLOCKED_WEIGHT_RATIO;
+  const previousDirectBlockedSince = Number(previous?.directBlockedSince);
+  const fallbackDirectBlockedSince = Number(previous?.lastProgressAt);
+  const directBlockedSince = materiallyDirectBlocked
+    ? (sameProgressContext
+      ? (Number.isFinite(previousDirectBlockedSince)
+        ? previousDirectBlockedSince
+        : (Number.isFinite(fallbackDirectBlockedSince) ? fallbackDirectBlockedSince : nowSec))
+      : nowSec)
+    : 0;
+  const directBlockedFor = materiallyDirectBlocked
+    ? Math.max(0, nowSec - directBlockedSince)
+    : 0;
+  const persistentDirectBlock = materiallyDirectBlocked && directBlockedFor >= GROUP_STALL_TIMEOUT;
+  const groupBlocked = !!plan
+    && tailPending
+    && (
+      persistentDirectBlock
+      || (
+        cursorLeadSaturated
+        && stallFor >= GROUP_STALL_TIMEOUT
+        && blockedRatio >= GROUP_BLOCKED_WEIGHT_RATIO
+      )
+    );
+  // The same authority also protects a formation-scale route before it has
+  // become a formal PassagePlan.  A material share repeatedly colliding with
+  // terrain cannot be hidden behind a still-moving P50/front; halt the
+  // bounded cursor and spend the next navigation budget on a group replan.
+  const routeGroupBlocked = !plan
+    && hasProgressRoute
+    && persistentDirectBlock;
+  const groupLevelBlocked = groupBlocked || routeGroupBlocked;
+  const slowRatio = Math.max(
+    blockedRatio,
+    (touchingPassage || !plan) ? detachedWeightRatio : 0
+  );
+  const anchorSpeedScale = groupLevelBlocked
+    ? 0
+    : (slowRatio <= GROUP_SLOW_WEIGHT_RATIO
+      ? 1
+      : clamp(1 - (((slowRatio - GROUP_SLOW_WEIGHT_RATIO) / 0.65) * 0.78), 0.22, 1));
+  let state = CARD_PASSAGE_GROUP_STATE.FORMATION;
+  if (groupLevelBlocked) {
+    state = CARD_PASSAGE_GROUP_STATE.GROUP_BLOCKED;
+  } else if (plan) {
+    if (frontProgress < finiteNumber(plan?.startProgress) - touchDistance) state = CARD_PASSAGE_GROUP_STATE.APPROACH;
+    else if (bodyProgress < finiteNumber(plan?.bottleneckStartProgress)) state = CARD_PASSAGE_GROUP_STATE.COMPRESS;
+    else if (tailPending && frontProgress >= clearProgress) state = CARD_PASSAGE_GROUP_STATE.CLEAR_TAIL;
+    else if (tailPending) state = CARD_PASSAGE_GROUP_STATE.FLOW;
+    else state = CARD_PASSAGE_GROUP_STATE.EXPAND;
+  }
+  const replanCooldown = Math.max(0.55, finiteNumber(options?.scanInterval) * 3);
+  const needsReplan = groupLevelBlocked
+    && nowSec - finiteNumber(previous?.replannedAt, -Infinity) >= replanCooldown;
+  return {
+    state,
+    passageId: Math.floor(finiteNumber(plan?.id)),
+    signature: String(plan?.geometrySignature || ''),
+    routeSignature: progressRouteSignature,
+    totalWeight,
+    trackedWeight,
+    outlierWeight,
+    detachedWeight,
+    detachedWeightRatio,
+    blockedWeight,
+    blockedRatio,
+    directBlockedWeight,
+    directBlockedRatio,
+    behindGateWeight,
+    behindGateRatio: behindGateWeight / Math.max(0.001, trackedWeight),
+    rearProgress,
+    tailProgress,
+    bodyProgress,
+    frontProgress,
+    clearProgress,
+    nominalClearProgress,
+    tailAllowance,
+    tailPending,
+    navigationProgress,
+    navigationLead,
+    maximumAnchorLead,
+    cursorLeadSaturated,
+    cursorAtRouteEnd,
+    touchingPassage,
+    madeProgress,
+    lastProgressAt,
+    stallFor,
+    directBlockedSince,
+    directBlockedFor,
+    blockedSince: groupLevelBlocked
+      ? (sameProgressContext && previous?.state === CARD_PASSAGE_GROUP_STATE.GROUP_BLOCKED
+        ? finiteNumber(previous?.blockedSince, nowSec)
+        : nowSec)
+      : 0,
+    anchorSpeedScale,
+    needsReplan
+  };
+};
+
 export const updateTrainingCardPassagePlan = ({
   squad = null,
   agents = [],
@@ -1046,21 +1494,32 @@ export const updateTrainingCardPassagePlan = ({
     segments: routeSegments,
     routeLength
   };
-  const coreAgentsForProgress = (Array.isArray(agents) ? agents : []).filter((agent) => (
-    agent
-    && !agent.dead
-    && !agent.isFlagBearer
-    && finiteNumber(agent.weight, 1) > 0.001
-    && agent._formationDetached !== true
-    && agent._formationRecovery?.active !== true
-    && agent._squadController?.rejoin?.active !== true
-  ));
-  const progressSamples = coreAgentsForProgress.map((agent) => (
-    projectPointToPassagePlan(agent, routeProjectionPlan).progress
-  ));
-  const minimumProgress = progressSamples.length > 0
-    ? Math.min(...progressSamples)
-    : projectPointToPassagePlan(squad, routeProjectionPlan).progress;
+  // Planning must start at the real rear of the group. Detached, recovery and
+  // rejoin members stay in this sample; a percentile would still silently
+  // skip a small-but-not-yet-proven tail, which can make the next bottleneck
+  // appear cleared before that physical member has moved.
+  const initialProgressRows = (Array.isArray(agents) ? agents : [])
+    .filter(isPassageParticipant)
+    .map((agent) => ({
+      agent,
+      weight: passageParticipantWeight(agent),
+      progress: projectPointToPassagePlan(agent, routeProjectionPlan).progress
+    }));
+  // Preserve only an already-proven tiny outlier across a plan rollover.
+  // New detached/recovery/rejoin members cannot opt out here; they must first
+  // satisfy classifyPassageOutliers' distance, duration and total-weight cap.
+  const retainedOutliers = classifyPassageOutliers({
+    rows: initialProgressRows,
+    plan: null,
+    totalWeight: initialProgressRows.reduce((sum, row) => sum + row.weight, 0),
+    body: resolveTrainingCardBodyAnchor(squad) || squad,
+    nowSec,
+    options
+  });
+  const minimumProgressRows = initialProgressRows.filter((row) => !retainedOutliers.has(row.agent));
+  const minimumProgress = minimumProgressRows.length > 0
+    ? minimumProgressRows.reduce((minimum, row) => Math.min(minimum, row.progress), Infinity)
+    : projectPointToPassagePlan(resolveTrainingCardBodyAnchor(squad) || squad, routeProjectionPlan).progress;
   const targetPoint = squad?.order?.targetPoint && typeof squad.order.targetPoint === 'object'
     ? squad.order.targetPoint
     : geometry.route?.[geometry.route.length - 1];
@@ -1137,28 +1596,24 @@ export const updateTrainingCardPassagePlan = ({
   }
   runtime.passagePlanInvalid = !!previousPlan && geometryChanged && !plan;
   const rows = updateTrainingCardPassageAgents({ squad, agents, plan, nowSec });
-  const activeRows = rows.filter((row) => row.state !== CARD_LOCOMOTION_STATE.FORMATION);
-  const active = !!plan && activeRows.length > 0;
-  const passageId = Math.floor(finiteNumber(plan?.id));
-  const passageSignature = String(plan?.geometrySignature || '');
-  const coreRows = rows.filter((row) => (
-    row?.agent
-    && row.agent?._formationDetached !== true
-    && row.agent?._formationRecovery?.active !== true
-    && row.agent?._squadController?.rejoin?.active !== true
-  ));
-  const tailPending = !!plan && coreRows.some((row) => {
-    if (row?.completedCurrentPassage === true) return false;
-    const state = row?.agent?._squadController || {};
-    const completed = Math.floor(finiteNumber(state?.passageCompletedId)) === passageId
-      && (!passageSignature || state?.passageCompletedSignature === passageSignature);
-    if (completed) return false;
-    const progress = finiteNumber(row?.projection?.progress, 0);
-    return progress < Math.max(
-      0,
-      finiteNumber(plan?.clearProgress, plan?.endProgress) - Math.max(0.5, plan?.streamSpacing * 0.18)
-    );
+  const groupProgress = resolveTrainingCardPassageGroupProgress({
+    squad,
+    agents,
+    rows,
+    plan,
+    routeProjectionPlan,
+    previous: runtime?.groupProgress,
+    nowSec,
+    options
   });
+  runtime.groupProgress = groupProgress;
+  const activeRows = rows.filter((row) => row.state !== CARD_LOCOMOTION_STATE.FORMATION);
+  const active = !!plan && (
+    groupProgress.state !== CARD_PASSAGE_GROUP_STATE.EXPAND
+    || groupProgress.tailPending
+    || activeRows.length > 0
+  );
+  const tailPending = groupProgress.tailPending === true;
   if (active || tailPending) {
     runtime.passageInactiveSince = 0;
   } else if (plan) {
@@ -1188,15 +1643,24 @@ export const updateTrainingCardPassagePlan = ({
   const streamingRows = rows.filter((row) => row.state === CARD_LOCOMOTION_STATE.STREAM);
   const approachRows = rows.filter((row) => row.state === CARD_LOCOMOTION_STATE.STREAM_APPROACH);
   const exitingRows = rows.filter((row) => row.state === CARD_LOCOMOTION_STATE.STREAM_EXIT);
-  const flowing = approachRows.length + streamingRows.length > 0;
+  const groupState = String(groupProgress?.state || CARD_PASSAGE_GROUP_STATE.FORMATION);
+  const flowing = !!plan && (groupState === CARD_PASSAGE_GROUP_STATE.FLOW
+    || groupState === CARD_PASSAGE_GROUP_STATE.CLEAR_TAIL
+    || groupState === CARD_PASSAGE_GROUP_STATE.GROUP_BLOCKED
+    || approachRows.length + streamingRows.length > 0);
   const previousTerrainState = String(runtime?.terrain?.state || '');
   const hasPassageLifecycle = previousTerrainState === 'PASSAGE'
     || previousTerrainState === 'EXPAND'
     || exitingRows.length > 0;
   const terrain = {
-    state: flowing
-      ? 'PASSAGE'
-      : (active || (plan && hasPassageLifecycle) ? 'EXPAND' : 'MARCH'),
+    state: groupState === CARD_PASSAGE_GROUP_STATE.APPROACH
+      || groupState === CARD_PASSAGE_GROUP_STATE.COMPRESS
+      ? 'COMPRESS'
+      : (groupState === CARD_PASSAGE_GROUP_STATE.EXPAND
+        ? 'EXPAND'
+        : (flowing
+          ? 'PASSAGE'
+          : (active || (plan && hasPassageLifecycle) ? 'EXPAND' : 'MARCH'))),
     sampledAt: nowSec,
     passageId: Math.max(0, Math.floor(finiteNumber(plan?.id))),
     passagePlanId: Math.max(0, Math.floor(finiteNumber(plan?.id))),
@@ -1212,9 +1676,9 @@ export const updateTrainingCardPassagePlan = ({
     startProgress: plan ? plan.startProgress : 0,
     endProgress: plan ? plan.endProgress : 0,
     frontClearance: plan ? Math.max(0, plan.startProgress) : Infinity,
-    frontCleared: exitingRows.length > 0 || !active,
-    bodyCleared: streamingRows.length <= 0,
-    rearCleared: rows.every((row) => row.state === CARD_LOCOMOTION_STATE.FORMATION),
+    frontCleared: !plan || groupProgress.frontProgress >= groupProgress.clearProgress,
+    bodyCleared: !plan || groupProgress.bodyProgress >= groupProgress.clearProgress,
+    rearCleared: !tailPending,
     compression: active ? clamp(plan.usableWidth / Math.max(options.spacing, resolveFormationWidth(squad, options.spacing)), 0.4, 1) : 1,
     rawCompression: active ? clamp(plan.usableWidth / Math.max(options.spacing, resolveFormationWidth(squad, options.spacing)), 0.4, 1) : 1,
     longitudinalScale: 1,
@@ -1222,7 +1686,15 @@ export const updateTrainingCardPassagePlan = ({
     agentsApproaching: approachRows.length,
     agentsStreaming: streamingRows.length,
     agentsExiting: exitingRows.length,
-    activeAgents: activeRows.length
+    activeAgents: activeRows.length,
+    groupState,
+    totalWeight: groupProgress.totalWeight,
+    blockedWeight: groupProgress.blockedWeight,
+    detachedWeight: groupProgress.detachedWeight,
+    behindGateWeight: groupProgress.behindGateWeight,
+    rearProgress: groupProgress.rearProgress,
+    bodyProgress: groupProgress.bodyProgress,
+    frontProgress: groupProgress.frontProgress
   };
   runtime.terrain = terrain;
   runtime.passageDebug = {
@@ -1231,7 +1703,17 @@ export const updateTrainingCardPassagePlan = ({
     streamCount: terrain.streamCount,
     agentsApproaching: terrain.agentsApproaching,
     agentsStreaming: terrain.agentsStreaming,
-    agentsExiting: terrain.agentsExiting
+    agentsExiting: terrain.agentsExiting,
+    groupState,
+    totalWeight: groupProgress.totalWeight,
+    blockedWeight: groupProgress.blockedWeight,
+    detachedWeight: groupProgress.detachedWeight,
+    behindGateWeight: groupProgress.behindGateWeight,
+    rearProgress: groupProgress.rearProgress,
+    bodyProgress: groupProgress.bodyProgress,
+    frontProgress: groupProgress.frontProgress,
+    tailPending: groupProgress.tailPending === true,
+    groupBlocked: groupProgress.state === CARD_PASSAGE_GROUP_STATE.GROUP_BLOCKED
   };
   return { plan, rows, terrain };
 };

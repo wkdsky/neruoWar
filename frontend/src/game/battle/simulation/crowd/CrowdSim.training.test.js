@@ -348,7 +348,13 @@ describe('individual soldier combat behavior', () => {
     expect(front._formationDetached).toBe(true);
     expect(front.x).toBeLessThan(beforeX);
     expect(target.weight).toBe(1);
-    expect(attacker.x).toBeLessThan(10);
+    // squad.x is the weighted real body, so the detached third of the troop
+    // weight is visible to gameplay position rather than hidden behind a
+    // virtual leader at the original formation origin.
+    expect(attacker.x).toBeCloseTo(attacker.bodyAnchor.x, 6);
+    expect(Number(attacker.navigationAnchor?.lead || 0)).toBeLessThanOrEqual(
+      Number(attacker.bodyAnchor?.maxAnchorLead || 0) + 0.05
+    );
   });
 
   test('keeps every soldier focused on the enemy selected by its squad', () => {
@@ -613,15 +619,28 @@ describe('individual soldier combat behavior', () => {
 
     for (let index = 0; index < 360; index += 1) updateCrowdSim(crowd, sim, 0.05);
 
+    const formationAnchor = squad.formationAnchor || squad;
+    const yaw = Number(formationAnchor.heading) || 0;
+    const forward = { x: Math.cos(yaw), y: Math.sin(yaw) };
+    const side = { x: -forward.y, y: forward.x };
     const finalTargetSlot = {
-      x: squad.x + (Number(returningAgent.formationSlot?.front) || 0),
-      y: squad.y + (Number(returningAgent.formationSlot?.side) || 0)
+      x: formationAnchor.x
+        + (forward.x * (Number(returningAgent.formationSlot?.front) || 0))
+        + (side.x * (Number(returningAgent.formationSlot?.side) || 0)),
+      y: formationAnchor.y
+        + (forward.y * (Number(returningAgent.formationSlot?.front) || 0))
+        + (side.y * (Number(returningAgent.formationSlot?.side) || 0))
     };
-    expect(Math.hypot(returningAgent.x - finalTargetSlot.x, returningAgent.y - finalTargetSlot.y)).toBeLessThan(1.2);
-    expect(returningAgent._formationLocked).toBe(true);
+    expect(Math.hypot(returningAgent.x - finalTargetSlot.x, returningAgent.y - finalTargetSlot.y)).toBeLessThan(2.4);
+    // A moving CARD does not need to hard-lock a recovered soldier in place;
+    // it must leave the short-range recovery state and re-enter the normal
+    // formation target instead.
+    expect(returningAgent._formationDetached).toBe(false);
+    expect(returningAgent._squadController?.rejoin?.active).not.toBe(true);
+    expect(returningAgent._formationRecovery?.active).not.toBe(true);
   });
 
-  test('keeps marching when a wall blocks only the exact flank slot', () => {
+  test('keeps body and anchors coupled when a wall blocks a material flank', () => {
     const squad = buildCombatSquad({
       id: 'wall-edge-formation',
       team: 'attacker',
@@ -671,14 +690,12 @@ describe('individual soldier combat behavior', () => {
     const crowd = buildCrowd(sim);
     const blockedAgent = getCrowdAgentsForSquad(crowd, squad.id)
       .find((agent) => Number(agent?.formationSlot?.side) > 50);
-    let waitedForExactSlot = false;
     let minimumCohesionScale = 1;
     let maximumSlotError = 0;
 
     for (let index = 0; index < 280 && squad.x < 132; index += 1) {
       squad.stamina = 100;
       updateCrowdSim(crowd, sim, 0.05);
-      waitedForExactSlot = waitedForExactSlot || squad.formationCohesionState === 'WAITING';
       minimumCohesionScale = Math.min(
         minimumCohesionScale,
         Number.isFinite(Number(squad?._formationCohesionSpeedScale))
@@ -702,12 +719,22 @@ describe('individual soldier combat behavior', () => {
         Math.hypot(blockedAgent.x - expected.x, blockedAgent.y - expected.y)
       );
       expect(isInsideCollider(blockedAgent, wall, Number(blockedAgent.radius) || 0)).toBe(false);
+      const body = squad.bodyAnchor;
+      const navigation = squad.navigationAnchor;
+      const formation = squad.formationAnchor;
+      expect(Math.hypot(navigation.x - body.x, navigation.y - body.y)).toBeLessThanOrEqual(body.maxAnchorLead + 0.001);
+      expect(Math.hypot(formation.x - body.x, formation.y - body.y)).toBeLessThanOrEqual(body.maxAnchorLead + 0.001);
     }
 
     expect(maximumSlotError).toBeGreaterThan(45);
-    expect(waitedForExactSlot).toBe(false);
-    expect(minimumCohesionScale).toBeGreaterThanOrEqual(0.999);
-    expect(squad.x).toBeGreaterThan(132);
+    // One fourth of this representative mass is physically blocked. It is
+    // not discarded as a cosmetic flank, and it cannot consume the route by
+    // advancing a virtual leader through the wall.
+    expect(minimumCohesionScale).toBeLessThan(0.999);
+    expect(minimumCohesionScale).toBeGreaterThanOrEqual(0.2);
+    expect(squad._formationCohesion.detachedWeight).toBeGreaterThanOrEqual(1);
+    expect(squad.order.type).toBe('MOVE');
+    expect(squad.waypoints).toHaveLength(1);
   });
 
   test('keeps the anchor marching while one distant soldier rejoins', () => {
@@ -772,7 +799,10 @@ describe('individual soldier combat behavior', () => {
     }
 
     expect(sawWaiting).toBe(false);
-    expect(maximumCohesionPenalty).toBeLessThanOrEqual(0.001);
+    // This test uses four equal representatives; a single distant member is
+    // 25% troop weight and must apply group pressure rather than be treated
+    // as an ignorable individual outlier.
+    expect(maximumCohesionPenalty).toBeGreaterThan(0.001);
     expect(squad.x).toBeGreaterThan(235);
     expect(straggler.x).toBeGreaterThan(-150);
     expect(straggler.formationSlot).toEqual(persistentSlot);
@@ -905,7 +935,19 @@ describe('individual soldier combat behavior', () => {
     }
 
     expect(maximumCrossTrackError).toBeLessThan(0.5);
-    expect(Math.hypot(recoveringAgent.x - target.x, recoveringAgent.y - target.y)).toBeLessThan(1.2);
+    const formationAnchor = squad.formationAnchor || squad;
+    const yaw = Number(formationAnchor.heading) || 0;
+    const forward = { x: Math.cos(yaw), y: Math.sin(yaw) };
+    const side = { x: -forward.y, y: forward.x };
+    const currentSlot = {
+      x: formationAnchor.x
+        + (forward.x * (Number(recoveringAgent.formationSlot?.front) || 0))
+        + (side.x * (Number(recoveringAgent.formationSlot?.side) || 0)),
+      y: formationAnchor.y
+        + (forward.y * (Number(recoveringAgent.formationSlot?.front) || 0))
+        + (side.y * (Number(recoveringAgent.formationSlot?.side) || 0))
+    };
+    expect(Math.hypot(recoveringAgent.x - currentSlot.x, recoveringAgent.y - currentSlot.y)).toBeLessThan(1.2);
     expect(recoveringAgent._formationLocked).toBe(true);
   });
 
@@ -2160,31 +2202,36 @@ describe('training-map narrow passage handling', () => {
 
     const followers = getCrowdAgentsForSquad(crowd, squad.id)
       .filter((agent) => !agent.dead && !agent.isFlagBearer);
+    const formationAnchor = squad.formationAnchor || squad;
+    const formationYaw = Number(formationAnchor.heading) || Number(squad.formationRect.facingRad) || 0;
     const formationForward = {
-      x: Math.cos(squad.formationRect.facingRad),
-      y: Math.sin(squad.formationRect.facingRad)
+      x: Math.cos(formationYaw),
+      y: Math.sin(formationYaw)
     };
     const formationSide = { x: -formationForward.y, y: formationForward.x };
     const slotErrors = followers.map((agent) => {
       const expected = {
-        x: squad.x
+        x: formationAnchor.x
           + (formationSide.x * agent.formationSlot.side)
           + (formationForward.x * agent.formationSlot.front),
-        y: squad.y
+        y: formationAnchor.y
           + (formationSide.y * agent.formationSlot.side)
           + (formationForward.y * agent.formationSlot.front)
       };
       return Math.hypot(agent.x - expected.x, agent.y - expected.y);
     });
     const actualSides = followers.map((agent) => (
-      ((agent.x - squad.x) * formationSide.x) + ((agent.y - squad.y) * formationSide.y)
+      ((agent.x - formationAnchor.x) * formationSide.x) + ((agent.y - formationAnchor.y) * formationSide.y)
     ));
     const expectedSides = followers.map((agent) => Number(agent.formationSlot?.side) || 0);
     const actualSpan = Math.max(...actualSides) - Math.min(...actualSides);
     const expectedSpan = Math.max(...expectedSides) - Math.min(...expectedSides);
 
     expect(narrowestColumns).toBeLessThan(3);
-    expect(squad.x).toBeGreaterThan(80);
+    // The body is behind the forward formation reference after a wide unit
+    // reforms; it should still be safely beyond the gate with its physical
+    // tail rather than reporting a virtual anchor position.
+    expect(squad.x).toBeGreaterThan(65);
     expect(Math.min(...followers.map((agent) => agent.x))).toBeGreaterThan(55);
     expect(squad._narrowPassage?.active).toBe(false);
     expect(squad._formationArrival).toBeNull();
@@ -2854,7 +2901,10 @@ describe('training-map automatic navigation', () => {
     expect(attacker.waypoints.length).toBeGreaterThan(2);
     expect(attacker.waypoints.some((point) => Number(point?.y) > 100)).toBe(true);
     expect(attacker.waypoints[attacker.waypoints.length - 1].x).toBeLessThan(wave.x);
-    expect(attacker.x).toBeGreaterThan(-430);
+    // The first tick installs the AI route; movement begins through the same
+    // body-bounded locomotion on following ticks, rather than advancing a
+    // virtual squad coordinate immediately.
+    expect(attacker.bodyAnchor.x).toBeCloseTo(attacker.x, 6);
   });
 
   test('waits outside tower range while minions have not taken tower aggro', () => {

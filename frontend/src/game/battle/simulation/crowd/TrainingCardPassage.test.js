@@ -5,7 +5,9 @@ import {
 } from './CrowdSim';
 import {
   createTrainingCardPassagePlan,
+  projectPointToPassagePlan,
   resolvePassageStreamCount,
+  resolveTrainingCardPassageGroupProgress,
   resolveTrainingCardPassageFlowIntent,
   resolveTrainingCardPassageFlowSteering,
   updateTrainingCardPassageAgents,
@@ -111,7 +113,7 @@ test('keeps a shared multi-state passage plan stable through a gate', () => {
   expect(firstPlanId).toBe(1);
 });
 
-test('keeps the passage plan alive for the trailing formation after anchor arrival', () => {
+test('keeps the passage plan alive while the physical tail is still streaming', () => {
   const squad = buildSquad();
   const spacing = 8;
   const columns = 6;
@@ -137,23 +139,37 @@ test('keeps the passage plan alive for the trailing formation after anchor arriv
   ];
   const sim = buildSim(squad, walls);
   const crowd = createCrowdSim(sim, { repConfig: { maxAgentWeight: 1, strictAgentMapping: true } });
-  let anchorArrived = false;
-  let planSurvivedAnchorArrival = false;
+  let sawFrontExit = false;
+  let planSurvivedFrontExit = false;
   let sawTailStream = false;
+  let anchorLeadViolation = false;
   for (let frame = 0; frame < 900; frame += 1) {
     updateCrowdSim(crowd, sim, 0.05);
-    if (!anchorArrived && squad.x > 80) anchorArrived = true;
-    if (anchorArrived && squad._squadController?.passagePlan) planSurvivedAnchorArrival = true;
     const agents = getCrowdAgentsForSquad(crowd, squad.id);
-    sawTailStream = sawTailStream || agents.some((agent) => (
+    const tailStreaming = agents.some((agent) => (
       agent._squadController?.locomotionState === 'STREAM'
       && Number(agent.x) < 15
     ));
+    const frontExiting = agents.some((agent) => (
+      agent._squadController?.locomotionState === 'STREAM_EXIT'
+    ));
+    sawTailStream = sawTailStream || tailStreaming;
+    sawFrontExit = sawFrontExit || frontExiting;
+    if (frontExiting && tailStreaming && squad._squadController?.passagePlan) {
+      planSurvivedFrontExit = true;
+    }
+    const body = squad.bodyAnchor;
+    const navigation = squad.navigationAnchor;
+    if (
+      body && navigation
+      && Number(navigation.lead) > Number(body.maxAnchorLead) + 0.05
+    ) anchorLeadViolation = true;
     if (squad.order.type === 'IDLE') break;
   }
-  expect(anchorArrived).toBe(true);
-  expect(planSurvivedAnchorArrival).toBe(true);
+  expect(sawFrontExit).toBe(true);
+  expect(planSurvivedFrontExit).toBe(true);
   expect(sawTailStream).toBe(true);
+  expect(anchorLeadViolation).toBe(false);
   expect(squad.order.type).toBe('IDLE');
 });
 
@@ -179,6 +195,203 @@ const buildDirectPassagePlan = () => createTrainingCardPassagePlan({
   ],
   route: [{ x: -80, y: 0 }, { x: 80, y: 0 }],
   nowSec: 0
+});
+
+test('keeps detached recovery/rejoin troop weight in the passage tail', () => {
+  const plan = buildDirectPassagePlan();
+  const squad = {
+    id: 'tail-mass',
+    x: 40,
+    y: 0,
+    bodyAnchor: { x: 40, y: 0, bodyProgress: 120, maxAnchorLead: 24 },
+    navigationAnchor: { x: 80, y: 0 },
+    formationRect: { width: 32, depth: 24, spacing: 8 },
+    _squadController: { passagePlan: plan }
+  };
+  const agents = [
+    { id: 'front', squadId: squad.id, x: 80, y: 0, weight: 7, _squadController: {} },
+    {
+      id: 'tail', squadId: squad.id, x: -20, y: 0, weight: 3,
+      _formationDetached: true,
+      _formationRecovery: { active: true },
+      _squadController: { rejoin: { active: true } }
+    }
+  ];
+  const progress = resolveTrainingCardPassageGroupProgress({
+    squad,
+    agents,
+    plan,
+    nowSec: 1
+  });
+
+  expect(progress.totalWeight).toBe(10);
+  expect(progress.detachedWeight).toBe(3);
+  expect(progress.outlierWeight).toBe(0);
+  expect(progress.behindGateWeight).toBe(3);
+  expect(progress.tailPending).toBe(true);
+});
+
+test('keeps an unqualified detached tail in minimumProgress for the next choke', () => {
+  const route = [{ x: -100, y: 0 }, { x: 160, y: 0 }];
+  const squad = {
+    id: 'minimum-progress-tail',
+    x: -80,
+    y: 0,
+    bodyAnchor: { x: -80, y: 0, bodyProgress: 20, maxAnchorLead: 24 },
+    formationRect: { width: 32, depth: 24, spacing: 8 },
+    deploySlots: [],
+    _passagePlanRoute: route,
+    order: { type: 'MOVE', targetPoint: { x: 160, y: 0 } },
+    waypoints: [{ x: 160, y: 0 }]
+  };
+  const walls = [
+    { id: 'first-top', x: 0, y: 36, width: 40, depth: 60, blocksMovement: true },
+    { id: 'first-bottom', x: 0, y: -36, width: 40, depth: 60, blocksMovement: true },
+    { id: 'second-top', x: 100, y: 36, width: 40, depth: 60, blocksMovement: true },
+    { id: 'second-bottom', x: 100, y: -36, width: 40, depth: 60, blocksMovement: true }
+  ];
+  const agents = [
+    {
+      id: 'unqualified-tail', squadId: squad.id, x: -90, y: 0, weight: 1,
+      _formationDetached: true,
+      _formationRecovery: { active: true },
+      _squadController: { rejoin: { active: true } }
+    },
+    { id: 'front-mass', squadId: squad.id, x: 80, y: 0, weight: 19, _squadController: {} }
+  ];
+  const runtime = {};
+  const refreshed = updateTrainingCardPassagePlan({
+    squad,
+    agents,
+    runtime,
+    sim: { field: { width: 420, height: 180 } },
+    walls,
+    route,
+    nowSec: 0,
+    force: true
+  });
+
+  expect(refreshed.plan).toBeTruthy();
+  // The 5% rear has not met the strict timed outlier criteria. Planning must
+  // still retain the first gate rather than jumping directly to the second.
+  expect(refreshed.plan.bottleneck.center.x).toBeLessThan(40);
+});
+
+test('keeps only a previously qualified tiny outlier out of the next route sample', () => {
+  const plan = buildDirectPassagePlan();
+  const routeProjectionPlan = {
+    route: plan.route,
+    segments: plan.segments,
+    routeLength: plan.routeLength
+  };
+  const squad = {
+    id: 'qualified-outlier',
+    x: 80,
+    y: 0,
+    bodyAnchor: { x: 80, y: 0, bodyProgress: 160, maxAnchorLead: 24 },
+    formationRect: { width: 32, depth: 24, spacing: 8 },
+    _squadController: {}
+  };
+  const agents = [
+    {
+      id: 'proved-tiny-tail', squadId: squad.id, x: -100, y: 0, weight: 5,
+      _formationDetached: true,
+      _squadController: {
+        rejoin: { active: true },
+        passageOutlier: { active: true, isolationDistance: 64, markedAt: 0 }
+      }
+    },
+    { id: 'main-body', squadId: squad.id, x: 80, y: 0, weight: 95, _squadController: {} }
+  ];
+  const progress = resolveTrainingCardPassageGroupProgress({
+    squad,
+    agents,
+    routeProjectionPlan,
+    nowSec: 5
+  });
+
+  expect(progress.outlierWeight).toBe(5);
+  expect(progress.trackedWeight).toBe(95);
+  expect(progress.bodyProgress).toBeGreaterThan(150);
+});
+
+test('escalates material terrain blockage to GROUP_BLOCKED only as a group problem', () => {
+  const plan = buildDirectPassagePlan();
+  const squad = {
+    id: 'blocked-mass',
+    x: -20,
+    y: 0,
+    bodyAnchor: { x: -20, y: 0, bodyProgress: 60, maxAnchorLead: 24 },
+    navigationAnchor: { x: 80, y: 0 },
+    formationRect: { width: 32, depth: 24, spacing: 8 },
+    _squadController: { passagePlan: plan }
+  };
+  const agents = [
+    { id: 'blocked-a', squadId: squad.id, x: -20, y: -2, weight: 4, _terrainBlockedAt: 0.8, _squadController: {} },
+    { id: 'blocked-b', squadId: squad.id, x: -20, y: 2, weight: 3, _terrainBlockedAt: 0.8, _squadController: {} },
+    { id: 'front', squadId: squad.id, x: 80, y: 0, weight: 3, _squadController: {} }
+  ];
+  const progress = resolveTrainingCardPassageGroupProgress({
+    squad,
+    agents,
+    plan,
+    previous: {
+      passageId: plan.id,
+      signature: plan.geometrySignature,
+      bodyProgress: 60,
+      rearProgress: 60,
+      lastProgressAt: 0
+    },
+    nowSec: 1
+  });
+
+  expect(progress.blockedWeight).toBe(7);
+  expect(progress.state).toBe('GROUP_BLOCKED');
+  expect(progress.anchorSpeedScale).toBe(0);
+  expect(progress.needsReplan).toBe(true);
+});
+
+test('escalates material terrain blockage before a PassagePlan can be created', () => {
+  const passageShape = buildDirectPassagePlan();
+  const routeProjectionPlan = {
+    route: passageShape.route,
+    segments: passageShape.segments,
+    routeLength: passageShape.routeLength
+  };
+  const squad = {
+    id: 'blocked-formation-route',
+    x: -20,
+    y: 0,
+    bodyAnchor: { x: -20, y: 0, bodyProgress: 60, maxAnchorLead: 24 },
+    navigationAnchor: { x: 4, y: 0 },
+    formationRect: { width: 32, depth: 24, spacing: 8 },
+    _squadController: {}
+  };
+  const agents = [
+    { id: 'blocked-a', squadId: squad.id, x: -20, y: -2, weight: 4, _terrainBlockedAt: 0.1, _squadController: {} },
+    { id: 'blocked-b', squadId: squad.id, x: -20, y: 2, weight: 3, _terrainBlockedAt: 0.1, _squadController: {} },
+    { id: 'front', squadId: squad.id, x: 40, y: 0, weight: 3, _squadController: {} }
+  ];
+  const first = resolveTrainingCardPassageGroupProgress({
+    squad,
+    agents,
+    routeProjectionPlan,
+    nowSec: 0.1
+  });
+  const progress = resolveTrainingCardPassageGroupProgress({
+    squad,
+    agents,
+    routeProjectionPlan,
+    previous: first,
+    nowSec: 0.9
+  });
+
+  expect(progress.passageId).toBe(0);
+  expect(progress.tailPending).toBe(false);
+  expect(progress.blockedWeight).toBe(7);
+  expect(progress.state).toBe('GROUP_BLOCKED');
+  expect(progress.anchorSpeedScale).toBe(0);
+  expect(progress.needsReplan).toBe(true);
 });
 
 test('keeps stream assignment and steering independent from formation slot', () => {
@@ -270,6 +483,24 @@ test('follows the shared route tangent after a passage turn', () => {
   });
   expect(flow.forwardX).toBeCloseTo(0);
   expect(flow.forwardY).toBeCloseTo(1);
+});
+
+test('keeps longitudinal progress on the current leg of a close U-shaped corridor', () => {
+  const plan = {
+    route: [{ x: 0, y: 0 }, { x: 80, y: 0 }, { x: 80, y: 20 }, { x: 0, y: 20 }],
+    segments: [
+      { start: { x: 0, y: 0 }, end: { x: 80, y: 0 }, length: 80, startProgress: 0, endProgress: 80, tangent: { x: 1, y: 0 } },
+      { start: { x: 80, y: 0 }, end: { x: 80, y: 20 }, length: 20, startProgress: 80, endProgress: 100, tangent: { x: 0, y: 1 } },
+      { start: { x: 80, y: 20 }, end: { x: 0, y: 20 }, length: 80, startProgress: 100, endProgress: 180, tangent: { x: -1, y: 0 } }
+    ],
+    routeLength: 180
+  };
+  const pointNearReturnLeg = { x: 40, y: 20 };
+  const nearestOnly = projectPointToPassagePlan(pointNearReturnLeg, plan);
+  const continuityAware = projectPointToPassagePlan(pointNearReturnLeg, plan, 40);
+
+  expect(nearestOnly.progress).toBeGreaterThan(120);
+  expect(continuityAware.progress).toBeLessThan(80);
 });
 
 test('orders curved-stream followers by route progress instead of world tangent projection', () => {
@@ -622,6 +853,19 @@ test('replans the next bottleneck on a shared multi-gate route', () => {
     if (planId > 0) planIds.add(planId);
   }
   expect(planIds.size).toBeGreaterThanOrEqual(2);
-  expect(squad.x).toBeGreaterThan(250);
+  const finalAgents = getCrowdAgentsForSquad(crowd, squad.id);
+  const totalWeight = finalAgents.reduce((sum, agent) => sum + Number(agent.weight || 0), 0);
+  const weightedBodyX = finalAgents.reduce(
+    (sum, agent) => sum + (Number(agent.x || 0) * Number(agent.weight || 0)),
+    0
+  ) / Math.max(1, totalWeight);
+  // squad.x is now the weighted physical body rather than a virtual leader;
+  // it need not equal the front-most destination point once the formation has
+  // reformed behind that point.
+  expect(squad.x).toBeGreaterThan(220);
+  expect(squad.x).toBeCloseTo(weightedBodyX, 1);
+  expect(Number(squad.navigationAnchor?.lead || 0)).toBeLessThanOrEqual(
+    Number(squad.bodyAnchor?.maxAnchorLead || 0) + 0.05
+  );
   expect(squad.order.type).toBe('IDLE');
 });

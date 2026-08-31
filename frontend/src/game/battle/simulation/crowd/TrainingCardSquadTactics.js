@@ -20,11 +20,17 @@ import { isTrainingCardSquad } from './TrainingSquadKind';
 import { DEFAULT_FORMATION_ID } from '../../../formation/defaultFormation';
 import {
   CARD_LOCOMOTION_STATE,
+  CARD_PASSAGE_GROUP_STATE,
   isTrainingCardAgentInStream,
   resolveTrainingCardPassageFlowIntent,
   updateTrainingCardPassageAgents,
   updateTrainingCardPassagePlan
 } from './TrainingCardPassage';
+import {
+  resolveTrainingCardBodyAnchor,
+  resolveTrainingCardFormationAnchor,
+  resolveTrainingCardNavigationAnchor
+} from './TrainingCardSquadBody';
 
 export const SQUAD_FORMATION_RUNTIME_STATE = Object.freeze({
   ASSEMBLE: 'ASSEMBLE',
@@ -64,6 +70,8 @@ const PASSAGE_EXIT_READY_RATIO = 0.82;
 const REFORM_STABLE_DURATION = 0.42;
 const MAX_CATCH_UP_MULTIPLIER = 1.34;
 const SUPPORT_MIN_HEALTH_DEFICIT = 0.035;
+const CARD_GROUP_OUTLIER_WEIGHT_RATIO = 0.08;
+const CARD_GROUP_SLOW_WEIGHT_RATIO = 0.1;
 
 const finiteNumber = (value, fallback = 0) => (
   Number.isFinite(Number(value)) ? Number(value) : fallback
@@ -151,6 +159,9 @@ const worldToLocal = (anchor = {}, point = {}) => {
 };
 
 const updateAnchor = (runtime = {}, squad = {}, forward = null) => {
+  const bodyAnchor = resolveTrainingCardBodyAnchor(squad) || squad;
+  const formationAnchor = resolveTrainingCardFormationAnchor(squad) || bodyAnchor;
+  const navigationAnchor = resolveTrainingCardNavigationAnchor(squad) || formationAnchor;
   const fallbackForward = normalizeVec(
     finiteNumber(squad?.dirX, 1),
     finiteNumber(squad?.dirY)
@@ -164,15 +175,38 @@ const updateAnchor = (runtime = {}, squad = {}, forward = null) => {
     : Math.atan2(
       resolvedForward.len > 0.0001 ? resolvedForward.y : fallbackForward.y,
       resolvedForward.len > 0.0001 ? resolvedForward.x : fallbackForward.x
-    );
+  );
   runtime.anchor = {
-    x: finiteNumber(squad?.x),
-    y: finiteNumber(squad?.y),
-    vx: finiteNumber(squad?.vx),
-    vy: finiteNumber(squad?.vy),
+    // Formation slots never read the legacy squad.x/y virtual leader.  CARD
+    // locomotion publishes a bounded formation anchor explicitly; the
+    // fallback remains body-first for restored/old saves.
+    x: finiteNumber(formationAnchor?.x, finiteNumber(bodyAnchor?.x, finiteNumber(squad?.x))),
+    y: finiteNumber(formationAnchor?.y, finiteNumber(bodyAnchor?.y, finiteNumber(squad?.y))),
+    vx: finiteNumber(formationAnchor?.vx),
+    vy: finiteNumber(formationAnchor?.vy),
     heading,
     forwardX: Math.cos(heading),
     forwardY: Math.sin(heading)
+  };
+  runtime.bodyAnchor = {
+    x: finiteNumber(bodyAnchor?.x, finiteNumber(squad?.x)),
+    y: finiteNumber(bodyAnchor?.y, finiteNumber(squad?.y)),
+    vx: finiteNumber(bodyAnchor?.vx),
+    vy: finiteNumber(bodyAnchor?.vy),
+    rearProgress: finiteNumber(bodyAnchor?.rearProgress),
+    bodyProgress: finiteNumber(bodyAnchor?.bodyProgress),
+    frontProgress: finiteNumber(bodyAnchor?.frontProgress),
+    maxAnchorLead: Math.max(0, finiteNumber(bodyAnchor?.maxAnchorLead))
+  };
+  runtime.navigationAnchor = {
+    x: finiteNumber(navigationAnchor?.x, runtime.anchor.x),
+    y: finiteNumber(navigationAnchor?.y, runtime.anchor.y),
+    routeProgress: finiteNumber(navigationAnchor?.routeProgress),
+    lead: Math.max(0, finiteNumber(navigationAnchor?.lead)),
+    lag: Math.max(0, finiteNumber(navigationAnchor?.lag)),
+    caughtUpToBody: navigationAnchor?.caughtUpToBody === true,
+    clampedToBody: navigationAnchor?.clampedToBody === true,
+    spatiallyClamped: navigationAnchor?.spatiallyClamped === true
   };
   return runtime.anchor;
 };
@@ -384,22 +418,26 @@ const resolveTerrainSample = ({
   nowSec = 0,
   runtime = null
 } = {}) => {
+  // This is retained for non-CARD/minion terrain compatibility only. CARD
+  // movement must always enter through updateTrainingCardPassagePlan so an
+  // old local-width probe can never become a second authority that filters
+  // detached/recovery mass or completes a passage by itself.
+  if (isTrainingCardSquad(squad)) {
+    return runtime?.terrain || {
+      state: SQUAD_FORMATION_RUNTIME_STATE.MARCH,
+      sampledAt: nowSec,
+      compression: 1,
+      longitudinalScale: 1,
+      columns: 1,
+      laneCount: 0,
+      passageId: 0
+    };
+  }
   const terrain = runtime?.terrain || {};
   const direction = normalizeVec(
     finiteNumber(forward?.x, finiteNumber(squad?.dirX, 1)),
     finiteNumber(forward?.y, finiteNumber(squad?.dirY))
   );
-  if (
-    isTrainingCardSquad(squad)
-    && (!Array.isArray(squad?._passageRoute) || squad._passageRoute.length <= 0)
-    && Array.isArray(squad?.waypoints)
-    && squad.waypoints.length > 0
-  ) {
-    squad._passageRoute = squad.waypoints.map((point) => ({
-      x: finiteNumber(point?.x),
-      y: finiteNumber(point?.y)
-    }));
-  }
   const safeDirection = direction.len > 0.0001 ? direction : { x: 1, y: 0 };
   const side = { x: -safeDirection.y, y: safeDirection.x };
   const spacing = resolveBaseSpacing(squad);
@@ -722,11 +760,20 @@ const resolveFormationSlot = ({
   };
 };
 
-const percentile = (values = [], ratio = 0.9) => {
-  if (!Array.isArray(values) || values.length <= 0) return 0;
-  const sorted = values.slice().sort((left, right) => left - right);
-  const index = clamp(Math.ceil(sorted.length * ratio) - 1, 0, sorted.length - 1);
-  return sorted[index] || 0;
+const weightedPercentile = (rows = [], ratio = 0.9, key = 'normalError') => {
+  const ordered = (Array.isArray(rows) ? rows : [])
+    .filter((row) => Number.isFinite(Number(row?.[key])) && finiteNumber(row?.weight) > 0.001)
+    .slice()
+    .sort((left, right) => finiteNumber(left?.[key]) - finiteNumber(right?.[key]));
+  const totalWeight = ordered.reduce((sum, row) => sum + Math.max(0, finiteNumber(row?.weight)), 0);
+  if (totalWeight <= 0.001) return 0;
+  const target = clamp(finiteNumber(ratio), 0, 1) * totalWeight;
+  let accumulated = 0;
+  for (let index = 0; index < ordered.length; index += 1) {
+    accumulated += Math.max(0, finiteNumber(ordered[index]?.weight));
+    if (accumulated + 0.0001 >= target) return finiteNumber(ordered[index]?.[key]);
+  }
+  return finiteNumber(ordered[ordered.length - 1]?.[key]);
 };
 
 const resolveCombatIntent = (squad = {}) => {
@@ -749,6 +796,7 @@ const refreshRuntimeDebug = (squad = {}, runtime = null) => {
   const terrain = runtime?.terrain || {};
   const combat = runtime?.combat || {};
   const passageDebug = runtime?.passageDebug || {};
+  const groupProgress = runtime?.groupProgress || {};
   squad.formationRuntime = {
     state: String(runtime?.formation?.state || SQUAD_FORMATION_RUNTIME_STATE.HOLD),
     requestedFormation: String(runtime?.formation?.requestedId || ''),
@@ -768,7 +816,28 @@ const refreshRuntimeDebug = (squad = {}, runtime = null) => {
       bodyCleared: terrain?.bodyCleared === true,
       rearCleared: terrain?.rearCleared === true
     },
-    corridorWidth: Number.isFinite(Number(terrain?.corridorWidth)) ? Number(terrain.corridorWidth) : null
+    corridorWidth: Number.isFinite(Number(terrain?.corridorWidth)) ? Number(terrain.corridorWidth) : null,
+    bodyAnchor: runtime?.bodyAnchor ? {
+      x: finiteNumber(runtime.bodyAnchor?.x),
+      y: finiteNumber(runtime.bodyAnchor?.y),
+      rearProgress: finiteNumber(runtime.bodyAnchor?.rearProgress),
+      bodyProgress: finiteNumber(runtime.bodyAnchor?.bodyProgress),
+      frontProgress: finiteNumber(runtime.bodyAnchor?.frontProgress),
+      maxAnchorLead: Math.max(0, finiteNumber(runtime.bodyAnchor?.maxAnchorLead))
+    } : null,
+    navigationAnchor: runtime?.navigationAnchor ? {
+      x: finiteNumber(runtime.navigationAnchor?.x),
+      y: finiteNumber(runtime.navigationAnchor?.y),
+      routeProgress: finiteNumber(runtime.navigationAnchor?.routeProgress),
+      lead: Math.max(0, finiteNumber(runtime.navigationAnchor?.lead)),
+      lag: Math.max(0, finiteNumber(runtime.navigationAnchor?.lag)),
+      caughtUpToBody: runtime.navigationAnchor?.caughtUpToBody === true,
+      clampedToBody: runtime.navigationAnchor?.clampedToBody === true,
+      spatiallyClamped: runtime.navigationAnchor?.spatiallyClamped === true
+    } : null,
+    passageGroupState: String(groupProgress?.state || CARD_PASSAGE_GROUP_STATE.FORMATION),
+    blockedWeight: Math.max(0, finiteNumber(groupProgress?.blockedWeight)),
+    behindGateWeight: Math.max(0, finiteNumber(groupProgress?.behindGateWeight))
   };
   squad.passagePlan = runtime?.passagePlan || null;
   squad.passageDebug = {
@@ -777,7 +846,17 @@ const refreshRuntimeDebug = (squad = {}, runtime = null) => {
     streamCount: Math.max(0, Math.floor(finiteNumber(passageDebug?.streamCount))),
     agentsApproaching: Math.max(0, Math.floor(finiteNumber(passageDebug?.agentsApproaching))),
     agentsStreaming: Math.max(0, Math.floor(finiteNumber(passageDebug?.agentsStreaming))),
-    agentsExiting: Math.max(0, Math.floor(finiteNumber(passageDebug?.agentsExiting)))
+    agentsExiting: Math.max(0, Math.floor(finiteNumber(passageDebug?.agentsExiting))),
+    groupState: String(passageDebug?.groupState || groupProgress?.state || CARD_PASSAGE_GROUP_STATE.FORMATION),
+    totalWeight: Math.max(0, finiteNumber(passageDebug?.totalWeight, groupProgress?.totalWeight)),
+    blockedWeight: Math.max(0, finiteNumber(passageDebug?.blockedWeight, groupProgress?.blockedWeight)),
+    detachedWeight: Math.max(0, finiteNumber(passageDebug?.detachedWeight, groupProgress?.detachedWeight)),
+    behindGateWeight: Math.max(0, finiteNumber(passageDebug?.behindGateWeight, groupProgress?.behindGateWeight)),
+    rearProgress: finiteNumber(passageDebug?.rearProgress, groupProgress?.rearProgress),
+    bodyProgress: finiteNumber(passageDebug?.bodyProgress, groupProgress?.bodyProgress),
+    frontProgress: finiteNumber(passageDebug?.frontProgress, groupProgress?.frontProgress),
+    tailPending: passageDebug?.tailPending === true,
+    groupBlocked: passageDebug?.groupBlocked === true
   };
   squad.combatRuntime = {
     state: String(combat?.state || SQUAD_COMBAT_RUNTIME_STATE.NONE),
@@ -844,6 +923,20 @@ export const ensureSquadControllerRuntime = ({
         agentsApproaching: 0,
         agentsStreaming: 0,
         agentsExiting: 0
+      },
+      groupProgress: {
+        state: CARD_PASSAGE_GROUP_STATE.FORMATION,
+        anchorSpeedScale: 1,
+        tailPending: false,
+        totalWeight: 0,
+        blockedWeight: 0,
+        behindGateWeight: 0,
+        detachedWeight: 0,
+        rearProgress: 0,
+        bodyProgress: 0,
+        frontProgress: 0,
+        needsReplan: false,
+        replannedAt: 0
       },
       cohesion: {
         readyRatio: 1,
@@ -1084,7 +1177,13 @@ export const prepareSquadControllerFrame = ({
         && Array.isArray(squad?.waypoints)
         && squad.waypoints.length > 0
       ) {
-        const anchor = { x: finiteNumber(squad?.x), y: finiteNumber(squad?.y) };
+        const navigationAnchor = resolveTrainingCardBodyAnchor(squad)
+          || resolveTrainingCardNavigationAnchor(squad)
+          || squad;
+        const anchor = {
+          x: finiteNumber(navigationAnchor?.x, finiteNumber(squad?.x)),
+          y: finiteNumber(navigationAnchor?.y, finiteNumber(squad?.y))
+        };
         squad._passagePlanRoute = [anchor, ...squad.waypoints.map((point) => ({
           x: finiteNumber(point?.x),
           y: finiteNumber(point?.y)
@@ -1141,15 +1240,29 @@ export const prepareSquadControllerFrame = ({
       agentsStreaming: streaming,
       agentsExiting: exiting,
       passageActive: approaching + streaming + exiting > 0
+        || runtime?.groupProgress?.tailPending === true
     };
   }
   if (!isTrainingCardSquad(squad)) updatePassageFlowAssignments({ runtime, agents, orderedAgents });
   const anchor = updateAnchor(runtime, squad, direction);
   const spacing = resolveBaseSpacing(squad);
-  const followers = orderedAgents.filter((agent) => !agent.isFlagBearer);
+  const bodyGateAnchor = runtime?.bodyAnchor && typeof runtime.bodyAnchor === 'object'
+    ? {
+      ...runtime.bodyAnchor,
+      heading: finiteNumber(runtime?.anchor?.heading, finiteNumber(runtime.bodyAnchor?.heading))
+    }
+    : anchor;
+  // CARD flag bearers are physical representatives.  Do not silently remove
+  // their troop weight from formation, passage, or cohesion accounting.
+  const followers = orderedAgents;
   const rearExtent = resolveRearExtent(followers, spacing, followers);
+  const groupProgress = runtime?.groupProgress || {};
+  const groupState = String(groupProgress?.state || CARD_PASSAGE_GROUP_STATE.FORMATION);
+  const groupBlocked = groupState === CARD_PASSAGE_GROUP_STATE.GROUP_BLOCKED;
   const passageFlowActive = runtime?.terrain?.state === SQUAD_FORMATION_RUNTIME_STATE.PASSAGE
-    || runtime?.terrain?.state === SQUAD_FORMATION_RUNTIME_STATE.EXPAND;
+    || runtime?.terrain?.state === SQUAD_FORMATION_RUNTIME_STATE.COMPRESS
+    || runtime?.terrain?.state === SQUAD_FORMATION_RUNTIME_STATE.EXPAND
+    || groupState === CARD_PASSAGE_GROUP_STATE.GROUP_BLOCKED;
   const rows = [];
   followers.forEach((agent, index) => {
     const fallback = fallbackSlotForIndex(index, resolveFormationColumns(squad, followers.length, spacing), spacing);
@@ -1183,10 +1296,12 @@ export const prepareSquadControllerFrame = ({
       || agent?._formationRecovery?.active === true
     );
     const recoveryThroughPassage = agent?._formationRecovery?.passageRecovery === true;
-    const needsGateForDetachedAgent = !recoveryThroughPassage
+    const needsGateForDetachedAgent = !groupBlocked
+      && !recoveryThroughPassage
       && initiallyDetached
       && normalError >= spacing * 1.45;
-    const needsGateForNormalAgent = !passageFlowActive
+    const needsGateForNormalAgent = !groupBlocked
+      && !passageFlowActive
       && normalError >= triggerDistance
       && lag >= spacing * 2.1;
     if (!rejoin && (needsGateForDetachedAgent || needsGateForNormalAgent)) {
@@ -1195,29 +1310,29 @@ export const prepareSquadControllerFrame = ({
         front: -rearExtent - (spacing * 1.15)
       };
       const gateSlot = resolveLegalRejoinGateSlot({
-        anchor,
+        // A recovery target is a catchable rear/body corridor gate, never an
+        // exact formation slot that keeps crossing the obstacle with the
+        // virtual anchor.
+        anchor: bodyGateAnchor,
         requestedSlot: requestedGateSlot,
         sim,
         walls,
         spacing
       });
-      const snapshotGate = needsGateForDetachedAgent;
-      const gate = localToWorld(anchor, gateSlot);
+      const gate = localToWorld(bodyGateAnchor, gateSlot);
       rejoin = {
         active: true,
         phase: 'GATE',
         startedAt: nowSec,
         gateSlot,
-        gateMode: snapshotGate ? 'SNAPSHOT' : 'FOLLOWING',
-        ...(snapshotGate ? {
-          gateX: gate.x,
-          gateY: gate.y,
-          gateUpdatedAt: nowSec
-        } : {})
+        gateMode: 'SNAPSHOT',
+        gateX: gate.x,
+        gateY: gate.y,
+        gateUpdatedAt: nowSec
       };
       // A rejoiner is a detached individual even when it did not originate
-      // from a terrain recovery.  Keep it out of core cohesion and flow until
-      // it has actually reached its persistent slot again.
+      // from a terrain recovery.  It remains in group mass/tail accounting;
+      // only its short-range steering is delegated to this stable gate.
       agent._formationDetached = true;
     }
     if (rejoin?.active) agent._formationDetached = true;
@@ -1232,7 +1347,7 @@ export const prepareSquadControllerFrame = ({
       // the tactical gate is first created.  Freeze that far-away gate at
       // the current rear/body corridor so it cannot keep retreating with the
       // moving anchor for the entire recovery route.
-      const gate = localToWorld(anchor, rejoin.gateSlot);
+      const gate = localToWorld(bodyGateAnchor, rejoin.gateSlot);
       rejoin = {
         ...rejoin,
         gateMode: 'SNAPSHOT',
@@ -1244,17 +1359,17 @@ export const prepareSquadControllerFrame = ({
     if (rejoin?.active && rejoin.phase === 'GATE') {
       const gate = Number.isFinite(Number(rejoin?.gateX)) && Number.isFinite(Number(rejoin?.gateY))
         ? { x: Number(rejoin.gateX), y: Number(rejoin.gateY) }
-        : localToWorld(anchor, rejoin.gateSlot);
-      const movingGate = localToWorld(anchor, rejoin.gateSlot);
+        : localToWorld(bodyGateAnchor, rejoin.gateSlot);
+      const movingGate = localToWorld(bodyGateAnchor, rejoin.gateSlot);
       const gateDrift = Math.hypot(movingGate.x - gate.x, movingGate.y - gate.y);
       const gateDistance = Math.hypot(gate.x - finiteNumber(agent?.x), gate.y - finiteNumber(agent?.y));
       if (gateDistance <= spacing * 1.22) {
         if (rejoin.gateMode !== 'SNAPSHOT' || gateDrift <= spacing * 3.2) {
           rejoin = { ...rejoin, phase: 'SLOT', reachedAt: nowSec };
         } else {
-          // The squad has moved on while this unit was approaching the old
-          // snapshot.  Refresh only after it reached that snapshot, so the
-          // target remains catchable instead of continuously escaping.
+          // The body may have advanced while this unit approached the old
+          // gate.  Refresh only after it reached that snapshot, and refresh
+          // toward the current body corridor rather than the formation lead.
           rejoin = {
             ...rejoin,
             gateX: movingGate.x,
@@ -1290,70 +1405,72 @@ export const prepareSquadControllerFrame = ({
     });
     rows.push({
       agent,
+      weight: Math.max(0, finiteNumber(agent?.weight, 1)),
       normalError,
       lag,
       rejoining: !!rejoin?.active,
       detached
     });
   });
-  // Detached/rejoining agents recover through a gate and must not turn a few
-  // pathological positions into a global march brake.  Cohesion is measured
-  // from the healthy body with percentile statistics, while the detached
-  // ratio is separately allowed to matter only when it is genuinely large.
-  const coreRows = rows.filter((row) => !row.detached);
-  const cohesionRows = coreRows.length > 0 ? coreRows : [];
-  const errors = cohesionRows.map((row) => row.normalError);
+  // A detached/recovery/rejoin member remains part of CARD cohesion.  The
+  // only exception is a passage classifier that has already proved it is a
+  // persistent, tiny, isolated outlier (capped by troop weight in Passage).
+  const cohortRows = rows.filter((row) => row?.agent?._squadController?.passageOutlier?.active !== true);
+  const cohesionRows = cohortRows.length > 0 ? cohortRows : rows;
+  const cohesionWeight = cohesionRows.reduce((sum, row) => sum + Math.max(0, finiteNumber(row?.weight)), 0);
   const allErrors = rows.map((row) => row.normalError);
-  const sumSquared = errors.reduce((sum, value) => sum + (value * value), 0);
   const maximumError = allErrors.length > 0 ? Math.max(...allErrors) : 0;
-  const upperError = percentile(errors, 0.9);
-  const averageError = errors.reduce((sum, value) => sum + value, 0) / Math.max(1, errors.length);
-  const rmsError = Math.sqrt(sumSquared / Math.max(1, errors.length));
+  const upperError = weightedPercentile(cohesionRows, 0.9, 'normalError');
+  const averageError = cohesionRows.reduce((sum, row) => (
+    sum + (row.normalError * Math.max(0, finiteNumber(row?.weight)))
+  ), 0) / Math.max(0.001, cohesionWeight);
+  const rmsError = Math.sqrt(cohesionRows.reduce((sum, row) => (
+    sum + (row.normalError * row.normalError * Math.max(0, finiteNumber(row?.weight)))
+  ), 0) / Math.max(0.001, cohesionWeight));
   const readyThreshold = Math.max(2.4, spacing * 0.68);
-  const readyRatio = cohesionRows.filter((row) => row.normalError <= readyThreshold).length
-    / Math.max(1, cohesionRows.length);
-  const maxLag = percentile(cohesionRows.map((row) => row.lag), 0.9);
+  const readyWeight = cohesionRows
+    .filter((row) => row.normalError <= readyThreshold)
+    .reduce((sum, row) => sum + Math.max(0, finiteNumber(row?.weight)), 0);
+  const readyRatio = readyWeight / Math.max(0.001, cohesionWeight);
+  const maxLag = weightedPercentile(cohesionRows, 0.9, 'lag');
   const rejoiningCount = rows.filter((row) => row.rejoining).length;
   const detachedCount = rows.filter((row) => row.detached).length;
   const detachedRatio = detachedCount / Math.max(1, rows.length);
   const totalWeight = rows.reduce((sum, row) => (
-    sum + Math.max(0, finiteNumber(row?.agent?.weight, 1))
+    sum + Math.max(0, finiteNumber(row?.weight))
   ), 0);
   const detachedWeight = rows
     .filter((row) => row.detached)
-    .reduce((sum, row) => sum + Math.max(0, finiteNumber(row?.agent?.weight, 1)), 0);
-  const detachedWeightRatio = detachedWeight / Math.max(0.001, totalWeight);
+    .reduce((sum, row) => sum + Math.max(0, finiteNumber(row?.weight)), 0);
+  const groupDetachedWeight = Math.max(detachedWeight, finiteNumber(groupProgress?.detachedWeight));
+  const detachedWeightRatio = groupDetachedWeight / Math.max(0.001, totalWeight);
+  const blockedWeight = Math.max(0, finiteNumber(groupProgress?.blockedWeight));
+  const blockedWeightRatio = blockedWeight / Math.max(0.001, finiteNumber(groupProgress?.trackedWeight, totalWeight));
   const softError = Math.max(spacing * 1.35, 8);
   const hardError = Math.max(spacing * 4.1, 32);
   const unreadyPressure = clamp((upperError - softError) / Math.max(1, hardError - softError), 0, 1);
   const readyPressure = clamp((0.78 - readyRatio) / 0.78, 0, 1);
-  // A handful of representatives is intentionally an outlier allowance, not
-  // a miniature quorum.  This keeps a single blocked flank slot from braking
-  // the CARD anchor in small focused formations as well as in a large army.
-  // Once the count exceeds the allowance, troop weight decides how serious
-  // the detached body really is.
-  const detachedOutlierAllowance = Math.max(1, Math.floor(rows.length * 0.08));
-  const hasDetachedBody = detachedCount > detachedOutlierAllowance;
-  const detachedPressure = hasDetachedBody
-    ? clamp((detachedWeightRatio - 0.12) / 0.56, 0, 1)
-    : 0;
-  const bodyDisruption = hasDetachedBody && detachedWeightRatio >= 0.42
-    ? (unreadyPressure * 0.22) + (readyPressure * 0.1)
-    : 0;
-  let speedScale = moving
-    ? clamp(
-      1
-        - (passageFlowActive ? 0 : bodyDisruption)
-        - (detachedPressure * 0.34),
-      0.6,
-      1
+  const detachedPressure = clamp((detachedWeightRatio - CARD_GROUP_OUTLIER_WEIGHT_RATIO) / 0.52, 0, 1);
+  const blockedPressure = clamp((blockedWeightRatio - CARD_GROUP_SLOW_WEIGHT_RATIO) / 0.58, 0, 1);
+  const formationPressure = passageFlowActive
+    ? Math.max(detachedPressure, blockedPressure)
+    : Math.max(detachedPressure, (unreadyPressure * 0.42) + (readyPressure * 0.24));
+  const speedScale = !moving
+    ? 1
+    : (groupBlocked
+      ? 0
+      : clamp(1 - (formationPressure * 0.56), 0.24, 1));
+  const waiting = moving && (
+    groupBlocked
+    || (
+      blockedWeightRatio >= 0.18
+      && finiteNumber(groupProgress?.stallFor) >= 0.45
     )
-    : 1;
-  // Passage flow deliberately prioritizes continuous forward throughput.  A
-  // handful of rejoiners no longer caps this value; only a major detached
-  // ratio can make the formation itself slow down.
-  const waiting = false;
-  const severeSince = 0;
+  );
+  const previousSevereSince = finiteNumber(runtime?.cohesion?.severeSince);
+  const severeSince = waiting
+    ? (previousSevereSince > 0 ? previousSevereSince : nowSec)
+    : 0;
   rows.forEach((row) => {
     const gain = clamp(
       (row.normalError - (spacing * 1.3)) / Math.max(1, spacing * 5.2),
@@ -1377,7 +1494,11 @@ export const prepareSquadControllerFrame = ({
     rejoiningCount,
     detachedCount,
     detachedRatio,
+    detachedWeight: groupDetachedWeight,
     detachedWeightRatio,
+    blockedWeight,
+    blockedWeightRatio,
+    groupState,
     speedScale,
     waiting,
     severeSince
@@ -1423,12 +1544,20 @@ export const prepareSquadControllerFrame = ({
     maxLag,
     detachedCount,
     detachedRatio,
-    detachedWeightRatio
+    detachedWeight: groupDetachedWeight,
+    detachedWeightRatio,
+    blockedWeight,
+    blockedWeightRatio,
+    groupState
   };
   squad._formationCohesionSpeedScale = speedScale;
-  squad.formationCohesionState = waiting
-    ? 'REGROUPING'
-    : (detachedCount > 0 ? 'REJOINING' : (speedScale < 0.98 ? 'SLOWING' : 'COHESIVE'));
+  squad.formationCohesionState = groupBlocked
+    ? 'GROUP_BLOCKED'
+    : (waiting
+      ? 'REGROUPING'
+      : (detachedCount > 0
+        ? 'REJOINING'
+        : (speedScale < 0.98 ? 'SLOWING' : 'COHESIVE')));
   squad.formationCohesionError = upperError;
   // Compatibility/debug mirror only.  CrowdSim no longer consumes this for
   // CARD steering; the controller's PASSAGE_FLOW intent is the source of
