@@ -694,9 +694,15 @@ export const createTrainingCardPassagePlan = ({
     options,
     formationWidth
   });
+  // `endProgress` intentionally includes a generous reformation envelope.
+  // Keeping a completed plan alive until the rear reaches that envelope makes
+  // two nearby gates look like one indefinitely: the normal formation reaches
+  // the next gate while the old plan is still reporting EXPAND.  The shared
+  // tail is authoritative instead; once it has cleared the actual passage
+  // progress, select the next bottleneck from the same route.
   const previousPlanStillRelevant = !previousPlan
-    || finiteNumber(previousPlan?.endProgress, Infinity)
-      >= finiteNumber(minimumProgress) - Math.max(options.exitClearDistance, options.scanStep);
+    || finiteNumber(previousPlan?.clearProgress, previousPlan?.endProgress)
+      >= finiteNumber(minimumProgress) - Math.max(0.5, options.scanStep * 0.18);
   if (
     !force
     && previousPlan
@@ -1245,6 +1251,15 @@ export const resolveTrainingCardPassageGroupProgress = ({
         : null);
       const terrainBlockedAt = finiteNumber(agent?._terrainBlockedAt);
       const blockedRecently = terrainBlockedAt > 0 && nowSec - terrainBlockedAt <= 0.9;
+      const solverMode = String(state?.locomotionDebug?.mode || '');
+      // A bounded MARCH_ELASTIC offset is deliberately a local formation
+      // deformation, not evidence that the shared route has failed.  Passage
+      // still owns stream collisions/watchdogs, and true route blockage still
+      // escalates through them; this prevents one bypassable flank tower from
+      // turning a whole open formation into GROUP_BLOCKED.
+      const locallyElastic = solverMode === 'MARCH_ELASTIC'
+        || solverMode === 'FORM_UP'
+        || solverMode === 'REFORM';
       return {
         agent,
         row,
@@ -1252,7 +1267,7 @@ export const resolveTrainingCardPassageGroupProgress = ({
         progress: finiteNumber(projection?.progress),
         weight: passageParticipantWeight(agent),
         detached: isPassageDetachedAgent(agent),
-        terrainBlocked: blockedRecently || agent?._nextFormationStepIllegal === true,
+        terrainBlocked: !locallyElastic && (blockedRecently || agent?._nextFormationStepIllegal === true),
         streamBlocked: state?.streamWatchdog?.stalled === true,
         completedCurrentPassage: row?.completedCurrentPassage === true
       };

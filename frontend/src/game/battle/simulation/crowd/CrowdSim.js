@@ -63,6 +63,7 @@ import {
   updateTrainingMinionSquadAiFrame
 } from './TrainingNonCardSquadAi';
 import {
+  CARD_FORMATION_LOCOMOTION_MODE,
   clearTrainingCardAiState,
   completeTrainingCardSquadAiFrame,
   isTrainingMapAiTargetDeferred,
@@ -1117,11 +1118,31 @@ const resolveSquadFormationPose = (squad = {}) => ({
     : resolveSquadFormationFacing(squad)
 });
 
+const resolveCardFormationSlotRadius = (agents = []) => (
+  (Array.isArray(agents) ? agents : []).reduce((maximum, agent) => {
+    if (!agent || agent.dead || (Number(agent?.weight) || 0) <= 0.001) return maximum;
+    const slot = agent?._squadController?.normalSlot || agent?.formationSlot || {};
+    return Math.max(maximum, Math.hypot(Number(slot?.side) || 0, Number(slot?.front) || 0));
+  }, 0)
+);
+
+const resolveCardFormationMaxSlotSpeed = ({ previous = null, current = null, agents = [], dt = 0 } = {}) => {
+  const safeDt = Math.max(0.001, Number(dt) || 0.016);
+  return (Array.isArray(agents) ? agents : []).reduce((maximum, agent) => {
+    if (!agent || agent.dead || (Number(agent?.weight) || 0) <= 0.001) return maximum;
+    const slot = agent?._squadController?.normalSlot || agent?.formationSlot || {};
+    const before = formationLocalToWorld(previous, slot);
+    const after = formationLocalToWorld(current, slot);
+    return Math.max(maximum, Math.hypot(after.x - before.x, after.y - before.y) / safeDt);
+  }, 0);
+};
+
 const advanceSquadFormationPose = (
   squad = null,
   movementForward = null,
   previousPose = null,
-  dt = 0
+  dt = 0,
+  { agents = [], maxSlotSpeed = Infinity } = {}
 ) => {
   const previous = previousPose || resolveSquadFormationPose(squad);
   const movement = normalizeVec(movementForward?.x, movementForward?.y);
@@ -1138,6 +1159,11 @@ const advanceSquadFormationPose = (
     squad._formationPoseX = current.x;
     squad._formationPoseY = current.y;
     squad._formationPoseYaw = current.yaw;
+    if (isTrainingCardSquad(squad)) {
+      squad._cardFormationAngularSpeed = 0;
+      squad._cardFormationSlotRadius = resolveCardFormationSlotRadius(agents);
+      squad._cardMaxSlotTargetSpeed = resolveCardFormationMaxSlotSpeed({ previous, current, agents, dt });
+    }
     return {
       previous,
       current,
@@ -1166,8 +1192,42 @@ const advanceSquadFormationPose = (
     };
   }
   const targetFacingRad = directionRad - directionOffsetRad;
-  const maxTurn = FORMATION_MARCH_TURN_RATE * Math.max(0, Number(dt) || 0);
-  const facingStep = clamp(normalizeAngleDelta(targetFacingRad - previous.yaw), -maxTurn, maxTurn);
+  const safeDt = Math.max(0.001, Number(dt) || 0.016);
+  const maxTurn = FORMATION_MARCH_TURN_RATE * safeDt;
+  const requestedFacingStep = clamp(normalizeAngleDelta(targetFacingRad - previous.yaw), -maxTurn, maxTurn);
+  let facingStep = requestedFacingStep;
+  const cardSlotBudget = Math.max(0, Number(maxSlotSpeed) || 0);
+  if (isTrainingCardSquad(squad) && Number.isFinite(cardSlotBudget) && cardSlotBudget > 0 && agents.length > 0) {
+    const sign = requestedFacingStep < 0 ? -1 : 1;
+    const candidateAt = (magnitude) => ({
+      ...current,
+      yaw: previous.yaw + (sign * magnitude)
+    });
+    const requestedSpeed = resolveCardFormationMaxSlotSpeed({
+      previous,
+      current: candidateAt(Math.abs(requestedFacingStep)),
+      agents,
+      dt: safeDt
+    });
+    if (requestedSpeed > cardSlotBudget + 0.001) {
+      let low = 0;
+      let high = Math.abs(requestedFacingStep);
+      // A small fixed search keeps formation turn bounds deterministic while
+      // accounting for the actual asymmetric slots, not just a nominal width.
+      for (let iteration = 0; iteration < 14; iteration += 1) {
+        const middle = (low + high) * 0.5;
+        const speed = resolveCardFormationMaxSlotSpeed({
+          previous,
+          current: candidateAt(middle),
+          agents,
+          dt: safeDt
+        });
+        if (speed <= cardSlotBudget) low = middle;
+        else high = middle;
+      }
+      facingStep = sign * low;
+    }
+  }
   current.yaw = previous.yaw + facingStep;
   squad.formationRect.facingRad = current.yaw;
   squad.formationRect.directionOffsetRad = directionOffsetRad;
@@ -1175,6 +1235,11 @@ const advanceSquadFormationPose = (
   squad._formationPoseX = current.x;
   squad._formationPoseY = current.y;
   squad._formationPoseYaw = current.yaw;
+  if (isTrainingCardSquad(squad)) {
+    squad._cardFormationAngularSpeed = facingStep / safeDt;
+    squad._cardFormationSlotRadius = resolveCardFormationSlotRadius(agents);
+    squad._cardMaxSlotTargetSpeed = resolveCardFormationMaxSlotSpeed({ previous, current, agents, dt: safeDt });
+  }
   return {
     previous,
     current,
@@ -1531,7 +1596,8 @@ const advanceAgentFormationPosition = (
   previousPose = null,
   currentPose = null,
   dt = 0,
-  lockSpacing = ''
+  lockSpacing = '',
+  maxRejoinDistance = Infinity
 ) => {
   const targetSlot = normalizeFormationSlot(slot);
   const previousLocal = formationWorldToLocal(previousPose, agent);
@@ -1543,10 +1609,17 @@ const advanceAgentFormationPosition = (
   if (locked && slotError > FORMATION_SLOT_RELEASE_DISTANCE) locked = false;
   let nextLocal = targetSlot;
   if (!locked) {
-    const alpha = 1 - Math.exp(-FORMATION_SLOT_REJOIN_HZ * Math.max(0, Number(dt) || 0));
+    const errorSide = targetSlot.side - previousLocal.side;
+    const errorFront = targetSlot.front - previousLocal.front;
+    const localError = Math.hypot(errorSide, errorFront);
+    const nominalAlpha = 1 - Math.exp(-FORMATION_SLOT_REJOIN_HZ * Math.max(0, Number(dt) || 0));
+    const allowedAlpha = Number.isFinite(Number(maxRejoinDistance)) && localError > 0.0001
+      ? Math.min(1, Math.max(0, Number(maxRejoinDistance) || 0) / localError)
+      : 1;
+    const alpha = Math.min(nominalAlpha, allowedAlpha);
     nextLocal = {
-      side: previousLocal.side + ((targetSlot.side - previousLocal.side) * alpha),
-      front: previousLocal.front + ((targetSlot.front - previousLocal.front) * alpha)
+      side: previousLocal.side + (errorSide * alpha),
+      front: previousLocal.front + (errorFront * alpha)
     };
     if (Math.hypot(
       nextLocal.side - targetSlot.side,
@@ -1593,6 +1666,807 @@ const resolveDirectFormationVelocity = ({
     distance,
     relativeSpeed
   };
+};
+
+const writeCardLocomotionDebug = ({
+  agent = null,
+  mode = CARD_FORMATION_LOCOMOTION_MODE.FORM_UP,
+  slot = null,
+  slotTarget = null,
+  targetSlotVx = 0,
+  targetSlotVy = 0,
+  blocked = false,
+  elasticOffset = null
+} = {}) => {
+  if (!agent) return;
+  const controller = agent?._squadController && typeof agent._squadController === 'object'
+    ? agent._squadController
+    : {};
+  const target = slotTarget || { x: Number(agent?.x) || 0, y: Number(agent?.y) || 0 };
+  const slotError = Math.hypot(
+    target.x - (Number(agent?.x) || 0),
+    target.y - (Number(agent?.y) || 0)
+  );
+  agent._squadController = {
+    ...controller,
+    elasticOffset: elasticOffset || controller?.elasticOffset || { side: 0, front: 0 },
+    locomotionDebug: {
+      mode,
+      slotId: String(controller?.slotKey ?? agent?.slotOrder ?? agent?.id ?? ''),
+      slotSide: Number(slot?.side) || 0,
+      slotFront: Number(slot?.front) || 0,
+      slotError,
+      targetSlotSpeed: Math.hypot(targetSlotVx, targetSlotVy),
+      blocked: blocked === true
+    }
+  };
+};
+
+const finishCardLocomotionStep = ({
+  agent = null,
+  x = 0,
+  y = 0,
+  dt = 0,
+  formationYaw = 0,
+  mode = CARD_FORMATION_LOCOMOTION_MODE.FORM_UP,
+  slot = null,
+  slotTarget = null,
+  targetSlotVx = 0,
+  targetSlotVy = 0,
+  blocked = false,
+  elasticOffset = null,
+  locked = false,
+  faceFormation = true
+} = {}) => {
+  if (!agent) return;
+  const safeDt = Math.max(0.001, Number(dt) || 0.016);
+  const previousX = Number(agent?.x) || 0;
+  const previousY = Number(agent?.y) || 0;
+  agent.x = Number(x) || 0;
+  agent.y = Number(y) || 0;
+  agent.vx = (agent.x - previousX) / safeDt;
+  agent.vy = (agent.y - previousY) / safeDt;
+  agent._formationLocked = locked === true;
+  agent._formationHold = locked === true;
+  agent._formationHoldSpacing = locked ? 'card-persistent' : '';
+  agent._nextFormationStepIllegal = blocked === true;
+  agent.hitTimer = Math.max(0, (Number(agent?.hitTimer) || 0) - safeDt);
+  if (faceFormation) agent.yaw = formationYaw;
+  else updateAgentYawFromVelocity(agent, agent.vx, agent.vy, safeDt);
+  agent.state = Math.abs(agent.vx) + Math.abs(agent.vy) > 0.08 ? 'move' : 'idle';
+  writeCardLocomotionDebug({
+    agent,
+    mode,
+    slot,
+    slotTarget,
+    targetSlotVx,
+    targetSlotVy,
+    blocked,
+    elasticOffset
+  });
+};
+
+const resolveCardMotionCommit = ({
+  agent = null,
+  sim = null,
+  walls = [],
+  dt = 0,
+  vx = 0,
+  vy = 0,
+  maxSpeed = Infinity
+} = {}) => {
+  const safeDt = Math.max(0.001, Number(dt) || 0.016);
+  const start = { x: Number(agent?.x) || 0, y: Number(agent?.y) || 0 };
+  const capped = clampVecLength(vx, vy, Math.max(0, Number(maxSpeed) || 0));
+  const requested = {
+    x: start.x + (capped.x * safeDt),
+    y: start.y + (capped.y * safeDt)
+  };
+  const radius = (Number(agent?.radius) || AGENT_RADIUS) + 0.5;
+  const swept = resolveSweptObstacleStep(start, requested, walls, radius);
+  let nextX = swept.x;
+  let nextY = swept.y;
+  let pushed = false;
+  const collisionWalls = queryObstacleCandidates(walls, nextX, nextY, radius, []);
+  collisionWalls.forEach((wall) => {
+    if (!wall || wall.destroyed) return;
+    const resolved = pushOutOfRect({ x: nextX, y: nextY }, wall, radius);
+    if (!resolved?.pushed) return;
+    nextX = resolved.x;
+    nextY = resolved.y;
+    pushed = true;
+  });
+  const halfW = (Number(sim?.field?.width) || 2700) * 0.5;
+  const halfH = (Number(sim?.field?.height) || 1488) * 0.5;
+  const clampedX = clamp(nextX, -halfW + 2, halfW - 2);
+  const clampedY = clamp(nextY, -halfH + 2, halfH - 2);
+  const fieldBlocked = Math.abs(clampedX - nextX) > 0.001 || Math.abs(clampedY - nextY) > 0.001;
+  const terrain = resolveTrainingLegalMovementStep({
+    sim,
+    start,
+    target: { x: clampedX, y: clampedY },
+    walls,
+    radius
+  });
+  const terrainBlocked = terrain.legal !== true;
+  return {
+    x: terrain.x,
+    y: terrain.y,
+    blocked: swept.collided || pushed || fieldBlocked || terrainBlocked,
+    obstacle: swept.obstacle || null
+  };
+};
+
+const resolveCardElasticOffset = (agent = null) => {
+  const offset = agent?._squadController?.elasticOffset;
+  return {
+    side: Number.isFinite(Number(offset?.side)) ? Number(offset.side) : 0,
+    front: Number.isFinite(Number(offset?.front)) ? Number(offset.front) : 0
+  };
+};
+
+const resolveCardElasticDebugMode = (mode, active) => {
+  if (mode === CARD_FORMATION_LOCOMOTION_MODE.MARCH_LOCKED && active) {
+    return CARD_FORMATION_LOCOMOTION_MODE.MARCH_ELASTIC;
+  }
+  if (mode === CARD_FORMATION_LOCOMOTION_MODE.MARCH_ELASTIC && !active) {
+    return CARD_FORMATION_LOCOMOTION_MODE.MARCH_LOCKED;
+  }
+  return mode;
+};
+
+const markCardElasticPressure = (runtime = null, nowSec = 0) => {
+  if (!runtime || typeof runtime !== 'object') return;
+  const locomotion = runtime?.locomotion && typeof runtime.locomotion === 'object'
+    ? runtime.locomotion
+    : {};
+  runtime.locomotion = {
+    ...locomotion,
+    elasticUntil: Math.max(Number(locomotion?.elasticUntil) || 0, nowSec + 0.34)
+  };
+};
+
+const tryCardLockedFormationTransport = ({
+  agent = null,
+  slot = null,
+  formationPose = null,
+  sim = null,
+  walls = [],
+  dt = 0,
+  speed = 0,
+  slotTarget = null,
+  targetSlotVx = 0,
+  targetSlotVy = 0
+} = {}) => {
+  if (!agent || !formationPose) return { handled: false, blocked: false };
+  const safeDt = Math.max(0.001, Number(dt) || 0.016);
+  const previousX = Number(agent?.x) || 0;
+  const previousY = Number(agent?.y) || 0;
+  const formationStep = advanceAgentFormationPosition(
+    agent,
+    slot,
+    formationPose.previous,
+    formationPose.current,
+    safeDt,
+    'card-persistent',
+    Math.max(0.25, Number(speed) || 0) * safeDt * 1.04
+  );
+  const radius = (Number(agent?.radius) || AGENT_RADIUS) + 0.5;
+  const swept = resolveSweptObstacleStep(
+    { x: previousX, y: previousY },
+    formationStep,
+    walls,
+    radius
+  );
+  const halfW = (Number(sim?.field?.width) || 2700) * 0.5;
+  const halfH = (Number(sim?.field?.height) || 1488) * 0.5;
+  const insideField = formationStep.x >= -halfW + 2
+    && formationStep.x <= halfW - 2
+    && formationStep.y >= -halfH + 2
+    && formationStep.y <= halfH - 2;
+  const legal = !swept.collided && insideField && isTrainingMovementSegmentTraversable({
+    sim,
+    start: { x: previousX, y: previousY },
+    target: formationStep,
+    walls,
+    radius
+  });
+  if (!legal) {
+    agent._nextFormationStepIllegal = true;
+    agent._formationLocked = false;
+    return { handled: false, blocked: true, obstacle: swept.obstacle || null };
+  }
+  finishCardLocomotionStep({
+    agent,
+    x: formationStep.x,
+    y: formationStep.y,
+    dt: safeDt,
+    formationYaw: formationPose.current.yaw,
+    mode: CARD_FORMATION_LOCOMOTION_MODE.MARCH_LOCKED,
+    slot,
+    slotTarget,
+    targetSlotVx,
+    targetSlotVy,
+    blocked: false,
+    elasticOffset: { side: 0, front: 0 },
+    locked: formationStep.locked === true,
+    faceFormation: true
+  });
+  return { handled: true, blocked: false };
+};
+
+const stepCardMarchElastic = ({
+  agent = null,
+  runtime = null,
+  slot = null,
+  formationPose = null,
+  sim = null,
+  walls = [],
+  neighbors = [],
+  dt = 0,
+  speed = 0,
+  spacing = 0,
+  nowSec = 0,
+  targetSlotVx = 0,
+  targetSlotVy = 0,
+  mode = CARD_FORMATION_LOCOMOTION_MODE.MARCH_ELASTIC,
+  forceBlocked = false,
+  slotBlocked = false,
+  blockedObstacle = null
+} = {}) => {
+  if (!agent || !formationPose) return false;
+  const safeDt = Math.max(0.001, Number(dt) || 0.016);
+  const baseSlot = normalizeFormationSlot(slot);
+  const currentOffset = resolveCardElasticOffset(agent);
+  const maxSide = Math.max(AGENT_RADIUS * 0.75, Number(spacing) * 0.82);
+  const maxFront = Math.max(AGENT_RADIUS * 0.65, Number(spacing) * 0.66);
+  const initialTarget = formationLocalToWorld(formationPose.current, {
+    side: baseSlot.side + currentOffset.side,
+    front: baseSlot.front + currentOffset.front
+  });
+  const initialError = {
+    x: initialTarget.x - (Number(agent?.x) || 0),
+    y: initialTarget.y - (Number(agent?.y) || 0)
+  };
+  const referenceDirection = normalizeVec(
+    targetSlotVx + initialError.x,
+    targetSlotVy + initialError.y
+  );
+  const avoid = computeAvoidanceDirection(
+    agent,
+    referenceDirection,
+    walls,
+    AGENT_AVOID_PROBE,
+    agent,
+    nowSec
+  );
+  const hardSeparation = computeTeamAwareSeparation(
+    agent,
+    neighbors,
+    Math.max(AGENT_RADIUS * 2.04, Number(spacing) * 0.4),
+    { allowOwnSquadSoftSeparation: false }
+  );
+  let pressure = normalizeVec(avoid.x + hardSeparation.x, avoid.y + hardSeparation.y);
+  if (pressure.len <= 0.0001 && (forceBlocked || slotBlocked) && blockedObstacle) {
+    pressure = normalizeVec(
+      (Number(agent?.x) || 0) - (Number(blockedObstacle?.x) || 0),
+      (Number(agent?.y) || 0) - (Number(blockedObstacle?.y) || 0)
+    );
+  }
+  const yaw = Number(formationPose?.current?.yaw) || 0;
+  const forward = { x: Math.cos(yaw), y: Math.sin(yaw) };
+  const side = { x: -forward.y, y: forward.x };
+  let elasticOffset = { ...currentOffset };
+  const hasPressure = forceBlocked || slotBlocked || pressure.len > 0.0001;
+  if (hasPressure) {
+    const pressureSide = (pressure.x * side.x) + (pressure.y * side.y);
+    const pressureFront = (pressure.x * forward.x) + (pressure.y * forward.y);
+    const nudge = clamp(safeDt * 4.6, 0, 0.42);
+    elasticOffset.side = clamp(elasticOffset.side + (pressureSide * maxSide * nudge), -maxSide, maxSide);
+    elasticOffset.front = clamp(elasticOffset.front + (pressureFront * maxFront * nudge), -maxFront, maxFront);
+  } else {
+    const release = Math.exp(-8.2 * safeDt);
+    elasticOffset.side *= release;
+    elasticOffset.front *= release;
+  }
+  const target = formationLocalToWorld(formationPose.current, {
+    side: baseSlot.side + elasticOffset.side,
+    front: baseSlot.front + elasticOffset.front
+  });
+  const errorX = target.x - (Number(agent?.x) || 0);
+  const errorY = target.y - (Number(agent?.y) || 0);
+  const currentVx = Number(agent?.vx) || 0;
+  const currentVy = Number(agent?.vy) || 0;
+  const boundedAvoidance = clampVecLength(
+    (avoid.x * Math.max(6, Number(speed) || 0) * 0.24) + (hardSeparation.x * 13),
+    (avoid.y * Math.max(6, Number(speed) || 0) * 0.24) + (hardSeparation.y * 13),
+    Math.max(1.2, Number(speed) * 0.31)
+  );
+  // Moving-reference controller: the slot's translation and rotation are
+  // feed-forward motion.  Position/velocity error and local avoidance merely
+  // correct a bounded temporary deformation; they never replace the slot.
+  const desiredVx = targetSlotVx
+    + (errorX * 4.35)
+    + ((targetSlotVx - currentVx) * 0.34)
+    + boundedAvoidance.x;
+  const desiredVy = targetSlotVy
+    + (errorY * 4.35)
+    + ((targetSlotVy - currentVy) * 0.34)
+    + boundedAvoidance.y;
+  const commit = resolveCardMotionCommit({
+    agent,
+    sim,
+    walls,
+    dt: safeDt,
+    vx: desiredVx,
+    vy: desiredVy,
+    maxSpeed: Math.max(6, Number(speed) * 1.15)
+  });
+  if (commit.blocked) {
+    markCardElasticPressure(runtime, nowSec);
+    const obstacleAway = commit.obstacle
+      ? normalizeVec((Number(agent?.x) || 0) - (Number(commit.obstacle?.x) || 0), (Number(agent?.y) || 0) - (Number(commit.obstacle?.y) || 0))
+      : null;
+    if (obstacleAway?.len > 0.0001) {
+      elasticOffset.side = clamp(
+        elasticOffset.side + (((obstacleAway.x * side.x) + (obstacleAway.y * side.y)) * maxSide * safeDt * 2.4),
+        -maxSide,
+        maxSide
+      );
+      elasticOffset.front = clamp(
+        elasticOffset.front + (((obstacleAway.x * forward.x) + (obstacleAway.y * forward.y)) * maxFront * safeDt * 2.4),
+        -maxFront,
+        maxFront
+      );
+    }
+  }
+  const offsetLength = Math.hypot(elasticOffset.side, elasticOffset.front);
+  const settled = !commit.blocked
+    && offsetLength <= Math.max(0.1, Number(spacing) * 0.025)
+    && Math.hypot(errorX, errorY) <= Math.max(AGENT_SETTLE_DEADZONE, Number(spacing) * 0.14);
+  const elasticActive = !settled || forceBlocked || slotBlocked || commit.blocked;
+  if (elasticActive) markCardElasticPressure(runtime, nowSec);
+  finishCardLocomotionStep({
+    agent,
+    x: commit.x,
+    y: commit.y,
+    dt: safeDt,
+    formationYaw: formationPose.current.yaw,
+    mode: resolveCardElasticDebugMode(mode, elasticActive),
+    slot: baseSlot,
+    slotTarget: formationLocalToWorld(formationPose.current, baseSlot),
+    targetSlotVx,
+    targetSlotVy,
+    blocked: forceBlocked || slotBlocked || commit.blocked,
+    elasticOffset,
+    locked: settled,
+    faceFormation: true
+  });
+  return true;
+};
+
+const stepCardHoldLocked = ({
+  agent = null,
+  runtime = null,
+  slot = null,
+  formationPose = null,
+  sim = null,
+  walls = [],
+  neighbors = [],
+  dt = 0,
+  speed = 0,
+  spacing = 0,
+  nowSec = 0,
+  targetSlotVx = 0,
+  targetSlotVy = 0,
+  slotBlocked = false,
+  blockedObstacle = null
+} = {}) => {
+  if (!agent || !formationPose) return false;
+  const slotTarget = formationLocalToWorld(formationPose.current, slot);
+  const error = Math.hypot(slotTarget.x - (Number(agent?.x) || 0), slotTarget.y - (Number(agent?.y) || 0));
+  const motion = Math.hypot(Number(agent?.vx) || 0, Number(agent?.vy) || 0);
+  if (!slotBlocked && error <= AGENT_SETTLE_DEADZONE && motion <= AGENT_SETTLE_SPEED) {
+    clearAvoidanceMemory(agent);
+    finishCardLocomotionStep({
+      agent,
+      x: Number(agent?.x) || 0,
+      y: Number(agent?.y) || 0,
+      dt,
+      formationYaw: formationPose.current.yaw,
+      mode: CARD_FORMATION_LOCOMOTION_MODE.HOLD_LOCKED,
+      slot,
+      slotTarget,
+      targetSlotVx,
+      targetSlotVy,
+      blocked: false,
+      elasticOffset: { side: 0, front: 0 },
+      locked: true,
+      faceFormation: true
+    });
+    agent.vx = 0;
+    agent.vy = 0;
+    agent.state = agent.attackCd > 0 ? 'attack' : 'idle';
+    return true;
+  }
+  const transport = !slotBlocked
+    ? tryCardLockedFormationTransport({
+      agent,
+      slot,
+      formationPose,
+      sim,
+      walls,
+      dt,
+      speed,
+      slotTarget,
+      targetSlotVx,
+      targetSlotVy
+    })
+    : { handled: false, blocked: true, obstacle: blockedObstacle };
+  if (transport.handled) {
+    // The solver is still HOLD_LOCKED even while a straggler takes a legal
+    // swept rejoin step.  It will zero velocity as soon as its own slot is
+    // reached; there is no perpetual orbiting steer.
+    writeCardLocomotionDebug({
+      agent,
+      mode: CARD_FORMATION_LOCOMOTION_MODE.HOLD_LOCKED,
+      slot,
+      slotTarget,
+      targetSlotVx,
+      targetSlotVy,
+      blocked: false,
+      elasticOffset: { side: 0, front: 0 }
+    });
+    return true;
+  }
+  return stepCardMarchElastic({
+    agent,
+    runtime,
+    slot,
+    formationPose,
+    sim,
+    walls,
+    neighbors,
+    dt,
+    speed,
+    spacing,
+    nowSec,
+    targetSlotVx,
+    targetSlotVy,
+    mode: CARD_FORMATION_LOCOMOTION_MODE.HOLD_LOCKED,
+    forceBlocked: true,
+    slotBlocked,
+    blockedObstacle: transport.obstacle || blockedObstacle
+  });
+};
+
+const stepCardPassageStream = ({
+  agent = null,
+  runtime = null,
+  slot = null,
+  formationPose = null,
+  sim = null,
+  walls = [],
+  neighbors = [],
+  passageFlow = null,
+  dt = 0,
+  speed = 0,
+  spacing = 0,
+  nowSec = 0,
+  targetSlotVx = 0,
+  targetSlotVy = 0
+} = {}) => {
+  if (!passageFlow) {
+    return stepCardMarchElastic({
+      agent,
+      runtime,
+      slot,
+      formationPose,
+      sim,
+      walls,
+      neighbors,
+      dt,
+      speed,
+      spacing,
+      nowSec,
+      targetSlotVx,
+      targetSlotVy,
+      mode: CARD_FORMATION_LOCOMOTION_MODE.MARCH_ELASTIC,
+      forceBlocked: true
+    });
+  }
+  const streamState = String(passageFlow?.state || CARD_LOCOMOTION_STATE.STREAM);
+  const queueSpeed = Number.isFinite(Number(passageFlow?.targetSpeed))
+    ? Math.max(0, Number(passageFlow.targetSpeed))
+    : Math.max(0, Number(speed) * (1 - (Number(passageFlow?.queuePressure) || 0) * 0.4));
+  const separation = computeStreamSeparation({
+    agent,
+    neighbors,
+    flowIntent: passageFlow,
+    targetGap: Math.max(AGENT_RADIUS * 2.1, Number(passageFlow?.streamSpacing) || Number(spacing) || 0)
+  });
+  const tangent = normalizeVec(passageFlow?.forwardX, passageFlow?.forwardY);
+  const side = { x: -tangent.y, y: tangent.x };
+  const avoid = computeAvoidanceDirection(
+    agent,
+    tangent,
+    walls,
+    AGENT_AVOID_PROBE,
+    agent,
+    nowSec
+  );
+  const forwardAvoidance = (avoid.x * tangent.x) + (avoid.y * tangent.y);
+  let lateralAvoidance = (avoid.x * side.x) + (avoid.y * side.y);
+  const laneError = Number(passageFlow?.laneError) || 0;
+  if (Math.abs(laneError) > 0.2 && lateralAvoidance * laneError < 0) lateralAvoidance = 0;
+  const passageAvoidance = {
+    x: (tangent.x * clamp(forwardAvoidance, -0.22, 0.22)) + (side.x * clamp(lateralAvoidance, -0.28, 0.28)),
+    y: (tangent.y * clamp(forwardAvoidance, -0.22, 0.22)) + (side.y * clamp(lateralAvoidance, -0.28, 0.28))
+  };
+  const forwardScale = streamState === CARD_LOCOMOTION_STATE.STREAM_APPROACH
+    ? clamp(Number(passageFlow?.approachForwardRatio), 0.65, 1)
+    : 1;
+  const desiredVx = (passageFlow.forwardX * queueSpeed * forwardScale)
+    + (Number(passageFlow?.laneVelocityX) || 0)
+    + (separation.x * 20 * (streamState === CARD_LOCOMOTION_STATE.STREAM ? 0.18 : 0.34))
+    + (passageAvoidance.x * Math.max(6, Number(speed) || 0) * 0.58);
+  const desiredVy = (passageFlow.forwardY * queueSpeed * forwardScale)
+    + (Number(passageFlow?.laneVelocityY) || 0)
+    + (separation.y * 20 * (streamState === CARD_LOCOMOTION_STATE.STREAM ? 0.18 : 0.34))
+    + (passageAvoidance.y * Math.max(6, Number(speed) || 0) * 0.58);
+  const commit = resolveCardMotionCommit({
+    agent,
+    sim,
+    walls,
+    dt,
+    vx: desiredVx,
+    vy: desiredVy,
+    maxSpeed: Math.max(6, Number(speed) * 1.15)
+  });
+  finishCardLocomotionStep({
+    agent,
+    x: commit.x,
+    y: commit.y,
+    dt,
+    formationYaw: formationPose?.current?.yaw,
+    mode: CARD_FORMATION_LOCOMOTION_MODE.PASSAGE_STREAM,
+    slot,
+    slotTarget: formationLocalToWorld(formationPose.current, slot),
+    targetSlotVx,
+    targetSlotVy,
+    blocked: commit.blocked,
+    elasticOffset: resolveCardElasticOffset(agent),
+    locked: false,
+    faceFormation: false
+  });
+  if (commit.blocked) markCardElasticPressure(runtime, nowSec);
+  return true;
+};
+
+const stepCardFormUp = (options = {}) => stepCardMarchElastic({
+  ...options,
+  mode: CARD_FORMATION_LOCOMOTION_MODE.FORM_UP
+});
+
+const stepCardReform = (options = {}) => stepCardMarchElastic({
+  ...options,
+  mode: CARD_FORMATION_LOCOMOTION_MODE.REFORM
+});
+
+const stepCardMarchLocked = ({
+  agent = null,
+  runtime = null,
+  slot = null,
+  formationPose = null,
+  sim = null,
+  walls = [],
+  neighbors = [],
+  dt = 0,
+  speed = 0,
+  spacing = 0,
+  nowSec = 0,
+  targetSlotVx = 0,
+  targetSlotVy = 0,
+  slotBlocked = false,
+  hasForeignNeighbor = false
+} = {}) => {
+  const blocked = slotBlocked || hasForeignNeighbor;
+  if (!blocked) {
+    const slotTarget = formationLocalToWorld(formationPose.current, slot);
+    const locked = tryCardLockedFormationTransport({
+      agent,
+      slot,
+      formationPose,
+      sim,
+      walls,
+      dt,
+      speed,
+      slotTarget,
+      targetSlotVx,
+      targetSlotVy
+    });
+    if (locked.handled) return true;
+    return stepCardMarchElastic({
+      agent,
+      runtime,
+      slot,
+      formationPose,
+      sim,
+      walls,
+      neighbors,
+      dt,
+      speed,
+      spacing,
+      nowSec,
+      targetSlotVx,
+      targetSlotVy,
+      mode: CARD_FORMATION_LOCOMOTION_MODE.MARCH_LOCKED,
+      forceBlocked: true,
+      blockedObstacle: locked.obstacle
+    });
+  }
+  return stepCardMarchElastic({
+    agent,
+    runtime,
+    slot,
+    formationPose,
+    sim,
+    walls,
+    neighbors,
+    dt,
+    speed,
+    spacing,
+    nowSec,
+    targetSlotVx,
+    targetSlotVy,
+    mode: CARD_FORMATION_LOCOMOTION_MODE.MARCH_LOCKED,
+    forceBlocked: true,
+    slotBlocked: true
+  });
+};
+
+const stepCardLocomotion = ({
+  agent = null,
+  runtime = null,
+  mode = CARD_FORMATION_LOCOMOTION_MODE.FORM_UP,
+  slot = null,
+  formationPose = null,
+  sim = null,
+  walls = [],
+  neighbors = [],
+  passageFlow = null,
+  combatDirective = null,
+  hasAnchor = false,
+  castOffset = null,
+  formationRecoveryGuidance = null,
+  slotBlocked = false,
+  hasForeignNeighbor = false,
+  dt = 0,
+  speed = 0,
+  spacing = 0,
+  nowSec = 0,
+  targetSlotVx = 0,
+  targetSlotVy = 0
+} = {}) => {
+  if (!agent || !runtime || !formationPose) return false;
+  const detached = agent?._formationDetached === true
+    || agent?._formationRecovery?.active === true
+    || agent?._squadController?.rejoin?.active === true;
+  if (combatDirective || hasAnchor || castOffset?.active || formationRecoveryGuidance?.active || detached) return false;
+  if (mode === CARD_FORMATION_LOCOMOTION_MODE.COMBAT_DEPLOY || mode === CARD_FORMATION_LOCOMOTION_MODE.COMBAT_FREE) {
+    return false;
+  }
+  if (mode === CARD_FORMATION_LOCOMOTION_MODE.PASSAGE_STREAM || passageFlow) {
+    return stepCardPassageStream({
+      agent,
+      runtime,
+      slot,
+      formationPose,
+      sim,
+      walls,
+      neighbors,
+      passageFlow,
+      dt,
+      speed,
+      spacing,
+      nowSec,
+      targetSlotVx,
+      targetSlotVy
+    });
+  }
+  if (mode === CARD_FORMATION_LOCOMOTION_MODE.HOLD_LOCKED) {
+    return stepCardHoldLocked({
+      agent,
+      runtime,
+      slot,
+      formationPose,
+      sim,
+      walls,
+      neighbors,
+      dt,
+      speed,
+      spacing,
+      nowSec,
+      targetSlotVx,
+      targetSlotVy,
+      slotBlocked: slotBlocked || hasForeignNeighbor
+    });
+  }
+  if (mode === CARD_FORMATION_LOCOMOTION_MODE.MARCH_LOCKED) {
+    return stepCardMarchLocked({
+      agent,
+      runtime,
+      slot,
+      formationPose,
+      sim,
+      walls,
+      neighbors,
+      dt,
+      speed,
+      spacing,
+      nowSec,
+      targetSlotVx,
+      targetSlotVy,
+      slotBlocked,
+      hasForeignNeighbor
+    });
+  }
+  if (mode === CARD_FORMATION_LOCOMOTION_MODE.FORM_UP) {
+    return stepCardFormUp({
+      agent,
+      runtime,
+      slot,
+      formationPose,
+      sim,
+      walls,
+      neighbors,
+      dt,
+      speed,
+      spacing,
+      nowSec,
+      targetSlotVx,
+      targetSlotVy,
+      forceBlocked: slotBlocked || hasForeignNeighbor,
+      slotBlocked: slotBlocked || hasForeignNeighbor
+    });
+  }
+  if (mode === CARD_FORMATION_LOCOMOTION_MODE.REFORM) {
+    return stepCardReform({
+      agent,
+      runtime,
+      slot,
+      formationPose,
+      sim,
+      walls,
+      neighbors,
+      dt,
+      speed,
+      spacing,
+      nowSec,
+      targetSlotVx,
+      targetSlotVy,
+      forceBlocked: slotBlocked || hasForeignNeighbor,
+      slotBlocked: slotBlocked || hasForeignNeighbor
+    });
+  }
+  return stepCardMarchElastic({
+    agent,
+    runtime,
+    slot,
+    formationPose,
+    sim,
+    walls,
+    neighbors,
+    dt,
+    speed,
+    spacing,
+    nowSec,
+    targetSlotVx,
+    targetSlotVy,
+    mode,
+    forceBlocked: slotBlocked || hasForeignNeighbor,
+    slotBlocked: slotBlocked || hasForeignNeighbor
+  });
 };
 
 const skillRangeByClass = (classTag = '') => {
@@ -6358,6 +7232,12 @@ const cardLeaderMoveStep = (
 ) => {
   const nowSec = Number(sim?.timeElapsed) || 0;
   const safeDt = Math.max(0.001, Number(dt) || 0.016);
+  // Keep the arrival contract explicit for CARD callers/debug tooling.  A
+  // completed or never-needed arrival is represented by null, never an
+  // ambiguous missing field.
+  if (!Object.prototype.hasOwnProperty.call(squad || {}, '_formationArrival')) {
+    squad._formationArrival = null;
+  }
   const walls = Array.isArray(blockingWalls)
     ? blockingWalls
     : filterBlockingObstacles(sim?.buildings || []);
@@ -6391,6 +7271,10 @@ const cardLeaderMoveStep = (
   const groupProgress = squad?._squadController?.groupProgress || {};
   const groupScale = clamp(Number(groupProgress?.anchorSpeedScale) || 1, 0, 1);
   const groupBlocked = groupProgress?.state === 'GROUP_BLOCKED';
+  const locomotionMode = String(
+    squad?._squadController?.locomotion?.mode || CARD_FORMATION_LOCOMOTION_MODE.FORM_UP
+  );
+  const reformActive = squad?._squadController?.reform?.active === true;
   const speedTargetMax = speedTargetBase
     * fatiguePenalty
     * statusMultipliers.speedMul
@@ -6416,6 +7300,7 @@ const cardLeaderMoveStep = (
     (squad?.meleeAttackOrder && squad.meleeAttackOrder.active !== false)
     || lockRangedSkill
     || groupBlocked
+    || locomotionMode === CARD_FORMATION_LOCOMOTION_MODE.HOLD_LOCKED
   );
   if (locksMarch) target = null;
 
@@ -6499,6 +7384,43 @@ const cardLeaderMoveStep = (
       }
     }
   }
+  if (locomotionMode === CARD_FORMATION_LOCOMOTION_MODE.REFORM && reformActive) {
+    // Reformation has priority over route progress but does not manufacture a
+    // frozen virtual leader.  A bounded crawl lets closely spaced sequential
+    // gates be discovered by the shared PassagePlan while the real body still
+    // pulls both anchors back.
+    desiredSpeed *= 0.18;
+  } else if (locomotionMode === CARD_FORMATION_LOCOMOTION_MODE.FORM_UP) {
+    desiredSpeed *= 0.34;
+  } else if (locomotionMode === CARD_FORMATION_LOCOMOTION_MODE.MARCH_ELASTIC) {
+    desiredSpeed *= 0.82;
+  }
+
+  // A wide formation cannot translate and rotate at the same rate as a lone
+  // agent.  Reserve enough of every representative's march budget for the
+  // outer slot's omega × r motion, then let advanceSquadFormationPose apply
+  // the exact per-slot limit for the final yaw step.
+  const cardAgents = crowd?.agentsBySquad?.get?.(squad?.id) || [];
+  const formationRadius = resolveCardFormationSlotRadius(cardAgents);
+  const previousFormationYaw = resolveSquadFormationPose(squad).yaw;
+  const explicitOffset = Number(squad?.formationRect?.directionOffsetRad);
+  const legacyDirection = Number(squad?.formationRect?.directionRad);
+  const directionOffset = snapTrainingDirectionOffset(
+    Number.isFinite(explicitOffset)
+      ? explicitOffset
+      : (Number.isFinite(legacyDirection) ? legacyDirection - previousFormationYaw : 0)
+  );
+  const targetFormationYaw = Math.atan2(desiredDirection.y, desiredDirection.x) - directionOffset;
+  const angularDemand = Math.min(
+    FORMATION_MARCH_TURN_RATE,
+    Math.abs(normalizeAngleDelta(targetFormationYaw - previousFormationYaw)) / safeDt
+  );
+  const slotSpeedBudget = Math.max(6, speedTargetMax * AGENT_FORMATION_CATCHUP_SPEED_MUL * 1.08);
+  const translationSpeedCap = Math.max(0, slotSpeedBudget - (angularDemand * formationRadius));
+  squad._cardFormationSlotSpeedBudget = slotSpeedBudget;
+  squad._cardFormationTurnSpeedCap = translationSpeedCap;
+  squad._cardFormationSlotRadius = formationRadius;
+  desiredSpeed = Math.min(desiredSpeed, translationSpeedCap);
   if (target && !lockRangedSkill && !groupBlocked) {
     squad.stamina = clamp((Number(squad?.stamina) || 0) - (STAMINA_MOVE_COST * safeDt), 0, STAMINA_MAX);
   } else {
@@ -6566,6 +7488,8 @@ const cardLeaderMoveStep = (
   squad.dirY = direction.y;
   squad.navigationSpeed = Math.hypot(Number(nextNavigation?.vx) || 0, Number(nextNavigation?.vy) || 0);
   if (groupBlocked) squad.action = '部队受阻，重新规划';
+  else if (locomotionMode === CARD_FORMATION_LOCOMOTION_MODE.REFORM && reformActive) squad.action = '通过窄地后整队';
+  else if (locomotionMode === CARD_FORMATION_LOCOMOTION_MODE.HOLD_LOCKED) squad.action = '列阵待命';
   else if (nextNavigation?.clampedToBody) squad.action = '等待部队主体通过';
   else if (tailPending && !target) squad.action = '通过窄地后整队';
   else if (cohesionScale < 0.98 || groupScale < 0.98) squad.action = '减速接应';
@@ -8575,7 +9499,12 @@ export const updateCrowdSim = (crowd, sim, dt) => {
     }
     forward = leaderMoveStep(squad, sim, crowd, safeDt, forward, steeringWeights, movementWalls);
     squad._crowdForward = forward;
-    const formationPose = advanceSquadFormationPose(squad, forward, previousFormationPose, safeDt);
+    const formationPose = advanceSquadFormationPose(squad, forward, previousFormationPose, safeDt, {
+      agents,
+      maxSlotSpeed: squadKind === TRAINING_SQUAD_KIND.CARD
+        ? (Number(squad?._cardFormationSlotSpeedBudget) || Infinity)
+        : Infinity
+    });
     const formationForward = formationPose.forward;
     squad._crowdFormationForward = { x: formationForward.x, y: formationForward.y };
     updateSquadSpeedPolicyState(squad, agents, safeDt);
@@ -8802,6 +9731,35 @@ export const updateCrowdSim = (crowd, sim, dt) => {
         && other.squadId !== agent.squadId
         && Math.hypot((agent.x || 0) - (other.x || 0), (agent.y || 0) - (other.y || 0)) < separationDistance
       ));
+      const cardLocomotionMode = String(
+        squadController?.locomotion?.mode || CARD_FORMATION_LOCOMOTION_MODE.FORM_UP
+      );
+      if (
+        squadKind === TRAINING_SQUAD_KIND.CARD
+        && stepCardLocomotion({
+          agent,
+          runtime: squadController,
+          mode: cardLocomotionMode,
+          slot,
+          formationPose,
+          sim,
+          walls: movementWalls,
+          neighbors,
+          passageFlow,
+          combatDirective,
+          hasAnchor,
+          castOffset,
+          formationRecoveryGuidance,
+          slotBlocked,
+          hasForeignNeighbor,
+          dt: safeDt,
+          speed,
+          spacing,
+          nowSec,
+          targetSlotVx,
+          targetSlotVy
+        })
+      ) return;
       if (
         agent._formationLocked !== false
         && !castOffset.active
@@ -8809,7 +9767,6 @@ export const updateCrowdSim = (crowd, sim, dt) => {
         && !hasAnchor
         && !passageFlow
         && !agent._formationDetached
-        && !(squadKind === TRAINING_SQUAD_KIND.CARD && leaderMoving)
         && !slotBlocked
         && !hasForeignNeighbor
       ) {
@@ -9046,14 +10003,10 @@ export const updateCrowdSim = (crowd, sim, dt) => {
           + (sep.y * 20 * weakSeparation * sepW)
           + (passageAvoidance.y * speed * 0.58 * avoidW);
       } else {
-        // Once an obstacle has claimed a side, formation is a weak visual
-        // tether until that obstacle is passed.  This prevents slot attraction
-        // from pulling the agent straight back across the wall each frame.
-        const avoidanceFormationWeight = Math.hypot(avoid.x, avoid.y) > 0.0001 ? 0.22 : 1;
-        desiredVx = (directFormationVelocity.vx * avoidanceFormationWeight)
+        desiredVx = directFormationVelocity.vx
           + (sep.x * 40 * sepScale * sepGainLocal * sepW)
           + (avoid.x * speed * avoidGainLocal * 0.9 * avoidW);
-        desiredVy = (directFormationVelocity.vy * avoidanceFormationWeight)
+        desiredVy = directFormationVelocity.vy
           + (sep.y * 40 * sepScale * sepGainLocal * sepW)
           + (avoid.y * speed * avoidGainLocal * 0.9 * avoidW);
       }
@@ -9087,7 +10040,13 @@ export const updateCrowdSim = (crowd, sim, dt) => {
         desiredVx = 0;
         desiredVy = 0;
       }
-      const usesDirectFormationMotion = !isTrainingCardSquad(squad)
+      const usesDirectFormationMotion = (
+        !isTrainingCardSquad(squad)
+        || (
+          !agent._formationDetached
+          && !agent?._squadController?.rejoin?.active
+        )
+      )
         && !combatDirective
         && !hasAnchor
         && !passageFlow

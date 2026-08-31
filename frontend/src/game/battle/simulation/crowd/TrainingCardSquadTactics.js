@@ -43,6 +43,22 @@ export const SQUAD_FORMATION_RUNTIME_STATE = Object.freeze({
   HOLD: 'HOLD'
 });
 
+// Formation shape and locomotion are intentionally separate.  AUTO_DEFAULT
+// remains the only player-facing shape, while this is the squad-level motion
+// authority consumed by CrowdSim.  In particular, MARCH_LOCKED is not a
+// cosmetic state: it selects swept reference-frame transport instead of the
+// generic crowd steering mixer.
+export const CARD_FORMATION_LOCOMOTION_MODE = Object.freeze({
+  HOLD_LOCKED: 'HOLD_LOCKED',
+  FORM_UP: 'FORM_UP',
+  MARCH_LOCKED: 'MARCH_LOCKED',
+  MARCH_ELASTIC: 'MARCH_ELASTIC',
+  PASSAGE_STREAM: 'PASSAGE_STREAM',
+  REFORM: 'REFORM',
+  COMBAT_DEPLOY: 'COMBAT_DEPLOY',
+  COMBAT_FREE: 'COMBAT_FREE'
+});
+
 export { CARD_LOCOMOTION_STATE };
 
 export const SQUAD_COMBAT_RUNTIME_STATE = Object.freeze({
@@ -72,6 +88,8 @@ const MAX_CATCH_UP_MULTIPLIER = 1.34;
 const SUPPORT_MIN_HEALTH_DEFICIT = 0.035;
 const CARD_GROUP_OUTLIER_WEIGHT_RATIO = 0.08;
 const CARD_GROUP_SLOW_WEIGHT_RATIO = 0.1;
+const CARD_ELASTIC_RELEASE_SEC = 0.34;
+const CARD_HOLD_READY_RATIO = 0.94;
 
 const finiteNumber = (value, fallback = 0) => (
   Number.isFinite(Number(value)) ? Number(value) : fallback
@@ -797,8 +815,11 @@ const refreshRuntimeDebug = (squad = {}, runtime = null) => {
   const combat = runtime?.combat || {};
   const passageDebug = runtime?.passageDebug || {};
   const groupProgress = runtime?.groupProgress || {};
+  const locomotion = runtime?.locomotion || {};
   squad.formationRuntime = {
     state: String(runtime?.formation?.state || SQUAD_FORMATION_RUNTIME_STATE.HOLD),
+    locomotionMode: String(locomotion?.mode || CARD_FORMATION_LOCOMOTION_MODE.FORM_UP),
+    locomotionTransitionReason: String(locomotion?.transitionReason || 'INITIAL_FORM_UP'),
     requestedFormation: String(runtime?.formation?.requestedId || ''),
     activeFormation: String(runtime?.formation?.activeId || ''),
     readyRatio: clamp(finiteNumber(cohesion?.readyRatio, 1), 0, 1),
@@ -837,7 +858,16 @@ const refreshRuntimeDebug = (squad = {}, runtime = null) => {
     } : null,
     passageGroupState: String(groupProgress?.state || CARD_PASSAGE_GROUP_STATE.FORMATION),
     blockedWeight: Math.max(0, finiteNumber(groupProgress?.blockedWeight)),
-    behindGateWeight: Math.max(0, finiteNumber(groupProgress?.behindGateWeight))
+    behindGateWeight: Math.max(0, finiteNumber(groupProgress?.behindGateWeight)),
+    slotErrorP50: Math.max(0, finiteNumber(locomotion?.slotErrorP50)),
+    slotErrorP90: Math.max(0, finiteNumber(locomotion?.slotErrorP90)),
+    slotErrorRms: Math.max(0, finiteNumber(locomotion?.slotErrorRms)),
+    lockedWeightRatio: clamp(finiteNumber(locomotion?.lockedWeightRatio), 0, 1),
+    elasticWeightRatio: clamp(finiteNumber(locomotion?.elasticWeightRatio), 0, 1),
+    passageWeightRatio: clamp(finiteNumber(locomotion?.passageWeightRatio), 0, 1),
+    maxSlotTargetSpeed: Math.max(0, finiteNumber(locomotion?.maxSlotTargetSpeed)),
+    formationAngularSpeed: finiteNumber(locomotion?.formationAngularSpeed),
+    blockedSlotWeight: Math.max(0, finiteNumber(locomotion?.blockedSlotWeight))
   };
   squad.passagePlan = runtime?.passagePlan || null;
   squad.passageDebug = {
@@ -962,7 +992,25 @@ export const ensureSquadControllerRuntime = ({
         active: true,
         needsRepack: false,
         startedAt: Math.max(0, finiteNumber(nowSec)),
-        stableSince: 0
+        stableSince: 0,
+        reason: 'INITIAL_FORM_UP'
+      },
+      locomotion: {
+        mode: CARD_FORMATION_LOCOMOTION_MODE.FORM_UP,
+        previousMode: '',
+        changedAt: Math.max(0, finiteNumber(nowSec)),
+        transitionReason: 'INITIAL_FORM_UP',
+        lastTerrainState: SQUAD_FORMATION_RUNTIME_STATE.MARCH,
+        elasticUntil: 0,
+        slotErrorP50: 0,
+        slotErrorP90: 0,
+        slotErrorRms: 0,
+        lockedWeightRatio: 0,
+        elasticWeightRatio: 0,
+        passageWeightRatio: 0,
+        maxSlotTargetSpeed: 0,
+        formationAngularSpeed: 0,
+        blockedSlotWeight: 0
       },
       membershipSignature: '',
       lastMoveAt: 0
@@ -979,6 +1027,7 @@ export const ensureSquadControllerRuntime = ({
     runtime.reform.active = true;
     runtime.reform.needsRepack = false;
     runtime.reform.startedAt = Math.max(0, finiteNumber(nowSec));
+    runtime.reform.reason = formationChanged ? 'FORMATION_CHANGED' : 'INITIAL_FORM_UP';
   } else if (membership !== runtime.membershipSignature) {
     const known = new Set(
       ordered
@@ -1053,12 +1102,151 @@ const updateReformState = ({
     runtime.reform.active = true;
     runtime.reform.startedAt = nowSec;
     runtime.reform.stableSince = 0;
+    runtime.reform.reason = 'MEMBERSHIP_CHANGED';
   }
   if (runtime?.combat?.disengagedAt > 0 && !runtime.reform.active) {
     runtime.reform.active = true;
     runtime.reform.startedAt = nowSec;
     runtime.reform.stableSince = 0;
+    runtime.reform.reason = 'COMBAT_EXIT';
   }
+};
+
+const resolveCardLocomotion = ({
+  runtime = null,
+  moving = false,
+  nowSec = 0,
+  spacing = 0
+} = {}) => {
+  if (!runtime) return CARD_FORMATION_LOCOMOTION_MODE.FORM_UP;
+  const terrainState = String(runtime?.terrain?.state || SQUAD_FORMATION_RUNTIME_STATE.MARCH);
+  const combatState = String(runtime?.combat?.state || SQUAD_COMBAT_RUNTIME_STATE.NONE);
+  const groupState = String(runtime?.groupProgress?.state || CARD_PASSAGE_GROUP_STATE.FORMATION);
+  const locomotion = runtime?.locomotion || {};
+  const cohesion = runtime?.cohesion || {};
+  const holdTolerance = Math.max(1.2, finiteNumber(spacing) * 0.42);
+  if (
+    combatState === SQUAD_COMBAT_RUNTIME_STATE.ENGAGED
+    || combatState === SQUAD_COMBAT_RUNTIME_STATE.DEPLOY
+  ) {
+    return CARD_FORMATION_LOCOMOTION_MODE.COMBAT_DEPLOY;
+  }
+  if (combatState === SQUAD_COMBAT_RUNTIME_STATE.APPROACH) {
+    return CARD_FORMATION_LOCOMOTION_MODE.COMBAT_FREE;
+  }
+  if (
+    terrainState === SQUAD_FORMATION_RUNTIME_STATE.PASSAGE
+    || groupState === CARD_PASSAGE_GROUP_STATE.FLOW
+    || groupState === CARD_PASSAGE_GROUP_STATE.CLEAR_TAIL
+    || groupState === CARD_PASSAGE_GROUP_STATE.GROUP_BLOCKED
+  ) {
+    return CARD_FORMATION_LOCOMOTION_MODE.PASSAGE_STREAM;
+  }
+  if (runtime?.reform?.active) {
+    return String(runtime?.reform?.reason || '') === 'INITIAL_FORM_UP'
+      ? CARD_FORMATION_LOCOMOTION_MODE.FORM_UP
+      : CARD_FORMATION_LOCOMOTION_MODE.REFORM;
+  }
+  if (
+    terrainState === SQUAD_FORMATION_RUNTIME_STATE.COMPRESS
+    || finiteNumber(locomotion?.elasticUntil) > nowSec
+  ) {
+    return CARD_FORMATION_LOCOMOTION_MODE.MARCH_ELASTIC;
+  }
+  if (!moving) {
+    const ready = clamp(finiteNumber(cohesion?.readyRatio), 0, 1);
+    const p90 = Math.max(0, finiteNumber(locomotion?.slotErrorP90, finiteNumber(cohesion?.upperError)));
+    return ready >= CARD_HOLD_READY_RATIO && p90 <= holdTolerance
+      ? CARD_FORMATION_LOCOMOTION_MODE.HOLD_LOCKED
+      : CARD_FORMATION_LOCOMOTION_MODE.FORM_UP;
+  }
+  return CARD_FORMATION_LOCOMOTION_MODE.MARCH_LOCKED;
+};
+
+const updateCardLocomotionMode = ({
+  runtime = null,
+  moving = false,
+  nowSec = 0,
+  spacing = 0
+} = {}) => {
+  if (!runtime) return null;
+  const previous = runtime?.locomotion && typeof runtime.locomotion === 'object'
+    ? runtime.locomotion
+    : {};
+  const nextMode = resolveCardLocomotion({ runtime, moving, nowSec, spacing });
+  const previousMode = String(previous?.mode || '');
+  let reason = 'OPEN_CORRIDOR';
+  const terrainState = String(runtime?.terrain?.state || SQUAD_FORMATION_RUNTIME_STATE.MARCH);
+  const groupState = String(runtime?.groupProgress?.state || CARD_PASSAGE_GROUP_STATE.FORMATION);
+  if (nextMode === CARD_FORMATION_LOCOMOTION_MODE.COMBAT_DEPLOY) reason = 'COMBAT_DEPLOY';
+  else if (nextMode === CARD_FORMATION_LOCOMOTION_MODE.COMBAT_FREE) reason = 'COMBAT_APPROACH';
+  else if (nextMode === CARD_FORMATION_LOCOMOTION_MODE.PASSAGE_STREAM) {
+    reason = groupState === CARD_PASSAGE_GROUP_STATE.GROUP_BLOCKED ? 'GROUP_BLOCKED' : 'CORRIDOR_TOO_NARROW';
+  } else if (nextMode === CARD_FORMATION_LOCOMOTION_MODE.REFORM) {
+    reason = String(runtime?.reform?.reason || (terrainState === SQUAD_FORMATION_RUNTIME_STATE.EXPAND ? 'PASSAGE_EXIT' : 'REFORM'));
+  } else if (nextMode === CARD_FORMATION_LOCOMOTION_MODE.MARCH_ELASTIC) {
+    reason = terrainState === SQUAD_FORMATION_RUNTIME_STATE.COMPRESS ? 'CORRIDOR_COMPRESSION' : 'BLOCKED_SLOT';
+  } else if (nextMode === CARD_FORMATION_LOCOMOTION_MODE.HOLD_LOCKED) reason = 'ARRIVAL_SETTLED';
+  else if (nextMode === CARD_FORMATION_LOCOMOTION_MODE.FORM_UP) reason = 'SLOT_READINESS';
+  runtime.locomotion = {
+    ...previous,
+    mode: nextMode,
+    previousMode: nextMode === previousMode ? String(previous?.previousMode || '') : previousMode,
+    changedAt: nextMode === previousMode ? finiteNumber(previous?.changedAt, nowSec) : nowSec,
+    transitionReason: nextMode === previousMode ? String(previous?.transitionReason || reason) : reason,
+    lastTerrainState: terrainState
+  };
+  return runtime.locomotion;
+};
+
+const refreshCardLocomotionMetrics = ({ runtime = null, agents = [], nowSec = 0 } = {}) => {
+  if (!runtime) return null;
+  const rows = (Array.isArray(agents) ? agents : [])
+    .filter(isLiveAgent)
+    .map((agent) => {
+      const debug = agent?._squadController?.locomotionDebug || {};
+      return {
+        agent,
+        weight: Math.max(0, finiteNumber(agent?.weight, 1)),
+        error: Math.max(0, finiteNumber(debug?.slotError)),
+        mode: String(debug?.mode || ''),
+        blocked: debug?.blocked === true,
+        targetSpeed: Math.max(0, finiteNumber(debug?.targetSlotSpeed))
+      };
+    });
+  const totalWeight = rows.reduce((sum, row) => sum + row.weight, 0);
+  const rms = Math.sqrt(rows.reduce((sum, row) => sum + ((row.error * row.error) * row.weight), 0)
+    / Math.max(0.001, totalWeight));
+  const weightFor = (predicate) => rows
+    .filter(predicate)
+    .reduce((sum, row) => sum + row.weight, 0);
+  const lockedWeight = weightFor((row) => row.mode === CARD_FORMATION_LOCOMOTION_MODE.MARCH_LOCKED
+    || row.mode === CARD_FORMATION_LOCOMOTION_MODE.HOLD_LOCKED);
+  const elasticWeight = weightFor((row) => row.mode === CARD_FORMATION_LOCOMOTION_MODE.MARCH_ELASTIC
+    || row.mode === CARD_FORMATION_LOCOMOTION_MODE.FORM_UP
+    || row.mode === CARD_FORMATION_LOCOMOTION_MODE.REFORM);
+  const passageWeight = weightFor((row) => row.mode === CARD_FORMATION_LOCOMOTION_MODE.PASSAGE_STREAM);
+  const blockedSlotWeight = weightFor((row) => row.blocked);
+  const previous = runtime?.locomotion || {};
+  const releaseUntil = blockedSlotWeight > 0.001 || elasticWeight > 0.001
+    ? Math.max(finiteNumber(previous?.elasticUntil), nowSec + CARD_ELASTIC_RELEASE_SEC)
+    : finiteNumber(previous?.elasticUntil);
+  runtime.locomotion = {
+    ...previous,
+    slotErrorP50: weightedPercentile(rows, 0.5, 'error'),
+    slotErrorP90: weightedPercentile(rows, 0.9, 'error'),
+    slotErrorRms: rms,
+    lockedWeightRatio: lockedWeight / Math.max(0.001, totalWeight),
+    elasticWeightRatio: elasticWeight / Math.max(0.001, totalWeight),
+    passageWeightRatio: passageWeight / Math.max(0.001, totalWeight),
+    maxSlotTargetSpeed: rows.reduce((maximum, row) => Math.max(maximum, row.targetSpeed), 0),
+    formationAngularSpeed: finiteNumber(runtime?.formationAngularSpeed),
+    blockedSlotWeight,
+    elasticUntil: releaseUntil > nowSec && elasticWeight > 0.001
+      ? releaseUntil
+      : Math.max(0, releaseUntil)
+  };
+  return runtime.locomotion;
 };
 
 const updatePassageFlowAssignments = ({ runtime = null, agents = [], orderedAgents = null } = {}) => {
@@ -1166,6 +1354,9 @@ export const prepareSquadControllerFrame = ({
   const terrainScanInterval = runtime?.terrain?.state === SQUAD_FORMATION_RUNTIME_STATE.PASSAGE
     ? 0.08
     : FORMATION_SCAN_INTERVAL;
+  const previousTerrainState = String(
+    runtime?.locomotion?.lastTerrainState || runtime?.terrain?.state || SQUAD_FORMATION_RUNTIME_STATE.MARCH
+  );
   let passageRows = null;
   if (
     nowSec - sampledAt >= terrainScanInterval
@@ -1218,6 +1409,19 @@ export const prepareSquadControllerFrame = ({
         runtime
       });
     }
+  }
+  const terrainStateAfterScan = String(runtime?.terrain?.state || SQUAD_FORMATION_RUNTIME_STATE.MARCH);
+  if (
+    terrainStateAfterScan === SQUAD_FORMATION_RUNTIME_STATE.EXPAND
+    && previousTerrainState !== SQUAD_FORMATION_RUNTIME_STATE.EXPAND
+  ) {
+    // Passage only owns the temporary stream.  Once its tail has cleared, the
+    // same persistent slot topology becomes authoritative again before the
+    // navigation anchor can resume normal marching.
+    runtime.reform.active = true;
+    runtime.reform.startedAt = nowSec;
+    runtime.reform.stableSince = 0;
+    runtime.reform.reason = 'PASSAGE_EXIT';
   }
   updateReformState({ squad, runtime, agents, orderedAgents, nowSec });
   if (isTrainingCardSquad(squad) && runtime?.passagePlan) {
@@ -1532,6 +1736,8 @@ export const prepareSquadControllerFrame = ({
       runtime.reform.stableSince = 0;
     }
   }
+  runtime.formationAngularSpeed = finiteNumber(squad?._cardFormationAngularSpeed);
+  updateCardLocomotionMode({ runtime, moving, nowSec, spacing });
   squad._formationCohesion = {
     maximumError,
     upperError,
@@ -1586,6 +1792,8 @@ export const completeSquadControllerFrame = ({
   updateAnchor(runtime, squad, forward);
   runtime.membershipSignature = resolveMembershipSignature(agents);
   runtime.lastUpdatedAt = nowSec;
+  runtime.formationAngularSpeed = finiteNumber(squad?._cardFormationAngularSpeed);
+  refreshCardLocomotionMetrics({ runtime, agents, nowSec });
   refreshRuntimeDebug(squad, runtime);
   return runtime;
 };

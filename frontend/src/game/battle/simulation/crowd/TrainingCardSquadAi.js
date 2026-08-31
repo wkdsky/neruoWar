@@ -28,6 +28,7 @@ import {
 } from './TrainingCardSquadStrategicAi';
 import { clearTrainingCardAiState } from './TrainingCardSquadAiState';
 import {
+  CARD_FORMATION_LOCOMOTION_MODE,
   SQUAD_COMBAT_INTENT,
   SQUAD_COMBAT_RUNTIME_STATE,
   SQUAD_FORMATION_RUNTIME_STATE,
@@ -48,6 +49,7 @@ import {
 import { isTrainingCardSquad } from './TrainingSquadKind';
 
 export {
+  CARD_FORMATION_LOCOMOTION_MODE,
   TRAINING_MAP_AI_PLAN_KIND,
   TRAINING_MAP_AI_STATE,
   SQUAD_COMBAT_INTENT,

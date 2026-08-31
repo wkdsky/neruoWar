@@ -81,6 +81,9 @@ const BattleDebugPanel = ({
     if (selectedSquad?.formationRuntime) {
       const formation = selectedSquad.formationRuntime;
       lines.push(`编队控制：${formation.state || '-'} ｜ 请求/实际 ${formation.requestedFormation || '-'}/${formation.activeFormation || '-'} ｜ 就绪 ${formatFixed((Number(formation.readyRatio) || 0) * 100, 0)}% ｜ cohesion ${formatFixed(formation.speedScale, 2)}`);
+      lines.push(`CARD行军：${formation.locomotionMode || '-'} ｜ ${formation.locomotionTransitionReason || '-'} ｜ slot误差 P50/P90/RMS ${formatFixed(formation.slotErrorP50, 2)}/${formatFixed(formation.slotErrorP90, 2)}/${formatFixed(formation.slotErrorRms, 2)}`);
+      lines.push(`CARD权重：locked ${formatFixed((Number(formation.lockedWeightRatio) || 0) * 100, 0)}% ｜ elastic ${formatFixed((Number(formation.elasticWeightRatio) || 0) * 100, 0)}% ｜ passage ${formatFixed((Number(formation.passageWeightRatio) || 0) * 100, 0)}% ｜ blocked ${formatFixed(formation.blockedSlotWeight, 1)}`);
+      lines.push(`CARD slot运动：最大目标速度 ${formatFixed(formation.maxSlotTargetSpeed, 1)} ｜ 角速度 ${formatFixed(formation.formationAngularSpeed, 2)} rad/s`);
       lines.push(`地形适配：压缩 ${formatFixed((Number(formation.compression) || 1) * 100, 0)}% ｜ 通道 ${formation.passage ? '是' : '否'} ｜ 宽度 ${formation.corridorWidth === null ? '-' : formatFixed(formation.corridorWidth, 1)}`);
       if (formation.bodyAnchor || formation.navigationAnchor) {
         const body = formation.bodyAnchor || {};
